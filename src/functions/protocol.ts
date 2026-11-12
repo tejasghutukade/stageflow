@@ -104,7 +104,7 @@ export type FunctionKind = "verification" | "routing" | "tool";
 
 export type FunctionFileRoot = "artifacts" | "workspace";
 
-export type FunctionCapabilityOp = "exists" | "stat" | "readText" | "readJson" | "write" | "http";
+export type FunctionCapabilityOp = "exists" | "stat" | "readText" | "readJson" | "list" | "write" | "http";
 
 export type FunctionCapabilityRequest = {
   type: "capability";
@@ -127,7 +127,7 @@ export type FunctionCapabilityResult = {
   message?: string;
 };
 
-const CAPABILITY_OPS = new Set<FunctionCapabilityOp>(["exists", "stat", "readText", "readJson", "write", "http"]);
+const CAPABILITY_OPS = new Set<FunctionCapabilityOp>(["exists", "stat", "readText", "readJson", "list", "write", "http"]);
 
 export function isCapabilityRequest(value: unknown): value is FunctionCapabilityRequest {
   if (!value || typeof value !== "object") return false;

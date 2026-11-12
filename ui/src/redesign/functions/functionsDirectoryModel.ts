@@ -10,7 +10,9 @@ export function filterFunctions(rows: readonly FunctionSummary[], kind: Function
 export function searchFunctions(rows: readonly FunctionSummary[], query: string): FunctionSummary[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return [...rows];
-  return rows.filter((row) => (row.name ?? "").toLowerCase().includes(needle));
+  return rows.filter((row) =>
+    [row.name ?? "", row.id, row.description ?? ""].some((text) => text.toLowerCase().includes(needle)),
+  );
 }
 
 export function kindCounts(rows: readonly FunctionSummary[]): Record<FunctionDirectoryKind, number> {

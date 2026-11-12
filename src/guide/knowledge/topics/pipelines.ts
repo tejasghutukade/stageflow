@@ -43,6 +43,7 @@ stages:
 
 - Mark at least one root \`entry: true\`.
 - Several \`to:\` entries fan out; every listed target stays on the graph and runs after the source succeeds. The agent does not pick which ones run.
+- A stage uses route \`if\` or a routing \`function\`, not both (\`function.routing_conflicts_with_if\`).
 - \`if\` on a route entry skips that target unless a condition on the source's output payload holds. Leaf: \`{ field, op, value }\`; composition: \`all\`, \`any\`, \`not\`. Operators: \`eq\`, \`ne\`, \`gt\`, \`gte\`, \`lt\`, \`lte\`, \`in\`, \`not_in\`. The \`field\` path must be a **required** property in the source \`io.output.schema\` (no arrays, no optional fields). There is no \`exists\` operator and no else branch. Bad \`if\` is \`pipeline.route_if_invalid\`.
 - \`on:\` (\`succeeded\`, \`failed\`, \`skipped\`) only stops skip-cascade. Write \`succeeded\`, not \`success\` (envelope status). It does **not** launch a stage after a failure. A child always needs a succeeded parent. For branching, use \`if\` on a succeeded payload.
 - A stage with two or more parents is a **join**. It waits until every parent is finished, runs if at least one succeeded, stays pending (run fails) if any parent failed, and is skipped if all parents skipped. It receives every succeeded parent's envelope.

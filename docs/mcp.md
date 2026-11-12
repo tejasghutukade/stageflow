@@ -220,7 +220,7 @@ See [Agents](agents.md). The REST, CLI and MCP surfaces side by side are in [Age
 
 ### Function tools {#function-tools}
 
-Project functions (`functions/<id>.function.yaml`) use the same service as `GET` and `POST /api/functions`. The id is `id` (`^[a-z][a-z0-9_]{0,63}$`). Revisions saved here are recorded as source `api`, author `mcp`. Attaching a function to a stage, pipeline, or agent still goes through `edit_stage`, `edit_pipeline`, and `save_agent`. `write_catalog_file` rejects a `*.function.yaml` file.
+Project functions (`functions/<id>.function.yaml`) use the same service as `GET` and `POST /api/functions`. The id is `id` (`^[a-z][a-z0-9_]{0,63}$`). Revisions saved here are recorded as source `api`, author `mcp`. A source that starts with `export const access` derives `capabilities` and `bindings`; the file omits those fields, and a payload that repeats a different list is `function.access_conflict`. A source with no declaration still carries explicit `capabilities` and `bindings`. Attaching a function to a stage, pipeline, or agent still goes through `edit_stage`, `edit_pipeline`, and `save_agent`. `write_catalog_file` rejects a `*.function.yaml` file.
 
 **Errors.** A refused call returns a tool result with `isError: true` whose text is `{ "code", "message", "issues"?, "current_revision"?, "usages"? }`. Branch on `code`: `function.invalid`, `function.conflict` (the current revision is in `current_revision`; the file is not overwritten), `function.in_use` (`usages` lists the pipeline, stage, or agent paths), `function.not_found`, `function.exists`, `function.kind_immutable`, `function.id_immutable`, `function.catalog_unreadable`.
 

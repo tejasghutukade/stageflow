@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runValidateCommand } from "../src/cli/validateCommand.js";
 import { createDraftPackage } from "../src/config/draftPackage.js";
 import { loadPipelineOutcome } from "../src/config/loadPipeline.js";
-import { parseFunctionYaml } from "../src/config/loadFunction.js";
+import { parseFunctionYaml, serializeFunctionDefinition } from "../src/config/loadFunction.js";
 import { catalogFileKind, writeCatalogFileForHttp } from "../src/server/readCatalogFile.js";
 import { AgentService } from "../src/agents/service.js";
 import { AgentStore } from "../src/agents/store.js";
@@ -564,6 +564,11 @@ describe("function catalog", () => {
     if (!parsed.ok) return;
     expect(parsed.value.id).toBe("score");
     expect(parsed.value.kind).toBe("verification");
+    const declared = parseFunctionYaml(
+      await readFile(path.join(process.cwd(), "tests/fixtures/functions/score_access.function.yaml"), "utf8"),
+    );
+    expect(declared.ok).toBe(true);
+    if (declared.ok) expect(declared.value.capabilities.map((capability) => capability.id)).toEqual(["artifacts", "env_min_score"]);
   });
 
   it("rejects a write capability on a verification", async () => {
@@ -578,5 +583,138 @@ describe("function catalog", () => {
         ACTOR,
       ),
     ).rejects.toMatchObject({ code: "function.invalid" });
+  });
+
+  it("derives capabilities from an access declaration and keeps legacy files unchanged", async () => {
+    const { project, service } = await open();
+    const source = [
+      "export const access = {",
+      '  artifacts: "read",',
+      '  env: ["MIN_SCORE", "REGION?"],',
+      '  network: ["https://api.example.com"],',
+      "};",
+      "export default function execute(context) {",
+      "  return { passed: true, region: context.env.REGION };",
+      "}",
+      "",
+    ].join("\n");
+    const created = await service.create(
+      project,
+      { id: "score", name: "Score", kind: "verification", source },
+      ACTOR,
+    );
+    expect(created.definition?.capabilities).toEqual([
+      { id: "artifacts", type: "file", root: "artifacts", path: "", access: "read" },
+      { id: "env_min_score", type: "env", alias: "MIN_SCORE" },
+      { id: "env_region", type: "env", alias: "REGION" },
+      {
+        id: "api_api_example_com",
+        type: "api",
+        origin: "https://api.example.com",
+        methods: ["GET"],
+        path_prefix: "/",
+        effect: "read",
+      },
+    ]);
+    expect(created.definition?.bindings).toEqual([
+      { alias: "MIN_SCORE", required: true },
+      { alias: "REGION", required: false },
+    ]);
+    const onDisk = await readFile(path.join(project, "functions", "score.function.yaml"), "utf8");
+    expect(onDisk).not.toContain("capabilities:");
+    expect(onDisk).not.toContain("bindings:");
+    const fetched = await service.get(project, "score");
+    expect(fetched.definition?.capabilities).toEqual(created.definition?.capabilities);
+
+    const same = await service.save(project, "score", { baseRevision: 1, definition: { id: "score", name: "Score", kind: "verification", source } }, ACTOR);
+    expect(same.revision).toBe(1);
+
+    const editedSource = source.replace('artifacts: "read"', 'artifacts: "none"');
+    const edited = await service.save(
+      project,
+      "score",
+      { baseRevision: 1, definition: { id: "score", name: "Score", kind: "verification", source: editedSource } },
+      ACTOR,
+    );
+    expect(edited.revision).toBe(2);
+    expect(edited.definition?.capabilities.some((capability) => capability.id === "artifacts")).toBe(false);
+
+    const hand = [
+      "id: hand",
+      "name: Hand",
+      "kind: verification",
+      "source: |",
+      "  export const access = {",
+      '    artifacts: "read",',
+      "    env: [],",
+      "    network: [],",
+      "  };",
+      "  export default function execute() {",
+      "    return { passed: true };",
+      "  }",
+      "",
+    ].join("\n");
+    await writeFile(path.join(project, "functions", "hand.function.yaml"), hand);
+    const synced = await service.get(project, "hand");
+    expect(synced.definition?.capabilities).toEqual([
+      { id: "artifacts", type: "file", root: "artifacts", path: "", access: "read" },
+    ]);
+    expect(synced.definition?.bindings).toEqual([]);
+
+    const mismatch = service.create(
+      project,
+      {
+        id: "wide",
+        name: "Wide",
+        kind: "verification",
+        source,
+        capabilities: [{ id: "workspace", type: "file", root: "workspace", path: "", access: "read" }],
+        bindings: [],
+      },
+      ACTOR,
+    );
+    await expect(mismatch).rejects.toMatchObject({
+      code: "function.invalid",
+      issues: expect.arrayContaining([
+        expect.objectContaining({
+          path: "capabilities",
+          code: "function.access_conflict",
+          message: "Remove capabilities and bindings, or make them match the access declaration in the source",
+        }),
+      ]),
+    });
+
+    const matched = await service.create(
+      project,
+      {
+        id: "matched",
+        name: "Matched",
+        kind: "verification",
+        source: editedSource,
+        capabilities: edited.definition?.capabilities,
+        bindings: edited.definition?.bindings,
+      },
+      ACTOR,
+    );
+    expect(matched.definition?.capabilities).toEqual(edited.definition?.capabilities);
+
+    const writeSource = source.replace('artifacts: "read"', 'artifacts: "write"');
+    await expect(
+      service.create(project, { id: "writer", name: "Writer", kind: "verification", source: writeSource }, ACTOR),
+    ).rejects.toMatchObject({
+      code: "function.invalid",
+      issues: expect.arrayContaining([expect.objectContaining({ code: "function.write_not_allowed", path: "source" })]),
+    });
+
+    const fixture = await readFile(path.join(process.cwd(), "tests/fixtures/functions/score.function.yaml"), "utf8");
+    const legacy = parseFunctionYaml(fixture);
+    expect(legacy.ok).toBe(true);
+    if (!legacy.ok) return;
+    const serialized = serializeFunctionDefinition(legacy.value);
+    expect(serialized).toContain("\ncapabilities:\n");
+    expect(serialized).toContain("\nbindings:");
+    const again = parseFunctionYaml(serialized);
+    expect(again).toEqual(legacy);
+    expect(serializeFunctionDefinition(legacy.value)).toBe(serialized);
   });
 });

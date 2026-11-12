@@ -124,4 +124,38 @@ describe("function MCP tools", () => {
     expect(tested.isError).toBe(false);
     expect(tested.payload).toMatchObject({ ok: true, kind: "test", revision: 2, value: { passed: true } });
   });
+
+  it("derives capabilities from a declared source and rejects a conflicting list", async () => {
+    const { tools } = await open();
+    const source = 'export const access = { artifacts: "read", env: ["MIN_SCORE"], network: [] };\nexport default function execute(){ return { passed: true }; }\n';
+    const created = await call(tools, "create_function", {
+      definition: { id: "declared", name: "Declared", kind: "verification", source },
+    });
+    expect(created.isError).toBe(false);
+    const fetched = await call(tools, "get_function", { id: "declared" });
+    expect(fetched.isError).toBe(false);
+    expect(fetched.payload).toMatchObject({
+      definition: {
+        capabilities: [
+          { id: "artifacts", type: "file", root: "artifacts", path: "", access: "read" },
+          { id: "env_min_score", type: "env", alias: "MIN_SCORE" },
+        ],
+        bindings: [{ alias: "MIN_SCORE", required: true }],
+      },
+    });
+    const conflict = await call(tools, "create_function", {
+      definition: {
+        id: "wide",
+        name: "Wide",
+        kind: "verification",
+        source,
+        capabilities: [{ id: "workspace", type: "file", root: "workspace", path: "", access: "read" }],
+      },
+    });
+    expect(conflict.isError).toBe(true);
+    expect(conflict.payload).toMatchObject({
+      code: "function.invalid",
+      issues: expect.arrayContaining([expect.objectContaining({ code: "function.access_conflict", path: "capabilities" })]),
+    });
+  });
 });

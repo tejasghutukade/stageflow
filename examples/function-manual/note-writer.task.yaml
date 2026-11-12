@@ -1,0 +1,4 @@
+id: note-writer
+goal: Store one note with the note_writer tool and emit its path and size
+context: The tool writes note.txt under the attempt artifacts. NOTE_LABEL, when set, is the prefix. When it is unset the prefix is note.
+constraints: Call note_writer once with the text Packed and labeled. Do not invent a second tool.

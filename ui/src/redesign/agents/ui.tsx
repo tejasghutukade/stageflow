@@ -14,10 +14,11 @@ export function PageFooter({ left, right }: { left: ReactNode; right?: ReactNode
   );
 }
 
-type ButtonVariant = "primary" | "secondary" | "ghost";
+type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 
 const BUTTON: Record<ButtonVariant, string> = {
   primary: "bg-[var(--sf-text-1)] text-[var(--sf-ground)]",
+  danger: "border border-[#f2645a80] bg-[var(--sf-fail-bg)] text-[var(--sf-fail)] hover:bg-[#f2645a26]",
   secondary:
     "border border-[var(--sf-hairline-strong)] bg-[var(--sf-raised)] text-[var(--sf-text-1)] hover:bg-[#20232a]",
   ghost: "font-normal text-[var(--sf-text-2)] hover:text-[var(--sf-text-1)]",
@@ -83,16 +84,19 @@ export function Segmented({
   onChange,
   changed = false,
   className = "",
+  ariaLabel,
 }: {
   options: string[];
   value: string;
   onChange?: (value: string) => void;
   changed?: boolean;
   className?: string;
+  ariaLabel?: string;
 }) {
   return (
     <div
       role="radiogroup"
+      aria-label={ariaLabel}
       className={`flex h-9 items-center rounded-lg border bg-[var(--sf-panel)] p-0.5 ${
         changed ? "border-[#6ca6ff66]" : "border-[var(--sf-hairline-strong)]"
       } ${className}`}

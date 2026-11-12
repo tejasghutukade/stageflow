@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import type { Socket } from "node:net";
 import { connect as netConnect } from "node:net";
-import { mkdir, mkdtemp, open, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, open, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -130,6 +130,29 @@ export default async function execute(context) {
 }
 `;
 
+const LIST_ROOTS = `
+export default async function execute(context) {
+  async function attempt(run) {
+    try {
+      return await run();
+    } catch (error) {
+      return { code: error.code, message: error.message };
+    }
+  }
+  return {
+    stolen: context.artifacts.stolen === true || context.workspace.stolen === true,
+    listed: await context.artifacts.list(""),
+    filesRead: await context.files.readText("artifacts", "a.txt"),
+    report: await context.artifacts.readJson("report.json"),
+    workspace: await context.workspace.list("."),
+    denied: [await attempt(() => context.artifacts.list("/etc")), await attempt(() => context.artifacts.list("../outside.txt"))],
+    missing: await attempt(() => context.artifacts.list("missing")),
+    file: await attempt(() => context.artifacts.list("a.txt")),
+    limited: await attempt(() => context.artifacts.list("many")),
+  };
+}
+`;
+
 const closures: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
@@ -172,6 +195,57 @@ describe("function broker", () => {
     expect(JSON.stringify(result)).not.toContain(OTHER_FILE);
     expect(JSON.stringify(result)).not.toContain(GITHUB_SENTINEL);
     expect(await readFile(path.join(artifacts, "other.txt"), "utf8")).toBe(OTHER_FILE);
+  });
+
+  it("reads a granted artifact under the Stageflow home runs directory", async () => {
+    const root = await makeRoot();
+    const home = path.join(root, "data-home");
+    const artifacts = path.join(home, "runs", "run-1", "stages", "write-report", "attempts", "1", "artifacts");
+    await mkdir(artifacts, { recursive: true });
+    await writeFile(path.join(artifacts, "report.json"), '{"score":82}');
+    await writeFile(path.join(artifacts, "auth.json"), AUTH_JSON);
+    await mkdir(path.join(artifacts, "attempts", "1", "credentials"), { recursive: true });
+    await writeFile(path.join(artifacts, "attempts", "1", "credentials", "token"), CREDENTIALS_DIR);
+    await writeFile(path.join(home, "secret.txt"), HOME_FILE);
+    const broker = brokerFor(root, {}, home);
+    const result = await broker.invoke({
+      invocationId: "home-runs-read",
+      kind: "verification",
+      source: `
+        export default async function execute(context) {
+          const report = await context.artifacts.readJson("report.json");
+          const denied = [];
+          for (const read of [
+            () => context.artifacts.readText("auth.json"),
+            () => context.artifacts.readText("attempts/1/credentials/token"),
+            () => context.files.readText("workspace", "secret.txt"),
+          ]) {
+            try {
+              denied.push(await read());
+            } catch {
+              denied.push("denied");
+            }
+          }
+          return { score: report.score, denied };
+        }
+      `,
+      context: {},
+      roots: { artifacts, workspace: home },
+      projectRoot: root,
+      grants: {
+        files: [
+          { root: "artifacts", path: ".", access: "read" },
+          { root: "workspace", path: ".", access: "read" },
+        ],
+      },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      value: { score: 82, denied: ["denied", "denied", "denied"] },
+    });
+    expect(JSON.stringify(result)).not.toContain(AUTH_JSON);
+    expect(JSON.stringify(result)).not.toContain(CREDENTIALS_DIR);
+    expect(JSON.stringify(result)).not.toContain(HOME_FILE);
   });
 
   it("denies absolute paths, traversal, symlink escapes, devices, and credential files", async () => {
@@ -251,6 +325,9 @@ describe("function broker", () => {
       },
       async writeFile() {
         throw new Error("unexpected container write");
+      },
+      async list() {
+        throw new Error("unexpected container list");
       },
     };
     const root = await makeRoot();
@@ -704,6 +781,177 @@ describe("function broker", () => {
     expect(result).toMatchObject({ ok: false, code: "cancelled" });
     expect(sentBody).toBe(false);
     expect(JSON.stringify(result)).not.toContain(SLOW_BODY);
+  });
+
+  it("lists and reads through context.artifacts and context.workspace with the same grants", async () => {
+    const root = await makeRoot();
+    const artifacts = path.join(root, "artifacts");
+    const reports = path.join(artifacts, "reports");
+    await mkdir(reports, { recursive: true });
+    await writeFile(path.join(reports, "summary.md"), "summary");
+    await writeFile(path.join(artifacts, "b.txt"), "b");
+    await writeFile(path.join(artifacts, "a.txt"), "aa");
+    await writeFile(path.join(artifacts, "report.json"), '{"score":4}');
+    await writeFile(path.join(artifacts, "auth.json"), AUTH_JSON);
+    await mkdir(path.join(artifacts, ".stageflow"), { recursive: true });
+    await writeFile(path.join(artifacts, ".stageflow", "secret"), "hidden-stageflow");
+    const outside = path.join(root, "outside.txt");
+    await writeFile(outside, OUTSIDE);
+    await symlink(outside, path.join(artifacts, "escape"));
+    await symlink(path.join(artifacts, "a.txt"), path.join(artifacts, "inside"));
+    await symlink("/dev/null", path.join(artifacts, "devnull"));
+    const workspace = path.join(root, "ws");
+    await mkdir(workspace);
+    await writeFile(path.join(workspace, "notes.txt"), "workspace-note");
+    const broker = brokerFor(root, {});
+    const many = path.join(artifacts, "many");
+    await mkdir(many);
+    await Promise.all(Array.from({ length: 1001 }, (_, index) => writeFile(path.join(many, `f${index}`), "x")));
+
+    const listed = await broker.invoke({
+      invocationId: "list-roots",
+      kind: "verification",
+      source: LIST_ROOTS,
+      context: { artifacts: { stolen: true }, workspace: { stolen: true }, files: { stolen: true }, env: { LEAK: "no" } },
+      roots: { artifacts, workspace },
+      projectRoot: root,
+      grants: { files: [{ root: "artifacts", path: ".", access: "read" }, { root: "workspace", path: "", access: "read" }] },
+    });
+    const reportsStat = await stat(reports);
+    expect(listed).toMatchObject({
+      ok: true,
+      value: {
+        stolen: false,
+        filesRead: "aa",
+        report: { score: 4 },
+        workspace: [{ name: "notes.txt", type: "file", size: "workspace-note".length }],
+        denied: [
+          { code: "permission_denied", message: "file access denied" },
+          { code: "permission_denied", message: "file access denied" },
+        ],
+        missing: { code: "not_found", message: "file not found" },
+        file: { code: "not_a_directory", message: "not a directory" },
+        limited: { code: "list_limit", message: "directory has more than 1000 entries" },
+      },
+    });
+    const rows = (listed.ok ? listed.value : undefined) as { listed?: Array<{ name: string; type: string; size: number }> } | undefined;
+    expect(rows?.listed).toEqual([
+      { name: "a.txt", type: "file", size: 2 },
+      { name: "b.txt", type: "file", size: 1 },
+      { name: "inside", type: "file", size: 2 },
+      { name: "many", type: "directory", size: (await lstat(many)).size },
+      { name: "report.json", type: "file", size: '{"score":4}'.length },
+      { name: "reports", type: "directory", size: reportsStat.size },
+    ]);
+    expect(JSON.stringify(listed)).not.toContain(AUTH_JSON);
+    expect(JSON.stringify(listed)).not.toContain(OUTSIDE);
+    expect(JSON.stringify(listed)).not.toContain("hidden-stageflow");
+
+    const parent = await broker.invoke({
+      invocationId: "list-parent-denied",
+      kind: "verification",
+      source: "export default async function execute(context){ try { return { rows: await context.artifacts.list('reports') }; } catch (error) { return { code: error.code, message: error.message }; } }",
+      context: {},
+      roots: { artifacts, workspace: root },
+      projectRoot: root,
+      grants: { files: [{ root: "artifacts", path: "reports/summary.md", access: "read" }] },
+    });
+    expect(parent).toMatchObject({ ok: true, value: { code: "permission_denied", message: "file access denied" } });
+
+    const child = await broker.invoke({
+      invocationId: "list-directory-grant",
+      kind: "verification",
+      source: "export default async function execute(context){ return { rows: await context.files.list('artifacts', 'reports') }; }",
+      context: {},
+      roots: { artifacts, workspace: root },
+      projectRoot: root,
+      grants: { files: [{ root: "artifacts", path: "reports", access: "read" }] },
+    });
+    expect(child).toMatchObject({
+      ok: true,
+      value: { rows: [{ name: "summary.md", type: "file", size: "summary".length }] },
+    });
+
+    const wrote = await broker.invoke({
+      invocationId: "artifacts-write",
+      kind: "tool",
+      source: "export default async function execute(context){ await context.artifacts.write('out.txt', 'next'); return { wrote: true }; }",
+      context: {},
+      roots: { artifacts, workspace: root },
+      projectRoot: root,
+      grants: { files: [{ root: "artifacts", path: "", access: "write" }] },
+    });
+    expect(wrote).toMatchObject({ ok: true, value: { wrote: true } });
+    expect(await readFile(path.join(artifacts, "out.txt"), "utf8")).toBe("next");
+
+    const deniedWrite = await broker.invoke({
+      invocationId: "artifacts-write-denied",
+      kind: "verification",
+      source: "export default async function execute(context){ try { await context.artifacts.write('out.txt', 'no'); return { wrote: true }; } catch (error) { return { code: error.code, message: error.message }; } }",
+      context: {},
+      roots: { artifacts, workspace: root },
+      projectRoot: root,
+      grants: { files: [{ root: "artifacts", path: ".", access: "read" }] },
+    });
+    expect(deniedWrite).toMatchObject({ ok: true, value: { code: "permission_denied", message: "file access denied" } });
+  });
+
+  it("lists a container directory and drops sensitive or escaping names", async () => {
+    const containerFiles = {
+      async realPath(containerPath: string) {
+        if (containerPath === "/workspace/artifacts/escape") return "/etc/passwd";
+        if (containerPath === "/etc/passwd") return "/etc/passwd";
+        return containerPath;
+      },
+      async stat(containerPath: string) {
+        if (containerPath === "/workspace/artifacts" || containerPath === "/workspace/artifacts/nested") {
+          return { file: false, directory: true, device: false, size: 64 };
+        }
+        if (containerPath === "/workspace/artifacts/a.txt") return { file: true, directory: false, device: false, size: 2 };
+        if (containerPath === "/etc/passwd") return { file: true, directory: false, device: false, size: 11 };
+        return undefined;
+      },
+      async readFile() {
+        throw new Error("unexpected container read");
+      },
+      async writeFile() {
+        throw new Error("unexpected container write");
+      },
+      async list(containerPath: string) {
+        if (containerPath !== "/workspace/artifacts") throw new Error(`unexpected list ${containerPath}`);
+        return [
+          { name: "b.txt", type: "file" as const, size: 1 },
+          { name: "a.txt", type: "file" as const, size: 2 },
+          { name: "auth.json", type: "file" as const, size: AUTH_JSON.length },
+          { name: "escape", type: "symlink" as const, size: 4 },
+          { name: "nested", type: "directory" as const, size: 64 },
+        ];
+      },
+    };
+    const root = await makeRoot();
+    const broker = new FunctionBroker({ env: {}, stageflowHome: path.join(root, "home"), containerFiles });
+    const result = await broker.invoke({
+      invocationId: "container-list",
+      kind: "verification",
+      source: "export default async function execute(context){ return { rows: await context.artifacts.list('') }; }",
+      context: { artifacts: { stolen: true }, workspace: "spoof" },
+      containerName: "stage-container",
+      roots: { artifacts: "/workspace/artifacts", workspace: "/workspace" },
+      projectRoot: "/workspace",
+      grants: { files: [{ root: "artifacts", path: ".", access: "read" }] },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        rows: [
+          { name: "a.txt", type: "file", size: 2 },
+          { name: "b.txt", type: "file", size: 1 },
+          { name: "nested", type: "directory", size: 64 },
+        ],
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(AUTH_JSON);
+    expect(JSON.stringify(result)).not.toContain("/etc/passwd");
   });
 });
 

@@ -60,7 +60,7 @@ import {
   SANDBOX_WRITE_TOOL_NAME,
   type AskOperatorCapture,
 } from "./claudeTools.js";
-import { claudeFunctionToolReason, resolveFunctionTools } from "../functions/toolCall.js";
+import { claudeFunctionToolReason, functionCatalogRoot, resolveFunctionTools } from "../functions/toolCall.js";
 import { createClaudeActivityMapper } from "./claudeActivity.js";
 import {
   contentLeakedToolCall,
@@ -127,7 +127,7 @@ function resolveClaudeModel(stageModel: string): Preflight {
 async function preflight(input: StageRunInput): Promise<Preflight> {
   const attachments = input.stage.tools?.functions ?? [];
   if (attachments.length > 0) {
-    const projectRoot = input.roots.checkoutRoot ?? input.roots.cwd;
+    const projectRoot = functionCatalogRoot(input);
     const resolved = await resolveFunctionTools({ projectRoot, attachments });
     const name = resolved.ok ? (resolved.tools[0]?.name ?? attachments[0]!.id) : attachments[0]!.id;
     return { ok: false, reason: claudeFunctionToolReason(name) };

@@ -45,6 +45,7 @@ More CI-focused examples will follow this pattern (prepare context → run pipel
 | [verify-tour](verify-tour/) | Verify check types: artifact, command, checklist, payload_schema, gate, checkout_changes | `sf ui`, then pick `verify-tour` |
 | [function-verify](function-verify/) | One verification function on a stage check, with file and env grants | [README](function-verify/README.md), `sf validate`, then `sf run` |
 | [function-tool](function-tool/) | One tool function attached on a stage as `tools.functions` | [README](function-tool/README.md), `sf validate`, then `sf run` |
+| [function-manual](function-manual/) | Verification, routing, and tool functions to run by hand | [README](function-manual/README.md), `sf validate`, then `sf run` |
 | [retry-tour](retry-tour/) | Retry surfaces: emit soft-reject, automatic repair, manual recover, ordinary Retry | `sf ui`, then pick `retry-tour` |
 | [mcp-hitl-tour](mcp-hitl-tour/) | MCP HITL tour: free_text gate, ungated fan-out + Clone Chain join, wait_for_human loop, artifacts | `sf ui` / MCP `start_run`, then [README](mcp-hitl-tour/README.md) |
 | [memory](memory/) | Two pipelines share one data-directory page: one writes a line, the next run reads it | Create `notebook` first, then [README](memory/README.md) |

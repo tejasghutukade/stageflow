@@ -262,6 +262,9 @@ describe("function routes", () => {
     expect(parseHash(`#${functionNewPath()}`)).toEqual({ name: "functions", creating: true });
     expect(parseHash(`#${functionPath("score")}`)).toEqual({ name: "functions", functionId: "score" });
     expect(parseHash("#/functions/pick_route")).toEqual({ name: "functions", functionId: "pick_route" });
+    expect(functionNewPath("tool")).toBe("/functions/new?kind=tool");
+    expect(parseHash("#/functions/new?kind=routing")).toEqual({ name: "functions", creating: true, kind: "routing" });
+    expect(parseHash("#/functions/new?kind=bogus")).toEqual({ name: "functions", creating: true });
   });
 });
 

@@ -6,7 +6,7 @@ import {
   buildPipelineDagSnapshotFromLoaded,
   instancesOfDefinition,
 } from "../runstore/pipelineDagSnapshot.js";
-import { attemptArtifactsDir } from "../runstore/workspaceLayout.js";
+import { stageFunctionCallPlace } from "../functions/stageCall.js";
 import {
   defaultStageBrowserSupport,
   resolveStageBrowserEnv,
@@ -495,14 +495,13 @@ export async function recoverFunctionRoute(options: {
     projectRoot,
     invoker: options.functionRouteInvoker,
     force: true,
-    roots: {
-      artifacts: attemptArtifactsDir(
-        prepared.run.workspaceDir,
-        stageId,
-        latest?.attempt ?? 1,
-      ),
-      workspace: prepared.checkoutRoot ?? projectRoot,
-    },
+    place: stageFunctionCallPlace({
+      runWorkspaceDir: prepared.run.workspaceDir,
+      stageId,
+      attempt: latest?.attempt,
+      checkoutRoot: prepared.checkoutRoot,
+      cwd: projectRoot,
+    }),
   });
   if (decision === undefined || decision.status === "error") {
     return {
@@ -1390,10 +1389,13 @@ export async function runPipelineDag(
         envelope,
         projectRoot: factoryCwd,
         invoker: options.functionRouteInvoker,
-        roots: {
-          artifacts: attemptArtifactsDir(run.workspaceDir, stageId, latest?.attempt ?? 1),
-          workspace: checkoutRoot ?? factoryCwd,
-        },
+        place: stageFunctionCallPlace({
+          runWorkspaceDir: run.workspaceDir,
+          stageId,
+          attempt: latest?.attempt,
+          checkoutRoot,
+          cwd: factoryCwd,
+        }),
       });
       if (decision === undefined || decision.status === "error") {
         schedulingHalted = true;
@@ -1826,10 +1828,13 @@ export async function runPipelineDag(
         envelope,
         projectRoot: factoryCwd,
         invoker: options.functionRouteInvoker,
-        roots: {
-          artifacts: attemptArtifactsDir(run.workspaceDir, node.id, latest?.attempt ?? 1),
-          workspace: checkoutRoot ?? factoryCwd,
-        },
+        place: stageFunctionCallPlace({
+          runWorkspaceDir: run.workspaceDir,
+          stageId: node.id,
+          attempt: latest?.attempt,
+          checkoutRoot,
+          cwd: factoryCwd,
+        }),
       });
       if (decision === undefined || decision.status === "error") {
         schedulingHalted = true;

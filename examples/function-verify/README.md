@@ -2,13 +2,14 @@
 
 One stage whose after-phase check is the project function `score_check`. The function reads `report.json` from the attempt artifacts and compares `score` with the bound `MIN_SCORE`.
 
-The definition lives at the project root, `functions/score_check.function.yaml`, because a function file is project-owned. The pipeline only names that id and grants the two capabilities the file declares.
+The definition lives at the project root, `functions/score_check.function.yaml`, because a function file is project-owned. Its source starts with `export const access`, which derives a read of the artifacts root (`artifacts`) and the env alias `MIN_SCORE` (`env_min_score`). The file does not repeat `capabilities` or `bindings`. The pipeline grants those two derived ids.
 
 ## What this demonstrates
 
 - A verification is `kind: verification` and `export default function execute` (async is fine).
+- `export const access` is the first statement. `context.artifacts.readJson("report.json")` uses the artifacts grant.
 - A stage check is `type: function` plus `function` on the stage body. Omitted `when` is the after phase.
-- Each declared capability needs a matching grant. The file grant repeats `root` and `path`. The env grant is the capability id.
+- Each derived capability needs a matching grant. The file grant repeats `root` and `path` (`path: ""` is the artifacts root). The env grant is the capability id.
 
 ## Commands
 

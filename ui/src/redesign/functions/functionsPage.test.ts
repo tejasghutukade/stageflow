@@ -6,10 +6,13 @@ import { PipelineEditorInspector } from "../editor/PipelineEditorInspector";
 import { functionsApi, FunctionApiError } from "../../api/functions";
 import { FunctionsDirectoryPage } from "./FunctionsDirectoryPage";
 import { FunctionEditorPage } from "./FunctionEditorPage";
-import { placeFunction } from "./functionAttachments";
+import { FunctionAttachmentPanel } from "./FunctionAttachmentPanel";
+import { placeFunction, staleGrants } from "./functionAttachments";
+import { accessFromDefinition, applyAccess } from "./functionAccess";
 import { filterFunctions, searchFunctions } from "./functionsDirectoryModel";
-import { deleteUnreferenced, saveOrSurfaceConflict, testRequestBody } from "./functionsPageModel";
-import type { FunctionSummary } from "../../api/functions";
+import { relativeTime, slugId } from "./functionKinds";
+import { deleteUnreferenced, followToolFields, saveOrSurfaceConflict, testRequestBody } from "./functionsPageModel";
+import type { FunctionCapability, FunctionSummary } from "../../api/functions";
 
 const ROWS: FunctionSummary[] = [
   {
@@ -262,5 +265,341 @@ describe("pipeline function slots", () => {
     expect(html).toContain('data-testid="function-slot-finding"');
     expect(html).toContain('href="#/functions/pick_route"');
     expect(html).toContain("A routing function cannot be attached as a tool.");
+  });
+});
+
+describe("functions directory polish", () => {
+  it("finds a function by id or description as well as name", () => {
+    expect(searchFunctions(ROWS, "pick_route").map((row) => row.id)).toEqual(["pick_route"]);
+    expect(searchFunctions(ROWS, "checks a report").map((row) => row.id)).toEqual(["score"]);
+    expect(searchFunctions(ROWS, "nothing like this")).toEqual([]);
+  });
+
+  it("teaches the three kinds when the project has none and links each to a prefilled editor", () => {
+    const html = render(createElement(FunctionsDirectoryPage, { loaded: [] }));
+    expect(html).toContain('data-testid="functions-empty"');
+    expect(html).toContain('href="#/functions/new?kind=verification"');
+    expect(html).toContain('href="#/functions/new?kind=routing"');
+    expect(html).toContain('href="#/functions/new?kind=tool"');
+  });
+
+  it("shows a definition problem on its row and gives each row a labelled delete control", () => {
+    const broken: FunctionSummary[] = [{ ...ROWS[0]!, issues: [SOURCE_ISSUE] }];
+    const html = render(createElement(FunctionsDirectoryPage, { loaded: broken }));
+    expect(html).toContain(SOURCE_ISSUE.message);
+    expect(html).toContain('aria-label="Delete Score check"');
+    expect(html).toContain('aria-label="Open Score check"');
+  });
+
+  it("slugs a name into an id and words a timestamp relative to now", () => {
+    expect(slugId("  Pick Best Route! ")).toBe("pick_best_route");
+    expect(slugId("***")).toBe("");
+    const now = Date.parse("2026-11-12T12:00:00.000Z");
+    expect(relativeTime("2026-11-12T11:59:40.000Z", now)).toBe("just now");
+    expect(relativeTime("2026-11-12T11:15:00.000Z", now)).toBe("45m ago");
+    expect(relativeTime("2026-11-12T07:00:00.000Z", now)).toBe("5h ago");
+    expect(relativeTime("2026-11-09T12:00:00.000Z", now)).toBe("3d ago");
+    expect(relativeTime("not a date", now)).toBe("");
+  });
+});
+
+describe("function editor polish", () => {
+  const detail = {
+    id: "score",
+    name: "Score check",
+    description: null,
+    kind: "verification" as const,
+    revision: 2,
+    createdAt: "2026-11-11T00:00:00.000Z",
+    updatedAt: "2026-11-11T00:00:00.000Z",
+    issues: [],
+    definition: {
+      id: "score",
+      name: "Score check",
+      kind: "verification" as const,
+      source: SAVED_SOURCE,
+      timeout_ms: 5000,
+      capabilities: [],
+      bindings: [],
+    },
+    yaml: null,
+    sourceHash: "abc",
+    contractVersion: 1,
+  };
+
+  it("offers a kind picker and a create action for a new function, preselecting the requested kind", () => {
+    const html = render(createElement(FunctionEditorPage, { creating: true, initialKind: "routing" }));
+    expect(html).toContain('role="radiogroup"');
+    expect(html).toContain("Create function");
+    expect(html).toContain("nextStageIds");
+    expect(html).not.toContain("Delete function");
+    expect(html).toContain("Save the function first to run a test.");
+  });
+
+  it("pre-fills a sample context shaped for the kind and explains that it becomes context", () => {
+    const tool = render(createElement(FunctionEditorPage, { functionId: "total_counts", loaded: { ...detail, id: "total_counts", kind: "tool", definition: { ...detail.definition, id: "total_counts", kind: "tool", tool_name: "total_counts", tool_description: "Sum" } } }));
+    expect(tool).toContain('aria-label="Sample context"');
+    expect(tool).toContain("&quot;input&quot;: {}");
+    expect(tool).toContain("context.input");
+    const routing = render(createElement(FunctionEditorPage, { functionId: "pick_route", loaded: { ...detail, id: "pick_route", kind: "routing", definition: { ...detail.definition, id: "pick_route", kind: "routing" } } }));
+    expect(routing).toContain("&quot;children&quot;");
+  });
+
+  it("names the next revision on the save action and fixes the id and kind of a saved function", () => {
+    const html = render(createElement(FunctionEditorPage, { functionId: "score", loaded: detail }));
+    expect(html).toContain("Save as revision 3");
+    expect(html).toContain("No unsaved changes");
+    expect(html).toContain("Delete function");
+    expect(html).toContain("functions/score.function.yaml");
+    expect(html).not.toContain('aria-label="Kind"');
+    expect(html).toContain('aria-label="Artifacts"');
+  });
+
+  it("puts a field issue under its field and any other issue in a summary", () => {
+    const html = render(
+      createElement(FunctionEditorPage, {
+        functionId: "score",
+        loaded: { ...detail, issues: [SOURCE_ISSUE, { path: "", code: "function.invalid", message: "Catalog is unreadable" }] },
+      }),
+    );
+    expect(html).toContain(SOURCE_ISSUE.message);
+    expect(html).toContain("Catalog is unreadable");
+    expect(html).toContain("This function has a problem");
+    expect(html).toContain("2 to fix");
+  });
+});
+
+describe("function attachment rows", () => {
+  it("flags an attached function the catalog no longer has", () => {
+    const draft: DraftPackagePayload = {
+      pipeline: {
+        id: "demo",
+        stages: [{ id: "decide", system_prompt: "Decide.", tools: { functions: [{ id: "deleted_one", grants: [] }] } }],
+      },
+    };
+    const html = render(
+      createElement(PipelineEditorInspector, {
+        draft,
+        selectedStageId: "decide",
+        findings: [],
+        defaultModel: null,
+        pipelines: [],
+        functions: ROWS,
+        onDraftChange: () => {},
+        onRenameStage: () => {},
+      }),
+    );
+    expect(html).toContain("deleted_one");
+    expect(html).toContain("Not found");
+  });
+
+  it("asks before granting access and flags an attachment whose grants are stale", () => {
+    const readArtifacts: FunctionCapability = { id: "artifacts", type: "file", root: "artifacts", path: "", access: "read" };
+    const definition = {
+      id: "total_counts",
+      name: "Total counts",
+      kind: "tool" as const,
+      source: SAVED_SOURCE,
+      timeout_ms: 5000,
+      capabilities: [readArtifacts],
+      bindings: [],
+    };
+    expect(staleGrants({ grants: [] }, definition)).toBe(true);
+    expect(staleGrants({ grants: [{ id: "artifacts", path: "", root: "artifacts" }] }, definition)).toBe(false);
+    expect(staleGrants({ grants: [{ id: "gone" }] }, null)).toBe(false);
+
+    const draft: DraftPackagePayload = {
+      pipeline: {
+        id: "demo",
+        stages: [{ id: "decide", system_prompt: "Decide.", tools: { functions: [{ id: "total_counts", grants: [] }] } }],
+      },
+    };
+    const html = render(
+      createElement(FunctionAttachmentPanel, {
+        draft,
+        stageId: "decide",
+        catalog: ROWS,
+        definitions: { total_counts: definition },
+        initialPending: {
+          id: "total_counts",
+          name: "Total counts",
+          labels: ["Read artifacts"],
+          grants: [{ id: "artifacts", root: "artifacts", path: "" }],
+          mode: "replace",
+          slot: "tool",
+        },
+        onDraftChange: () => {},
+      }),
+    );
+    expect(html).toContain("Access changed");
+    expect(html).toContain("Review");
+    expect(html).toContain("Total counts wants: Read artifacts");
+    expect(html).toContain("Allow");
+    expect(html).toContain("Cancel");
+    expect(html).toContain('data-testid="function-attachments"');
+  });
+});
+
+describe("function access editor", () => {
+  const base = {
+    id: "score",
+    name: "Score check",
+    description: null,
+    kind: "verification" as const,
+    revision: 1,
+    createdAt: "2026-11-11T00:00:00.000Z",
+    updatedAt: "2026-11-11T00:00:00.000Z",
+    issues: [],
+    yaml: null,
+    sourceHash: "abc",
+    contractVersion: 1,
+  };
+  const readApi: FunctionCapability = {
+    id: "api_1",
+    type: "api",
+    origin: "https://api.example.com",
+    methods: ["GET"],
+    path_prefix: "/",
+    effect: "read",
+  };
+
+  it("shows access controls for a tool and hides write and action on a verification", () => {
+    const tool = render(createElement(FunctionEditorPage, { creating: true, initialKind: "tool" }));
+    expect(tool).toContain(">Access<");
+    expect(tool).toContain('data-testid="function-contract"');
+    expect(tool).toContain('aria-label="Artifacts"');
+    expect(tool).toContain("Environment variables");
+    expect(tool).toContain("Add variable");
+    expect(tool).toContain("Network");
+    expect(tool).toContain("Add origin");
+    expect(tool).toContain("Read and write");
+    expect(tool).toContain("No access. This function can only work on its context.");
+    expect(tool).toContain("Defaults to the id.");
+    expect(tool).toContain("Defaults to the description.");
+
+    const verification = render(
+      createElement(FunctionEditorPage, {
+        functionId: "score",
+        loaded: {
+          ...base,
+          definition: {
+            id: "score",
+            name: "Score check",
+            kind: "verification",
+            source: SAVED_SOURCE,
+            timeout_ms: 5000,
+            capabilities: [readApi],
+            bindings: [],
+          },
+        },
+      }),
+    );
+    expect(verification).toContain("https://api.example.com");
+    expect(verification).toContain("Move access into the source");
+    expect(verification).toContain("Attachments will ask you to review access once, because capability ids are now derived from the code.");
+    expect(verification).not.toContain("Read and write");
+    expect(verification).not.toContain("Action");
+  });
+
+  it("binds access controls to a declaration and shows parser issues without rewriting", () => {
+    const declared = `export const access = {
+  artifacts: "read",
+  env: ["MIN_SCORE?"],
+  files: [{ root: "artifacts", path: "report.json", access: "read" }],
+  network: ["https://api.example.com"],
+};
+export default function execute(context) { return { passed: true }; }
+`;
+    const html = render(
+      createElement(FunctionEditorPage, {
+        functionId: "score",
+        loaded: {
+          ...base,
+          definition: {
+            id: "score",
+            name: "Score check",
+            kind: "verification",
+            source: declared,
+            timeout_ms: 5000,
+            capabilities: [],
+            bindings: [],
+          },
+        },
+      }),
+    );
+    expect(html).toContain("Read artifacts");
+    expect(html).toContain("Env MIN_SCORE (optional)");
+    expect(html).toContain("API https://api.example.com (read)");
+    expect(html).toContain("Advanced access");
+    expect(html).toContain("report.json");
+    expect(html).toContain("Edit these paths in the source.");
+    expect(html).toContain('aria-label="Workspace"');
+    expect(html).not.toContain("Move access into the source");
+
+    const broken = `export const access = { nope: true };
+export default function execute(context) { return { passed: true }; }
+`;
+    const invalid = render(
+      createElement(FunctionEditorPage, {
+        functionId: "score",
+        loaded: {
+          ...base,
+          definition: {
+            id: "score",
+            name: "Score check",
+            kind: "verification",
+            source: broken,
+            timeout_ms: 5000,
+            capabilities: [],
+            bindings: [],
+          },
+        },
+      }),
+    );
+    expect(invalid).toContain("unknown access key");
+    expect(invalid).toContain("nope");
+    expect(invalid).toContain("(1:25)");
+    expect(invalid).toContain("<fieldset");
+    expect(invalid).toContain("disabled");
+  });
+
+  it("shows advanced file access and leaves that capability unchanged", () => {
+    const reports: FunctionCapability = { id: "reports", type: "file", root: "workspace", path: "reports/", access: "read" };
+    const html = render(
+      createElement(FunctionEditorPage, {
+        functionId: "score",
+        loaded: {
+          ...base,
+          definition: {
+            id: "score",
+            name: "Score check",
+            kind: "verification",
+            source: SAVED_SOURCE,
+            timeout_ms: 5000,
+            capabilities: [reports],
+            bindings: [],
+          },
+        },
+      }),
+    );
+    expect(html).toContain("Advanced access (1)");
+    expect(html).toContain("reports/");
+    const access = accessFromDefinition([reports], [], "verification");
+    expect(access.advanced).toEqual([reports]);
+    expect(applyAccess({ capabilities: [reports], bindings: [] }, { ...access, env: [{ alias: "FEED_REGION", required: true, capabilityId: "" }] }, "verification").capabilities[0]).toEqual(reports);
+  });
+
+  it("follows the id and description for a new tool until those fields are edited", () => {
+    const blank = { id: "total", description: "Add the counts", tool_name: "", tool_description: "" };
+    expect(followToolFields(true, "tool", blank, { toolName: false, toolDescription: false })).toEqual({
+      tool_name: "total",
+      tool_description: "Add the counts",
+    });
+    expect(followToolFields(true, "tool", { ...blank, tool_name: "custom", tool_description: "Mine" }, { toolName: true, toolDescription: true })).toEqual({
+      tool_name: "custom",
+      tool_description: "Mine",
+    });
+    expect(followToolFields(false, "tool", blank, { toolName: false, toolDescription: false })).toEqual({ tool_name: "", tool_description: "" });
+    expect(followToolFields(true, "verification", blank, { toolName: false, toolDescription: false })).toEqual({ tool_name: "", tool_description: "" });
   });
 });

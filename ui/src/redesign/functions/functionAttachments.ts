@@ -28,6 +28,21 @@ export function placeFunction(
   };
 }
 
+function canonicalGrants(grants: readonly FunctionGrant[]): string {
+  const sorted = [...grants].sort((left, right) => left.id.localeCompare(right.id));
+  return JSON.stringify(
+    sorted.map((grant) => Object.fromEntries(Object.entries(grant).sort(([left], [right]) => left.localeCompare(right)))),
+  );
+}
+
+export function staleGrants(
+  attachment: { grants: readonly FunctionGrant[] },
+  definition: { capabilities: readonly FunctionCapability[] } | null | undefined,
+): boolean {
+  if (!definition) return false;
+  return canonicalGrants(attachment.grants) !== canonicalGrants(grantsForCapabilities(definition.capabilities));
+}
+
 export function grantsForCapabilities(capabilities: readonly FunctionCapability[]): FunctionGrant[] {
   return capabilities.map((capability) => {
     if (capability.type === "file") return { id: capability.id, root: capability.root, path: capability.path };

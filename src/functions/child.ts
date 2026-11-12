@@ -76,6 +76,8 @@ const EXPLICIT_CODES = new Set([
   "file_limit",
   "not_found",
   "invalid_output",
+  "not_a_directory",
+  "list_limit",
 ]);
 
 type CapabilityCall = {
@@ -363,6 +365,17 @@ function installCapabilities(
     ),
   );
   context.setProp(files, "write", write);
+  const list = scope.manage(
+    context.newFunction("list", (rootHandle, pathHandle) =>
+      hostPromise(context, bridge, {
+        op: "list",
+        root: readGuestString(context, rootHandle),
+        path: guestPath(context, pathHandle),
+      }),
+    ),
+  );
+  context.setProp(files, "list", list);
+  for (const rootName of ["artifacts", "workspace"] as const) installRoot(context, scope, guestContext, bridge, rootName);
   const http = scope.manage(context.newObject());
   const request = scope.manage(
     context.newFunction("request", (spec) =>
@@ -433,6 +446,45 @@ function jsonToHandle(context: QuickJSContext, value: JsonValue): QuickJSHandle 
     return context.newString("");
   }
   return parsed.value;
+}
+
+function installRoot(
+  context: QuickJSContext,
+  scope: Scope,
+  guestContext: QuickJSHandle,
+  bridge: HostBridge,
+  rootName: "artifacts" | "workspace",
+): void {
+  const root = scope.manage(context.newObject());
+  for (const op of ["exists", "stat", "readText", "readJson", "list"] as const) {
+    const fn = scope.manage(
+      context.newFunction(op, (pathHandle) =>
+        hostPromise(context, bridge, {
+          op,
+          root: rootName,
+          path: guestPath(context, pathHandle),
+        }),
+      ),
+    );
+    context.setProp(root, op, fn);
+  }
+  const write = scope.manage(
+    context.newFunction("write", (pathHandle, contentHandle) =>
+      hostPromise(context, bridge, {
+        op: "write",
+        root: rootName,
+        path: guestPath(context, pathHandle),
+        content: readGuestString(context, contentHandle),
+      }),
+    ),
+  );
+  context.setProp(root, "write", write);
+  context.setProp(guestContext, rootName, root);
+}
+
+function guestPath(context: QuickJSContext, handle: QuickJSHandle | undefined): string {
+  if (!handle || context.typeof(handle) === "undefined") return "";
+  return readGuestString(context, handle) ?? "";
 }
 
 function readGuestString(context: QuickJSContext, handle: QuickJSHandle | undefined): string | undefined {

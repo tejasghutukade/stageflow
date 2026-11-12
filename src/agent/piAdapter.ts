@@ -106,7 +106,8 @@ import { createReplyEmailTool } from "../tools/replyEmail.js";
 import { createGetEmailTool, createSearchEmailTool, createDownloadEmailAttachmentTool } from "../tools/readEmail.js";
 import "./cursorProvider.js";
 import { isCursorModelRef, readCursorApiKey } from "./cursorProvider.js";
-import { cursorFunctionToolReason, resolveFunctionTools } from "../functions/toolCall.js";
+import { stageFunctionCallPlace } from "../functions/stageCall.js";
+import { cursorFunctionToolReason, functionCatalogRoot, resolveFunctionTools } from "../functions/toolCall.js";
 import { Type } from "typebox";
 import { findProviderSupport } from "./providerSupport.js";
 import { mapSessionEventToActivity, readActivityVerbose, type StageActivityEvent } from "./activity.js";
@@ -1261,7 +1262,7 @@ async function prepareStageSessionWiring(
   const { roots } = input;
   const functionAttachments = input.stage.tools?.functions ?? [];
   if (functionAttachments.length > 0 && isCursorModelRef(input.stage.model ?? "")) {
-    const projectRoot = roots.checkoutRoot ?? roots.cwd;
+    const projectRoot = functionCatalogRoot(input);
     const resolved = await resolveFunctionTools({ projectRoot, attachments: functionAttachments });
     const name = resolved.ok ? (resolved.tools[0]?.name ?? functionAttachments[0]!.id) : functionAttachments[0]!.id;
     return { ok: false, reason: cursorFunctionToolReason(name) };
@@ -1587,7 +1588,7 @@ async function prepareStageSessionWiring(
       }
     }
     if (functionAttachments.length > 0) {
-      const projectRoot = roots.checkoutRoot ?? roots.cwd;
+      const projectRoot = functionCatalogRoot(input);
       const resolved = await resolveFunctionTools({
         projectRoot,
         attachments: functionAttachments,
@@ -1595,6 +1596,15 @@ async function prepareStageSessionWiring(
           stage: runtimeStageId(input),
           attempt: roots.attempt ?? 1,
           ...(input.runId !== undefined ? { run: input.runId } : {}),
+        }),
+        place: stageFunctionCallPlace({
+          runWorkspaceDir: roots.runWorkspaceDir,
+          stageId: runtimeStageId(input),
+          attempt: roots.attempt,
+          checkoutRoot: roots.checkoutRoot,
+          cwd: roots.cwd,
+          containerName: roots.containerName,
+          containerDockerBin: roots.containerDockerBin,
         }),
       });
       if (!resolved.ok) return failAfterAttach(resolved.reason);

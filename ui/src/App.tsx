@@ -198,7 +198,7 @@ function ConsoleRoot() {
       />
     );
   } else if (route.name === "functions") {
-    content = <FunctionsRedesign functionId={route.functionId} creating={route.creating === true} />;
+    content = <FunctionsRedesign functionId={route.functionId} creating={route.creating === true} kind={route.kind} />;
   } else if (route.name === "pipelines") {
     content = <PipelinesPage onNew={go} />;
   } else if (route.name === "pipeline") {

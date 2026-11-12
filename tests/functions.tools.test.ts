@@ -14,11 +14,14 @@ import { functionSourceHash } from "../src/config/loadFunction.js";
 import { createFunctionInvoker } from "../src/functions/invoke.js";
 import { FunctionService } from "../src/functions/service.js";
 import { FunctionStore } from "../src/functions/store.js";
+import { stageFunctionCallPlace } from "../src/functions/stageCall.js";
 import {
   functionSnapshotPins,
+  resolveFunctionTools,
   runAttachedFunctionTool,
   type FunctionToolInvoker,
 } from "../src/functions/toolCall.js";
+import type { FunctionCallInput } from "../src/functions/invoke.js";
 import { buildComponents, buildSnapshot, computeFingerprint } from "../src/evals/snapshot.js";
 import { createRunStoreWithConnection } from "../src/runstore/createStore.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
@@ -197,6 +200,50 @@ describe("function tools", () => {
       expect(result.code).toBe("uncertain_outcome");
       expect(result.text.toLowerCase()).toContain("uncertain");
     }
+  });
+
+  it("sends a stage tool call to the attempt artifacts", async () => {
+    const { project, functions } = await openProject();
+    await functions.create(project, toolBody("invoice_tool", INVOICE_SOURCE), actor);
+    const seen: FunctionCallInput[] = [];
+    const invoker: FunctionToolInvoker = {
+      async call(_projectRoot, input) {
+        seen.push(input);
+        return {
+          ok: true,
+          value: { id: "inv-1", amount: 1, envelope: null },
+          logs: "",
+          durationMs: 1,
+          sourceHash: "hash",
+          revision: 1,
+          kind: "tool",
+          status: "succeeded",
+        };
+      },
+    };
+    const place = stageFunctionCallPlace({
+      runWorkspaceDir: "/data/runs/run-1",
+      stageId: "write-note",
+      attempt: 2,
+      cwd: "/data/runs/run-1",
+      checkoutRoot: "/checkout",
+      containerName: "box",
+    });
+    const resolved = await resolveFunctionTools({
+      projectRoot: project,
+      attachments: [{ id: "invoice_tool", grants: [] }],
+      invoker,
+      place,
+    });
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    await resolved.tools[0]!.run({ invoice: { id: "inv-1", amount: 1 } }, "call-1");
+    expect(seen[0]?.roots).toEqual(place.roots);
+    expect(seen[0]?.containerName).toBe("box");
+    expect(place.roots.artifacts).toBe("/data/runs/run-1/stages/write-note/attempts/2/artifacts");
+    expect(place.roots.workspace).toBe("/checkout");
+    expect(place.roots.artifacts.includes("/artifacts")).toBe(true);
+    expect(place.roots.artifacts.startsWith(project)).toBe(false);
   });
 
   it("cannot reach process or an ungranted host", async () => {

@@ -409,6 +409,17 @@ export function normalizePipelineStageEntries(
           },
         ]);
       }
+      if (route.some((entry) => "if" in entry && entry.if !== undefined)) {
+        return loadFailure([
+          {
+            code: "function.routing_conflicts_with_if",
+            message: `Stage "${id}" has a routing function and route if. Use one.`,
+            category: "pipeline",
+            pipelineId: ctx.pipelineId,
+            stageId: id,
+          },
+        ]);
+      }
       routeFunction = parsedFunction.value;
     }
 

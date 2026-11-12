@@ -1,6 +1,6 @@
 # Function tool
 
-One stage that exposes the project function `total_counts` as a tool. The agent supplies a `counts` array. The function returns `{ total }`. It does not read an envelope and it declares no file, env, or API capability.
+One stage that exposes the project function `total_counts` as a tool. The agent supplies a `counts` array. The function returns `{ total }`. It does not read an envelope. Its `access` declaration leaves artifacts, env, and network empty, so it declares no file, env, or API capability.
 
 The definition lives at the project root, `functions/total_counts.function.yaml`. The same `tools.functions` entry (`id` plus `grants`) is what an agent definition uses.
 

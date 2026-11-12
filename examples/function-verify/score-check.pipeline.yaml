@@ -19,7 +19,7 @@ stages:
         type: function
         function: score_check
         grants:
-          - id: report
+          - id: artifacts
             root: artifacts
-            path: report.json
-          - id: min_score
+            path: ""
+          - id: env_min_score

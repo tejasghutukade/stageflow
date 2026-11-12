@@ -1,10 +1,34 @@
 import { functionsApi, FunctionApiError, type FunctionDefinition, type FunctionDetail, type FunctionKind, type FunctionSummary } from "../../api/functions";
 
+const ACCESS_NOTE = `  env: [],           // names; add "?" for optional, e.g. "MIN_SCORE?"
+  network: [],       // allowed https origins
+};
+
+`;
+
 export const FUNCTION_TEMPLATES: Record<FunctionKind, string> = {
-  verification: "export default function execute(context) {\n  return { passed: true, message: \"Accepted\" };\n}\n",
-  routing:
-    "export default function execute(context) {\n  return {\n    nextStageIds: context.children.map((child) => child.id),\n    reason: \"Every eligible destination\",\n  };\n}\n",
-  tool: "export default function execute(context) {\n  const counts = Array.isArray(context.input.counts) ? context.input.counts : [];\n  return { total: counts.reduce((sum, count) => sum + count, 0) };\n}\n",
+  verification: `export const access = {
+  artifacts: "none", // "none" | "read"
+${ACCESS_NOTE}export default function execute(context) {
+  return { passed: true, message: "Accepted" };
+}
+`,
+  routing: `export const access = {
+  artifacts: "none", // "none" | "read"
+${ACCESS_NOTE}export default function execute(context) {
+  return {
+    nextStageIds: context.children.map((child) => child.id),
+    reason: "Every eligible destination",
+  };
+}
+`,
+  tool: `export const access = {
+  artifacts: "none", // "none" | "read" | "write" (write: tools only)
+${ACCESS_NOTE}export default function execute(context) {
+  const counts = Array.isArray(context.input.counts) ? context.input.counts : [];
+  return { total: counts.reduce((sum, count) => sum + count, 0) };
+}
+`,
 };
 
 export function testRequestBody(input: { source?: string; input?: unknown; mocks?: unknown; real: boolean }): Record<string, unknown> {
@@ -47,4 +71,19 @@ export async function saveOrSurfaceConflict(
 
 export function definitionFromDetail(detail: FunctionDetail): FunctionDefinition | null {
   return detail.definition;
+}
+
+export function followToolFields(
+  creating: boolean,
+  kind: FunctionKind,
+  fields: { id: string; description: string; tool_name: string; tool_description: string },
+  touched: { toolName: boolean; toolDescription: boolean },
+): { tool_name: string; tool_description: string } {
+  if (!creating || kind !== "tool") {
+    return { tool_name: fields.tool_name, tool_description: fields.tool_description };
+  }
+  return {
+    tool_name: touched.toolName ? fields.tool_name : fields.id,
+    tool_description: touched.toolDescription ? fields.tool_description : fields.description,
+  };
 }

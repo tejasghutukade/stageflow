@@ -127,7 +127,8 @@ export type ValidationFindingCode =
   | "function.grant_not_requested"
   | "function.under_granted"
   | "function.invalid"
-  | "function.routing_requires_route";
+  | "function.routing_requires_route"
+  | "function.routing_conflicts_with_if";
 
 export type ValidationFinding = {
   severity: ValidationSeverity;

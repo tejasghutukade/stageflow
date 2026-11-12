@@ -310,7 +310,7 @@ Check discriminator is `type:` (not `kind:`). Gate widgets still use `kind:` on 
 | `checkout_changes` | `id` | `path_fields` | `after` only |
 | `function` | `id`, `function` | `grants`, `when` | `after` (default), `emit`, or both |
 
-A `type: function` check names one verification function. `function` is that function's id. `grants` lists the capabilities the check allows. Each grant repeats the capability id and, for a file or API capability, the origin, methods, path prefix, credential reference, root, and path the definition declares. A missing function, a function of another kind, or a capability the attachment does not grant fails `sf validate` (`function.missing`, `function.kind_mismatch`, `function.under_granted`, `function.grant_not_requested`). See [Functions](#functions).
+A `type: function` check names one verification function. `function` is that function's id. `grants` lists the capabilities the check allows. Each grant repeats the capability id and, for a file or API capability, the origin, methods, path prefix, credential reference, root, and path the definition declares. A missing function, a function of another kind, or a capability the attachment does not grant fails `sf validate` (`function.missing`, `function.kind_mismatch`, `function.under_granted`, `function.grant_not_requested`). A file grant `path: ""` or `path: "."` is the whole root. See [Functions](#functions).
 
 Check IDs are unique within the stage. `artifact.path` is relative to the stage attempt's artifact directory. Emit `type: artifact` is a basename list check on `envelope.artifacts` (no disk I/O). After `type: artifact` is an on-disk file under the attempt artifacts dir. `gate.kind` must also appear in the stage's `gate_kinds` (and that list must be non-empty so `ask_operator` is registered — omit / `[]` means no HITL tool). Each `checkout_changes.path_fields` entry must name a required array-of-strings field in `io.output.schema`. Optional `type: payload_schema` with `when: [after]` re-checks the captured payload against `io.output.schema` (see [Upgrading older catalogs](#upgrading-older-catalogs) for the legacy field vs this check type); emit-time validation already runs when that schema is present. `type: checklist` is scored against the success envelope's `checklist_attestations` field (one `{ check_id, items }` entry per checklist, matched as a set against the declared `items`) — see [Envelopes — Checklist attestations](envelopes.md#checklist-attestations).
 
@@ -1107,10 +1107,10 @@ A function is project-owned JavaScript. The file is `functions/<id>.function.yam
 | `name` | yes | Operator-facing name, up to 120 characters |
 | `description` | no | Up to 500 characters |
 | `kind` | yes | `verification`, `routing`, or `tool`. Fixed after create |
-| `source` | yes | JavaScript module, at most 64 KiB. Must be `export default function execute(context)` or `export default async function execute(context)`. The module body is parsed and not executed during validation |
+| `source` | yes | JavaScript module, at most 64 KiB. Must be `export default function execute(context)` or `export default async function execute(context)`. The module body is parsed and not executed during validation. It may start with an [`access` declaration](#function-access) |
 | `timeout_ms` | no | Integer from 1 to 30000. Omitted means 5000 |
-| `capabilities` | no | List of file, env, and API capabilities. Omitted means none |
-| `bindings` | no | Env aliases this function reads, each `{ alias, required? }`. `required` defaults to true. The alias must match an env capability. Omitted means none |
+| `capabilities` | no | List of file, env, and API capabilities. Omitted means none. Omitted from the file when `source` declares `access`; the parsed definition still has the derived list |
+| `bindings` | no | Env aliases this function reads, each `{ alias, required? }`. `required` defaults to true. The alias must match an env capability. Omitted means none. Omitted from the file when `source` declares `access` |
 
 A tool also requires:
 
@@ -1132,6 +1132,26 @@ A tool also requires:
 | `api` | `id`, `type: api`, `origin` (https origin, no path or user info), `methods` (`GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`), `path_prefix` (starts with `/`), `effect: read\|action`, optional `credential_ref` | `action` is tool-only |
 
 A capability `id` is `[a-z][a-z0-9_]*`, max 64, and unique in the file.
+
+### Access declaration {#function-access}
+
+A module may start with `export const access = { ... };`. Only whitespace and `//` or `/* */` comments may come before it. The Host reads that object as data. It does not run it. Any other `export const access`, or an `export let` / `export var access`, is `function.invalid_access` ("access must be the first statement in the file").
+
+| Key | Form | Default |
+|-----|------|---------|
+| `artifacts` | `"none"`, `"read"`, or `"write"` | `"none"` |
+| `workspace` | same three values. `"read"` or `"write"` grants the whole workspace root. That is broad; leave it `"none"` unless the function needs it | `"none"` |
+| `files` | array of `{ root: artifacts\|workspace, path, access: read\|write }`. `path` is relative to that root, with no `..` and no absolute path | omitted |
+| `env` | array of names. `"MIN_SCORE"` is required. `"REGION?"` is optional | `[]` |
+| `network` | array of `"https://host"` (read, `GET`, path `/`) or `{ origin, effect?: read\|action, methods?: string[], path?: string, credential?: string }`. `path` is the path prefix and defaults to `/`. `effect` defaults to `read`. Default methods are `GET` for read and `GET POST PUT PATCH DELETE` for action | `[]` |
+
+`write` and network `effect: "action"` are tool-only. The literal may use objects, arrays, single or double quotes, simple escapes, `true` / `false` / `null`, numbers, comments, and trailing commas. Spread, computed keys, calls, template strings, and other identifiers are `function.invalid_access` with a line and column in the source.
+
+The Host turns a valid declaration into capabilities, in this order: `artifacts`, `workspace`, `files`, `env`, `network`. Ids are `artifacts`, `workspace`, `file_<root>_<path>`, `env_<alias>` (lowercased), and `api_<host>` (`_port` when the origin's port is not 443). A collision adds `_2`, `_3`. Bindings follow the `env` names. Those derived lists are what grants, preflight, and history see. The file does not store `capabilities` or `bindings`.
+
+A save or a hand-edited file that also includes `capabilities` or `bindings` must leave them out, or they must match the derived lists. Otherwise the code is `function.access_conflict`: "Remove capabilities and bindings, or make them match the access declaration in the source". A module with no `access` declaration keeps explicit `capabilities` and `bindings`, including an empty list.
+
+`execute` can use `context.files` as before. It can also use `context.artifacts` and `context.workspace`. Each has `exists(path)`, `stat(path)`, `readText(path)`, `readJson(path)`, `list(path)`, and `write(path, content)`. `path` is relative to that root. `list()` and `list("")` and `list(".")` name the root. `context.files.list(root, path)` is the same read. `list` returns the immediate children, `{ name, type: "file" | "directory", size }`, sorted by name, at most 1000. A larger directory is `list_limit`. A file is `not_a_directory`. A missing directory is not found. A path the grant does not cover, including the parent of a file-scoped grant, is the same permission denial as any other file read. Sensitive names, devices, sockets, and symlinks that leave the root are left out of the list.
 
 An attachment grant names that capability id. A file grant also repeats `root` and `path`. An API grant also repeats `origin`, `methods`, `path_prefix`, and `credential_ref` when the capability has one. An env grant is only the capability id. A saved change to a capability does not apply to an existing attachment until that attachment grants the updated capability. `sf validate` reports `function.under_granted` when a declared capability is missing or no longer matches, and `function.grant_not_requested` when a grant names a capability the function does not declare.
 
@@ -1155,7 +1175,7 @@ verify:
       - id: min_score
 ```
 
-The pipeline stage entry that owns `route` carries one routing function id. `if` stays on each edge. The function runs after those predicates and sees every child that remains eligible. When the function declares capabilities, the field is an object with `id` and `grants`. With no capabilities it is the id:
+The pipeline stage entry that owns `route` carries one routing function id. That stage's forward edges have no `if`. A stage uses route `if` or a routing function. `sf validate` reports `function.routing_conflicts_with_if` when a stage has both. When the function declares capabilities, the field is an object with `id` and `grants`. With no capabilities it is the id:
 
 ```yaml
 stages:
@@ -1163,15 +1183,7 @@ stages:
     function: pick_route
     route:
       - to: left
-        if:
-          field: branch
-          op: eq
-          value: left
       - to: right
-        if:
-          field: branch
-          op: eq
-          value: right
 ```
 
 ```yaml
@@ -1194,7 +1206,7 @@ tools:
 
 On an agent the same list sits on `tools.functions` beside the other tool fields. A stage does not inherit an agent's functions, and an agent does not inherit a stage's.
 
-Runnable copies: [`examples/function-verify/`](../examples/function-verify/) and [`examples/function-tool/`](../examples/function-tool/).
+Runnable copies: [`examples/function-verify/`](../examples/function-verify/), [`examples/function-tool/`](../examples/function-tool/), and [`examples/function-manual/`](../examples/function-manual/).
 
 ## Tasks (`*.task.yaml`)
 

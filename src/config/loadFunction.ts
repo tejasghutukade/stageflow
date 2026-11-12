@@ -4,6 +4,12 @@ import { access, cp, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml, YAMLParseError } from "yaml";
 import { canonicalJson, sha256Hex } from "../evals/canonical.js";
+import {
+  accessCapabilityAnchors,
+  deriveAccess,
+  readAccessDeclaration,
+  type AccessPos,
+} from "../functions/accessDeclaration.js";
 import { loadStageflowManifestOutcome } from "./loadStageflowManifest.js";
 import { isExcluded } from "./scanCatalogPaths.js";
 import { yamlParsePosition } from "./yamlParsePosition.js";
@@ -20,6 +26,7 @@ const CREDENTIAL_REF = /^[A-Za-z0-9_.:-]{1,128}$/;
 const TOOL_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 const HTTP_METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
 const EXPORT_DEFAULT = /export\s+default\s+(?:async\s+)?function\s+execute\s*\(/;
+const ACCESS_CONFLICT = "Remove capabilities and bindings, or make them match the access declaration in the source";
 const SKIP_DIRECTORIES = new Set(["node_modules", ".git", "dist", ".stageflow"]);
 
 export type FunctionKind = "verification" | "routing" | "tool";
@@ -115,7 +122,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function relativePath(value: unknown): string | undefined {
-  if (typeof value !== "string" || value.trim() === "") return undefined;
+  if (typeof value !== "string") return undefined;
+  if (value === "") return "";
+  if (value.trim() === "") return undefined;
   const trimmed = value.trim();
   if (path.isAbsolute(trimmed)) return undefined;
   const normalized = path.posix.normalize(trimmed.replace(/\\/g, "/"));
@@ -320,6 +329,65 @@ function parseBindings(value: unknown, capabilities: FunctionCapability[], issue
   return bindings;
 }
 
+function resolveCapabilities(
+  raw: Record<string, unknown>,
+  kind: FunctionKind,
+  issues: FunctionIssue[],
+): { capabilities: FunctionCapability[]; bindings: FunctionBinding[] } {
+  const declared = typeof raw.source === "string" ? readAccessDeclaration(raw.source) : { present: false as const };
+  if (declared.present && !declared.ok) {
+    for (const item of declared.issues) {
+      issues.push({
+        path: "source",
+        code: "function.invalid_access",
+        message: item.message,
+        line: item.line,
+        column: item.column,
+      });
+    }
+    return { capabilities: [], bindings: [] };
+  }
+  if (declared.present && declared.ok) {
+    const derived = deriveAccess(declared.access, kind);
+    const derivedIssues: FunctionIssue[] = [];
+    const capabilities = parseCapabilities(derived.capabilities, kind, derivedIssues);
+    const bindings = parseBindings(derived.bindings, capabilities, derivedIssues);
+    const anchors = accessCapabilityAnchors(declared.access, declared.locations);
+    for (const item of derivedIssues) {
+      issues.push(anchorDerivedIssue(item, anchors, declared.locations.env, declared.locations.statement));
+    }
+    if (raw.capabilities !== undefined && !sameCapabilityList(raw.capabilities, capabilities, kind)) {
+      issues.push(issue("capabilities", "function.access_conflict", ACCESS_CONFLICT));
+    }
+    if (raw.bindings !== undefined && !sameBindingList(raw.bindings, bindings, capabilities)) {
+      issues.push(issue("bindings", "function.access_conflict", ACCESS_CONFLICT));
+    }
+    return { capabilities, bindings };
+  }
+  const capabilities = parseCapabilities(raw.capabilities, kind, issues);
+  return { capabilities, bindings: parseBindings(raw.bindings, capabilities, issues) };
+}
+
+function sameCapabilityList(value: unknown, derived: FunctionCapability[], kind: FunctionKind): boolean {
+  const found: FunctionIssue[] = [];
+  const parsed = parseCapabilities(value, kind, found);
+  return found.length === 0 && canonicalJson(parsed) === canonicalJson(derived);
+}
+
+function sameBindingList(value: unknown, derived: FunctionBinding[], capabilities: FunctionCapability[]): boolean {
+  const found: FunctionIssue[] = [];
+  const parsed = parseBindings(value, capabilities, found);
+  return found.length === 0 && canonicalJson(parsed) === canonicalJson(derived);
+}
+
+function anchorDerivedIssue(item: FunctionIssue, anchors: AccessPos[], env: AccessPos[], statement: AccessPos): FunctionIssue {
+  const capability = /^capabilities\.(\d+)/.exec(item.path);
+  const binding = /^bindings\.(\d+)/.exec(item.path);
+  const pos = capability ? anchors[Number(capability[1])] : binding ? env[Number(binding[1])] : undefined;
+  const at = pos ?? statement;
+  return { path: "source", code: item.code, message: item.message, line: at.line, column: at.column };
+}
+
 export function parseFunctionDefinition(raw: unknown): FunctionParseResult {
   if (!isRecord(raw)) return { ok: false, issues: [issue("", "function.invalid_shape", "A function definition must be an object")] };
   const issues: FunctionIssue[] = [];
@@ -349,8 +417,7 @@ export function parseFunctionDefinition(raw: unknown): FunctionParseResult {
       timeout = raw.timeout_ms;
     }
   }
-  const capabilities = parseCapabilities(raw.capabilities, kind, issues);
-  const bindings = parseBindings(raw.bindings, capabilities, issues);
+  const { capabilities, bindings } = resolveCapabilities(raw, kind, issues);
   const definition: FunctionDefinition = {
     id: typeof raw.id === "string" ? raw.id : "",
     name: typeof raw.name === "string" ? raw.name.trim() : "",
@@ -408,8 +475,11 @@ export function serializeFunctionDefinition(definition: FunctionDefinition): str
     body.input_schema = definition.input_schema;
     if (definition.output_schema !== undefined) body.output_schema = definition.output_schema;
   }
-  body.capabilities = definition.capabilities;
-  body.bindings = definition.bindings;
+  const declared = readAccessDeclaration(definition.source);
+  if (!(declared.present && declared.ok)) {
+    body.capabilities = definition.capabilities;
+    body.bindings = definition.bindings;
+  }
   return stringifyYaml(body, { lineWidth: 0 });
 }
 
@@ -507,8 +577,10 @@ export function parseFunctionGrant(raw: unknown, field: string): { ok: true; val
     grant.root = raw.root;
   }
   if (raw.path !== undefined) {
-    if (typeof raw.path !== "string" || raw.path.trim() === "") return { ok: false, message: `${field} path must be a string` };
-    grant.path = raw.path.trim();
+    if (typeof raw.path !== "string" || (raw.path !== "" && raw.path.trim() === "")) {
+      return { ok: false, message: `${field} path must be a string` };
+    }
+    grant.path = raw.path === "" ? "" : raw.path.trim();
   }
   return { ok: true, value: grant };
 }

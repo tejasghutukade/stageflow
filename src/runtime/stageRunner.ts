@@ -33,7 +33,7 @@ import {
 } from "./stageAttemptBootstrap.js";
 import { runWithFunctionChecks, type FunctionCheckScope } from "../envelope/functionVerification.js";
 import { commitFunctionRoute, type FunctionRouteInvoker } from "./functionRoute.js";
-import { attemptArtifactsDir } from "../runstore/workspaceLayout.js";
+import { stageFunctionCallPlace } from "../functions/stageCall.js";
 import { sqliteConnectionFromStore } from "../runstore/createStore.js";
 import { createVerifiedStageExecution } from "./verifiedStageExecution.js";
 import {
@@ -542,10 +542,15 @@ export async function runStage(
         envelope: finalized.envelope,
         projectRoot: factoryCwd,
         invoker: options.functionRouteInvoker,
-        roots: {
-          artifacts: attemptArtifactsDir(roots.runWorkspaceDir, stageId, attempt),
-          workspace: roots.checkoutRoot ?? roots.cwd,
-        },
+        place: stageFunctionCallPlace({
+          runWorkspaceDir: roots.runWorkspaceDir,
+          stageId,
+          attempt,
+          checkoutRoot: roots.checkoutRoot,
+          cwd: roots.cwd,
+          containerName: roots.containerName,
+          containerDockerBin: roots.containerDockerBin,
+        }),
       });
     }
     return finalized;

@@ -27,9 +27,12 @@ output_schema:
     - total
   additionalProperties: false
 source: |
+  export const access = {
+    artifacts: "none",
+    env: [],
+    network: [],
+  };
   export default function execute(context) {
     const counts = context.input.counts;
     return { total: counts.reduce((sum, count) => sum + count, 0) };
   }
-capabilities: []
-bindings: []

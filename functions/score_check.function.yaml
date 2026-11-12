@@ -4,8 +4,13 @@ description: Accepts a report when its score meets the bound threshold.
 kind: verification
 timeout_ms: 5000
 source: |
+  export const access = {
+    artifacts: "read",
+    env: ["MIN_SCORE"],
+    network: [],
+  };
   export default async function execute(context) {
-    const report = await context.files.readJson("artifacts", "report.json");
+    const report = await context.artifacts.readJson("report.json");
     const threshold = Number(context.env.MIN_SCORE);
     if (!Number.isFinite(threshold) || typeof report.score !== "number") {
       throw new Error("Expected a numeric report score and configured threshold");
@@ -16,15 +21,3 @@ source: |
       message: passed ? "Score accepted" : "Score below threshold",
     };
   }
-capabilities:
-  - id: report
-    type: file
-    root: artifacts
-    path: report.json
-    access: read
-  - id: min_score
-    type: env
-    alias: MIN_SCORE
-bindings:
-  - alias: MIN_SCORE
-    required: true

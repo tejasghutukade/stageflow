@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { open, realpath, rename, rm, stat } from "node:fs/promises";
+import { lstat, open, readdir, realpath, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { REDACTION_SECRETS_FILENAME } from "../logging/namedSecrets.js";
 import { execInSandboxContainer } from "../runtime/sandboxContainer.js";
@@ -30,11 +30,18 @@ export type ContainerFileStat = {
   size: number;
 };
 
+export type ContainerListEntry = {
+  name: string;
+  type: "file" | "directory" | "symlink" | "other";
+  size: number;
+};
+
 export type ContainerFiles = {
   realPath(containerPath: string): Promise<string>;
   stat(containerPath: string): Promise<ContainerFileStat | undefined>;
   readFile(containerPath: string, signal: AbortSignal): Promise<string>;
   writeFile(containerPath: string, content: string, signal: AbortSignal): Promise<void>;
+  list(containerPath: string): Promise<ContainerListEntry[]>;
 };
 
 export type FileCapabilityResult =
@@ -42,7 +49,7 @@ export type FileCapabilityResult =
   | { ok: false; code: string; message: string };
 
 export type FileCapabilityInput = {
-  op: "exists" | "stat" | "readText" | "readJson" | "write";
+  op: "exists" | "stat" | "readText" | "readJson" | "list" | "write";
   root: string | undefined;
   filePath: string | undefined;
   content?: string;
@@ -60,6 +67,9 @@ export type FileCapabilityInput = {
 
 const FILE_DENIED = { ok: false as const, code: "permission_denied", message: "file access denied" };
 const NOT_FOUND = { ok: false as const, code: "not_found", message: "file not found" };
+const NOT_A_DIRECTORY = { ok: false as const, code: "not_a_directory", message: "not a directory" };
+const LIST_LIMIT = { ok: false as const, code: "list_limit", message: "directory has more than 1000 entries" };
+const LIST_MAX = 1000;
 const FILE_LIMIT = { ok: false as const, code: "file_limit", message: "file exceeds 1 MiB" };
 const UNCERTAIN = {
   ok: false as const,
@@ -70,7 +80,8 @@ const CANCELLED = { ok: false as const, code: "cancelled", message: "function ex
 
 export async function performFileCapability(input: FileCapabilityInput): Promise<FileCapabilityResult> {
   if (input.signal.aborted) return CANCELLED;
-  const relative = relativeFilePath(input.filePath);
+  const relative =
+    input.op === "list" && (input.filePath === "" || input.filePath === ".") ? "." : relativeFilePath(input.filePath);
   if (!relative || (input.root !== "artifacts" && input.root !== "workspace")) return FILE_DENIED;
   const access = input.op === "write" ? "write" : "read";
   if (!grantAllows(input.grants, input.root, relative, access)) return FILE_DENIED;
@@ -128,6 +139,17 @@ function dockerContainerFiles(target: SandboxFileTarget): ContainerFiles {
       await writeSandboxFile(target, containerPath, content);
       if (signal.aborted) throw abortError();
     },
+    async list(containerPath: string) {
+      const confined = confineSandboxPath(containerPath);
+      const quoted = shellQuote(confined);
+      const result = await execInSandboxContainer({
+        containerName: target.containerName,
+        dockerBin: target.dockerBin,
+        command: `find -- ${quoted} -mindepth 1 -maxdepth 1 -printf '%y %s %f\\0'`,
+      });
+      if (result.exitCode !== 0) throw new Error("list failed");
+      return parseContainerList(result.stdout);
+    },
   };
 }
 
@@ -143,6 +165,10 @@ async function hostCapability(
     return FILE_DENIED;
   }
   const home = await canonical(input.stageflowHome);
+  if (input.op === "list" && relative === ".") {
+    if (isSensitive(rootReal, home, input.projectRoot)) return FILE_DENIED;
+    return listHost(input, rootReal, rootReal, home);
+  }
   if (isSensitive(path.join(rootReal, relative), home, input.projectRoot)) return FILE_DENIED;
   const parent = path.resolve(rootReal, path.dirname(relative));
   let parentReal: string;
@@ -155,6 +181,7 @@ async function hostCapability(
   const candidate = path.join(parentReal, path.basename(path.resolve(rootReal, relative)));
   if (!isInside(rootReal, candidate) || isSensitive(candidate, home, input.projectRoot)) return FILE_DENIED;
   if (input.op === "write") return writeHost(input, rootReal, candidate, home);
+  if (input.op === "list") return listHost(input, rootReal, candidate, home);
   let real: string;
   try {
     real = await realpath(candidate);
@@ -280,6 +307,7 @@ async function containerCapability(
     return FILE_DENIED;
   }
   if (again !== real || !containerAllows(again, root, input)) return FILE_DENIED;
+  if (input.op === "list") return listContainer(input, files, root, again, info);
   if (input.op === "exists") return { ok: true, value: true };
   if (input.op === "stat") {
     return { ok: true, value: { size: info.size, file: info.file, directory: info.directory } };
@@ -361,6 +389,195 @@ function textResult(op: "readText" | "readJson", data: Buffer): FileCapabilityRe
   }
 }
 
+async function listHost(
+  input: FileCapabilityInput,
+  rootReal: string,
+  candidate: string,
+  home: string,
+): Promise<FileCapabilityResult> {
+  let real: string;
+  try {
+    real = await realpath(candidate);
+  } catch (error) {
+    if (codeOf(error) === "ENOENT") return NOT_FOUND;
+    return FILE_DENIED;
+  }
+  if (!listPathAllowed(real, rootReal, home, input.projectRoot)) return FILE_DENIED;
+  let fh;
+  try {
+    fh = await open(real, "r");
+    if (input.signal.aborted) return CANCELLED;
+    const opened = await fh.stat();
+    if (opened.isCharacterDevice() || opened.isBlockDevice() || opened.isSocket() || opened.isFIFO()) return FILE_DENIED;
+    const again = await realpath(candidate);
+    if (!listPathAllowed(again, rootReal, home, input.projectRoot)) return FILE_DENIED;
+    const againStat = await stat(again);
+    if (againStat.dev !== opened.dev || againStat.ino !== opened.ino) return FILE_DENIED;
+    if (!opened.isDirectory()) return NOT_A_DIRECTORY;
+    const dirents = await readdir(again, { withFileTypes: true });
+    if (dirents.length > LIST_MAX) return LIST_LIMIT;
+    const rows: ListRow[] = [];
+    for (const dirent of dirents) {
+      const child = path.join(again, dirent.name);
+      try {
+        if (isSensitive(child, home, input.projectRoot)) continue;
+        if (dirent.isSymbolicLink()) {
+          const followed = await followListLink(child, rootReal, home, input.projectRoot);
+          if (followed) rows.push({ name: dirent.name, ...followed });
+          continue;
+        }
+        if (dirent.isSocket() || dirent.isCharacterDevice() || dirent.isBlockDevice() || dirent.isFIFO()) continue;
+        const info = await lstat(child);
+        if (info.isDirectory()) rows.push({ name: dirent.name, type: "directory", size: info.size });
+        else if (info.isFile()) rows.push({ name: dirent.name, type: "file", size: info.size });
+      } catch {
+        continue;
+      }
+    }
+    const confirmed = await realpath(candidate);
+    if (confirmed !== again || !listPathAllowed(confirmed, rootReal, home, input.projectRoot)) return FILE_DENIED;
+    return listValue(rows);
+  } catch (error) {
+    if (input.signal.aborted || codeOf(error) === "ABORT_ERR" || (error as Error).name === "AbortError") return CANCELLED;
+    if (codeOf(error) === "ENOTDIR") return NOT_A_DIRECTORY;
+    if (codeOf(error) === "ENOENT") return NOT_FOUND;
+    return FILE_DENIED;
+  } finally {
+    await fh?.close().catch(() => undefined);
+  }
+}
+
+async function followListLink(
+  child: string,
+  rootReal: string,
+  home: string,
+  projectRoot: string | undefined,
+): Promise<{ type: "file" | "directory"; size: number } | undefined> {
+  let target: string;
+  try {
+    target = await realpath(child);
+  } catch {
+    return undefined;
+  }
+  if (!listPathAllowed(target, rootReal, home, projectRoot)) return undefined;
+  let info;
+  try {
+    info = await stat(target);
+  } catch {
+    return undefined;
+  }
+  let again: string;
+  try {
+    again = await realpath(child);
+  } catch {
+    return undefined;
+  }
+  if (again !== target || !listPathAllowed(again, rootReal, home, projectRoot)) return undefined;
+  if (info.isSocket() || info.isCharacterDevice() || info.isBlockDevice() || info.isFIFO()) return undefined;
+  if (info.isDirectory()) return { type: "directory", size: info.size };
+  if (info.isFile()) return { type: "file", size: info.size };
+  return undefined;
+}
+
+async function listContainer(
+  input: FileCapabilityInput,
+  files: ContainerFiles,
+  root: string,
+  directory: string,
+  info: ContainerFileStat,
+): Promise<FileCapabilityResult> {
+  if (!info.directory) return NOT_A_DIRECTORY;
+  let entries: ContainerListEntry[];
+  try {
+    entries = await files.list(directory);
+  } catch {
+    return FILE_DENIED;
+  }
+  if (entries.length > LIST_MAX) return LIST_LIMIT;
+  let again: string;
+  try {
+    again = posixPath(await files.realPath(directory));
+  } catch {
+    return FILE_DENIED;
+  }
+  if (again !== directory || !containerAllows(again, root, input)) return FILE_DENIED;
+  const rows: ListRow[] = [];
+  for (const entry of entries) {
+    if (!entry.name || entry.name === "." || entry.name === ".." || entry.name.includes("/") || entry.name.includes("\0")) {
+      continue;
+    }
+    const child = path.posix.join(directory, entry.name);
+    if (isSensitive(child, input.stageflowHome, input.projectRoot)) continue;
+    if (entry.type === "other") continue;
+    if (entry.type === "symlink") {
+      const followed = await followContainerLink(files, child, root, input);
+      if (followed) rows.push({ name: entry.name, ...followed });
+      continue;
+    }
+    if (entry.type === "directory") rows.push({ name: entry.name, type: "directory", size: entry.size });
+    else if (entry.type === "file") rows.push({ name: entry.name, type: "file", size: entry.size });
+  }
+  return listValue(rows);
+}
+
+async function followContainerLink(
+  files: ContainerFiles,
+  child: string,
+  root: string,
+  input: FileCapabilityInput,
+): Promise<{ type: "file" | "directory"; size: number } | undefined> {
+  let target: string;
+  try {
+    target = posixPath(await files.realPath(child));
+  } catch {
+    return undefined;
+  }
+  if (!containerAllows(target, root, input)) return undefined;
+  let info: ContainerFileStat | undefined;
+  try {
+    info = await files.stat(target);
+  } catch {
+    return undefined;
+  }
+  if (!info || info.device) return undefined;
+  let again: string;
+  try {
+    again = posixPath(await files.realPath(child));
+  } catch {
+    return undefined;
+  }
+  if (again !== target || !containerAllows(again, root, input)) return undefined;
+  if (info.directory) return { type: "directory", size: info.size };
+  if (info.file) return { type: "file", size: info.size };
+  return undefined;
+}
+
+function parseContainerList(stdout: string): ContainerListEntry[] {
+  const entries: ContainerListEntry[] = [];
+  for (const record of stdout.split("\0")) {
+    if (record.length === 0) continue;
+    const match = /^([a-zA-Z]) (\d+) ([\s\S]*)$/.exec(record);
+    if (!match?.[1] || match[2] === undefined || match[3] === undefined) continue;
+    const flag = match[1];
+    const type = flag === "f" ? "file" : flag === "d" ? "directory" : flag === "l" ? "symlink" : "other";
+    entries.push({ name: match[3], type, size: Number(match[2]) });
+  }
+  return entries;
+}
+
+function listPathAllowed(target: string, rootReal: string, home: string, projectRoot: string | undefined): boolean {
+  if (!isInside(rootReal, target) || isSensitive(target, home, projectRoot)) return false;
+  return target !== "/dev" && !target.startsWith(`${path.sep}dev${path.sep}`);
+}
+
+type ListRow = { name: string; type: "file" | "directory"; size: number };
+
+function listValue(rows: ListRow[]): FileCapabilityResult {
+  rows.sort((left, right) => Buffer.compare(Buffer.from(left.name), Buffer.from(right.name)));
+  if (Buffer.byteLength(JSON.stringify(rows), "utf8") > FUNCTION_IO_BYTES_MAX) return FILE_LIMIT;
+  return { ok: true, value: rows };
+}
+
 function grantAllows(
   grants: readonly FunctionFileGrant[],
   root: FunctionFileRoot,
@@ -405,7 +622,7 @@ function isSensitive(filePath: string, home: string, projectRoot: string | undef
   if (parts.includes(".stageflow")) return true;
   const attemptsAt = parts.lastIndexOf("attempts");
   if (attemptsAt >= 0 && parts[attemptsAt + 2] === "credentials") return true;
-  if (home && isInside(home, filePath)) return true;
+  if (home && isInside(home, filePath)) return !isInside(path.join(home, "runs"), filePath);
   if (projectRoot && isInside(path.join(projectRoot, ".stageflow"), filePath)) return true;
   return false;
 }

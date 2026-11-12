@@ -18,6 +18,7 @@ import {
 } from "./invoke.js";
 import { FunctionService } from "./service.js";
 import { FunctionStore } from "./store.js";
+import type { StageFunctionCallPlace } from "./stageCall.js";
 
 export type FunctionToolInvoker = {
   call(projectRoot: string, input: FunctionCallInput): Promise<FunctionRunView>;
@@ -51,6 +52,13 @@ export type ResolvedFunctionTool = {
   grants: FunctionGrant[];
   run: (args: unknown, callId: string) => Promise<FunctionToolResult>;
 };
+
+export function functionCatalogRoot(input: {
+  projectRoot?: string;
+  roots: { checkoutRoot?: string; cwd: string };
+}): string {
+  return input.projectRoot ?? input.roots.checkoutRoot ?? input.roots.cwd;
+}
 
 export function claudeFunctionToolReason(toolName: string): string {
   return `stage attaches function tool "${toolName}"; the model would see it as mcp__stageflow__${toolName} instead of ${toolName}`;
@@ -86,6 +94,7 @@ export async function resolveFunctionTools(input: {
   db?: Database.Database;
   invoker?: FunctionToolInvoker;
   execution?: (callId: string) => FunctionToolExecution;
+  place?: StageFunctionCallPlace;
 }): Promise<{ ok: true; tools: ResolvedFunctionTool[] } | { ok: false; reason: string }> {
   const tools: ResolvedFunctionTool[] = [];
   const names = new Set<string>();
@@ -119,6 +128,7 @@ export async function resolveFunctionTools(input: {
           invoker: input.invoker,
           definition,
           execution: { ...(input.execution?.(callId) ?? {}), toolCall: callId },
+          place: input.place,
         }),
     });
   }
@@ -135,6 +145,7 @@ export async function runAttachedFunctionTool(input: {
   invoker?: FunctionToolInvoker;
   definition?: FunctionDefinition;
   execution?: FunctionToolExecution;
+  place?: StageFunctionCallPlace;
 }): Promise<FunctionToolResult> {
   const definition = input.definition ?? (await loadDefinition(input.projectRoot, input.functionId));
   if (!definition) return { ok: false, code: "invalid_input", text: `Function "${input.functionId}" is not available` };
@@ -152,6 +163,7 @@ export async function runAttachedFunctionTool(input: {
     ...(input.execution?.session !== undefined ? { sessionId: input.execution.session } : {}),
     ...(input.execution?.stage !== undefined ? { stageId: input.execution.stage } : {}),
     ...(input.execution?.attempt !== undefined ? { attempt: input.execution.attempt } : {}),
+    ...(input.place ?? {}),
   });
   if (!view.ok || view.code === "uncertain_outcome" || view.status === "uncertain") {
     const code = view.code ?? "exception";

@@ -7,7 +7,7 @@ import type { FunctionGrant, FunctionKind } from "../config/loadFunction.js";
 import { createFunctionInvoker, type FunctionInvoker } from "../functions/invoke.js";
 import { FunctionService } from "../functions/service.js";
 import { FunctionStore } from "../functions/store.js";
-import { attemptArtifactsDir } from "../runstore/workspaceLayout.js";
+import { stageFunctionCallPlace } from "../functions/stageCall.js";
 import type { JsonValue } from "../functions/protocol.js";
 import type { CompletionCheck, CompletionContract } from "../types/completion.js";
 import type { ResolvedPipelineDag } from "../types/pipeline.js";
@@ -174,14 +174,15 @@ export function createFunctionCheckScope(input: {
           stageId: request.stageId ?? input.stageId,
           attempt: request.attempt ?? input.attempt,
           attachmentId: request.checkId,
-          roots: {
-            artifacts: attemptArtifactsDir(input.roots.runWorkspaceDir, input.stageId, input.attempt),
-            workspace: input.roots.checkoutRoot ?? input.roots.cwd,
-          },
-          ...(input.roots.containerName !== undefined ? { containerName: input.roots.containerName } : {}),
-          ...(input.roots.containerDockerBin !== undefined
-            ? { containerDockerBin: input.roots.containerDockerBin }
-            : {}),
+          ...stageFunctionCallPlace({
+            runWorkspaceDir: input.roots.runWorkspaceDir,
+            stageId: input.stageId,
+            attempt: input.attempt,
+            checkoutRoot: input.roots.checkoutRoot,
+            cwd: input.roots.cwd,
+            containerName: input.roots.containerName,
+            containerDockerBin: input.roots.containerDockerBin,
+          }),
         });
         return {
           ok: view.ok,

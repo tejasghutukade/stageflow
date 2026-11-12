@@ -1,3 +1,4 @@
+import type { StageFunctionCallPlace } from "../functions/stageCall.js";
 import { predecessorEdges } from "../config/pipelineNeeds.js";
 import type { FunctionGrant } from "../config/loadFunction.js";
 import { createFunctionInvoker } from "../functions/invoke.js";
@@ -211,7 +212,7 @@ function realRouteInvoker(input: {
   projectRoot: string;
   routeFunction: { id: string; grants: FunctionGrant[] };
   attempt: number;
-  roots?: { artifacts?: string; workspace?: string };
+  place?: StageFunctionCallPlace;
 }): FunctionRouteInvoker {
   const service = new FunctionService({ store: new FunctionStore(input.db) });
   const invoker = createFunctionInvoker({ db: input.db });
@@ -231,7 +232,7 @@ function realRouteInvoker(input: {
         runId: call.runId,
         stageId: call.stageId,
         attempt: input.attempt,
-        ...(input.roots !== undefined ? { roots: input.roots } : {}),
+        ...(input.place ?? {}),
       });
       return {
         ok: view.ok,
@@ -253,7 +254,7 @@ export async function commitFunctionRoute(input: {
   projectRoot?: string;
   invoker?: FunctionRouteInvoker;
   force?: boolean;
-  roots?: { artifacts?: string; workspace?: string };
+  place?: StageFunctionCallPlace;
 }): Promise<FunctionRouteRecord | undefined> {
   const node = routeNode(input.dag, input.stageId);
   if (input.dag === undefined || node?.routeFunction === undefined) return undefined;
@@ -280,7 +281,7 @@ export async function commitFunctionRoute(input: {
             projectRoot: input.projectRoot,
             routeFunction,
             attempt,
-            ...(input.roots !== undefined ? { roots: input.roots } : {}),
+            ...(input.place !== undefined ? { place: input.place } : {}),
           })
         : undefined);
     if (invoker === undefined) {

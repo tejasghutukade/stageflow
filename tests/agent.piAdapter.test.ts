@@ -1027,6 +1027,45 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
     }
   });
 
+  it("loads a function tool from the catalog project when the run workspace has none", async () => {
+    const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-fn-run-"));
+    const project = await mkdtemp(path.join(tmpdir(), "sf-pi-fn-project-"));
+    const home = await mkdtemp(path.join(tmpdir(), "sf-pi-fn-project-home-"));
+    const { connection } = createRunStoreWithConnection({ rootDir: home, openerMode: "migrate" });
+    try {
+      const functions = new FunctionService({ store: new FunctionStore(connection) });
+      await functions.create(
+        project,
+        {
+          id: "invoice_tool",
+          name: "Invoice",
+          kind: "tool",
+          source: "export default function execute() { return { ok: true }; }\n",
+          tool_name: "total_invoice",
+          tool_description: "Total an invoice.",
+          input_schema: { type: "object", properties: {} },
+          capabilities: [],
+          bindings: [],
+        },
+        { source: "api", author: "test" },
+      );
+      await new PiAgentAdapter().runStage(
+        wiringInput(runWs, {
+          projectRoot: project,
+          stage: {
+            id: "clarify",
+            system_prompt: "x",
+            model: "anthropic/claude-sonnet-4-5",
+            tools: { functions: [{ id: "invoice_tool", grants: [] }] },
+          },
+        }),
+      );
+      expect(lastSessionTools()).toContain("total_invoice");
+    } finally {
+      connection.close();
+    }
+  });
+
   it("fails a cursor stage before the model session opens", async () => {
     const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-fn-cursor-"));
     const home = await mkdtemp(path.join(tmpdir(), "sf-pi-fn-cursor-home-"));

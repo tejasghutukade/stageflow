@@ -484,6 +484,7 @@ async function openStageWithOperatorCatalog(
   try {
     const handle = agent.openStage({
       ...input,
+      ...(factoryCwd !== undefined ? { projectRoot: factoryCwd } : {}),
       stage: {
         ...input.stage,
         system_prompt: `${stampStagePromptArtifactsDir(

@@ -1,0 +1,31 @@
+id: report-gate
+stages:
+  - id: write-report
+    model: openrouter/nvidia/nemotron-3.5-lightning:free
+    system_prompt: |
+      Write report.json under the attempt artifacts. The file must be JSON with a numeric score of 82 and no other fields.
+      Then emit a success envelope whose payload is { "score": 82 }.
+      The report gate reads that file and the host MIN_SCORE value.
+    io:
+      input:
+        schema:
+          type: object
+          additionalProperties: false
+      output:
+        schema:
+          type: object
+          required:
+            - score
+          properties:
+            score:
+              type: integer
+          additionalProperties: false
+    verify:
+      - id: score-accepted
+        type: function
+        function: report_gate
+        grants:
+          - id: file_artifacts_report_json
+            root: artifacts
+            path: report.json
+          - id: env_min_score

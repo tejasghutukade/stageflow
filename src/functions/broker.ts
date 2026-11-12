@@ -220,7 +220,7 @@ export class FunctionBroker {
 function guestContext(context: JsonObject, env: Record<string, string>): JsonObject {
   const out: JsonObject = {};
   for (const [key, value] of Object.entries(context)) {
-    if (key === "env" || key === "files" || key === "http" || key === "log" || key === "signal") continue;
+    if (key === "env" || key === "files" || key === "http" || key === "log" || key === "signal" || key === "artifacts" || key === "workspace") continue;
     out[key] = value;
   }
   out.env = env;

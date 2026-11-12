@@ -106,4 +106,37 @@ describe("function routes", () => {
     expect(listed.status).toBe(200);
     expect((listed.body?.functions as Array<{ id: string }>).map((row) => row.id).sort()).toEqual(["score", "score_copy"]);
   });
+
+  it("derives capabilities from a declared source and rejects a conflicting list", async () => {
+    const { call } = await open();
+    const source = 'export const access = { artifacts: "read", env: ["MIN_SCORE"], network: [] };\nexport default function execute(){ return { passed: true }; }\n';
+    const created = await call("POST", "/api/functions", {
+      definition: { id: "score", name: "Score", kind: "verification", source },
+    });
+    expect(created.status).toBe(201);
+    const fetched = await call("GET", "/api/functions/score");
+    expect(fetched.status).toBe(200);
+    expect(fetched.body?.definition).toMatchObject({
+      capabilities: [
+        { id: "artifacts", type: "file", root: "artifacts", path: "", access: "read" },
+        { id: "env_min_score", type: "env", alias: "MIN_SCORE" },
+      ],
+      bindings: [{ alias: "MIN_SCORE", required: true }],
+    });
+
+    const conflict = await call("POST", "/api/functions", {
+      definition: {
+        id: "wide",
+        name: "Wide",
+        kind: "verification",
+        source,
+        capabilities: [{ id: "workspace", type: "file", root: "workspace", path: "", access: "read" }],
+      },
+    });
+    expect(conflict.status).toBe(422);
+    expect(conflict.body).toMatchObject({
+      code: "function.invalid",
+      issues: expect.arrayContaining([expect.objectContaining({ code: "function.access_conflict", path: "capabilities" })]),
+    });
+  });
 });
