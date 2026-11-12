@@ -83,6 +83,23 @@ describe("ensureGlobalService", () => {
     expect(spawnCalls).toBe(0);
   });
 
+  it("names an older Stageflow Host instead of calling it a foreign process", async () => {
+    let spawnCalls = 0;
+    const result = await ensureGlobalService({
+      probeHost: async () => "old_stageflow",
+      spawnFn: (() => {
+        spawnCalls += 1;
+        throw new Error("should not spawn");
+      }) as unknown as typeof spawn,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("old_host_running");
+      expect(result.message).toContain("older Stageflow Host");
+    }
+    expect(spawnCalls).toBe(0);
+  });
+
   it("with STAGEFLOW_NO_AUTOSTART and no host: returns autostart_disabled without spawning or creating service.log", async () => {
     await withIsolatedHome(async () => {
       let spawnCalls = 0;

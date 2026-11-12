@@ -249,9 +249,10 @@ export async function assertHostDownForRestore(options?: {
 }): Promise<void> {
   const probe = options?.probe ?? probeGlobalServiceDetailed;
   const result = await probe();
-  if (result === "up") {
+  // Only "nothing is listening" is safe. An older Host, another data directory, or a Host still booting all count as live.
+  if (result !== "unreachable") {
     throw new RestoreError(
-      "restore_host_live: Host is up (GET /livez). Stop it before restore.",
+      `restore_host_live: something answers on the Host port (${result}). Stop the Host before restore.`,
       "restore_host_live",
     );
   }

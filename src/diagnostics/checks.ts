@@ -1,9 +1,18 @@
-import { createHash } from "node:crypto";
-import { accessSync, constants, writeFileSync, unlinkSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+  accessSync,
+  closeSync,
+  constants,
+  openSync,
+  readFileSync,
+  writeFileSync,
+  unlinkSync,
+} from "node:fs";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
-import { globalStageflowHome } from "../project/globalHome.js";
+import { createOwnerOnlyDirectory, globalStageflowHome } from "../project/globalHome.js";
+import { PACKAGE_VERSION } from "../package-meta.js";
 import type { RunStore } from "../runstore/port.js";
 
 const execFileAsync = promisify(execFile);
@@ -42,18 +51,68 @@ export function resetReadyzCacheForTests(): void {
   readyzCache = undefined;
 }
 
-/** First 16 hex chars of sha256(resolved home). `/livez` is unauthenticated, so it never returns the path. */
+const HOST_ID_FILENAME = "host-id";
+const HOST_ID_PATTERN = /^[0-9a-f]{16}$/;
+const homeIds = new Map<string, string>();
+
+export function resetStageflowHomeIdsForTests(): void {
+  homeIds.clear();
+}
+
+function readHostId(filePath: string): string | undefined {
+  try {
+    const text = readFileSync(filePath, "utf8").trim();
+    return HOST_ID_PATTERN.test(text) ? text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A random id stored once in `<home>/host-id`. The CLI and the Host read the same file, so they agree on
+ * whether a running Host uses this data directory. `/livez` is unauthenticated: the id reveals neither the
+ * path nor the user name.
+ */
 export function stageflowHomeId(home: string = globalStageflowHome()): string {
-  return createHash("sha256").update(path.resolve(home)).digest("hex").slice(0, 16);
+  const resolved = path.resolve(home);
+  const cached = homeIds.get(resolved);
+  if (cached !== undefined) return cached;
+  const filePath = path.join(resolved, HOST_ID_FILENAME);
+  let id = readHostId(filePath);
+  if (id === undefined) {
+    createOwnerOnlyDirectory(resolved);
+    const minted = randomBytes(8).toString("hex");
+    try {
+      const fd = openSync(filePath, "wx", 0o600);
+      try {
+        writeFileSync(fd, minted, "utf8");
+      } finally {
+        closeSync(fd);
+      }
+      id = minted;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      id = readHostId(filePath) ?? minted;
+    }
+  }
+  homeIds.set(resolved, id);
+  return id;
 }
 
 export function livezBody(): {
   ok: true;
   status: "live";
   service: "stageflow";
+  version: string;
   home_id: string;
 } {
-  return { ok: true, status: "live", service: "stageflow", home_id: stageflowHomeId() };
+  return {
+    ok: true,
+    status: "live",
+    service: "stageflow",
+    version: PACKAGE_VERSION,
+    home_id: stageflowHomeId(),
+  };
 }
 
 async function checkGitPresent(): Promise<boolean> {

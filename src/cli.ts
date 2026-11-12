@@ -68,7 +68,11 @@ import {
 } from "./server/controlToken.js";
 import { stageflowHomeId } from "./diagnostics/checks.js";
 import { mintConsoleLoginCode } from "./server/consoleLoginCode.js";
-import { probeStageflowHost, SF_SERVICE_CHILD } from "./server/ensureGlobalService.js";
+import {
+  oldHostRunningMessage,
+  probeStageflowHost,
+  SF_SERVICE_CHILD,
+} from "./server/ensureGlobalService.js";
 import { resolveMcpStateless } from "./mcp/server.js";
 import { PACKAGE_VERSION, BUILD_SHA } from "./package-meta.js";
 import { installProxyDispatcher } from "./net/proxy.js";
@@ -782,6 +786,10 @@ async function printIfHostAlreadyRunning(options: {
   const probed = await probeStageflowHost(base, { expectedHomeId: stageflowHomeId() });
   if (probed === "foreign") {
     console.error(`Port ${bound} is in use by another program. Use --port.`);
+    return 1;
+  }
+  if (probed === "old_stageflow") {
+    console.error(oldHostRunningMessage(bound));
     return 1;
   }
   if (probed === "other_home") {

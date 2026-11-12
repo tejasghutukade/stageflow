@@ -82,6 +82,34 @@ describe("host identity probe", () => {
     }
   });
 
+  it("names an older Stageflow Host (no service field) and exits 1", async () => {
+    const port = await reservePort(4155);
+    const stub = http.createServer((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, status: "live" }));
+    });
+    await new Promise<void>((resolve) => stub.listen(port, "127.0.0.1", () => resolve()));
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      errors.push(args.map(String).join(" "));
+    });
+    setOpenBrowserForTests(() => {
+      throw new Error("should not open");
+    });
+    try {
+      expect(await probeStageflowHost(`http://127.0.0.1:${port}`)).toBe("old_stageflow");
+      const code = await main(["node", "sf", "ui", "--port", String(port)]);
+      expect(code).toBe(1);
+      expect(errors.join("\n")).toContain(`An older Stageflow Host is running on port ${port}`);
+    } finally {
+      spy.mockRestore();
+      setOpenBrowserForTests(undefined);
+      await new Promise<void>((resolve, reject) => {
+        stub.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
   it("distinguishes another data directory from this one, and /livez hides the path", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "sf-home-a-"));
     const other = mkdtempSync(path.join(tmpdir(), "sf-home-b-"));

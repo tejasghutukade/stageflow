@@ -54,7 +54,18 @@ export type HostProbeResult = "up" | "down";
  * listening on the port but didn't answer with valid health JSON, so it's
  * almost certainly not our service and spawning would just collide).
  */
-export type ServiceProbeResult = "up" | "unreachable" | "unhealthy" | "foreign" | "other_home";
+export type ServiceProbeResult =
+  | "up"
+  | "unreachable"
+  | "unhealthy"
+  | "foreign"
+  | "other_home"
+  | "old_stageflow";
+
+/** An older Stageflow Host (before 0.56) still holds the port, usually the service left running across an upgrade. */
+export function oldHostRunningMessage(port: number | string): string {
+  return `An older Stageflow Host is running on port ${port}. Stop it (end its "sf mcp" or "sf ui" process, or restart the container), then run this again.`;
+}
 
 export function hostBaseUrl(): string {
   return `http://127.0.0.1:${resolveServicePort()}`;
@@ -74,13 +85,19 @@ export async function probeStageflowHost(
       return "unreachable";
     }
     if (res.status !== 200) return "unhealthy";
-    let body: { service?: unknown; home_id?: unknown };
+    let body: { ok?: unknown; status?: unknown; service?: unknown; home_id?: unknown };
     try {
-      body = JSON.parse(await res.text()) as { service?: unknown; home_id?: unknown };
+      body = JSON.parse(await res.text()) as typeof body;
     } catch {
       return "unhealthy";
     }
-    if (body.service !== "stageflow") return "foreign";
+    if (body === null || typeof body !== "object") return "foreign";
+    if (body.service !== "stageflow") {
+      // Hosts before 0.56 answer {"ok":true,"status":"live"} with no service field.
+      return body.service === undefined && body.ok === true && body.status === "live"
+        ? "old_stageflow"
+        : "foreign";
+    }
     if (
       options?.expectedHomeId !== undefined &&
       body.home_id !== options.expectedHomeId
@@ -129,7 +146,8 @@ export type EnsureGlobalServiceResult =
         | "spawn_failed"
         | "timed_out"
         | "autostart_disabled"
-        | "bind_refused";
+        | "bind_refused"
+        | "old_host_running";
       message: string;
     };
 
@@ -168,6 +186,13 @@ export async function ensureGlobalService(
   const initial = await probeHost();
   if (initial === "up") {
     return { ok: true, alreadyRunning: true };
+  }
+  if (initial === "old_stageflow") {
+    return {
+      ok: false,
+      reason: "old_host_running",
+      message: oldHostRunningMessage(resolveServicePort()),
+    };
   }
   if (initial === "unhealthy" || initial === "foreign" || initial === "other_home") {
     return {

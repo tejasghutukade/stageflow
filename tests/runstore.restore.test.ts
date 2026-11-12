@@ -23,6 +23,7 @@ function restoreEnv(key: string, value: string | undefined): void {
   else process.env[key] = value;
 }
 import {
+  assertHostDownForRestore,
   applyPendingRestoreAtBoot,
   applyRestoreArchive,
   RestoreError,
@@ -56,6 +57,15 @@ describe("restore", () => {
         probe: async () => "up",
       }),
     ).rejects.toMatchObject({ code: "restore_host_live" });
+  });
+
+  it("refuses restore for every probe result except unreachable", async () => {
+    for (const result of ["up", "old_stageflow", "foreign", "other_home", "unhealthy"] as const) {
+      await expect(assertHostDownForRestore({ probe: async () => result })).rejects.toMatchObject({
+        code: "restore_host_live",
+      });
+    }
+    await expect(assertHostDownForRestore({ probe: async () => "unreachable" })).resolves.toBeUndefined();
   });
 
   it("moves previous store aside and restores without sidecars", async () => {
