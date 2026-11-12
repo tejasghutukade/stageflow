@@ -14,9 +14,13 @@ import "./redesign/slice5.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { controlTokenReady } from "./api/controlToken";
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+// A `#code=` login link is exchanged before the first API call, so the console opens signed in.
+void controlTokenReady.then(() => {
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+});
