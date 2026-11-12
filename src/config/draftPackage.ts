@@ -301,33 +301,79 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
+/** Deepest a shared stage may sit above its package (`../../stages/x.yaml` is 2). */
+const MAX_STAGE_PARENT_DEPTH = 16;
+
+/** Why a pipeline id or stage path cannot be written as a file, or undefined when it can. */
+function unsafeDraftPaths(draft: DraftPackage): string | undefined {
+  const id = draft.pipeline.id;
+  if (
+    typeof id !== "string" ||
+    id.length === 0 ||
+    pathContainsNul(id) ||
+    pipelineIdHasPathSeparator(id) ||
+    id === "." ||
+    id === ".."
+  ) {
+    return `pipeline id cannot be used as a file name (${String(id)})`;
+  }
+  for (const stage of draft.stages ?? []) {
+    if (typeof stage.path !== "string") return "stage path must be a string";
+    const rel = normalizeStageRelPath(stage.path);
+    if (!rel || pathContainsNul(rel) || path.isAbsolute(rel) || path.posix.isAbsolute(rel) || /^[A-Za-z]:/.test(rel)) {
+      return `Invalid stage path (${stage.path})`;
+    }
+    if (stageParentDepth(rel) > MAX_STAGE_PARENT_DEPTH) return `Stage path climbs too far (${stage.path})`;
+  }
+  return undefined;
+}
+
+/** How many directories a relative stage path climbs above its package, after normalizing. */
+function stageParentDepth(rel: string): number {
+  const segments = path.posix.normalize(rel).split("/");
+  let depth = 0;
+  while (segments[depth] === "..") depth += 1;
+  return depth;
+}
+
+function assertInside(root: string, target: string): void {
+  const rel = path.relative(root, target);
+  if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(`draft path escapes its validation folder (${target})`);
+  }
+}
+
+/**
+ * Write the draft into `tempRoot` for validation. The package sits deep enough below `tempRoot` that every
+ * `../` stage path (a shared stage elsewhere in the project) still lands inside it, and every target is checked
+ * before it is written. Returns the package directory to validate from.
+ */
 async function materializeDraft(
   draft: DraftPackage,
-  dir: string,
+  tempRoot: string,
   pipelineFilename: string,
-): Promise<void> {
+): Promise<string> {
   const migrated = hoistUsesWrapperSkills(draft);
+  const depth = Math.max(0, ...(migrated.stages ?? []).map((stage) => stageParentDepth(normalizeStageRelPath(stage.path))));
+  const dir = path.join(tempRoot, ...Array.from({ length: depth }, (_, index) => `p${index}`));
   await mkdir(dir, { recursive: true });
-  await writeFile(
-    path.join(dir, pipelineFilename),
-    stringifyTargetYaml(pipelineDocument(migrated.pipeline)),
-    "utf8",
-  );
+  const pipelinePath = path.resolve(dir, pipelineFilename);
+  assertInside(tempRoot, pipelinePath);
+  await writeFile(pipelinePath, stringifyTargetYaml(pipelineDocument(migrated.pipeline)), "utf8");
 
   for (const stage of migrated.stages ?? []) {
-    const rel = normalizeStageRelPath(stage.path);
-    const stagePath = path.join(dir, rel);
+    const stagePath = path.resolve(dir, normalizeStageRelPath(stage.path));
+    assertInside(tempRoot, stagePath);
     await mkdir(path.dirname(stagePath), { recursive: true });
     await writeFile(stagePath, stringifyTargetYaml(stage.body), "utf8");
   }
 
   if (draft.task) {
-    await writeFile(
-      path.join(dir, path.basename(draft.task.filename)),
-      stringifyTargetYaml(draft.task.body),
-      "utf8",
-    );
+    const taskPath = path.resolve(dir, path.basename(draft.task.filename));
+    assertInside(tempRoot, taskPath);
+    await writeFile(taskPath, stringifyTargetYaml(draft.task.body), "utf8");
   }
+  return dir;
 }
 
 function collectTaskFindings(
@@ -395,12 +441,20 @@ export async function validateDraftPackage(
       await rm(sidecar, { force: true });
     }
   } else if (needsMaterialize) {
+    const unsafe = unsafeDraftPaths(draft);
+    if (unsafe !== undefined) {
+      return buildValidationResult(
+        "pipeline",
+        [{ severity: "error", code: "pipeline.invalid_path", path: "<draft>", message: unsafe, category: "pipeline" }],
+        strict,
+      );
+    }
     const tempRoot = await mkdtemp(path.join(tmpdir(), "sf-draft-"));
     try {
       const pipelineFilename = `${draft.pipeline.id}.pipeline.yaml`;
-      await materializeDraft(draft, tempRoot, pipelineFilename);
+      const packageDir = await materializeDraft(draft, tempRoot, pipelineFilename);
       const pipelineResult = await validatePipeline(pipelineFilename, {
-        cwd: tempRoot,
+        cwd: packageDir,
         projectRoot: tempRoot,
         validateStages: true,
         strict,
