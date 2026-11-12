@@ -1082,10 +1082,10 @@ export function NewTriggerModal({
                     </span>
                     <div className="flex flex-1 flex-col">
                       <span className={`w-fit text-[#a7aab2] ${MONO} text-[11px] leading-[1.45455]`}>
-                        number: 482 · author: tejasghutukade · action: opened
+                        number: 482 · author: octocat · action: opened
                       </span>
                       <span className={`w-fit text-[#a7aab2] ${MONO} text-[11px] leading-[1.45455]`}>
-                        url: github.com/tejasghutukade/software-factory/pull/482
+                        url: github.com/your-org/your-repo/pull/482
                       </span>
                     </div>
                   </div>

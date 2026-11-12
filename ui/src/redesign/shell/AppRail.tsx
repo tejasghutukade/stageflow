@@ -178,7 +178,7 @@ export function AppRail({
                       title="Experimental"
                     >
                       <span className="sr-only">experimental</span>
-                      Exp
+                      <span aria-hidden="true">Exp</span>
                     </span>
                   ) : null}
                   {item.badge === "waiting" && waitingCount > 0 ? (

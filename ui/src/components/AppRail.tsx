@@ -85,7 +85,7 @@ export function AppRail({
           {item.experimental ? (
             <span className="rail__count" title="Experimental">
               <span className="sr-only">experimental</span>
-              Exp
+              <span aria-hidden="true">Exp</span>
             </span>
           ) : null}
           {item.id === "today" && waitingCount != null && waitingCount > 0 && (

@@ -84,7 +84,7 @@ verify_install() {
   echo ""
   echo "Installed: $(sf --version 2>/dev/null || echo stageflow)"
   local global_root pkg_dir
-  global_root="$(npm root -g)"
+  global_root="$(npm root -g 2>/dev/null || true)"
   if ! pkg_dir="$(package_dir_from_sf 2>/dev/null)"; then
     pkg_dir="${global_root}/${STAGEFLOW_PACKAGE}"
   fi

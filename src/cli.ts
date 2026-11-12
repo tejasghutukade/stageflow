@@ -143,9 +143,9 @@ const USAGE = `Usage:
   sf runs resume --run <runId> --stage <stageId> [--json]
   sf runs abandon --run <runId> --stage <stageId> [--json]
   sf runs rerun --run <runId> [--pinned] [--json]
-  sf trigger
-  sf eval
-  sf agents
+  sf trigger …   (see sf trigger --help)
+  sf eval …      (see sf eval --help)
+  sf agents …    (see sf agents --help)
   ${UI_USAGE_LINE}
   ${MCP_USAGE_LINE}
   sf providers list
