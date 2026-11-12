@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { freePort } from "./helpers/freePort.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(root, "src", "cli.ts");
@@ -21,21 +22,8 @@ afterEach(() => {
   }
 });
 
-function reservePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = (port: number) => {
-      if (port > 4199) {
-        reject(new Error("no free port in 4100-4199"));
-        return;
-      }
-      const server = createServer();
-      server.once("error", () => probe(port + 1));
-      server.listen(port, "127.0.0.1", () => {
-        server.close(() => resolve(port));
-      });
-    };
-    probe(4170);
-  });
+function reservePort(_start?: number): Promise<number> {
+  return freePort();
 }
 
 describe("control token save failure", () => {

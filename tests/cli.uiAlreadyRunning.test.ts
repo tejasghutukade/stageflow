@@ -8,22 +8,12 @@ import { main, setOpenBrowserForTests } from "../src/cli.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { loadControlTokens } from "../src/server/controlToken.js";
 import { startMcpServer } from "../src/server/mcpHost.js";
+import { freePort } from "./helpers/freePort.js";
+import { resetStageflowHomeIdsForTests } from "../src/diagnostics/checks.js";
+import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 
-function reservePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = (port: number) => {
-      if (port > 4199) {
-        reject(new Error("no free port in 4100-4199"));
-        return;
-      }
-      const server = createServer();
-      server.once("error", () => probe(port + 1));
-      server.listen(port, "127.0.0.1", () => {
-        server.close(() => resolve(port));
-      });
-    };
-    probe(4140);
-  });
+function reservePort(_start?: number): Promise<number> {
+  return freePort();
 }
 
 describe("sf ui when a Host is already running", () => {
@@ -33,6 +23,8 @@ describe("sf ui when a Host is already running", () => {
 
   afterEach(() => {
     setOpenBrowserForTests(undefined);
+    resetGlobalStageflowHomeForTests();
+    resetStageflowHomeIdsForTests();
     if (prevHome === undefined) delete process.env.STAGEFLOW_HOME;
     else process.env.STAGEFLOW_HOME = prevHome;
     if (prevToken === undefined) delete process.env.STAGEFLOW_CONTROL_TOKEN;
@@ -51,6 +43,7 @@ describe("sf ui when a Host is already running", () => {
     process.env.STAGEFLOW_HOME = home;
     delete process.env.STAGEFLOW_CONTROL_TOKEN;
     delete process.env.STAGEFLOW_CONTROL_TOKEN_FILE;
+    resetGlobalStageflowHomeForTests();
     const port = await reservePort();
     const store = createRunStore({ rootDir: home });
     const started = await startMcpServer({
@@ -62,6 +55,8 @@ describe("sf ui when a Host is already running", () => {
       mcpStateless: true,
       controlTokens: loadControlTokens({ STAGEFLOW_CONTROL_TOKEN: token }),
     });
+    resetGlobalStageflowHomeForTests();
+    resetStageflowHomeIdsForTests();
     const opened: string[] = [];
     setOpenBrowserForTests((url) => {
       opened.push(url);

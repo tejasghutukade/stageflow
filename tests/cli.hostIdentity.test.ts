@@ -7,30 +7,29 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { main, setOpenBrowserForTests } from "../src/cli.js";
-import { stageflowHomeId } from "../src/diagnostics/checks.js";
+import { resetStageflowHomeIdsForTests, stageflowHomeId } from "../src/diagnostics/checks.js";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import { probeStageflowHost } from "../src/server/ensureGlobalService.js";
+import { freePort } from "./helpers/freePort.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(root, "src", "cli.ts");
 const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
 const children: ChildProcess[] = [];
 
-function reservePort(start: number): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = (port: number) => {
-      if (port > 4199) {
-        reject(new Error("no free port in 4100-4199"));
-        return;
-      }
-      const server = createNetServer();
-      server.once("error", () => probe(port + 1));
-      server.listen(port, "127.0.0.1", () => {
-        server.close(() => resolve(port));
-      });
-    };
-    probe(start);
-  });
+function reservePort(_start?: number): Promise<number> {
+  return freePort();
+}
+
+const savedEnv = {
+  home: process.env.STAGEFLOW_HOME,
+  token: process.env.STAGEFLOW_CONTROL_TOKEN,
+  file: process.env.STAGEFLOW_CONTROL_TOKEN_FILE,
+};
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
 }
 
 function useHome(home: string): void {
@@ -49,7 +48,11 @@ afterEach(() => {
       // already exited
     }
   }
+  restoreEnv("STAGEFLOW_HOME", savedEnv.home);
+  restoreEnv("STAGEFLOW_CONTROL_TOKEN", savedEnv.token);
+  restoreEnv("STAGEFLOW_CONTROL_TOKEN_FILE", savedEnv.file);
   resetGlobalStageflowHomeForTests();
+  resetStageflowHomeIdsForTests();
 });
 
 describe("host identity probe", () => {
