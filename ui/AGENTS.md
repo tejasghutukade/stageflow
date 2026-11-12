@@ -45,3 +45,5 @@ MORE CLI:
 The operator-console chrome primitives — rail, page-head, zone, block, run-row, fail-row, rrow, pick, theme-pick, gate, track-mini, mini, filters/tab, topbar, capacity, setting, table, drawer, kv, graph-view, gnode, canvas-tools, canvas-hint, work-split, run-page workspace — are ported from the finalized HTML prototype as CSS classes in `ui/src/console.css`, using Astryx design tokens (`var(--color-*)`, `var(--spacing-*)`, `var(--radius-*)`, `var(--font-size-*)`, `var(--shadow-*)`). Native HTML elements (`<div>`, `<span>`, `<nav>`, `<section>`, `<table>`, `<a>`, `<button>`, `<aside>`, `<dl>`) are allowed for those primitives. This overrides the "No `<div>`" and "don't hand-roll CSS" Astryx rules for chrome surfaces.
 
 Astryx atoms remain where they already work: `Markdown`, `CodeBlock`, `Token`, `Collapsible`, `Theme`, and `Banner` (as last resort). Do not replace working Astryx content components with hand-rolled equivalents.
+
+`npm run ui:dev` proxies `/api` to `127.0.0.1:3847` and rewrites `Origin` to that host. The Host rejects an Origin whose port does not match `Host`. The dev server needs a running Host and its control token.
