@@ -87,7 +87,17 @@ export function globalStageflowHome(): string {
 /** Create `dir` at mode 0700 when it is missing. An existing directory is left as it is. */
 export function createOwnerOnlyDirectory(dir: string): void {
   try {
-    lstatSync(dir);
+    const st = lstatSync(dir);
+    if (st.isDirectory() && process.platform !== "win32") {
+      const uid = process.getuid?.();
+      if (uid !== undefined && st.uid === uid && (st.mode & 0o077) !== 0) {
+        try {
+          chmodSync(dir, 0o700);
+        } catch {
+          // best-effort on non-POSIX
+        }
+      }
+    }
     return;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;

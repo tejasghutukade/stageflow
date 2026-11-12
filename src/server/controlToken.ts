@@ -246,6 +246,15 @@ function readControlTokenFile(filePath: string): string | undefined {
  * Reuse only a regular file owned by this user, mode 0600, with a valid token.
  * 0644, a symlink, or another owner is not reusable.
  */
+function controlTokenFileExists(filePath: string): boolean {
+  try {
+    lstatSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function readReusableControlToken(filePath: string): string | undefined {
   let st;
   try {
@@ -259,9 +268,11 @@ function readReusableControlToken(filePath: string): string | undefined {
     );
   }
   if (st.isSymbolicLink() || !st.isFile()) return undefined;
-  const uid = process.getuid?.();
-  if (uid === undefined || st.uid !== uid) return undefined;
-  if ((st.mode & 0o777) !== 0o600) return undefined;
+  if (process.platform !== "win32") {
+    const uid = process.getuid?.();
+    if (uid === undefined || st.uid !== uid) return undefined;
+    if ((st.mode & 0o777) !== 0o600) return undefined;
+  }
   const text = readControlTokenFile(filePath);
   if (text === undefined || text.length === 0) return undefined;
   try {
@@ -342,6 +353,11 @@ export function ensureHostControlToken(
   if (existing !== undefined) {
     env.STAGEFLOW_CONTROL_TOKEN_FILE = filePath;
     return { generated: false, token: existing, filePath };
+  }
+  if (controlTokenFileExists(filePath)) {
+    console.error(
+      `Ignoring ${filePath}: it must be a regular file owned by you with mode 0600. A new token was created.`,
+    );
   }
   const token = randomBytes(32).toString("hex");
   return { generated: true, token, filePath, pendingWrite: true };

@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { lstatSync, readFileSync, symlinkSync } from "node:fs";
 import { chmod, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
+import { ensureGlobalHome, resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { buildStageEnvironment } from "../src/runtime/stageEnvironment.js";
 import { SF_STAGE_WORKER } from "../src/runtime/stageWorkerProtocol.js";
@@ -422,5 +423,66 @@ describe("requiredScopeFor", () => {
     );
     expect(requiredScopeFor("POST", "/api/backup")).toBe("drive");
     expect(requiredScopeFor("GET", "/api/export")).toBe("read");
+  });
+});
+
+describe("control token reuse edges", () => {
+  it("reuses a token file on win32 without a uid", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-win-token-"));
+    const file = path.join(dir, CONTROL_TOKEN_FILENAME);
+    const token = "b".repeat(64);
+    await writeFile(file, token, "utf8");
+    await chmod(file, 0o644);
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    const getuid = Object.getOwnPropertyDescriptor(process, "getuid");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    Object.defineProperty(process, "getuid", { value: undefined, configurable: true });
+    try {
+      const ensured = ensureHostControlToken({ STAGEFLOW_HOME: dir });
+      expect(ensured.generated).toBe(false);
+      expect(ensured.token).toBe(token);
+    } finally {
+      if (platform) Object.defineProperty(process, "platform", platform);
+      if (getuid) Object.defineProperty(process, "getuid", getuid);
+    }
+  });
+
+  it("says when a 0644 token file is replaced", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-open-token-"));
+    const file = path.join(dir, CONTROL_TOKEN_FILENAME);
+    const token = "c".repeat(64);
+    await writeFile(file, token, "utf8");
+    await chmod(file, 0o644);
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "));
+    });
+    try {
+      const ensured = ensureHostControlToken({ STAGEFLOW_HOME: dir });
+      expect(ensured.generated).toBe(true);
+      expect(ensured.token).not.toBe(token);
+      expect(lines.join("\n")).toContain(
+        `Ignoring ${file}: it must be a regular file owned by you with mode 0600. A new token was created.`,
+      );
+      expect(lines.join("\n")).not.toContain(token);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("tightens an existing home directory to 0700", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "sf-home-mode-"));
+    await chmod(home, 0o755);
+    const prev = process.env.STAGEFLOW_HOME;
+    process.env.STAGEFLOW_HOME = home;
+    resetGlobalStageflowHomeForTests();
+    try {
+      ensureGlobalHome();
+      expect((await stat(home)).mode & 0o777).toBe(0o700);
+    } finally {
+      if (prev === undefined) delete process.env.STAGEFLOW_HOME;
+      else process.env.STAGEFLOW_HOME = prev;
+      resetGlobalStageflowHomeForTests();
+    }
   });
 });
