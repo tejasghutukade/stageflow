@@ -7,9 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.56.0] - 2026-11-11
 
+### Upgrade notes
+
+- **Stop a running Host before you upgrade.** A 0.56 CLI reports an older Host on the port ("An older Stageflow Host is running on port 3847") and does not use it. `sf restore` refuses while anything answers on the port.
+- **Store migration 019** adds `agent_sessions.rolled_from_session_id`. After it runs, 0.55.x refuses the store (`store_schema_too_new`).
+- **`/livez` returns `service`, `version` and `home_id`.** `home_id` is a random id kept in `$STAGEFLOW_HOME/host-id`.
+
 ### Security
 
-- **A local Host has a control token.** The first start writes `$STAGEFLOW_HOME/control-token` (mode 0600) and prints `Control token: …`, including in Docker logs. Later starts reuse that file and print only the path. If the logs don't show it, run `docker exec <container> cat /data/control-token`. A second `sf ui` on a port that already has this Host opens the console signed in. The console link carries a one-time code that expires in 60 seconds; the page exchanges it for the token. A stage does not receive the control token or the data directory path. An unsandboxed stage still runs as your user, so it can read files in the data directory (`~/.stageflow` by default, `/data` in Docker). Use the stage container sandbox (`STAGEFLOW_STAGE_CONTAINER_IMAGE`) when a stage runs untrusted code. `/livez` and `/readyz` stay open. Set `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` only when you mean to start with no token.
+- **A local Host has a control token.** The first start writes `$STAGEFLOW_HOME/control-token` (mode 0600) and prints `Control token: …`, including in Docker logs. Later starts reuse that file and print only the path. If the logs don't show it, run `docker exec <container> cat /data/control-token`. A second `sf ui` on a port that already has this Host opens the console signed in. The console link carries a one-time code that expires in 60 seconds; the page exchanges it for the token. A stage does not receive the control token. Its cache, temporary and working directories are inside the data directory (`~/.stageflow` by default, `/data` in Docker), and an unsandboxed stage runs as your user, so it can find and read the token file. Use the stage container sandbox (`STAGEFLOW_STAGE_CONTAINER_IMAGE`) when a stage runs untrusted code. `/livez` and `/readyz` stay open, as do `/api/auth-hint` (the token file path, loopback callers only) and `/api/console-login` (the one-time code exchange, loopback callers only). Set `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` only when you mean to start with no token.
 - **An `Origin` must match the `Host` header, including the port.** A page on another localhost port can no longer call the API.
 - **A2A `run_stage` is off unless that caller sets `allow_run_stage`.** Invoking a published pipeline is unchanged.
 - **Stage activity is redacted before it is stored.** `redaction-secrets.json` is removed after the worker loads it.
@@ -31,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A second Host binds its port before it touches run data.**
 - **Skill install rejects a name that would delete outside the skills folder.**
 - **After an operator answer, the stage keeps its secrets and home.** Abandoning a stage stops that stage only.
-- **A channel thread rolls onto a new session when it reaches its turn or time limit.** Its cost limit counts spend across the whole thread, so a rollover does not reset it. Always-on agents count the last 24 hours.
+- **A channel thread rolls onto a new session when it reaches its turn or time limit.** Its cost limit counts the thread's spend over the last 24 hours, across rollovers, so a rollover does not reset it. A refusal names the cost limit when that is the one reached.
 - **An eval whose graders all error fails,** instead of scoring as a pass.
 - **`name.stage.yaml` matches `id: name`.**
 - **Documented `STAGEFLOW_*` variables no longer stop the Host.**

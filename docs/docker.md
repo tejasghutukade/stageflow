@@ -19,7 +19,7 @@ The [hardened egress reference](#hardened-egress-reference-compose) below is doc
 
 ## Local try (Compose)
 
-First-run checklist for the shipped [`docker-compose.yml`](../docker-compose.yml). The compose file builds the local `Dockerfile`, mounts a named volume at `/data`, publishes port **3847**, and sets `STAGEFLOW_HOME=/data`, `STAGEFLOW_CREDENTIAL_HOME=/data`, and `TMPDIR=/data/tmp` (`STAGEFLOW_BIND=0.0.0.0` is already in the image). The image, Compose, and `scripts/docker-smoke.sh` set `STAGEFLOW_CREDENTIAL_HOME` to that data directory, so the volume is the container's operator store. A data directory is its own operator only when that override is set. This is a **local try** surface — not the hardened egress sandbox.
+First-run checklist for the shipped [`docker-compose.yml`](../docker-compose.yml). The compose file builds the local `Dockerfile`, mounts a named volume at `/data`, publishes port **3847**, and sets `STAGEFLOW_HOME=/data`, `STAGEFLOW_CREDENTIAL_HOME=/data`, `TMPDIR=/tmp/stageflow` and `SQLITE_TMPDIR=/data/tmp` (`STAGEFLOW_BIND=0.0.0.0` is already in the image). The image, Compose, and `scripts/docker-smoke.sh` set `STAGEFLOW_CREDENTIAL_HOME` to that data directory, so the volume is the container's operator store. A data directory is its own operator only when that override is set. This is a **local try** surface — not the hardened egress sandbox.
 
 The compose service runs `command: ["sf", "ui"]` on purpose: operator console **and** MCP on the same Host. The image `CMD` is still `sf mcp` (headless); override to `sf mcp` only when you want a UI-less Host. Do not run both `sf ui` and `sf mcp` at once — they share port **3847**.
 
@@ -144,7 +144,8 @@ DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/tejasghutuk
 docker run --rm \
   -e STAGEFLOW_HOME=/data \
   -e STAGEFLOW_CREDENTIAL_HOME=/data \
-  -e TMPDIR=/data/tmp \
+  -e TMPDIR=/tmp/stageflow \
+  -e SQLITE_TMPDIR=/data/tmp \
   -e STAGEFLOW_CONTROL_TOKEN \
   -v stageflow-data:/data \
   -p 3847:3847 \
@@ -333,7 +334,7 @@ Rich health reports `store_filesystem`.
 
 ## Writable paths and `read_only: true`
 
-Supported writable set: `$STAGEFLOW_HOME` and a writable `TMPDIR` (also used as `SQLITE_TMPDIR` when unset). When `TMPDIR` / `TMP` / `TEMP` are unset or whitespace-empty, Host boot soft-defaults to `$STAGEFLOW_HOME/tmp` (creates it) then asserts writability. Boot still fails with `tmpdir_unusable` if that path (or an explicit `TMPDIR`) is not writable. Compose/images often set `TMPDIR=/data/tmp` explicitly — that remains valid.
+Supported writable set: `$STAGEFLOW_HOME` and a writable `TMPDIR` (also used as `SQLITE_TMPDIR` when unset). When `TMPDIR` / `TMP` / `TEMP` are unset or whitespace-empty, Host boot soft-defaults to `$STAGEFLOW_HOME/tmp` (creates it) then asserts writability. Boot still fails with `tmpdir_unusable` if that path (or an explicit `TMPDIR`) is not writable. The shipped image and Compose set `TMPDIR=/tmp/stageflow`, outside the data directory, and keep `SQLITE_TMPDIR=/data/tmp` on the volume. An explicit `TMPDIR=/data/tmp` still works.
 
 ## Logging budget
 
@@ -396,7 +397,8 @@ services:
       STAGEFLOW_BIND: 0.0.0.0
       STAGEFLOW_CONTROL_TOKEN_FILE: /run/secrets/control_token
       STAGEFLOW_BUILD_SHA: "<git sha>"
-      TMPDIR: /data/tmp
+      TMPDIR: /tmp/stageflow
+      SQLITE_TMPDIR: /data/tmp
       HTTPS_PROXY: http://egress-proxy:3128
       HTTP_PROXY: http://egress-proxy:3128
       NO_PROXY: 127.0.0.1,localhost,egress-proxy

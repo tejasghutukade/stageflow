@@ -194,4 +194,10 @@ describe("docs", () => {
     }
     expect(problems).toEqual([]);
   });
+
+  it("never claims a stage is kept from the data directory path", () => {
+    const files = ["README.md", "SECURITY.md", "CHANGELOG.md", ...markdownFiles("docs"), ...markdownFiles("skills")];
+    const problems = files.filter((file) => /data directory path/.test(read(file)));
+    expect(problems).toEqual([]);
+  });
 });
