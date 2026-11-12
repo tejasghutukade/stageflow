@@ -409,6 +409,83 @@ describe("function broker", () => {
     expect(JSON.stringify(imported)).not.toContain("spawn");
   });
 
+  it("allows origin-root and narrower API path prefixes", async () => {
+    const server = await httpFixture({ status: 200, body: "path-ok" });
+    track(async () => server.close());
+    const root = await makeRoot();
+    const broker = httpBroker(
+      root,
+      { "allowed.test": [["203.0.113.10"], ["203.0.113.10"]] },
+      { "203.0.113.10": portOf(server.url) },
+      0,
+    );
+    const guestHttp = (requestPath: string) => `
+export default async function execute(context) {
+  try {
+    const response = await context.http.request({
+      method: "GET",
+      origin: "https://allowed.test",
+      path: ${JSON.stringify(requestPath)},
+    });
+    return { allowed: true, status: response.status, body: response.body };
+  } catch (error) {
+    return { allowed: false, code: error.code, message: error.message };
+  }
+}
+`;
+    const invoke = async (pathPrefix: string, requestPath: string, invocationId: string) =>
+      broker.invoke({
+        invocationId,
+        kind: "tool",
+        source: guestHttp(requestPath),
+        context: {},
+        roots: { workspace: root },
+        projectRoot: root,
+        grants: {
+          apis: [
+            {
+              origin: "https://allowed.test",
+              methods: ["GET"],
+              pathPrefix,
+              access: "read",
+              credential: "API_TOKEN",
+            },
+          ],
+        },
+      });
+
+    server.requests.length = 0;
+    expect(await invoke("/", "/")).toMatchObject({ ok: true, value: { allowed: true, status: 200 } });
+    expect(server.requests).toHaveLength(1);
+    expect(server.requests[0]?.url).toBe("/");
+
+    server.requests.length = 0;
+    expect(await invoke("/", "/v1/report")).toMatchObject({
+      ok: true,
+      value: { allowed: true, status: 200, body: "path-ok" },
+    });
+    expect(server.requests).toHaveLength(1);
+    expect(server.requests[0]?.url).toBe("/v1/report");
+
+    server.requests.length = 0;
+    expect(await invoke("/v1", "/v1/report")).toMatchObject({ ok: true, value: { allowed: true, status: 200 } });
+    expect(server.requests).toHaveLength(1);
+    expect(server.requests[0]?.url).toBe("/v1/report");
+
+    server.requests.length = 0;
+    expect(await invoke("/v1", "/other")).toMatchObject({
+      ok: true,
+      value: { allowed: false, code: "permission_denied", message: "api access denied" },
+    });
+    expect(server.requests).toHaveLength(0);
+
+    expect(await invoke("/v1", "//v1")).toMatchObject({
+      ok: true,
+      value: { allowed: false, code: "permission_denied", message: "api access denied" },
+    });
+    expect(server.requests).toHaveLength(0);
+  });
+
   it("does not send credentials when a permitted host redirects or re-resolves to a private address", async () => {
     const proxy = await httpFixture({ status: 500, body: "proxy-should-not-run" });
     const sink = await httpFixture({ status: 200, body: SLOW_BODY });

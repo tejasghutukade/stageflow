@@ -297,6 +297,7 @@ function pathAllowed(prefix: string, requestPath: string): boolean {
   if (normalized.length > 1 && normalized.endsWith("/")) normalized = normalized.slice(0, -1);
   const clean = prefix.length > 1 && prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
   if (pathPosix(clean) !== clean && prefix !== "/") return false;
+  if (clean === "/") return true;
   return normalized === clean || normalized.startsWith(`${clean}/`);
 }
 
