@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { lstatSync, readFileSync, symlinkSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
 import { chmod, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -206,6 +206,48 @@ describe("ensureHostControlToken", () => {
     expect(ensured.filePath).toBeUndefined();
     retireGeneratedControlToken(ensured, env);
     await expect(stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(`${file}.retired`, "utf8")).toBe(`${DRIVE}\n`);
+  });
+
+  it("keeps the file when a named _FILE, a symlinked spelling, or a plain token value refers to it", async () => {
+    const make = async (label: string) => {
+      const dir = await mkdtemp(path.join(tmpdir(), `sf-keep-${label}-`));
+      const file = path.join(dir, CONTROL_TOKEN_FILENAME);
+      await writeFile(file, `${DRIVE}\n`, { mode: 0o600 });
+      return { dir, file };
+    };
+    const cases: Array<(dir: string, file: string) => NodeJS.ProcessEnv> = [
+      (dir, file) => ({ STAGEFLOW_HOME: dir, STAGEFLOW_CONTROL_TOKEN_CI_FILE: file }),
+      (dir, file) => ({ STAGEFLOW_HOME: dir, STAGEFLOW_CONTROL_TOKEN_FILE: path.join(realpathSync(dir), path.basename(file)) }),
+      (dir) => ({ STAGEFLOW_HOME: realpathSync(dir), STAGEFLOW_CONTROL_TOKEN_FILE: path.join(dir, ".", CONTROL_TOKEN_FILENAME) }),
+      (dir) => ({ STAGEFLOW_HOME: dir, STAGEFLOW_CONTROL_TOKEN: DRIVE }),
+    ];
+    for (const [index, build] of cases.entries()) {
+      const { dir, file } = await make(String(index));
+      const env = build(dir, file);
+      const ensured = ensureHostControlToken(env);
+      retireGeneratedControlToken(ensured, env);
+      expect(await readFile(file, "utf8"), `case ${index}`).toBe(`${DRIVE}\n`);
+    }
+  });
+
+  it("warns instead of throwing when the file cannot be moved", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-retire-ro-"));
+    const file = path.join(dir, CONTROL_TOKEN_FILENAME);
+    await writeFile(file, `${DRIVE}\n`, { mode: 0o600 });
+    await chmod(dir, 0o500);
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "));
+    });
+    try {
+      const env: NodeJS.ProcessEnv = { STAGEFLOW_HOME: dir, STAGEFLOW_CONTROL_TOKEN: OTHER };
+      expect(() => retireGeneratedControlToken(ensureHostControlToken(env), env)).not.toThrow();
+      expect(lines.join("\n")).toContain("Could not retire the generated control token file");
+    } finally {
+      spy.mockRestore();
+      await chmod(dir, 0o700);
+    }
   });
 
   it("keeps the file when STAGEFLOW_CONTROL_TOKEN_FILE points at it", async () => {

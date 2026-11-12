@@ -8,8 +8,10 @@ import {
   openSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
+  realpathSync,
 } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import os from "node:os";
@@ -391,30 +393,95 @@ export function commitHostControlToken(
   ensured.pendingWrite = false;
 }
 
+/** Two paths name the same file: same device and inode, else the same real path. */
+function sameFile(a: string, b: string): boolean {
+  try {
+    const sa = statSync(a);
+    const sb = statSync(b);
+    if (sa.dev === sb.dev && sa.ino === sb.ino) return true;
+  } catch {
+    // fall through to path comparison
+  }
+  const real = (value: string) => {
+    try {
+      return realpathSync(value);
+    } catch {
+      return path.resolve(value);
+    }
+  };
+  return real(a) === real(b);
+}
+
+/** Every file the operator pointed a token variable at: the drive and read `_FILE`s and each named `_FILE`. */
+function operatorTokenFiles(env: NodeJS.ProcessEnv): string[] {
+  const files = [env.STAGEFLOW_CONTROL_TOKEN_FILE, env.STAGEFLOW_READ_TOKEN_FILE];
+  for (const named of listNamedControlTokenEnvKeys(env)) {
+    if (named.isFile) files.push(env[named.envKey]);
+  }
+  return files.filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+}
+
+/** Token values the operator set, from plain variables and from the files they named. */
+function operatorTokenValues(env: NodeJS.ProcessEnv): Set<string> {
+  const values = new Set<string>();
+  const add = (value: string | undefined) => {
+    const trimmed = value?.trim();
+    if (trimmed) values.add(trimmed);
+  };
+  add(env.STAGEFLOW_CONTROL_TOKEN);
+  add(env.STAGEFLOW_READ_TOKEN);
+  for (const named of listNamedControlTokenEnvKeys(env)) {
+    if (!named.isFile) add(env[named.envKey]);
+  }
+  for (const file of operatorTokenFiles(env)) {
+    try {
+      add(readFileSync(file, "utf8"));
+    } catch {
+      // unreadable: nothing to compare
+    }
+  }
+  return values;
+}
+
+/**
+ * When the operator set their own token, move a token file a previous start generated out of the way, so the CLI
+ * does not keep sending a token this Host no longer accepts. Never touches a file the operator named in any token
+ * variable (by inode or real path, symlinked spellings included) or a file holding a token the operator set. The
+ * file is renamed to `control-token.retired`, not deleted. Failures are reported, never thrown.
+ */
 export function retireGeneratedControlToken(
   ensured: EnsuredHostControlToken,
   env: NodeJS.ProcessEnv = process.env,
 ): void {
-  if (ensured.generated || ensured.pendingWrite || ensured.filePath !== undefined) return;
-  if (!operatorSetControlToken(env)) return;
-  const filePath = path.join(controlTokenDirectory(env), CONTROL_TOKEN_FILENAME);
-  const operatorFile = env.STAGEFLOW_CONTROL_TOKEN_FILE;
-  if (
-    operatorFile !== undefined &&
-    operatorFile.length > 0 &&
-    path.resolve(operatorFile) === path.resolve(filePath)
-  ) {
-    return;
-  }
-  let stat: ReturnType<typeof lstatSync>;
   try {
-    stat = lstatSync(filePath);
+    if (ensured.generated || ensured.pendingWrite || ensured.filePath !== undefined) return;
+    if (!operatorSetControlToken(env)) return;
+    const filePath = path.join(controlTokenDirectory(env), CONTROL_TOKEN_FILENAME);
+    let stat: ReturnType<typeof lstatSync>;
+    try {
+      stat = lstatSync(filePath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw err;
+    }
+    if (!stat.isSymbolicLink() && !stat.isFile()) return;
+    if (operatorTokenFiles(env).some((file) => sameFile(file, filePath))) return;
+    let content: string | undefined;
+    try {
+      content = readFileSync(filePath, "utf8").trim();
+    } catch {
+      content = undefined;
+    }
+    if (content !== undefined && content.length > 0 && operatorTokenValues(env).has(content)) return;
+    const retired = `${filePath}.retired`;
+    renameSync(filePath, retired);
+    console.error(
+      `Moved ${filePath} to ${retired}: this Host uses the token you set, so the generated one is no longer valid.`,
+    );
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw err;
+    const code = (err as NodeJS.ErrnoException).code ?? "unknown";
+    console.error(`Could not retire the generated control token file (${code}). Remove it by hand if the CLI gets 401.`);
   }
-  if (!stat.isSymbolicLink() && !stat.isFile()) return;
-  unlinkSync(filePath);
 }
 
 /**
