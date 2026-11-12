@@ -14,10 +14,18 @@ import {
   setHostFunctionForkForTests,
 } from "../src/functions/hostExecutor.js";
 import {
+  FUNCTION_KILL_GRACE_MS,
+  FUNCTION_MAX_RUNNING,
+  FUNCTION_MAX_WAITING,
+  FUNCTION_TIMEOUT_MS_MAX,
+} from "../src/functions/protocol.js";
+import {
+  HOST_TIMEOUT_MS,
   callFunctionOnHost,
   handleStageFunctionMessage,
   type StageFunctionHost,
 } from "../src/functions/workerIpc.js";
+import type { FunctionCallInput } from "../src/functions/invoke.js";
 import { createFunctionInvoker, type FunctionRunView } from "../src/functions/invoke.js";
 import { SF_STAGE_WORKER } from "../src/runtime/stageWorkerProtocol.js";
 
@@ -289,6 +297,145 @@ describe("function host queue", () => {
     });
     expect(JSON.stringify(replies[0])).not.toContain("no owner");
     expect(result.ok).toBe(true);
+  });
+
+  it("sizes the worker host timeout for a full admission queue", () => {
+    expect(HOST_TIMEOUT_MS).toBe(6 * (FUNCTION_TIMEOUT_MS_MAX + FUNCTION_KILL_GRACE_MS) + 1_000);
+  });
+
+  it("refuses a call when the wait queue is already full", async () => {
+    let started = 0;
+    const hanging: Array<() => void> = [];
+    const executor = new FunctionExecutor({
+      forkFn: (() => {
+        started += 1;
+        const child = fakeChild();
+        child.send = (() => {
+          hanging.push(() => child.emitSuccess());
+          return true;
+        }) as ChildProcess["send"];
+        return child;
+      }) as typeof childProcess.fork,
+    });
+    setHostFunctionExecutorForTests(executor);
+    const broker = new FunctionBroker({ executor: hostFunctionExecutor() });
+    const invoke = (invocationId: string) =>
+      broker.invoke({
+        invocationId,
+        kind: "verification",
+        source: SYNC_OK,
+        context: {},
+        timeoutMs: FUNCTION_TIMEOUT_MS_MAX,
+      });
+
+    const running = Promise.all(
+      Array.from({ length: FUNCTION_MAX_RUNNING }, (_, index) => invoke(`run-${index}`)),
+    );
+    await vi.waitFor(() => expect(started).toBe(FUNCTION_MAX_RUNNING));
+    Array.from({ length: FUNCTION_MAX_WAITING }, (_, index) => invoke(`wait-${index}`));
+    await expect(invoke("overflow")).resolves.toMatchObject({
+      ok: false,
+      code: "resource_limit",
+      message: "function execution queue is full",
+    });
+    for (const finish of hanging.splice(0)) finish();
+    await running;
+  });
+
+  it("does not time out the last accepted waiter before the host responds", async () => {
+    vi.useFakeTimers();
+    let started = 0;
+    const hanging: Array<() => void> = [];
+    const executor = new FunctionExecutor({
+      forkFn: (() => {
+        started += 1;
+        const child = fakeChild();
+        child.send = (() => {
+          hanging.push(() => child.emitSuccess());
+          return true;
+        }) as ChildProcess["send"];
+        return child;
+      }) as typeof childProcess.fork,
+    });
+    setHostFunctionExecutorForTests(executor);
+    const shared = hostFunctionExecutor();
+    const broker = new FunctionBroker({ executor: shared });
+    const host: StageFunctionHost = {
+      async call(_projectRoot, input) {
+        const result = await broker.invoke({
+          invocationId: input.invocationId ?? "missing",
+          kind: input.kind,
+          source: SYNC_OK,
+          context: {},
+          timeoutMs: FUNCTION_TIMEOUT_MS_MAX,
+        });
+        if (!result.ok) {
+          throw new Error(result.message);
+        }
+        return successView();
+      },
+      async cancel() {},
+    };
+    const invokeOnBroker = (invocationId: string) =>
+      broker.invoke({
+        invocationId,
+        kind: "verification",
+        source: SYNC_OK,
+        context: {},
+        timeoutMs: FUNCTION_TIMEOUT_MS_MAX,
+      });
+
+    const transport = new EventEmitter() as EventEmitter & {
+      connected: boolean;
+      send(message: unknown, callback?: (error: Error | null) => void): boolean;
+    };
+    transport.connected = true;
+    transport.send = (message, callback) => {
+      const request = message as { type?: string; requestId?: string; input?: FunctionCallInput };
+      if (request.type === "function.invoke" && request.requestId && request.input) {
+        queueMicrotask(() => {
+          void handleStageFunctionMessage(
+            { type: "function.invoke", requestId: request.requestId, input: request.input },
+            host,
+            "/projects/app",
+            (response) => transport.emit("message", response),
+            () => true,
+            { grantsFor: () => [] },
+          );
+        });
+      }
+      callback?.(null);
+      return true;
+    };
+
+    const oldHostTimeout = FUNCTION_TIMEOUT_MS_MAX + FUNCTION_KILL_GRACE_MS + 1_000;
+    try {
+      const running = Promise.all(
+        Array.from({ length: FUNCTION_MAX_RUNNING }, (_, index) => invokeOnBroker(`run-${index}`)),
+      );
+      await vi.waitFor(() => expect(started).toBe(FUNCTION_MAX_RUNNING));
+      Array.from({ length: FUNCTION_MAX_WAITING - 1 }, (_, index) => invokeOnBroker(`wait-${index}`));
+      const settled: FunctionRunView[] = [];
+      const lastWaiter = callFunctionOnHost({ functionId: "score_check", kind: "verification" }, transport).then((view) => {
+        settled.push(view);
+        return view;
+      });
+      await vi.waitFor(() => expect(started).toBe(FUNCTION_MAX_RUNNING));
+      vi.advanceTimersByTime(oldHostTimeout + 1);
+      await Promise.resolve();
+      expect(settled).toHaveLength(0);
+      while (hanging.length > 0) {
+        for (const finish of hanging.splice(0)) finish();
+        await Promise.resolve();
+      }
+      await running;
+      const view = await lastWaiter;
+      expect(view).toMatchObject({ ok: true, value: { passed: true } });
+      expect(view.message).not.toBe("function host timed out");
+    } finally {
+      while (hanging.length > 0) hanging.shift()?.();
+      vi.useRealTimers();
+    }
   });
 
   it("asks the host instead of forking from a stage worker", async () => {

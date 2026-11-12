@@ -4,7 +4,7 @@ import type { FunctionGrant, FunctionKind } from "../config/loadFunction.js";
 import { FUNCTION_KILL_GRACE_MS, FUNCTION_TIMEOUT_MS_MAX } from "./protocol.js";
 import type { FunctionCallInput, FunctionRunView } from "./invoke.js";
 
-const HOST_TIMEOUT_MS = FUNCTION_TIMEOUT_MS_MAX + FUNCTION_KILL_GRACE_MS + 1_000;
+export const HOST_TIMEOUT_MS = 6 * (FUNCTION_TIMEOUT_MS_MAX + FUNCTION_KILL_GRACE_MS) + 1_000;
 
 export type StageFunctionHost = {
   call(projectRoot: string, input: FunctionCallInput): Promise<FunctionRunView>;
