@@ -79,6 +79,35 @@ describe("control token fragment", () => {
     expect(next).not.toContain("code=");
     expect(next).not.toContain(token);
   });
+
+  it("keeps a stored token when the code exchange is rejected", async () => {
+    const good = "g".repeat(32);
+    store.set("stageflow.controlToken", good);
+    const replaceState = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("{}", { status: 401 })),
+    );
+    vi.stubGlobal("window", {
+      location: { hash: "#code=junk", pathname: "/", search: "" },
+      history: { state: null, replaceState },
+    });
+    vi.resetModules();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        store.set(k, v);
+      },
+      removeItem: (k: string) => {
+        store.delete(k);
+      },
+      clear: () => store.clear(),
+    });
+    const { getControlToken } = await import("./controlToken");
+    await vi.waitFor(() => expect(replaceState).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(getControlToken()).toBe(good);
+  });
 });
 
 describe("api Authorization attachment", () => {
