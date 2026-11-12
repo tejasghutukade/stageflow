@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -143,7 +144,9 @@ describe("installSkillFromCommand", () => {
         project_root: repo.root,
       });
       if (!result.ok) throw new Error(result.error);
-      expect(result.dest_path).toBe(path.join(repo.root, ".pi", "skills", "test-skill"));
+      expect(realpathSync(result.dest_path)).toBe(
+        realpathSync(path.join(repo.root, ".pi", "skills", "test-skill")),
+      );
     } finally {
       await repo.cleanup();
     }
