@@ -82,6 +82,8 @@ export function scoreResult(input: ScoreResultInput): ScoreResultOutput {
   let mustPassFailed = false;
   let mustPassPassed = false;
   let hasGraderErrors = false;
+  let sawNonMustPass = false;
+  let sawNonMustPassGrade = false;
   let weightedSum = 0;
   let weightTotal = 0;
 
@@ -100,18 +102,30 @@ export function scoreResult(input: ScoreResultInput): ScoreResultOutput {
       }
       continue;
     }
+    sawNonMustPass = true;
     if (!grade) continue;
     if (grade.status === "error") {
       hasGraderErrors = true;
       continue;
     }
+    sawNonMustPassGrade = true;
     weightedSum += grader.weight * (grade.score ?? 0);
     weightTotal += grader.weight;
   }
 
+  // A non-must-pass grader that produced no grade cannot be hidden by a passing must_pass grader.
   // Nothing left to average: passing must_pass graders score 1, a must_pass failure scores 0.
   // No must_pass grader at all leaves a null score and a failure.
-  const score = weightTotal > 0 ? weightedSum / weightTotal : mustPassFailed ? 0 : mustPassPassed ? 1 : null;
+  const score =
+    sawNonMustPass && !sawNonMustPassGrade
+      ? null
+      : weightTotal > 0
+        ? weightedSum / weightTotal
+        : mustPassFailed
+          ? 0
+          : mustPassPassed
+            ? 1
+            : null;
   const passed = score !== null && !mustPassFailed && score + EPS >= input.passThreshold;
   return { score, passed, hasGraderErrors, budgetWarnings: warnings };
 }

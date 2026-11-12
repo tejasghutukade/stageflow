@@ -180,7 +180,7 @@ A case with nothing at the `expected` path gets an error grade `EVAL_CASE_MISSIN
   scale: pass_fail
 ```
 
-The judge sees the rubric, the examples, the case input, the case `expected` if present, and the stage output. It must reply with JSON; a reply that is not JSON, or an HTTP error from the provider, becomes an error grade (`EVAL_JUDGE_ERROR`) that is left out of the score. 1-to-5 scores are normalized to (v-1)/4 for statistics; the raw value is stored too. A rubric is only as good as its agreement with you: you can [check the judge against your own labels](#calibrate-judge). Pick a judge that is not the stage's model; if they match, validation warns (`eval.judge_same_as_stage`) because models tend to favor their own output.
+The judge sees the rubric, the examples, the case input, the case `expected` if present, and the stage output. It must reply with JSON; a reply that is not JSON, or an HTTP error from the provider, becomes an error grade (`EVAL_JUDGE_ERROR`). That grade is left out of the weighted mean. If no grader other than `must_pass` produced a grade, the score is null and the result fails. 1-to-5 scores are normalized to (v-1)/4 for statistics; the raw value is stored too. A rubric is only as good as its agreement with you: you can [check the judge against your own labels](#calibrate-judge). Pick a judge that is not the stage's model; if they match, validation warns (`eval.judge_same_as_stage`) because models tend to favor their own output.
 
 **`code`.** The body of a JavaScript function that receives `(output, testCase, context)` where `output` is the envelope, `testCase` is the case, and `context = { evalId, runId, repeat }`. It returns a boolean, a number from 0 to 1, or `{ pass, score?, reason? }`. A number passes when it is at least `pass_threshold`. A thrown error, a bad return value or running past 5 seconds is an error grade (`EVAL_GRADER_CODE_ERROR`), not a failure.
 
@@ -204,7 +204,7 @@ For each result Stageflow starts a normal stage run with this task: `goal` from 
 
 ### Scoring
 
-A result's **score** is the weighted mean of its graders' scores, leaving out `must_pass` graders and graders that errored. A result **passes** when no `must_pass` grader failed and the score is at least `pass_threshold`. A stage that failed, timed out or asked for input counts as a failed result, not as missing data. The **run** passes when it completed and its pass rate is at least `pass_threshold`.
+A result's **score** is the weighted mean of its graders' scores, leaving out `must_pass` graders and graders that errored. If any grader is not `must_pass` and none of those produced a grade, the score is null and the result fails. An errored `must_pass` grader fails the result. A result **passes** when no `must_pass` grader failed and the score is at least `pass_threshold`. A stage that failed, timed out or asked for input counts as a failed result, not as missing data. The **run** passes when it completed and its pass rate is at least `pass_threshold`.
 
 ## Datasets
 
@@ -662,7 +662,7 @@ Agent evals have their own table in [Troubleshooting agent evals](#troubleshooti
 | `EVAL_ENGINE_ERROR` | `error` | The engine finished without a result for the case, or the case cannot run (for example an approval wait) |
 | `EVAL_BUDGET_EXCEEDED` | `skipped_budget` | The cost limit was reached before the case started |
 | `EVAL_CANCELLED` | `cancelled` | The run was stopped, or stopped early after 5 consecutive provider failures |
-| `EVAL_JUDGE_ERROR` | grade `error` | The judge call failed or did not reply with JSON; left out of the score |
+| `EVAL_JUDGE_ERROR` | grade `error` | The judge call failed or did not reply with JSON. Left out of the weighted mean; the result fails with no score when no other non-`must_pass` grader produced a grade |
 | `EVAL_GRADER_CODE_ERROR` | grade `error` | A `code` grader threw, returned a bad value or ran past 5 seconds |
 | `EVAL_CASE_MISSING_EXPECTED` | grade `error` | A grader needs `expected` (or tool rules) the case does not have |
 | `EVAL_GRADER_NOT_APPLICABLE` | grade `error` | The grader type cannot read this subject; validation reports `eval.grader_not_applicable` first |
