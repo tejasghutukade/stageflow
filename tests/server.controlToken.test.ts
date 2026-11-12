@@ -179,6 +179,19 @@ describe("ensureHostControlToken", () => {
     });
   });
 
+  it("does not mint a default token when only a named drive token is set", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-named-token-"));
+    const env: NodeJS.ProcessEnv = {
+      STAGEFLOW_HOME: dir,
+      STAGEFLOW_CONTROL_TOKEN_CI: "c".repeat(32),
+    };
+    const ensured = ensureHostControlToken(env);
+    expect(ensured.generated).toBe(false);
+    await expect(stat(path.join(dir, CONTROL_TOKEN_FILENAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("does not generate when unauthenticated bind is explicitly opted in", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "sf-allow-bind-"));
     const env: NodeJS.ProcessEnv = {

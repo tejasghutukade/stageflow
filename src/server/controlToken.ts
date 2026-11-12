@@ -172,10 +172,16 @@ export type EnsuredHostControlToken = {
 function operatorSetControlToken(env: NodeJS.ProcessEnv): boolean {
   const plain = env.STAGEFLOW_CONTROL_TOKEN;
   const file = env.STAGEFLOW_CONTROL_TOKEN_FILE;
-  return (
+  if (
     (plain !== undefined && plain.length > 0) ||
     (file !== undefined && file.length > 0)
-  );
+  ) {
+    return true;
+  }
+  return listNamedControlTokenEnvKeys(env).some((named) => {
+    const value = env[named.envKey];
+    return value !== undefined && value.length > 0;
+  });
 }
 
 function resolveControlTokenHome(env: NodeJS.ProcessEnv): string | undefined {
