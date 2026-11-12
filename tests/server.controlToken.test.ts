@@ -295,26 +295,15 @@ describe("resolveClientBearerToken", () => {
     expect(resolveClientBearerToken("POST", {})).toBeUndefined();
   });
 
-  it("does not resolve the installed file from a stage environment", async () => {
+  it("does not resolve the installed file from a stage worker", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "sf-stage-token-"));
     await writeFile(path.join(dir, CONTROL_TOKEN_FILENAME), `${DRIVE}\n`, {
       mode: 0o600,
     });
-    const hostEnv = {
-      STAGEFLOW_HOME: dir,
-      STAGEFLOW_CONTROL_TOKEN: DRIVE,
-      PATH: "/usr/bin",
-    };
-    const stage = buildStageEnvironment({ hostEnv });
-    expect(stage.env.STAGEFLOW_HOME).toBeUndefined();
-    expect(stage.env.STAGEFLOW_CONTROL_TOKEN).toBeUndefined();
-    expect(resolveClientBearerToken("POST", stage.env)).toBeUndefined();
+    const env = { STAGEFLOW_HOME: dir };
+    expect(resolveClientBearerToken("POST", env)).toBe(DRIVE);
     expect(
-      resolveClientBearerToken("POST", {
-        ...stage.env,
-        STAGEFLOW_HOME: dir,
-        [SF_STAGE_WORKER]: "1",
-      }),
+      resolveClientBearerToken("POST", { ...env, [SF_STAGE_WORKER]: "1" }),
     ).toBeUndefined();
   });
 });

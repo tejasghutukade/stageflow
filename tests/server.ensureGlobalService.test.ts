@@ -8,6 +8,7 @@ import {
   ensureGlobalService,
   hostBaseUrl,
   isNoAutostartEnabled,
+  SF_SERVICE_CHILD,
   STAGEFLOW_NO_AUTOSTART,
   type ServiceProbeResult,
 } from "../src/server/ensureGlobalService.js";
@@ -216,6 +217,28 @@ describe("ensureGlobalService", () => {
 
       expect(result).toEqual({ ok: true, alreadyRunning: false });
       expect(spawnCalls).toBe(1);
+    });
+  });
+
+  it("spawns the service child with SF_SERVICE_CHILD=1", async () => {
+    await withIsolatedHome(async () => {
+      const probeResults: ServiceProbeResult[] = ["unreachable", "up"];
+      let probeIndex = 0;
+      let childEnv: NodeJS.ProcessEnv | undefined;
+      const result = await ensureGlobalService({
+        cliEntry,
+        probeHost: async () =>
+          probeResults[Math.min(probeIndex++, probeResults.length - 1)]!,
+        spawnFn: ((_command, _args, options) => {
+          childEnv = options?.env;
+          return { unref: () => undefined } as unknown as ReturnType<typeof spawn>;
+        }) as unknown as typeof spawn,
+        pollIntervalMs: 1,
+        timeoutMs: 1000,
+        env: { STAGEFLOW_BIND: "127.0.0.1" },
+      });
+      expect(result).toEqual({ ok: true, alreadyRunning: false });
+      expect(childEnv?.[SF_SERVICE_CHILD]).toBe("1");
     });
   });
 
