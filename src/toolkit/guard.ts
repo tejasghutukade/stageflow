@@ -56,6 +56,9 @@ export async function checkAgentCaller(
   service: AgentService | undefined,
   projectRoot: string,
 ): Promise<{ ok: false; message: string } | null> {
+  if (tool === "test_function" && args.real === true) {
+    return refusal("An agent cannot run a real function test.");
+  }
   if (!service) return null;
   const self = caller.agentId;
   const checkDefinition = (candidate: AgentDefinition, what: string) => {

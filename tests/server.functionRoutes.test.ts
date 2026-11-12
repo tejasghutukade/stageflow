@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { handleFunctionRoutes } from "../src/server/functionRoutes.js";
+import { createFunctionInvoker } from "../src/functions/invoke.js";
 import { FunctionService } from "../src/functions/service.js";
 import { FunctionStore } from "../src/functions/store.js";
 import { createRunStoreWithConnection } from "../src/runstore/createStore.js";
@@ -69,9 +70,10 @@ describe("function routes", () => {
     const { connection } = createRunStoreWithConnection({ rootDir: home, openerMode: "migrate" });
     closers.push(() => connection.close());
     const service = new FunctionService({ store: new FunctionStore(connection) });
+    const invoker = createFunctionInvoker({ db: connection, env: {}, stageflowHome: home });
     const call = async (method: string, pathname: string, body?: unknown) => {
       const { res, json, sent } = capture();
-      const handled = await handleFunctionRoutes(request(method, pathname, body), method, pathname, service, project, res, json);
+      const handled = await handleFunctionRoutes(request(method, pathname, body), method, pathname, service, project, res, json, invoker);
       expect(handled).toBe(true);
       return sent;
     };
@@ -138,5 +140,13 @@ describe("function routes", () => {
       code: "function.invalid",
       issues: expect.arrayContaining([expect.objectContaining({ code: "function.access_conflict", path: "capabilities" })]),
     });
+  });
+
+  it("runs a real console test against the saved function", async () => {
+    const { call } = await open();
+    await call("POST", "/api/functions", { definition: definition("score") });
+    const tested = await call("POST", "/api/functions/score/test", { real: true });
+    expect(tested.status).toBe(200);
+    expect(tested.body).toMatchObject({ ok: true, kind: "test", value: { passed: true } });
   });
 });

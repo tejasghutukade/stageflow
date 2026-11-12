@@ -94,6 +94,9 @@ export function createEvalGate(options: {
     };
 
     if (!isToolGranted(definition, call.tool)) return refuse("denied", `Tool ${call.tool} is not granted to this agent.`);
+    if (call.tool === "stageflow.test_function" && call.input.real === true) {
+      return refuse("denied", "Real function tests cannot run in an evaluation.");
+    }
     if (options.projectRoot && forbiddenWriteTarget(options.projectRoot, options.stageflowHome ?? globalStageflowHome(), call.tool, call.input) !== undefined) {
       return refuse("denied", "Agent definitions and Stageflow state cannot be written by an agent.");
     }

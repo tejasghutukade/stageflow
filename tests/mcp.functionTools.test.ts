@@ -126,6 +126,10 @@ describe("function MCP tools", () => {
     const tested = await call(tools, "test_function", { id: "score" });
     expect(tested.isError).toBe(false);
     expect(tested.payload).toMatchObject({ ok: true, kind: "test", revision: 2, value: { passed: true } });
+
+    const realTest = await call(tools, "test_function", { id: "score", real: true });
+    expect(realTest.isError).toBe(false);
+    expect(realTest.payload).toMatchObject({ ok: true, kind: "test", value: { passed: true } });
   });
 
   it("forwards function services through createMcpHttpHandler", async () => {
