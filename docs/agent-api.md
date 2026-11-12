@@ -159,6 +159,7 @@ Errors are `{ code, message, retryAfterSec? }` with a friendly `message`:
 |------|------|---------|
 | `web_chat.unavailable` | 404 | Unknown or switched-off link, agent disabled or archived, thread not yours |
 | `web_chat.invalid` | 400 | Missing or bad visitor id, empty text, wrong method |
+| `web_chat.forbidden_origin` | 403 | A browser request from a site that is neither this Host nor listed in `STAGEFLOW_PUBLIC_CHAT_ORIGINS` |
 | `web_chat.message_too_long` | 413 | Over `web_chat.max_message_chars` |
 | `web_chat.rate_limited` | 429 | Over `web_chat.rate_limit_per_minute` per visitor (thread creation gets twice that) or three times it per IP address. `Retry-After` is set |
 | `web_chat.busy` | 409 | The last message is still being answered |

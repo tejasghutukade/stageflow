@@ -248,14 +248,24 @@ describe("POST /api/drafts/plan", () => {
       expect(outside.status).toBe(400);
 
       const escaping = packageDraft("x");
-      escaping.stages![0]!.path = "../escape.yaml";
+      escaping.stages![0]!.path = "../../../../escape.yaml";
       const escaped = await postPlan(base, {
         project_root: root,
         directory: "workshop/x",
         draft: escaping,
       });
       expect(escaped.status).toBe(400);
-      expect(escaped.body.error).toMatch(/escapes package directory/);
+      expect(escaped.body.error).toMatch(/escapes project root/);
+
+      // A shared stage elsewhere in the project is allowed.
+      const shared = packageDraft("x");
+      shared.stages![0]!.path = "../stages/shared.yaml";
+      const sharedPlan = await postPlan(base, {
+        project_root: root,
+        directory: "workshop/x",
+        draft: shared,
+      });
+      expect(sharedPlan.status).toBe(200);
     });
   });
 });

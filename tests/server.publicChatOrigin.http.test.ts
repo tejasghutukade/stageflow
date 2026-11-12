@@ -89,6 +89,14 @@ describe("public chat Host gate", () => {
       },
     });
     expect(posted.status).toBe(201);
+
+    // The Host's Origin rule is skipped for public chat, so the chat's own list must refuse other sites.
+    const unlisted = await fetch(`${base}/api/public/chat/${slug}/threads`, {
+      method: "POST",
+      headers: { Origin: "https://evil.example", Host: hostHeader, "Content-Type": "application/json", "x-visitor-id": VISITOR },
+    });
+    expect(unlisted.status).toBe(403);
+    expect(((await unlisted.json()) as { code: string }).code).toBe("web_chat.forbidden_origin");
   });
 
   it("still rejects the same cross-origin on /api/runs", async () => {
