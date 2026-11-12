@@ -1252,11 +1252,13 @@ export async function createDraftPackageWithDetails(
         ...(fileHashes ? { fileHashes } : {}),
       };
     }
+    const conflictHashes = readDraftFileHashes(body.fileHashes);
     return {
       ok: false,
       status: res.status,
       error: body.error ?? `Request failed (${res.status})`,
       ...(typeof body.code === "string" ? { code: body.code } : {}),
+      ...(conflictHashes ? { fileHashes: conflictHashes } : {}),
       ...(body.findings ? { findings: body.findings } : {}),
     };
   } catch (err) {
@@ -1311,11 +1313,13 @@ export async function overwriteDraftPackageWithDetails(
         ...(fileHashes ? { fileHashes } : {}),
       };
     }
-  return {
+    const fileHashes = readDraftFileHashes(body.fileHashes);
+    return {
       ok: false,
       status: res.status,
       error: body.error ?? `Request failed (${res.status})`,
       ...(typeof body.code === "string" ? { code: body.code } : {}),
+      ...(fileHashes ? { fileHashes } : {}),
       ...(body.findings ? { findings: body.findings } : {}),
     };
   } catch (err) {

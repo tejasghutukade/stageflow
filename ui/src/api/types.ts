@@ -642,6 +642,7 @@ export type CreateDraftPackageResult =
       status: number;
       error: string;
       code?: string;
+      fileHashes?: DraftFileHashes;
       findings?: ValidationFinding[];
     };
 

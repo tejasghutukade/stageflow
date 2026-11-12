@@ -221,6 +221,7 @@ import {
 } from "./bootstrap.js";
 import {
   assertAllowedHttpAccess,
+  isPublicChatApiPath,
   isTrustedLocalHttpRequest,
   resolveAllowedHosts,
   type AllowedHosts,
@@ -570,6 +571,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
         if (
           !assertAllowedHttpAccess(allowedHosts, req, res, {
             requireOrigin: isCredentialMutatingApi(method, pathname),
+            skipOriginHostMatch: isPublicChatApiPath(pathname),
           })
         ) {
           return true;
@@ -2277,6 +2279,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             json(res, result.status, {
               error: result.error,
               ...(result.code ? { code: result.code } : {}),
+              ...(result.fileHashes ? { fileHashes: result.fileHashes } : {}),
               ...(result.findings ? { findings: result.findings } : {}),
             });
             return true;
@@ -2345,6 +2348,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             json(res, result.status, {
               error: result.error,
               ...(result.code ? { code: result.code } : {}),
+              ...(result.fileHashes ? { fileHashes: result.fileHashes } : {}),
               ...(result.findings ? { findings: result.findings } : {}),
             });
             return true;

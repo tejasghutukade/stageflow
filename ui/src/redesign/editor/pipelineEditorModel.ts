@@ -1,11 +1,19 @@
 import type {
+  CatalogRootKind,
+  DraftFileHashes,
   DraftPackagePayload,
   DraftValidationResult,
   PipelineListing,
   ValidationFinding,
 } from "../../api";
-import { parseHash } from "../../routes";
+import { parseHash, pipelinePath } from "../../routes";
 import { locateFindingField } from "../workshop/inspector/stageFields";
+import {
+  catalogSaveBindingFromRelativePath,
+  draftOriginFromResponse,
+  type DraftOrigin,
+} from "../workshop/workshopPageModel";
+import { pipelineYamlDocument, serializeYamlDocument } from "./draftYaml";
 
 export const EDITOR_TAB_IDS = ["editor", "runs", "history"] as const;
 
@@ -217,6 +225,117 @@ export function lastValidatedFooter(elapsedMs: number | null): string {
       ? "—"
       : `${Math.max(0, Math.round(elapsedMs))}ms`;
   return `Last validated · sf validate --strict · ${timing}`;
+}
+
+export const FILE_CHANGED_TITLE =
+  "The file changed on disk since you opened it";
+
+export type EditorLeaveCancel = "forward" | "replace";
+
+export function editorLeaveCancelAction(fromPopstate: boolean): EditorLeaveCancel {
+  return fromPopstate ? "forward" : "replace";
+}
+
+export function beforeUnloadReturnValue(
+  unsaved: boolean,
+): string | undefined {
+  if (!unsaved) return undefined;
+  return "";
+}
+
+export type DraftPackageWriteSuccess = {
+  pipeline: { id: string; path: string; project_root?: string };
+  pipelinePath: string;
+  fileHashes?: DraftFileHashes;
+  project_root?: string;
+  root_kind?: CatalogRootKind;
+  read_only?: boolean;
+};
+
+export type AfterEditorPackageWrite = {
+  writtenDraft: DraftPackagePayload;
+  destination: { directory: string; pipelineFilename: string } | null;
+  fileHashes: DraftFileHashes | null;
+  origin: DraftOrigin | null;
+  routePath: string | null;
+  openPipelinePath: string;
+};
+
+export function afterEditorPackageWrite(input: {
+  writtenDraft: DraftPackagePayload;
+  result: DraftPackageWriteSuccess;
+  readOnlyCopy: boolean;
+  currentPipelineId: string;
+  currentProjectRoot?: string;
+}): AfterEditorPackageWrite {
+  const binding = catalogSaveBindingFromRelativePath(
+    input.result.pipelinePath,
+    input.result.pipeline.id,
+  );
+  const projectRoot =
+    input.result.project_root ??
+    input.result.pipeline.project_root ??
+    undefined;
+  const origin =
+    draftOriginFromResponse(input.result) ??
+    (projectRoot
+      ? {
+          project_root: projectRoot,
+          kind: input.result.root_kind ?? (input.readOnlyCopy ? "workspace" : "registered"),
+          readOnly: input.result.read_only === true,
+        }
+      : null);
+  const routeHash = pipelinePath(input.result.pipeline.id, {
+    ...(projectRoot ? { project_root: projectRoot } : {}),
+  });
+  const routeChanged =
+    input.readOnlyCopy &&
+    (input.result.pipeline.id !== input.currentPipelineId ||
+      (projectRoot ?? "") !== (input.currentProjectRoot ?? ""));
+  return {
+    writtenDraft: input.writtenDraft,
+    destination: binding?.saveDestination ?? null,
+    fileHashes: input.result.fileHashes ?? null,
+    origin,
+    routePath: routeChanged ? routeHash : null,
+    openPipelinePath: input.result.pipeline.path,
+  };
+}
+
+export type DraftPackageSaveError = {
+  ok: false;
+  status: number;
+  error: string;
+  code?: string;
+  fileHashes?: DraftFileHashes;
+};
+
+export function isDraftFileChangedError(
+  result: DraftPackageSaveError,
+): boolean {
+  return result.status === 409 && result.code === "FILE_CHANGED";
+}
+
+export function isDraftIdCollisionError(result: DraftPackageSaveError): boolean {
+  return result.status === 409 && result.code !== "FILE_CHANGED";
+}
+
+export function draftPackageClipboardText(
+  draft: DraftPackagePayload,
+  pipelineRelPath: string,
+): string {
+  const sections: string[] = [
+    `# ${pipelineRelPath}\n${serializeYamlDocument(pipelineYamlDocument(draft.pipeline))}`,
+  ];
+  for (const stage of draft.stages ?? []) {
+    sections.push(`# ${stage.path}\n${serializeYamlDocument(stage.body)}`);
+  }
+  if (draft.task) {
+    sections.push(
+      `# ${draft.task.filename}\n${serializeYamlDocument(draft.task.body)}`,
+    );
+  }
+  return `${sections.join("\n\n")}`.trimEnd();
 }
 
 const EDITOR_HISTORY_MONTHS = [

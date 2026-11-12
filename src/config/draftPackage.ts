@@ -59,7 +59,7 @@ export type DraftFileHashes = {
 };
 
 export const DRAFT_FILE_CHANGED_MESSAGE =
-  "The file changed on disk since you opened it. Reload and try again.";
+  "The file changed on disk since you opened it.";
 
 export type OverwriteDraftPackageInput = {
   directory: string;
@@ -93,6 +93,7 @@ export type DraftPackageWriteResult =
       status: 400 | 404 | 409 | 422 | 500;
       error: string;
       code?: "FILE_CHANGED";
+      fileHashes?: DraftFileHashes;
       findings?: ValidationFinding[];
     };
 
@@ -583,20 +584,21 @@ async function refuseIfFilesChanged(
   baseHashes: DraftFileHashes | undefined,
 ): Promise<Extract<DraftPackageWriteResult, { ok: false }> | null> {
   if (!baseHashes) return null;
+  let stale = false;
   for (const file of files) {
     const expected = baseHashes.files[file.relPath];
     if (expected === undefined) continue;
     const current = await fileContentHash(file.absPath);
-    if (current !== expected) {
-      return {
-        ok: false,
-        status: 409,
-        code: "FILE_CHANGED",
-        error: DRAFT_FILE_CHANGED_MESSAGE,
-      };
-    }
+    if (current !== expected) stale = true;
   }
-  return null;
+  if (!stale) return null;
+  return {
+    ok: false,
+    status: 409,
+    code: "FILE_CHANGED",
+    error: DRAFT_FILE_CHANGED_MESSAGE,
+    fileHashes: await hashesForFiles(files),
+  };
 }
 
 async function writeDraftPackageFiles(

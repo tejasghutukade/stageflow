@@ -5,6 +5,7 @@ import {
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 import { ModelPicker } from "../components/ModelPicker";
+import { showToast } from "../toast";
 import {
   createContext,
   useCallback,
@@ -86,6 +87,11 @@ import {
   type StudioSelection,
 } from "./workshopStudio";
 import { cloneDraft } from "../redesign/editor/draftMutators";
+import { EditorFileChangedDialog } from "../redesign/editor/EditorFileChangedDialog";
+import {
+  draftPackageClipboardText,
+  isDraftFileChangedError,
+} from "../redesign/editor/pipelineEditorModel";
 import { useRedesign } from "../redesign/flag";
 import { useHotkeys } from "../redesign/keys";
 import type { WorkshopChatAttachment } from "../redesign/workshop/chat/attachments";
@@ -1109,6 +1115,12 @@ export function WorkshopPage({
   const [redesignChatWidth, setRedesignChatWidth] = useState(WORKSHOP_CHAT_DEFAULT_WIDTH);
   const diskFingerprintsRef = useRef<Record<string, string>>({});
   const fileHashesRef = useRef<DraftFileHashes | null>(null);
+  const [fileChangedOpen, setFileChangedOpen] = useState(false);
+  const pendingSaveRef = useRef<{
+    dest: SaveDestination;
+    allowInvalid: boolean;
+    mode: "create" | "overwrite";
+  } | null>(null);
   const attachmentsRef = useRef<WorkshopChatAttachment[]>([]);
   const docsContextRef = useRef(false);
   const autoApplyRef = useRef(false);
@@ -2220,6 +2232,7 @@ export function WorkshopPage({
       dest: SaveDestination,
       allowInvalid: boolean,
       mode: "create" | "overwrite",
+      overwriteHashes?: DraftFileHashes | null,
     ) => {
       setSaving(true);
       setSaveError(null);
@@ -2259,13 +2272,14 @@ export function WorkshopPage({
       });
       const writeWire = dest.catalogRoot || saveTargetWireIdRef.current || defaultWriteWireIdRef.current;
       const effectiveMode = draftOrigin?.readOnly ? "create" : mode;
+      const baseHashes = overwriteHashes ?? fileHashesRef.current;
       const input = {
         directory: dest.folder,
         pipelineFilename: filename,
         draft: draftWithCatalogFilenames(nextDraft),
         allowInvalid,
-        ...(effectiveMode === "overwrite" && fileHashesRef.current
-          ? { baseHashes: fileHashesRef.current }
+        ...(effectiveMode === "overwrite" && baseHashes
+          ? { baseHashes }
           : {}),
         ...omitDefaultWriteProjectRoot(writeWire, defaultWriteWireIdRef.current),
       };
@@ -2275,6 +2289,13 @@ export function WorkshopPage({
           : await createDraftPackageWithDetails(input);
       setSaving(false);
       if (!result.ok) {
+        if (isDraftFileChangedError(result)) {
+          if (result.fileHashes) fileHashesRef.current = result.fileHashes;
+          pendingSaveRef.current = { dest, allowInvalid, mode };
+          setFileChangedOpen(true);
+          setSaveError(null);
+          return;
+        }
         if (result.findings) applySaveFindings(result.findings);
         setSaveError(result.error);
         if (!saveOpenRef.current) {
@@ -2284,6 +2305,8 @@ export function WorkshopPage({
         }
         return;
       }
+      pendingSaveRef.current = null;
+      setFileChangedOpen(false);
       setSavedPipelinePath(result.pipelinePath);
       setSaveDestination({ directory: dest.folder, pipelineFilename: filename });
       setBaseline(cloneDraft(nextDraft));
@@ -2576,6 +2599,49 @@ export function WorkshopPage({
   }, [mutationCards]);
   const bannerVisible = showDiskBanner || showAutosaveBanner;
 
+  const onOverwriteFileChanged = useCallback(() => {
+    const pending = pendingSaveRef.current;
+    if (!pending) return;
+    void commitSave(
+      pending.dest,
+      pending.allowInvalid,
+      pending.mode,
+      fileHashesRef.current,
+    );
+  }, [commitSave]);
+
+  const onReloadAfterFileChanged = useCallback(() => {
+    setFileChangedOpen(false);
+    pendingSaveRef.current = null;
+    if (!savedPipelinePath) return;
+    const row = pickerRows.find(
+      (item) => item.relativePath === savedPipelinePath,
+    );
+    if (row) void onPickCatalogRow(row);
+  }, [onPickCatalogRow, pickerRows, savedPipelinePath]);
+
+  const onCopyDraftAfterFileChanged = useCallback(() => {
+    const path =
+      savedPipelinePath ??
+      `${draft.pipeline.id}/${draft.pipeline.id}.pipeline.yaml`;
+    const text = draftPackageClipboardText(draftRef.current, path);
+    void navigator.clipboard.writeText(text).then(
+      () => showToast("Copied draft to clipboard"),
+      () => showToast("Could not copy draft"),
+    );
+    setFileChangedOpen(false);
+  }, [savedPipelinePath]);
+
+  const fileChangedDialog = fileChangedOpen ? (
+    <EditorFileChangedDialog
+      busy={saving}
+      onClose={() => setFileChangedOpen(false)}
+      onOverwrite={onOverwriteFileChanged}
+      onReload={onReloadAfterFileChanged}
+      onCopy={onCopyDraftAfterFileChanged}
+    />
+  ) : null;
+
   useHotkeys(
     redesignOn
       ? [
@@ -2646,6 +2712,7 @@ export function WorkshopPage({
 
   if (redesignOn) {
     return (
+      <>
       <WorkshopRedesignView
         chatWidth={redesignChatWidth}
         onChatWidthChange={(width) => setRedesignChatWidth(clampWorkshopChatWidth(width))}
@@ -2927,10 +2994,13 @@ export function WorkshopPage({
             : null
         }
       />
+      {fileChangedDialog}
+      </>
     );
   }
 
   return (
+    <>
     <div
       className={`pane workshop-lab${splitDragging ? " is-resizing-x" : ""}`}
     >
@@ -3113,5 +3183,7 @@ export function WorkshopPage({
         <StageDetailPopup stage={selectedStage} onClose={closePopup} />
       ) : null}
     </div>
+    {fileChangedDialog}
+    </>
   );
 }

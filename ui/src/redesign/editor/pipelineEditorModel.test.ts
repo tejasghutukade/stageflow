@@ -19,6 +19,12 @@ import {
   mergeEditorHistory,
   problemCounts,
   stageUsedByCount,
+  afterEditorPackageWrite,
+  beforeUnloadReturnValue,
+  draftPackageClipboardText,
+  editorLeaveCancelAction,
+  isDraftFileChangedError,
+  isDraftIdCollisionError,
   type EditorTabId,
 } from "./pipelineEditorModel";
 
@@ -541,5 +547,127 @@ describe("lastValidatedFooter", () => {
     expect(lastValidatedFooter(18.4)).toBe(
       "Last validated · sf validate --strict · 18ms",
     );
+  });
+});
+
+describe("editor leave", () => {
+  it("cancels popstate with forward and in-app links with replace", () => {
+    expect(editorLeaveCancelAction(true)).toBe("forward");
+    expect(editorLeaveCancelAction(false)).toBe("replace");
+  });
+
+  it("sets beforeunload returnValue only when unsaved", () => {
+    expect(beforeUnloadReturnValue(false)).toBeUndefined();
+    expect(beforeUnloadReturnValue(true)).toBe("");
+  });
+});
+
+describe("afterEditorPackageWrite", () => {
+  const written = draft("saved");
+
+  it("marks a workspace copy clean and points the route at the new catalog root", () => {
+    const applied = afterEditorPackageWrite({
+      writtenDraft: written,
+      readOnlyCopy: true,
+      currentPipelineId: "manifest-demo",
+      currentProjectRoot: "/repo/catalog",
+      result: {
+        pipeline: {
+          id: "manifest-demo",
+          path: "manifest-demo/manifest-demo.pipeline.yaml",
+          project_root: "workspace",
+        },
+        pipelinePath: "manifest-demo/manifest-demo.pipeline.yaml",
+        project_root: "workspace",
+        root_kind: "workspace",
+        read_only: false,
+        fileHashes: { files: { "manifest-demo/manifest-demo.pipeline.yaml": "h1" } },
+      },
+    });
+    expect(applied.writtenDraft).toBe(written);
+    expect(applied.destination).toEqual({
+      directory: "manifest-demo",
+      pipelineFilename: "manifest-demo.pipeline.yaml",
+    });
+    expect(applied.fileHashes).toEqual({
+      files: { "manifest-demo/manifest-demo.pipeline.yaml": "h1" },
+    });
+    expect(applied.origin).toEqual({
+      project_root: "workspace",
+      kind: "workspace",
+      readOnly: false,
+    });
+    expect(applied.routePath).toBe(
+      "/pipelines/manifest-demo?project_root=workspace",
+    );
+    expect(isDraftDirty(written, written)).toBe(false);
+  });
+
+  it("marks a renamed save-as copy clean without changing the route when the id already matches", () => {
+    const renamed = draft("saved");
+    renamed.pipeline.id = "manifest-demo-copy";
+    const applied = afterEditorPackageWrite({
+      writtenDraft: renamed,
+      readOnlyCopy: true,
+      currentPipelineId: "manifest-demo-copy",
+      currentProjectRoot: "workspace",
+      result: {
+        pipeline: {
+          id: "manifest-demo-copy",
+          path: "manifest-demo-copy/manifest-demo-copy.pipeline.yaml",
+          project_root: "workspace",
+        },
+        pipelinePath: "manifest-demo-copy/manifest-demo-copy.pipeline.yaml",
+        project_root: "workspace",
+        root_kind: "workspace",
+        fileHashes: { files: { "manifest-demo-copy/manifest-demo-copy.pipeline.yaml": "h2" } },
+      },
+    });
+    expect(applied.routePath).toBeNull();
+    expect(applied.destination?.pipelineFilename).toBe(
+      "manifest-demo-copy.pipeline.yaml",
+    );
+  });
+});
+
+describe("draft save conflicts", () => {
+  it("detects FILE_CHANGED separately from an id collision", () => {
+    expect(
+      isDraftFileChangedError({
+        ok: false,
+        status: 409,
+        code: "FILE_CHANGED",
+        error: "changed",
+      }),
+    ).toBe(true);
+    expect(
+      isDraftIdCollisionError({
+        ok: false,
+        status: 409,
+        error: "Pipeline already exists",
+      }),
+    ).toBe(true);
+    expect(
+      isDraftIdCollisionError({
+        ok: false,
+        status: 409,
+        code: "FILE_CHANGED",
+        error: "changed",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("draftPackageClipboardText", () => {
+  it("includes the pipeline and stage YAML with path headers", () => {
+    const pkg: DraftPackagePayload = {
+      pipeline: { id: "demo", stages: [{ id: "s1", uses: "./s1.yaml" }] },
+      stages: [{ path: "s1.yaml", body: { id: "s1", system_prompt: "hi" } }],
+    };
+    const text = draftPackageClipboardText(pkg, "demo/demo.pipeline.yaml");
+    expect(text).toContain("# demo/demo.pipeline.yaml");
+    expect(text).toContain("id: demo");
+    expect(text).toContain("# s1.yaml");
+    expect(text).toContain("system_prompt: hi");
   });
 });

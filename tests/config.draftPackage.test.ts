@@ -958,6 +958,14 @@ describe("comment-preserving overwrite", () => {
       if (saved.ok) return;
       expect(saved.status).toBe(409);
       expect(saved.code).toBe("FILE_CHANGED");
+      expect(saved.fileHashes).toBeDefined();
+      const pipelineKey = Object.keys(saved.fileHashes!.files).find((key) =>
+        key.endsWith("demo.pipeline.yaml"),
+      );
+      expect(pipelineKey).toBeDefined();
+      expect(saved.fileHashes!.files[pipelineKey!]).not.toBe(
+        loaded.fileHashes.files[pipelineKey!],
+      );
       expect(await readFile(file, "utf8")).toBe(external);
     }));
 });
