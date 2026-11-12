@@ -54,3 +54,6 @@ ui/AGENTS.md
 **/*.test.ts
 **/*.test.tsx
 examples/prototyping
+
+# Local eval files the Guide writes; never part of the image
+examples/evals/guide-*

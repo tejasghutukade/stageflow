@@ -5,6 +5,8 @@ title: Console - Agents
 
 # Agents in the console
 
+Experimental. Agents, agent sessions and web chat work; their shape may still change.
+
 What an agent is, its YAML and its runtime: [Agents](agents.md), [Agent definition](agent-definition.md) and [Agent runtime](agent-runtime.md). This page covers the screens.
 
 ## Agent directory (`#/agents`)

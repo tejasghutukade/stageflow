@@ -23,16 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Unfinished features are marked experimental.** Agents and web chat, channels, A2A, identity, browser attach / container hosts / live view, the Claude and Cursor backends, email rules, and Jev failure sorting still work. The console shows **Exp** on Agents, Agent sessions, Connections, Identity, and A2A.
+- **Unfinished features are marked experimental.** Agents and web chat, channels, A2A, identity, browser attach / container hosts / live view, the Claude and Cursor backends, email rules, and Jev failure sorting still work. The console shows **Exp** on Agents, Agent sessions, Connections, Identity, and A2A; the README lists every experimental feature, and the console Agents, Connections and A2A pages say so at the top.
 - **Example stages use Claude Sonnet 5.5 or Haiku 4.5.** Haiku 5.5 is not in the pinned Pi catalog. The github-release pipeline still uses Cursor.
-- **A fresh install lists six examples:** hello-world, plan-review, conditional-fork, generic-fan-in, feedback-loop, and evals.
+- **A fresh install lists six examples:** hello-world, plan-review, conditional-fork, generic-fan-in, feedback-loop, and evals. The Docker image now ships the whole `examples/` folder, as npm does, so it lists them too.
 - **`pi_home` is no longer a credential source.** Only `sf_owned`.
 - **`sf <command> --help` prints that command.** `sf --help` stays the short index.
 - **npm audit fixes** for zod, source-map-js, and the mailparser chain. Four high and fifteen moderate advisories remain where the fix is a breaking upgrade of Pi or the MCP adapter.
 
 ### Fixed
 
-- **The console editor keeps comments and unknown keys,** and refuses a save when the file changed on disk. Workshop uses the same write.
+- **The console editor keeps comments and unknown keys,** and refuses a save when the file changed on disk. Workshop and the stage editor (Catalog → Stages) use the same write. A save changes only the edited lines: comment spacing, flow maps, folded blocks, anchors and CRLF line endings stay as they were, and comments stay with their stage when stages are reordered, inserted or renamed.
 - **Start queues a run when agent slots are full,** until the queue itself is full.
 - **One Host per data directory.** A Host takes `$STAGEFLOW_HOME/host.lock` (pid and URL) before it touches run data, so a second Host on another port or address is refused with "Another Stageflow Host is using this data directory (pid …, http://…)" instead of reconciling the first Host's runs. A lock left by a crashed Host is replaced. A pending restore is applied only after the lock and the port bind, and `sf restore` refuses while a Host holds the lock.
 - **Skill install rejects a name that would delete outside the skills folder.**

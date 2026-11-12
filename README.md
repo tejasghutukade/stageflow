@@ -55,6 +55,8 @@ The same pipeline runs three ways without rewriting anything:
 - **Definition-time graph view** — `sf graph --pipeline <path>` prints how a pipeline is wired before any run (terminal diagram or `--json`)
 - **SQLite run store** — global `~/.stageflow/` state (`state.db` plus per-run workspaces), shared across every project since Stageflow became a single auto-starting service
 
+**Experimental.** These work today, but their shape may still change between releases: agents and their public web chat, connections (channels and email accounts, including email rules), A2A, identity, browser attach, container browser hosts and live view, the Claude and Cursor stage backends, and automatic failure sorting in evals (Jev). The console marks Agents, Agent sessions, Connections, Identity and A2A with **Exp**. Pipelines, stages, HITL gates, the CLI, MCP, the run store and evals themselves are the stable core.
+
 ## Architecture at a glance
 
 ![Stageflow architecture: pipeline definitions and operator interfaces drive the orchestration runtime, which coordinates agent execution and persisted state](docs/img/stageflow-architecture.svg)

@@ -5,6 +5,8 @@ title: Console - A2A
 
 # A2A in the console
 
+Experimental. A2A and its console screen work; their shape may still change.
+
 A2A is in the **Connect** group of the sidebar, after Identity (route `#/a2a`). It is where an operator lets other agents call published pipelines, without a file, a command or an environment variable. For the protocol, the request contract and the management API behind this screen, see [A2A](a2a.md).
 
 | Route | Screen |

@@ -16,8 +16,8 @@ COPY ui ./ui
 COPY scripts ./scripts
 COPY skills ./skills
 COPY builtin-skills ./builtin-skills
-COPY examples/triggers-readiness ./examples/triggers-readiness
-COPY examples/evals ./examples/evals
+# The whole examples folder, as npm ships it: examples/stageflow.yaml seeds the six catalog examples.
+COPY examples ./examples
 COPY README.md LICENSE ./
 RUN npm run build \
   && npm run ui:build \
@@ -53,7 +53,7 @@ COPY --from=build --chown=stageflow:stageflow /src/dist ./dist
 COPY --from=build --chown=stageflow:stageflow /src/skills ./skills
 COPY --from=build --chown=stageflow:stageflow /src/builtin-skills ./builtin-skills
 COPY --from=build --chown=stageflow:stageflow /src/examples/triggers-readiness ./catalog/triggers-readiness
-COPY --from=build --chown=stageflow:stageflow /src/examples/evals ./examples/evals
+COPY --from=build --chown=stageflow:stageflow /src/examples ./examples
 COPY --from=build --chown=stageflow:stageflow /src/README.md /src/LICENSE ./
 COPY --from=build /src/scripts/generate-toolchain-manifest.mjs ./scripts/generate-toolchain-manifest.mjs
 RUN node ./scripts/generate-toolchain-manifest.mjs /etc/stageflow/toolchain.json \

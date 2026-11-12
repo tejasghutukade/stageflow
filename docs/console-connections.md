@@ -5,6 +5,8 @@ title: Console - Connections
 
 # Connections
 
+Experimental. Channels, email accounts and email rules work; their shape may still change.
+
 `#/connections` lists everything Stageflow talks to, in four sections:
 
 | Section | Contents |

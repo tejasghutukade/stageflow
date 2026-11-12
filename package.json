@@ -20,6 +20,7 @@
     "skills",
     "builtin-skills",
     "examples",
+    "!examples/evals/guide-*",
     "docker-compose.consumer-identity.yml",
     "docker/consumer-cerbos.yaml",
     "policy-samples/consumer-orders.yaml",

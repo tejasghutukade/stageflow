@@ -271,4 +271,12 @@ describe("Dockerfile", () => {
     const docker = readFileSync(path.resolve(__dirname, "..", "Dockerfile"), "utf8");
     expect(docker).toContain(`ARG PROMPTFOO_VERSION=${PINNED_PROMPTFOO_VERSION}`);
   });
+
+  it("ships the whole examples folder, so the image seeds the same six examples as npm", () => {
+    const docker = readFileSync(path.resolve(__dirname, "..", "Dockerfile"), "utf8");
+    expect(docker).toContain("COPY examples ./examples");
+    expect(docker).toContain("/src/examples ./examples");
+    const ignore = readFileSync(path.resolve(__dirname, "..", ".dockerignore"), "utf8").split("\n");
+    expect(ignore.filter((line) => line.trim() === "examples" || line.trim() === "examples/stageflow.yaml")).toEqual([]);
+  });
 });
