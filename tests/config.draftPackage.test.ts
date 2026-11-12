@@ -1090,6 +1090,36 @@ describe("stage paths stay inside the project", () => {
       expect(reloaded.draft.stages?.[0]?.body.system_prompt).toContain("updated");
     }));
 
+  it("refuses a new stage file under a symlinked folder that points outside the project", () =>
+    withRepo(async (root) => {
+      const outsideRoot = path.join(path.dirname(root), `sf-outside-dir-${path.basename(root)}`);
+      await mkdir(outsideRoot, { recursive: true });
+      const pkg = path.join(root, "pipelines");
+      await mkdir(pkg, { recursive: true });
+      await writeFile(
+        path.join(pkg, "demo.pipeline.yaml"),
+        "id: demo\nstages:\n  - id: plan\n    uses: ./linked/new.yaml\n    entry: true\n",
+        "utf8",
+      );
+      await symlink(outsideRoot, path.join(pkg, "linked"));
+      const draft: DraftPackage = {
+        pipeline: { id: "demo", stages: [{ id: "plan", uses: "./linked/new.yaml", entry: true }] },
+        stages: [
+          { path: "./linked/new.yaml", body: { id: "new", system_prompt: "Nope", model: MODEL, ...REQUIRED_IO } },
+        ],
+      };
+      try {
+        const result = await overwriteDraftPackage(root, { directory: "pipelines", draft, allowInvalid: true });
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.status).toBe(400);
+        expect(result.error).toMatch(/escapes project root/i);
+        await expect(access(path.join(outsideRoot, "new.yaml"))).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        await rm(outsideRoot, { recursive: true, force: true });
+      }
+    }));
+
   it("refuses a symlink that escapes the project", () =>
     withRepo(async (root) => {
       const outsideRoot = path.join(path.dirname(root), `sf-outside-${path.basename(root)}`);

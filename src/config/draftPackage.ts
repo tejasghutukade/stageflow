@@ -186,18 +186,32 @@ async function resolveStageWritePath(
       error: `Stage path escapes project root (${stagePath})`,
     };
   }
+  // Check the real location of the file, or for a new file of its nearest existing folder, so a symlinked
+  // folder that points outside the project cannot carry the write out.
+  let realRoot: string;
   try {
-    const real = realpathSync(candidate);
-    const realRoot = realpathSync(projectResolved);
-    const relReal = path.relative(realRoot, real);
-    if (relReal.startsWith("..") || path.isAbsolute(relReal)) {
-      return {
-        ok: false,
-        error: `Stage path escapes project root (${stagePath})`,
-      };
-    }
+    realRoot = realpathSync(projectResolved);
   } catch {
-    // New paths are allowed when the lexical location stays in the project.
+    realRoot = projectResolved;
+  }
+  let existing = candidate;
+  for (;;) {
+    try {
+      const real = realpathSync(existing);
+      const relReal = path.relative(realRoot, real);
+      if (relReal.startsWith("..") || path.isAbsolute(relReal)) {
+        return {
+          ok: false,
+          error: `Stage path escapes project root (${stagePath})`,
+        };
+      }
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      const parent = path.dirname(existing);
+      if (parent === existing) break;
+      existing = parent;
+    }
   }
   return { ok: true, absPath: candidate };
 }
