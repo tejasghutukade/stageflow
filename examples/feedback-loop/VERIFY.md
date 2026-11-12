@@ -5,7 +5,7 @@ Simple runs to exercise the feedback-loop work from this repo. Uses a real provi
 ## Setup
 
 ```bash
-cd /path/to/software-factory
+cd /path/to/your-checkout
 npm i
 npm run build
 # Provider auth once (example stages use anthropic/claude-sonnet-5-5)

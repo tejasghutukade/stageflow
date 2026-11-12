@@ -71,6 +71,7 @@ import { stageflowHomeId } from "./diagnostics/checks.js";
 import { mintConsoleLoginCode } from "./server/consoleLoginCode.js";
 import {
   oldHostRunningMessage,
+  otherHostHomeMessage,
   probeStageflowHost,
   SF_SERVICE_CHILD,
 } from "./server/ensureGlobalService.js";
@@ -173,7 +174,7 @@ const USAGE = `Usage:
 
 Stageflow (sf) runs YAML-defined automatic stage pipelines.
 
-Store backend: SF_STORE=sqlite only. SF_STORE=disk is rejected; disk-era .stageflow/runs trees import when the SQLite store is empty. Data under .stageflow/.
+Store backend: SF_STORE=sqlite only. SF_STORE=disk is rejected; disk-era .stageflow/runs trees import when the SQLite store is empty. Data under ~/.stageflow/.
 `;
 
 function isHelpFlag(arg: string): boolean {
@@ -797,9 +798,7 @@ async function printIfHostAlreadyRunning(options: {
     return 1;
   }
   if (probed === "other_home") {
-    console.error(
-      `Another Stageflow Host with a different data directory is on port ${bound}. Stop it or use --port.`,
-    );
+    console.error(otherHostHomeMessage(bound));
     return 1;
   }
   if (probed !== "up" && probed !== "starting") return null;

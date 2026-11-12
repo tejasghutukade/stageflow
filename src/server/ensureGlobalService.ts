@@ -2,6 +2,7 @@ import { type ChildProcess, spawn as spawnDefault } from "node:child_process";
 import { chmodSync, openSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { stageflowHomeId } from "../diagnostics/checks.js";
 import { ensureGlobalHome } from "../project/globalHome.js";
 import {
   assertBindAllowed,
@@ -68,6 +69,10 @@ export function oldHostRunningMessage(port: number | string): string {
   return `An older Stageflow Host is running on port ${port}. Stop it (end its "sf mcp" or "sf ui" process, or restart the container), then run this again.`;
 }
 
+export function otherHostHomeMessage(port: number | string): string {
+  return `Another Stageflow Host with a different data directory is on port ${port}. Stop it or use --port.`;
+}
+
 export function hostBaseUrl(): string {
   return `http://127.0.0.1:${resolveServicePort()}`;
 }
@@ -113,7 +118,9 @@ export async function probeStageflowHost(
 }
 
 export async function probeGlobalServiceDetailed(): Promise<ServiceProbeResult> {
-  return probeStageflowHost(hostBaseUrl());
+  return probeStageflowHost(hostBaseUrl(), {
+    expectedHomeId: stageflowHomeId(),
+  });
 }
 
 export async function defaultProbeHost(): Promise<HostProbeResult> {
@@ -210,7 +217,14 @@ export async function ensureGlobalService(
       message: oldHostRunningMessage(resolveServicePort()),
     };
   }
-  if (initial === "unhealthy" || initial === "foreign" || initial === "other_home") {
+  if (initial === "other_home") {
+    return {
+      ok: false,
+      reason: "port_occupied",
+      message: otherHostHomeMessage(resolveServicePort()),
+    };
+  }
+  if (initial === "unhealthy" || initial === "foreign") {
     return {
       ok: false,
       reason: "port_occupied",

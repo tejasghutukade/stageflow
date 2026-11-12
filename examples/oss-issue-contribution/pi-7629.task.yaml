@@ -3,13 +3,13 @@ goal: >
   Deliver a verified minimal local fix for Pi issue #7629, tui.select.pageUp
   and tui.select.pageDown are not handled in all select lists, applied as
   source and test edits in the checkout working tree, plus an
-  operator-approved pull request opened against tejasghutukade/pi rather than
+  operator-approved pull request opened against <your-github-username>/pi rather than
   earendil-works/pi.
 context: |
   Issue: https://github.com/earendil-works/pi/issues/7629
   Title: tui.select.pageUp and tui.select.pageDown are not handled in all select lists
   Upstream repo: https://github.com/earendil-works/pi
-  Fork (PR target after the run): https://github.com/tejasghutukade/pi
+  Fork (PR target after the run): https://github.com/<your-github-username>/pi
   State: OPEN, unassigned, labeled bug, zero human comments — unclaimed.
 
   Pi's CONTRIBUTING.md auto-closes issues and PRs from new/unproven
@@ -60,8 +60,8 @@ constraints: |
   except oss-approve-contribution, which may do so only after the operator
   has explicitly accepted the contribution package through its
   artifact_backed gate.
-  Do not target earendil-works/pi. The PR base is always tejasghutukade/pi
-  (gh pr create --repo tejasghutukade/pi).
+  Do not target earendil-works/pi. The PR base is always <your-github-username>/pi
+  (gh pr create --repo <your-github-username>/pi).
   Do not edit CHANGELOG.md; pi's maintainers add changelog entries themselves.
   Before opening the local PR, the checkout must pass `npm run check` and
   `./test.sh` (or the package-scoped equivalents for the touched package) —

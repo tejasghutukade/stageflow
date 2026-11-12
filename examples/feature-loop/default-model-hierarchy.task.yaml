@@ -8,7 +8,7 @@ goal: >
   order, verify coverage, review the whole diff, address review feedback,
   and open an operator-approved pull request.
 context: |
-  This repository is Stageflow itself (tejasghutukade/stageflow). The
+  This repository is Stageflow itself (<owner>/stageflow). The
   checkout for this run is a dedicated git worktree already on branch
   scratch/extra-workspace, tracking origin/main.
 
@@ -42,7 +42,7 @@ context: |
 
   Keep model (LLM id string) distinct from agent (pi | claude backend).
 
-  - Publish target: tejasghutukade/stageflow
+  - Publish target: <owner>/stageflow
   - Base branch: main
   - Head branch: the checkout's current branch (do not create or switch)
 constraints: |

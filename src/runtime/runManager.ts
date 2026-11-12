@@ -216,6 +216,7 @@ export type CapacityHealth = {
   activeCount: number;
   maxConcurrent: number;
   slotsAvailable: number;
+  queuedCount: number;
   activeStageProcesses: number;
   maxActiveStageProcesses: number | null;
   disk?: DiskBreakdown;
@@ -776,6 +777,7 @@ export class RunManager {
       activeCount,
       maxConcurrent,
       slotsAvailable: Math.max(0, maxConcurrent - activeCount),
+      queuedCount: this.admissionQueue.size,
       activeStageProcesses,
       maxActiveStageProcesses: Number.isFinite(maxActiveStageProcessesRaw)
         ? maxActiveStageProcessesRaw

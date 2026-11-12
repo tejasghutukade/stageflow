@@ -185,10 +185,10 @@ export function useStartRunForm({
     }));
   }, [selectedPipeline]);
 
-  const queuedCount = snapshot.runs.reduce(
-    (count, run) => count + (run.status === "queued" ? 1 : 0),
-    0,
-  );
+  const queuedCount =
+    health != null && typeof health.queuedCount === "number"
+      ? health.queuedCount
+      : 0;
   const queue = startQueueDecision({
     slotsAvailable: health == null ? null : health.slotsAvailable,
     queuedCount,

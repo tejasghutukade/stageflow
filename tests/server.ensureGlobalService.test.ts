@@ -8,6 +8,7 @@ import {
   ensureGlobalService,
   hostBaseUrl,
   isNoAutostartEnabled,
+  otherHostHomeMessage,
   SF_SERVICE_CHILD,
   STAGEFLOW_NO_AUTOSTART,
   type ServiceProbeResult,
@@ -79,6 +80,23 @@ describe("ensureGlobalService", () => {
     if (!result.ok) {
       expect(result.reason).toBe("port_occupied");
       expect(result.message).toContain(String(DEFAULT_PORT));
+    }
+    expect(spawnCalls).toBe(0);
+  });
+
+  it("reports another data directory when home_id differs", async () => {
+    let spawnCalls = 0;
+    const result = await ensureGlobalService({
+      probeHost: async () => "other_home",
+      spawnFn: (() => {
+        spawnCalls += 1;
+        throw new Error("should not spawn");
+      }) as unknown as typeof spawn,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("port_occupied");
+      expect(result.message).toBe(otherHostHomeMessage(DEFAULT_PORT));
     }
     expect(spawnCalls).toBe(0);
   });

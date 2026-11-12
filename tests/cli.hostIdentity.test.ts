@@ -160,11 +160,35 @@ describe("host identity probe", () => {
       throw new Error("should not open");
     });
     try {
-      const code = await main(["node", "sf", "ui", "--port", String(port), "--no-open"]);
-      expect(code).toBe(1);
+      errors.length = 0;
+      expect(
+        await main(["node", "sf", "ui", "--port", String(port), "--no-open"]),
+      ).toBe(1);
       expect(errors.join("\n")).toContain(
         `Another Stageflow Host with a different data directory is on port ${port}. Stop it or use --port.`,
       );
+      errors.length = 0;
+      const savedServicePort = process.env.STAGEFLOW_SERVICE_PORT;
+      process.env.STAGEFLOW_SERVICE_PORT = String(port);
+      try {
+        expect(
+          await main([
+            "node",
+            "sf",
+            "run",
+            "--task",
+            "tests/fixtures/tasks/sample.task.yaml",
+            "--pipeline",
+            "tests/fixtures/pipelines/single.pipeline.yaml",
+          ]),
+        ).toBe(1);
+        expect(errors.join("\n")).toContain(
+          `Another Stageflow Host with a different data directory is on port ${port}. Stop it or use --port.`,
+        );
+      } finally {
+        if (savedServicePort === undefined) delete process.env.STAGEFLOW_SERVICE_PORT;
+        else process.env.STAGEFLOW_SERVICE_PORT = savedServicePort;
+      }
     } finally {
       spy.mockRestore();
     }

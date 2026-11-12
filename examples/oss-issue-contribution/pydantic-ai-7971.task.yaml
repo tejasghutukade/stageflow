@@ -3,13 +3,13 @@ goal: >
   Deliver a verified minimal local fix for Pydantic AI issue #7971, Carry a
   durable unit's emitted events and enqueued messages in its recorded output,
   applied as source and test edits in the checkout working tree, plus an
-  operator-approved pull request opened against tejasghutukade/pydantic-ai
+  operator-approved pull request opened against <your-github-username>/pydantic-ai
   rather than pydantic/pydantic-ai.
 context: |
   Issue: https://github.com/pydantic/pydantic-ai/issues/7971
   Title: Carry a durable unit's emitted events and enqueued messages in its recorded output
   Upstream repo: https://github.com/pydantic/pydantic-ai
-  Fork (PR target after the run): https://github.com/tejasghutukade/pydantic-ai
+  Fork (PR target after the run): https://github.com/<your-github-username>/pydantic-ai
   State: OPEN, unassigned. Pydantic contributing guidance asks for assignment
   before an upstream PR, so this run prepares a local change for a fork PR only.
 
@@ -43,7 +43,7 @@ constraints: |
   has explicitly accepted the contribution package through its
   artifact_backed gate.
   Do not target pydantic/pydantic-ai. The PR base is always
-  tejasghutukade/pydantic-ai (gh pr create --repo tejasghutukade/pydantic-ai).
+  <your-github-username>/pydantic-ai (gh pr create --repo <your-github-username>/pydantic-ai).
   Keep the change limited to the reproduced issue and its regression test.
   Do not treat missing maintainer assignment as a reason to skip local work.
   Source and test edits belong in the checkout working tree and must never be

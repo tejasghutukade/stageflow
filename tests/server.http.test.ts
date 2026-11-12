@@ -2081,6 +2081,7 @@ describe("localhost HTTP API", () => {
         activeCount: 0,
         maxConcurrent: 2,
         slotsAvailable: 2,
+        queuedCount: 0,
         activeStageProcesses: 0,
         maxActiveStageProcesses: expect.any(Number),
         stage_env_passthrough: expect.any(Boolean),

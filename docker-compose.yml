@@ -8,8 +8,6 @@
 # `docker exec <container> cat /data/control-token`.
 # Do not publish this port beyond localhost.
 #
-# Mounting /var/run/docker.sock is root on the host.
-#
 # Shell environment overrides values from `.env`. Empty exported GITHUB_TOKEN /
 # GH_TOKEN blanks the container token — prefer:
 #   env -u GITHUB_TOKEN -u GH_TOKEN docker compose up --build -d
@@ -20,11 +18,8 @@
 # command is `sf ui` intentionally (console + MCP on the same Host).
 # Image CMD remains `sf mcp`; override only for a UI-less Host.
 #
-# Stage file tools (read, write, edit, bash) run in stageflow-bash by default.
-# The socket mount is what lets this container start those sandbox containers.
-# The service user is root only so the entrypoint can join the socket's group;
-# it then drops to the stageflow user. Remove STAGEFLOW_STAGE_CONTAINER_IMAGE
-# and the socket mount to keep those tools in this container.
+# Stage file tools (read, write, edit, bash) run in stageflow-bash when you
+# also use docker-compose.sandbox.yml — see docs/docker.md.
 
 # Optional browser stages: build the recipe in docker/Dockerfile.browser on top
 # of this image and bind-mount docker/browser.config.example.yaml at
@@ -36,11 +31,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: ghcr.io/tejasghutukade/stageflow:local
-    user: "0:0"
     command: ["sf", "ui"]
-    depends_on:
-      stageflow-bash:
-        condition: service_completed_successfully
     ports:
       - "127.0.0.1:3847:3847"
     environment:
@@ -57,7 +48,6 @@ services:
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
       EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
       STAGEFLOW_ENSURE_PROJECT_ROOTS: /opt/stageflow/catalog/triggers-readiness,/catalog/memory,/catalog/document-policy-review
-      STAGEFLOW_STAGE_CONTAINER_IMAGE: stageflow-bash:local
       STAGEFLOW_STAGE_READONLY_DIR: ${STAGEFLOW_STAGE_READONLY_DIR:-}
       # Agents (all safe when empty). Not passed on purpose: STAGEFLOW_AGENT_SESSION_IDLE_MINUTES and
       # STAGEFLOW_AGENT_STALL_SECONDS, because an empty value parses as 0 and turns them off.
@@ -70,17 +60,7 @@ services:
       - stageflow-data:/data
       - ./examples/memory:/catalog/memory
       - ./examples/document-policy-review:/catalog/document-policy-review:ro
-      # Root on the host: this socket can start containers as root.
-      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
-
-  stageflow-bash:
-    image: stageflow-bash:local
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.bash-sandbox
-    command: ["true"]
-    restart: "no"
 
 volumes:
   stageflow-data:

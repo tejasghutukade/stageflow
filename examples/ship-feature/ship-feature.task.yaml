@@ -7,9 +7,9 @@ goal: >
   (non-negative integers, checked at compile time). Also add a nullable:
   true keyword usable on any node type, compiling to a union of that type
   with null. Ship the change as an operator-approved pull request opened
-  against tejasghutukade/stageflow.
+  against <owner>/stageflow.
 context: |
-  This repository is Stageflow itself (tejasghutukade/stageflow). The
+  This repository is Stageflow itself (<owner>/stageflow). The
   checkout for this run is a dedicated git worktree already on branch
   demo/richer-payload-schema-constraints, tracking origin/main, in a clean
   state with npm install already run.
@@ -55,7 +55,7 @@ context: |
   typecheck, npx vitest run tests/envelope.payloadSchema.test.ts, and npm
   test for the full suite.
 
-  Ship target: open the pull request against tejasghutukade/stageflow, base
+  Ship target: open the pull request against <owner>/stageflow, base
   branch main, from the checkout's current branch
   (demo/richer-payload-schema-constraints) — push to origin on that same
   repository, not a fork.

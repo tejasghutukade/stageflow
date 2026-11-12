@@ -1,0 +1,24 @@
+# Optional stage sandbox — mounts the Docker socket and runs stage bash tools
+# in sibling containers. Root on the host: the socket can start containers as
+# root. See docs/docker.md#stage-sandbox-in-compose.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up --build -d
+
+services:
+  stageflow:
+    user: "0:0"
+    depends_on:
+      stageflow-bash:
+        condition: service_completed_successfully
+    environment:
+      STAGEFLOW_STAGE_CONTAINER_IMAGE: stageflow-bash:local
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  stageflow-bash:
+    image: stageflow-bash:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.bash-sandbox
+    command: ["true"]
+    restart: "no"

@@ -83,7 +83,10 @@ export function AppRail({
           <span className="rail__glyph" aria-hidden="true">{item.glyph}</span>
           <span className="rail__label">{item.label}</span>
           {item.experimental ? (
-            <span className="rail__count" title="Experimental">Exp</span>
+            <span className="rail__count" title="Experimental">
+              <span className="sr-only">experimental</span>
+              Exp
+            </span>
           ) : null}
           {item.id === "today" && waitingCount != null && waitingCount > 0 && (
             <span className="rail__count">{waitingCount}</span>

@@ -177,6 +177,7 @@ export function AppRail({
                       className="rounded-sm border border-[#ffffff2e] px-[5px] text-[11px] text-[var(--sf-text-3)]"
                       title="Experimental"
                     >
+                      <span className="sr-only">experimental</span>
                       Exp
                     </span>
                   ) : null}

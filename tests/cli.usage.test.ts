@@ -71,7 +71,7 @@ describe("CLI stub", { timeout: 15_000 }, () => {
     expect(result.stdout).toMatch(/logout/);
     expect(result.stdout).toMatch(/Stageflow \(sf\)/);
     expect(result.stdout).not.toMatch(/software-factory \(sf\)/);
-    expect(result.stdout).toMatch(/Data under \.stageflow\/\./);
+    expect(result.stdout).toMatch(/Data under ~\/\.stageflow\/\./);
     expect(result.stdout).toMatch(/sf --version/);
     expect(result.stdout).toMatch(/sf -V/);
     expect(result.stdout).toMatch(/sf <command> --help/);
@@ -155,7 +155,7 @@ describe("CLI stub", { timeout: 15_000 }, () => {
       text: expect.stringMatching(/sf <command> --help/),
       exitCode: 0,
     });
-    expect(overview?.text).toMatch(/Data under \.stageflow\/\./);
+    expect(overview?.text).toMatch(/Data under ~\/\.stageflow\/\./);
     expect(overview?.text).not.toMatch(/Manage saved browser logins/);
     expect(resolveCliHelp(["node", "sf", "-h"])).toEqual(overview);
     expect(resolveCliHelp(["node", "sf"])).toEqual({
@@ -171,7 +171,7 @@ describe("CLI stub", { timeout: 15_000 }, () => {
       expect(direct?.exitCode, command).toBe(0);
       expect(direct?.text, command).toBe(short?.text);
       expect(direct?.text, command).toBe(nested?.text);
-      expect(direct?.text, command).not.toMatch(/Data under \.stageflow\/\./);
+      expect(direct?.text, command).not.toMatch(/Data under ~\/\.stageflow\/\./);
       expect(direct?.text, command).not.toBe(overview?.text);
     }
 
@@ -203,7 +203,7 @@ describe("CLI stub", { timeout: 15_000 }, () => {
       const label = args.join(" ");
       expect(result.status, label).toBe(0);
       const out = result.stdout + result.stderr;
-      expect(out, label).not.toMatch(/Data under \.stageflow\/\./);
+      expect(out, label).not.toMatch(/Data under ~\/\.stageflow\/\./);
       expect(out, label).not.toMatch(/sf providers list/);
       if (args[0] === "ui") {
         expect(out, label).toMatch(/sf ui \[--host/);

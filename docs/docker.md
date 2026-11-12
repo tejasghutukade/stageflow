@@ -11,9 +11,17 @@ See also [Data directory](data-directory.md), [CLI reference](cli-reference.md),
 
 ## Stage sandbox in Compose
 
-The shipped [`docker-compose.yml`](../docker-compose.yml) sets `STAGEFLOW_STAGE_CONTAINER_IMAGE=stageflow-bash:local` and mounts `/var/run/docker.sock`. Mounting `/var/run/docker.sock` is root on the host: anyone who can use that socket can start containers as root on the machine. `read`, `write`, `edit`, and `bash` then run in a sibling container built from [`docker/Dockerfile.bash-sandbox`](../docker/Dockerfile.bash-sandbox). The Stageflow process still runs as the `stageflow` user. Compose starts that service as root only so [`docker/stageflow-entry.sh`](../docker/stageflow-entry.sh) can join the socket's group, then drops to `stageflow`. There is no `privileged` and no extra capabilities.
+The shipped [`docker-compose.yml`](../docker-compose.yml) does **not** mount `/var/run/docker.sock` or set `STAGEFLOW_STAGE_CONTAINER_IMAGE`. Stage file tools then run in the Host container.
 
-That mount lets this container create and remove those sandbox containers on the host daemon. A plain `docker run` of the published image does not set the variable and does not mount the socket, so sandboxing stays off. To run Compose the same way, delete `STAGEFLOW_STAGE_CONTAINER_IMAGE` and the socket mount.
+Optional [`docker-compose.sandbox.yml`](../docker-compose.sandbox.yml) adds the socket mount and `STAGEFLOW_STAGE_CONTAINER_IMAGE=stageflow-bash:local`. Mounting `/var/run/docker.sock` is root on the host: anyone who can use that socket can start containers as root on the machine. `read`, `write`, `edit`, and `bash` then run in a sibling container built from [`docker/Dockerfile.bash-sandbox`](../docker/Dockerfile.bash-sandbox). The Stageflow process still runs as the `stageflow` user. Compose starts that service as root only so [`docker/stageflow-entry.sh`](../docker/stageflow-entry.sh) can join the socket's group, then drops to `stageflow`. There is no `privileged` and no extra capabilities.
+
+Use both files when you want the sandbox:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up --build -d
+```
+
+A plain `docker run` of the published image does not set the variable and does not mount the socket, so sandboxing stays off.
 
 The [hardened egress reference](#hardened-egress-reference-compose) below is documentation only. It does not mount the socket.
 
