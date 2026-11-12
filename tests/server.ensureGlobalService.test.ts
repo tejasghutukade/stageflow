@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   ensureGlobalService,
+  probeStageflowHost,
   hostBaseUrl,
   isNoAutostartEnabled,
   otherHostHomeMessage,
@@ -297,6 +298,45 @@ describe("ensureGlobalService", () => {
       expect(result).toEqual({ ok: true, alreadyRunning: true });
       expect(spawnCalls).toBe(0);
     });
+  });
+
+  it("reports another data directory when a starting Host turns out to use one", async () => {
+    await withIsolatedHome(async () => {
+      const probeResults: ServiceProbeResult[] = ["starting", "other_home"];
+      let probeIndex = 0;
+      const result = await ensureGlobalService({
+        cliEntry,
+        probeHost: async () => probeResults[Math.min(probeIndex++, probeResults.length - 1)]!,
+        spawnFn: (() => {
+          throw new Error("should not spawn");
+        }) as unknown as typeof spawn,
+        pollIntervalMs: 1,
+        timeoutMs: 1000,
+        env: { STAGEFLOW_BIND: "127.0.0.1" },
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toBe("port_occupied");
+        expect(result.message).toContain("different data directory");
+      }
+    });
+  });
+
+  it("probes a booting Host from another data directory as other_home", async () => {
+    const http = await import("node:http");
+    for (const [homeId, expected] of [["other-home-id", "other_home"], ["mine", "starting"]] as const) {
+      const server = http.createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, status: "starting", service: "stageflow", home_id: homeId }));
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+      const port = (server.address() as { port: number }).port;
+      try {
+        expect(await probeStageflowHost(`http://127.0.0.1:${port}`, { expectedHomeId: "mine" })).toBe(expected);
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    }
   });
 
   it("still spawns when STAGEFLOW_BIND is non-loopback and drive token is set", async () => {

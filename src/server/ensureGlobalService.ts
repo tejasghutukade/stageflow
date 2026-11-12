@@ -98,7 +98,17 @@ export async function probeStageflowHost(
       return "unhealthy";
     }
     if (body === null || typeof body !== "object") return "foreign";
-    if (body.service === "stageflow" && body.status === "starting") return "starting";
+    if (body.service === "stageflow" && body.status === "starting") {
+      // A booting Host names its data directory too; one from another directory is not ours.
+      if (
+        options?.expectedHomeId !== undefined &&
+        typeof body.home_id === "string" &&
+        body.home_id !== options.expectedHomeId
+      ) {
+        return "other_home";
+      }
+      return "starting";
+    }
     if (body.service !== "stageflow") {
       // Hosts before 0.57 answer {"ok":true,"status":"live"} with no service field.
       return body.service === undefined && body.ok === true && body.status === "live"
@@ -197,12 +207,29 @@ export async function ensureGlobalService(
     return { ok: true, alreadyRunning: true };
   }
   if (initial === "starting") {
+    let last: ServiceProbeResult = "starting";
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       await sleep(pollIntervalMs);
       const next = await probeHost();
       if (next === "up") return { ok: true, alreadyRunning: true };
-      if (next !== "starting") break;
+      if (next !== "starting") {
+        last = next;
+        break;
+      }
+    }
+    if (last === "other_home") {
+      return { ok: false, reason: "port_occupied", message: otherHostHomeMessage(resolveServicePort()) };
+    }
+    if (last === "old_stageflow") {
+      return { ok: false, reason: "old_host_running", message: oldHostRunningMessage(resolveServicePort()) };
+    }
+    if (last === "unreachable") {
+      return {
+        ok: false,
+        reason: "timed_out",
+        message: `The starting Stageflow Host on port ${resolveServicePort()} stopped before it became ready. Check its log, then try again.`,
+      };
     }
     return {
       ok: false,

@@ -1,3 +1,4 @@
+import { stageflowHomeId } from "../diagnostics/checks.js";
 import {
   createServer,
   type IncomingMessage,
@@ -102,12 +103,21 @@ function listenServer(server: Server, host: string, port: number): Promise<void>
  * until {@link createHttpHost} installs the real handler. A failure is the
  * Node listen error (EADDRINUSE when another host already owns the port).
  */
+/** The data directory's id, so a probe can tell this booting Host from one using another directory. */
+function startingHomeId(): string | undefined {
+  try {
+    return stageflowHomeId();
+  } catch {
+    return undefined;
+  }
+}
+
 function startingResponse(req: IncomingMessage, res: ServerResponse): void {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const method = req.method ?? "GET";
   const live = url.pathname === "/livez" && (method === "GET" || method === "HEAD");
   const body = live
-    ? { ok: true, status: "starting", service: "stageflow" }
+    ? { ok: true, status: "starting", service: "stageflow", home_id: startingHomeId() }
     : { status: "starting" };
   const payload = JSON.stringify(body);
   res.writeHead(live ? 200 : 503, {

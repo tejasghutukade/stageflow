@@ -452,6 +452,7 @@ describe("createHttpHost shared listen", () => {
         ok: true,
         status: "starting",
         service: "stageflow",
+        home_id: expect.stringMatching(/^[0-9a-f]{16}$/),
       });
       const other = await fetch(`http://127.0.0.1:${port}/api/runs`);
       expect(other.status).toBe(503);
