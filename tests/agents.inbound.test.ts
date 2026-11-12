@@ -150,7 +150,7 @@ describe("agent inbound webhooks", () => {
     clock.advance(11 * 60_000);
     await router_handle(router, second);
     await vi.waitFor(() => expect(replies).toHaveLength(2));
-    expect(replies[1]!.text).toMatch(/reached its/);
+    expect(replies[1]!.text).toMatch(/cost limit/);
     const sessions = (await service.listSessions(project, "support", { limit: 10 })).sessions;
     expect(sessions).toHaveLength(1);
   });
@@ -169,9 +169,27 @@ describe("agent inbound webhooks", () => {
     expect(sessions).toHaveLength(2);
     await router_handle(router, third);
     await vi.waitFor(() => expect(replies).toHaveLength(3));
-    expect(replies[2]!.text).toMatch(/reached its/);
+    expect(replies[2]!.text).toMatch(/cost limit/);
     expect(replies[2]!.text).not.toBe("re: once more");
     sessions = (await service.listSessions(project, "support", { limit: 10 })).sessions;
+    expect(sessions).toHaveLength(2);
+  });
+
+  it("rolls a cost-capped thread onto a new session once the 24-hour window passes", async () => {
+    const { router, replies, service, project, clock } = await setup({ limits: { cost_usd: 0.001 } });
+    const first = slackRequest({ event: { ...slackEvent.event, ts: "1.0", event_ts: "1.0", thread_ts: "1.0" } });
+    const second = slackRequest({ event: { ...slackEvent.event, text: "and the refund?", ts: "2.0", event_ts: "2.0", thread_ts: "1.0" } });
+    const third = slackRequest({ event: { ...slackEvent.event, text: "next day", ts: "3.0", event_ts: "3.0", thread_ts: "1.0" } });
+    await router_handle(router, first);
+    await vi.waitFor(() => expect(replies).toHaveLength(1));
+    await router_handle(router, second);
+    await vi.waitFor(() => expect(replies).toHaveLength(2));
+    expect(replies[1]!.text).toMatch(/cost limit/);
+    clock.advance(25 * 60 * 60_000);
+    await router_handle(router, third);
+    await vi.waitFor(() => expect(replies).toHaveLength(3));
+    expect(replies[2]!.text).toBe("re: next day");
+    const sessions = (await service.listSessions(project, "support", { limit: 10 })).sessions;
     expect(sessions).toHaveLength(2);
   });
 
