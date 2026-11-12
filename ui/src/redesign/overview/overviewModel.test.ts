@@ -234,7 +234,7 @@ describe("triggers and health", () => {
 
   it("states the run store size and free disk", () => {
     const gb = 1024 ** 3;
-    const health = { ok: true, activeRunIds: [], activeCount: 0, maxConcurrent: 4, slotsAvailable: 4, disk: { runs_bytes: 100 * 1024 ** 2, worktrees_bytes: 0, repos_bytes: 0, state_db_bytes: 112 * 1024 ** 2, a2a_artifacts_bytes: 0, free_bytes: 48 * gb } } as CapacityHealth;
+    const health = { ok: true, activeRunIds: [], activeCount: 0, maxConcurrent: 4, slotsAvailable: 4, queuedCount: 0, disk: { runs_bytes: 100 * 1024 ** 2, worktrees_bytes: 0, repos_bytes: 0, state_db_bytes: 112 * 1024 ** 2, a2a_artifacts_bytes: 0, free_bytes: 48 * gb } } as CapacityHealth;
     expect(runStoreLine(health)).toBe("212 MB · 48 GB free");
     expect(runStoreLine(null)).toBeNull();
   });
