@@ -391,6 +391,32 @@ export function commitHostControlToken(
   ensured.pendingWrite = false;
 }
 
+export function retireGeneratedControlToken(
+  ensured: EnsuredHostControlToken,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (ensured.generated || ensured.pendingWrite || ensured.filePath !== undefined) return;
+  if (!operatorSetControlToken(env)) return;
+  const filePath = path.join(controlTokenDirectory(env), CONTROL_TOKEN_FILENAME);
+  const operatorFile = env.STAGEFLOW_CONTROL_TOKEN_FILE;
+  if (
+    operatorFile !== undefined &&
+    operatorFile.length > 0 &&
+    path.resolve(operatorFile) === path.resolve(filePath)
+  ) {
+    return;
+  }
+  let stat: ReturnType<typeof lstatSync>;
+  try {
+    stat = lstatSync(filePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw err;
+  }
+  if (!stat.isFile() || stat.isSymbolicLink()) return;
+  unlinkSync(filePath);
+}
+
 /**
  * Lines printed once next to the listen URL. The token value is included only
  * when this process just minted it and `revealToken` is set. A reused file

@@ -61,6 +61,7 @@ import {
   activeControlTokenSource,
   commitHostControlToken,
   ensureHostControlToken,
+  retireGeneratedControlToken,
   generatedControlTokenLines,
   loadControlTokens,
   resolveClientBearerToken,
@@ -694,6 +695,7 @@ export async function main(argv: string[]): Promise<number> {
         controlTokens: tokens,
       });
       const tokenSaved = commitHostControlTokenOrWarn(ensuredToken);
+      retireGeneratedControlToken(ensuredToken);
       if (host.store) {
         try {
           await host.store.ensureProject(ctx.projectRoot);
@@ -738,6 +740,7 @@ export async function main(argv: string[]): Promise<number> {
         controlTokens: tokens,
       });
       const tokenSaved = commitHostControlTokenOrWarn(ensuredToken);
+      retireGeneratedControlToken(ensuredToken);
       console.log(`MCP endpoint: ${host.mcpUrl}`);
       if (tokenSaved) printGeneratedControlToken(ensuredToken);
       const outcome = await host.shutdown.whenDrained();

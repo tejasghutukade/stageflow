@@ -26,6 +26,7 @@ import {
   refuseBindMessage,
   requiredScopeFor,
   resolveClientBearerToken,
+  retireGeneratedControlToken,
 } from "../src/server/controlToken.js";
 
 const DRIVE = "d".repeat(32);
@@ -190,6 +191,34 @@ describe("ensureHostControlToken", () => {
     await expect(stat(path.join(dir, CONTROL_TOKEN_FILENAME))).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+
+  it("deletes a leftover generated token when the operator sets STAGEFLOW_CONTROL_TOKEN", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-retire-token-"));
+    const file = path.join(dir, CONTROL_TOKEN_FILENAME);
+    await writeFile(file, `${DRIVE}\n`, { mode: 0o600 });
+    const env: NodeJS.ProcessEnv = {
+      STAGEFLOW_HOME: dir,
+      STAGEFLOW_CONTROL_TOKEN: OTHER,
+    };
+    const ensured = ensureHostControlToken(env);
+    expect(ensured.generated).toBe(false);
+    expect(ensured.filePath).toBeUndefined();
+    retireGeneratedControlToken(ensured, env);
+    await expect(stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps the file when STAGEFLOW_CONTROL_TOKEN_FILE points at it", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-keep-token-"));
+    const file = path.join(dir, CONTROL_TOKEN_FILENAME);
+    await writeFile(file, `${DRIVE}\n`, { mode: 0o600 });
+    const env: NodeJS.ProcessEnv = {
+      STAGEFLOW_HOME: dir,
+      STAGEFLOW_CONTROL_TOKEN_FILE: file,
+    };
+    const ensured = ensureHostControlToken(env);
+    retireGeneratedControlToken(ensured, env);
+    expect(await readFile(file, "utf8")).toBe(`${DRIVE}\n`);
   });
 
   it("does not generate when unauthenticated bind is explicitly opted in", async () => {
