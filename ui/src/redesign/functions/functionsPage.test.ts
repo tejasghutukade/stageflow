@@ -543,8 +543,6 @@ describe("function editor generations", () => {
     const run = {
       ok: true,
       status: "succeeded",
-      code: null,
-      message: null,
       value: { passed: true },
       logs: "",
       durationMs: 1,

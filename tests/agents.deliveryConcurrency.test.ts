@@ -47,7 +47,6 @@ describe("reply delivery under overlapping sweeps", () => {
     release();
     const counts = await Promise.all([first, second]);
 
-    // two retries in total, one per reply, not four
     expect(sends).toHaveLength(4);
     expect(new Set(sends).size).toBe(4);
     expect(counts[0]! + counts[1]!).toBe(2);
