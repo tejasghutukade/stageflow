@@ -4,6 +4,8 @@ import { projectRun } from "../projection/projectRun.js";
 import { waitRun, type WaitUntil } from "../mcp/waitRun.js";
 import { projectWaitingGates } from "../mcp/waitingGates.js";
 import { completeCliRun } from "./runCommand.js";
+import { cliProgressColor } from "./runProgress.js";
+import { formatRunListLine, formatRunShow, formatWaitingEntry } from "./runShow.js";
 import { reportCliRun, writeQueuedAdmissionLine, type CliRunReportIo } from "./runOutput.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import {
@@ -19,13 +21,16 @@ import {
   type EnsureGlobalServiceResult,
 } from "../server/ensureGlobalService.js";
 import { mapRetryStageFailure } from "../server/operatorResults.js";
+import { ackHitlAnswer, collectHitlAnswer, readTTYLine } from "./hitlPrompt.js";
 import {
+  computeRunDir,
   httpAbandonStage,
   httpCancelRun,
   httpDecideFeedbackLoop,
   httpDeleteRun,
   httpDeliverAnswer,
   httpGcRuns,
+  httpReadRun,
   httpRecoverManualStageUntilStop,
   httpRerun,
   httpResumeTimedOutStage,
@@ -390,6 +395,7 @@ export async function runRunsCommand(
     store?: RunStore;
     stdinIsTTY?: boolean;
     readStdin?: () => string;
+    readLine?: () => Promise<string | null>;
     waitSignal?: AbortSignal;
     env?: NodeJS.ProcessEnv;
     hostBaseUrl?: string;
@@ -487,10 +493,14 @@ export async function runRunsCommand(
       );
       if (parsed.json) {
         printJson(out, { runs });
+      } else if (runs.length === 0) {
+        out.log("No runs.");
       } else {
-        for (const run of runs) {
-          out.log(`${run.run_id}\t${run.status}`);
-        }
+        const color = cliProgressColor(
+          process.stdout.isTTY === true,
+          options.env ?? process.env,
+        );
+        for (const run of runs) out.log(formatRunListLine(run, color));
       }
       return 0;
     }
@@ -509,7 +519,14 @@ export async function runRunsCommand(
         if (parsed.json) {
           printJson(out, projection);
         } else {
-          out.log(`${projection.run_id}\t${projection.status}`);
+          out.log(
+            formatRunShow(detail, {
+              color: cliProgressColor(
+                process.stdout.isTTY === true,
+                options.env ?? process.env,
+              ),
+            }),
+          );
         }
         return 0;
       } catch (err) {
@@ -552,12 +569,14 @@ export async function runRunsCommand(
       });
       if (parsed.json) {
         printJson(out, { waiting });
+      } else if (waiting.length === 0) {
+        out.log("Nothing is waiting.");
       } else {
-        for (const item of waiting) {
-          const runId = typeof item.runId === "string" ? item.runId : "";
-          const stageId = typeof item.stageId === "string" ? item.stageId : "";
-          out.log(`${runId}\t${stageId}`);
-        }
+        const color = cliProgressColor(
+          process.stdout.isTTY === true,
+          options.env ?? process.env,
+        );
+        out.log(waiting.map((item) => formatWaitingEntry(item, color)).join("\n\n"));
       }
       return 0;
     }
@@ -616,7 +635,27 @@ export async function runRunsCommand(
         if (parsed.json) {
           printJson(out, result);
         } else {
-          out.log(`${result.reason}\t${result.run.status}`);
+          const headline =
+            result.reason === "timeout"
+              ? "Timed out. The run is still going."
+              : result.reason === "waiting"
+                ? "A stage is waiting."
+                : result.reason === "already"
+                  ? "The run was already in that state."
+                  : "The run finished.";
+          try {
+            const detail = await getStore().readRun(result.run.run_id);
+            out.log(
+              `${headline}\n\n${formatRunShow(detail, {
+                color: cliProgressColor(
+                  process.stdout.isTTY === true,
+                  options.env ?? process.env,
+                ),
+              })}`,
+            );
+          } catch {
+            out.log(`${headline} ${result.run.run_id} ${result.run.status}`);
+          }
         }
         return 0;
       } finally {
@@ -634,6 +673,41 @@ export async function runRunsCommand(
         return usageError(out, "Missing --stage");
       }
       let answerRaw = parsed.answer;
+      let prompted: { ack: string } | undefined;
+      const canPrompt =
+        !parsed.json &&
+        answerRaw === undefined &&
+        stdinIsTTY &&
+        (options.readLine !== undefined || process.stdin.isTTY === true);
+      if (answerRaw === undefined && canPrompt) {
+        let detail;
+        try {
+          detail = await httpReadRun(base, parsed.runId);
+        } catch (err) {
+          out.error(err instanceof Error ? err.message : String(err));
+          return 1;
+        }
+        const stage = detail.stages.find((item) => item.stage_id === parsed.stageId);
+        const prompt = stage?.pending_prompt;
+        if (!prompt) {
+          out.error(`Stage ${parsed.stageId} is not waiting for input.`);
+          return 1;
+        }
+        const answer = await collectHitlAnswer(
+          prompt,
+          { log: out.log, readLine: options.readLine ?? readTTYLine },
+          {
+            runDir: computeRunDir(parsed.runId),
+            stageArtifacts: stage?.artifacts ?? [],
+          },
+        );
+        if (!answer) {
+          out.log("Cancelled.");
+          return 1;
+        }
+        answerRaw = JSON.stringify(answer);
+        prompted = { ack: ackHitlAnswer(answer) };
+      }
       if (answerRaw === undefined) {
         if (stdinIsTTY) {
           return usageError(
@@ -700,6 +774,12 @@ export async function runRunsCommand(
             ? { ok: true, verification: result.verification }
             : { ok: true },
         );
+      } else if (prompted) {
+        out.log(
+          result.verification !== undefined
+            ? `${prompted.ack} (${result.verification})`
+            : prompted.ack,
+        );
       } else {
         out.log(
           result.verification !== undefined
@@ -761,7 +841,7 @@ export async function runRunsCommand(
           loopId: result.loopId,
         });
       } else {
-        out.log(`ok\t${result.effect}\t${result.loopId}`);
+        out.log(`Feedback ${result.effect} on ${result.loopId}.`);
       }
       return 0;
     }
@@ -820,7 +900,9 @@ export async function runRunsCommand(
           attemptIndex: result.attemptIndex,
         });
       } else {
-        out.log(`ok\t${result.runId}\t${result.stageId}\t${result.attemptIndex}`);
+        out.log(
+          `Resumed ${result.stageId} on ${result.runId}, attempt ${result.attemptIndex}.`,
+        );
       }
       return 0;
     }
@@ -849,7 +931,7 @@ export async function runRunsCommand(
         if (parsed.json) {
           printJson(out, result);
         } else {
-          out.log(`${result.runId}\t${result.stageId}\tstopped`);
+          out.log(`Stopped recovery of ${result.stageId} on ${result.runId}.`);
         }
         return 0;
       }
@@ -895,7 +977,7 @@ export async function runRunsCommand(
           stageId: result.stageId,
         });
       } else {
-        out.log(`${result.runId}\t${result.stageId}`);
+        out.log(`Abandoned ${result.stageId} on ${result.runId}.`);
       }
       return 0;
     }
@@ -921,7 +1003,7 @@ export async function runRunsCommand(
           runId: result.runId,
         });
       } else {
-        out.log(result.runId);
+        out.log(`Cancelled ${result.runId}.`);
       }
       return 0;
     }
@@ -949,7 +1031,7 @@ export async function runRunsCommand(
           runId: result.runId,
         });
       } else {
-        out.log(result.runId);
+        out.log(`Deleted ${result.runId}.`);
       }
       return 0;
     }

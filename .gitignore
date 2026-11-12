@@ -6,6 +6,7 @@ ui/dist/
 .stageflow-home/
 .stageflow-control-token
 .env
+docker-compose.override.yml
 .software-factory/
 *.log
 .DS_Store
