@@ -416,6 +416,49 @@ describe("loadDraftPackage", () => {
       expect(loaded.taskPath).toBe("pipelines/demo.task.yaml");
     }));
 
+  it("writes a task loaded from another folder back there, and refuses it when it changed on disk", () =>
+    withRepo(async (root) => {
+      await seedPackage(root, {
+        prompts: { clarify: "Clarify" },
+        stages: [{ id: "clarify", uses: "./clarify.yaml" }],
+      });
+      await mkdir(path.join(root, "tasks"), { recursive: true });
+      const taskFile = path.join(root, "tasks", "brief.task.yaml");
+      await writeFile(taskFile, "id: brief\ngoal: Original\n", "utf8");
+      const loaded = await loadDraftPackage(root, "pipelines/demo.pipeline.yaml", { taskPath: "tasks/brief.task.yaml" });
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) return;
+      const draft: DraftPackage = {
+        ...loaded.draft,
+        task: { ...loaded.draft.task!, body: { ...loaded.draft.task!.body, goal: "Edited" } },
+      };
+      const saved = await overwriteDraftPackage(root, {
+        directory: "pipelines",
+        pipelineFilename: "demo.pipeline.yaml",
+        draft,
+        baseHashes: loaded.fileHashes,
+        allowInvalid: true,
+      });
+      expect(saved.ok, JSON.stringify(saved)).toBe(true);
+      expect(await readFile(taskFile, "utf8")).toContain("goal: Edited");
+      await expect(access(path.join(root, "pipelines", "brief.task.yaml"))).rejects.toMatchObject({ code: "ENOENT" });
+
+      const reloaded = await loadDraftPackage(root, "pipelines/demo.pipeline.yaml", { taskPath: "tasks/brief.task.yaml" });
+      if (!reloaded.ok) throw new Error("reload failed");
+      await writeFile(taskFile, "id: brief\ngoal: Changed elsewhere\n", "utf8");
+      const stale = await overwriteDraftPackage(root, {
+        directory: "pipelines",
+        pipelineFilename: "demo.pipeline.yaml",
+        draft: { ...reloaded.draft, task: { ...reloaded.draft.task!, body: { ...reloaded.draft.task!.body, goal: "Mine" } } },
+        baseHashes: reloaded.fileHashes,
+        allowInvalid: true,
+      });
+      expect(stale.ok).toBe(false);
+      if (stale.ok) return;
+      expect(stale.code).toBe("FILE_CHANGED");
+      expect(await readFile(taskFile, "utf8")).toContain("Changed elsewhere");
+    }));
+
   it("loadTaskArtifact reads a task without loading the pipeline", () =>
     withRepo(async (root) => {
       const dir = path.join(root, "pipelines");

@@ -47,6 +47,8 @@ export type DraftPackage = {
   task?: {
     filename: string;
     body: Record<string, unknown>;
+    /** Project-relative path the task was loaded from; a save writes it back there instead of into the package. */
+    path?: string;
   };
 };
 
@@ -136,6 +138,8 @@ export type LoadDraftPackageResult =
 export type DraftTaskArtifact = {
   filename: string;
   body: Record<string, unknown>;
+  /** Project-relative path the task was loaded from. */
+  path?: string;
 };
 
 export type LoadTaskArtifactResult =
@@ -816,7 +820,16 @@ async function resolveDraftWriteFiles(
   }
 
   if (draft.task) {
-    const taskAbs = path.join(packageDirectory, path.basename(draft.task.filename));
+    // A task loaded from elsewhere in the project goes back to where it was loaded (that is the file its base hash
+    // describes). Otherwise it lives in the package.
+    const loadedFrom =
+      typeof draft.task.path === "string" && draft.task.path.trim() && !pathContainsNul(draft.task.path)
+        ? resolveProjectRelativePath(projectRoot, draft.task.path.trim().replace(/\\/g, "/"))
+        : null;
+    const taskAbs =
+      loadedFrom !== null && path.basename(loadedFrom) === path.basename(draft.task.filename)
+        ? loadedFrom
+        : path.join(packageDirectory, path.basename(draft.task.filename));
     files.push({
       kind: "task",
       absPath: taskAbs,
@@ -1330,6 +1343,7 @@ export async function loadTaskArtifact(
       task: {
         filename: path.basename(taskAbs),
         body,
+        path: path.relative(projectRoot, taskAbs).replace(/\\/g, "/"),
       },
       taskPath: path.relative(projectRoot, taskAbs).replace(/\\/g, "/"),
     };
