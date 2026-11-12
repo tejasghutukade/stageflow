@@ -16,7 +16,7 @@ Every variable the Host and CLI read, in one place. Details live in the page eac
 | `STAGEFLOW_BIND` | Listen address for `sf ui` / `sf mcp` |
 | `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND` | `1` is an explicit opt-in to start a non-loopback bind with no control token. Leave unset otherwise; the Host then generates one |
 | `STAGEFLOW_ALLOWED_HOSTS` | Extra Host/Origin names accepted (loopback always allowed; `*` rejected). Needed for any public hostname, including webhook and web chat URLs. A Host bound (`STAGEFLOW_BIND`) to one non-loopback IP also accepts that IP on its own port, so its own calls, such as the eval engine's callback, are not refused |
-| `STAGEFLOW_CONTROL_TOKEN`, `_FILE` | Drive-scoped bearer token (32+ chars). Unset at Host start reuses `$STAGEFLOW_HOME/control-token` (mode 0600, owned by this user, not a symlink) or mints one and writes it after listen. `Control token:` is printed only for a new token on a terminal. The CLI reads that file when the variable is unset; a stage worker does not |
+| `STAGEFLOW_CONTROL_TOKEN`, `_FILE` | Drive-scoped bearer token (32+ chars). Unset at Host start reuses `$STAGEFLOW_HOME/control-token` (mode 0600, owned by this user, not a symlink) or mints one and writes it after listen. `Control token:` is printed on first start, including Docker logs. Later starts print the file path only. The CLI reads that file when the variable is unset; a stage worker does not |
 | `STAGEFLOW_CONTROL_TOKEN_<NAME>`, `_FILE` | Named drive token |
 | `STAGEFLOW_READ_TOKEN`, `_FILE` | Read-scoped bearer token |
 | `STAGEFLOW_SERVICE_PORT` | Port of the shared global service (tests only) |

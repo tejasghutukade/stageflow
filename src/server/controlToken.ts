@@ -17,7 +17,7 @@ import path from "node:path";
 import { SecretFromEnvError, readSecretFromEnvOrFile } from "../config/secretFromEnvOrFile.js";
 import { createOwnerOnlyDirectory, globalStageflowHome } from "../project/globalHome.js";
 import { SF_STAGE_WORKER } from "../runtime/stageWorkerProtocol.js";
-import { isLoopbackHostname } from "./allowedHosts.js";
+import { isLoopbackHostname, isLoopbackRemoteAddress } from "./allowedHosts.js";
 import { isEvalInternalPath } from "./evalInternalRoutes.js";
 import { matchLiveViewRoute } from "./liveViewPath.js";
 
@@ -180,6 +180,19 @@ function resolveControlTokenHome(env: NodeJS.ProcessEnv): string | undefined {
   }
   if (env === process.env) return path.join(os.homedir(), ".stageflow");
   return undefined;
+}
+
+export function controlTokenFilePath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(controlTokenDirectory(env), CONTROL_TOKEN_FILENAME);
+}
+
+/** Path only, and only for a loopback caller. Never the token. */
+export function authHintBody(
+  remoteAddress: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): { tokenFile: string | null } {
+  if (!isLoopbackRemoteAddress(remoteAddress)) return { tokenFile: null };
+  return { tokenFile: controlTokenFilePath(env) };
 }
 
 function controlTokenDirectory(env: NodeJS.ProcessEnv): string {

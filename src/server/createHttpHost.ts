@@ -17,6 +17,7 @@ import {
   type AllowedHosts,
 } from "./allowedHosts.js";
 import {
+  authHintBody,
   enforceBearerAuth,
   loadControlTokens,
   requiredScopeFor,
@@ -162,10 +163,14 @@ export async function createHttpHost(
     const pathname = url.pathname;
 
     if (
-      (pathname === "/livez" || pathname === "/readyz") &&
+      (pathname === "/livez" || pathname === "/readyz" || pathname === "/api/auth-hint") &&
       (method === "GET" || method === "HEAD")
     ) {
       if (!assertAllowedHttpAccess(allowedHosts, req, res)) return;
+      if (pathname === "/api/auth-hint") {
+        json(res, 200, authHintBody(req.socket?.remoteAddress));
+        return;
+      }
       if (pathname === "/livez") {
         handleLivez(req, res);
         return;

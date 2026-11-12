@@ -91,7 +91,7 @@ Under `--json`, a failure to start the Host exits 1. The document depends on the
 |---|---|---|
 | `autostart_disabled` | Nothing answered, and `STAGEFLOW_NO_AUTOSTART` is set to something other than empty, `0`, or `false`. | Start `sf mcp` or `sf ui`, or unset the variable. In Docker, the container entrypoint should already be the Host. `docker exec` against a stopped container cannot spawn one. |
 | `port_occupied` | Something is listening but `/livez` was not 200 JSON. | Free the port, or set the same `STAGEFLOW_SERVICE_PORT` on both the Host and the CLI. Do not start a second copy. |
-| `bind_refused` | `STAGEFLOW_BIND` is not loopback and no drive token is loaded. A normal `sf ui` / `sf mcp` start writes one first. | Let the Host generate the token and copy `Control token:` from its output, or set `STAGEFLOW_CONTROL_TOKEN` (32 or more characters, no whitespace). `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` is an explicit opt-in to start with no token. |
+| `bind_refused` | `STAGEFLOW_BIND` is not loopback and no drive token is loaded. A normal `sf ui` / `sf mcp` start writes one first. | Let the Host generate the token and copy `Control token:` from its output (first start; later starts print the file path). In Docker, if the logs don't show it, run `docker exec <container> cat /data/control-token`. Or set `STAGEFLOW_CONTROL_TOKEN` (32 or more characters, no whitespace). `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` is an explicit opt-in to start with no token. |
 | `spawn_failed` | The detached process or its log file could not be opened. | Read the message. It names `service.log` or the spawn error. |
 | `timed_out` | `/livez` did not succeed before the timeout. | Read `$STAGEFLOW_HOME/service.log`. Raise `STAGEFLOW_AUTOSTART_TIMEOUT_MS` on a slow disk. |
 
@@ -168,7 +168,7 @@ A waiting run is success of the start. Exit 2 is the handoff.
 
 | symptom | cause | fix |
 |---|---|---|
-| Container exits immediately with the bind refusal text | `STAGEFLOW_BIND=0.0.0.0` and the process could not load a drive token. A normal start writes one and prints it. | Read the container logs for `Control token:`. Set `STAGEFLOW_CONTROL_TOKEN` only when you want to choose the secret. Do not set `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND` unless you mean to run with no token. |
+| Container exits immediately with the bind refusal text | `STAGEFLOW_BIND=0.0.0.0` and the process could not load a drive token. A normal start writes one and prints it on first start. | Read the container logs for `Control token:`. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`. Set `STAGEFLOW_CONTROL_TOKEN` only when you want to choose the secret. Do not set `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND` unless you mean to run with no token. |
 | `autostart_disabled` inside `docker exec` | The image sets `STAGEFLOW_NO_AUTOSTART=1` and the entrypoint is not running. | Start the container (`sf mcp` or `sf ui`). Exec does not boot the Host. |
 | `/livez` connection refused on the laptop | Port not published, or published on a different interface. | `-p 127.0.0.1:3847:3847`. Curl that URL, not a container-internal hostname, from the laptop. |
 | Login exists on the laptop, not in the container | Different credential homes. | The volume's `/data/agent/auth.json` is the container store. Set `STAGEFLOW_PROVIDER_*` on the container or log in with `docker exec -it`. |

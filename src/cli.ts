@@ -745,7 +745,7 @@ async function printIfHostAlreadyRunning(port: number | undefined): Promise<bool
 }
 
 function revealControlToken(): boolean {
-  return process.stdout.isTTY === true && process.env[SF_SERVICE_CHILD] !== "1";
+  return process.env[SF_SERVICE_CHILD] !== "1";
 }
 
 function heldControlToken(ensured: EnsuredHostControlToken): string | undefined {

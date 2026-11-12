@@ -6,9 +6,33 @@ import {
   wasControlTokenRequired,
 } from "../api/controlToken";
 
+export type AuthHint = { tokenFile: string | null };
+
+const FALLBACK =
+  "The token is in the `control-token` file in the Host's data directory (`~/.stageflow` by default, `/data` in Docker). In Docker, run `docker exec <container> cat /data/control-token`.";
+
+export function ControlTokenInstructions({ hint }: { hint: AuthHint | null }) {
+  if (hint?.tokenFile) {
+    return (
+      <>
+        <p className="font-sans text-xs text-[var(--sf-text-3)]">
+          This Host rejected the request. The token is in this file. It stays in this browser.
+        </p>
+        <p className="font-['Geist_Mono',monospace] text-[12px] text-[var(--sf-text-2)]">
+          cat {hint.tokenFile}
+        </p>
+      </>
+    );
+  }
+  return (
+    <p className="font-sans text-xs text-[var(--sf-text-3)]">{FALLBACK}</p>
+  );
+}
+
 export function ControlTokenGate() {
   const [open, setOpen] = useState(wasControlTokenRequired);
   const [token, setToken] = useState("");
+  const [hint, setHint] = useState<AuthHint | null>(null);
 
   useEffect(() => {
     if (wasControlTokenRequired()) setOpen(true);
@@ -17,6 +41,30 @@ export function ControlTokenGate() {
       setOpen(true);
     });
   }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void fetch("/api/auth-hint")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body: unknown) => {
+        if (cancelled) return;
+        const tokenFile =
+          body !== null &&
+          typeof body === "object" &&
+          "tokenFile" in body &&
+          typeof (body as { tokenFile?: unknown }).tokenFile === "string"
+            ? (body as { tokenFile: string }).tokenFile
+            : null;
+        setHint({ tokenFile });
+      })
+      .catch(() => {
+        if (!cancelled) setHint(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   if (!open) return null;
 
@@ -33,13 +81,7 @@ export function ControlTokenGate() {
         <h2 className="font-sans text-[15px] font-semibold text-[var(--sf-text-1)]">
           Control token
         </h2>
-        <p className="font-sans text-xs text-[var(--sf-text-3)]">
-          This Host rejected the request. The token is in ~/.stageflow/control-token
-          (or docker logs &lt;container&gt;). It stays in this browser.
-        </p>
-        <p className="font-['Geist_Mono',monospace] text-[12px] text-[var(--sf-text-2)]">
-          cat ~/.stageflow/control-token
-        </p>
+        <ControlTokenInstructions hint={hint} />
         <input
           type="password"
           autoComplete="off"

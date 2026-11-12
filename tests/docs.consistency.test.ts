@@ -174,4 +174,24 @@ describe("docs", () => {
       { version: `< ${minor}`, supported: "No" },
     ]);
   });
+
+  it("follows a logs Control token line with docker exec within 3 lines", () => {
+    const files = [
+      ...DOC_FILES,
+      ...markdownFiles("skills"),
+      "docker-compose.yml",
+    ];
+    const problems: string[] = [];
+    for (const file of files) {
+      const lines = read(file).split("\n");
+      lines.forEach((line, index) => {
+        if (!/logs.*`Control token/.test(line)) return;
+        const window = lines.slice(index, index + 4).join("\n");
+        if (!window.includes("docker exec")) {
+          problems.push(`${file}:${index + 1}`);
+        }
+      });
+    }
+    expect(problems).toEqual([]);
+  });
 });

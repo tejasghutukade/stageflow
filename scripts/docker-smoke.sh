@@ -48,6 +48,8 @@ CHECK_READYZ=0
 CHECK_BUILD_SHA=0
 CONTAINER_ID=""
 VOLUME_NAME=""
+MINT_ID=""
+MINT_VOLUME=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -132,6 +134,12 @@ cleanup() {
   fi
   if [[ -n "$VOLUME_NAME" ]]; then
     docker volume rm -f "$VOLUME_NAME" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$MINT_ID" ]]; then
+    docker rm -f "$MINT_ID" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$MINT_VOLUME" ]]; then
+    docker volume rm -f "$MINT_VOLUME" >/dev/null 2>&1 || true
   fi
   exit "$ec"
 }
@@ -254,4 +262,60 @@ if [[ $CHECK_BUILD_SHA -eq 1 ]]; then
 fi
 
 err "OK — image boots and /livez is live"
+
+err "starting a second container with no preset control token"
+MINT_VOLUME="stageflow-smoke-mint-$(date +%s)-$$"
+docker volume create "$MINT_VOLUME" >/dev/null
+MINT_ID="$(
+  docker run -d \
+    --name "stageflow-smoke-mint-$$" \
+    -e STAGEFLOW_HOME=/data \
+    -e STAGEFLOW_CREDENTIAL_HOME=/data \
+    -e TMPDIR=/data/tmp \
+    -e SQLITE_TMPDIR=/data/tmp \
+    -v "${MINT_VOLUME}:/data" \
+    -p "0:3847" \
+    "$IMAGE"
+)"
+MINT_PORT="$(
+  docker port "$MINT_ID" 3847/tcp \
+    | head -n 1 \
+    | sed -E 's/.*:([0-9]+)$/\1/'
+)"
+MINT_LIVEZ="http://127.0.0.1:${MINT_PORT}/livez"
+mint_deadline=$((SECONDS + TIMEOUT_SECS))
+mint_ok=0
+while (( SECONDS < mint_deadline )); do
+  set +e
+  mint_http="$(curl -fsS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 "$MINT_LIVEZ" 2>/dev/null)"
+  mint_ec=$?
+  set -e
+  if [[ $mint_ec -eq 0 && "$mint_http" == "200" ]]; then
+    mint_ok=1
+    break
+  fi
+  sleep 2
+done
+if [[ $mint_ok -ne 1 ]]; then
+  err "timed out waiting for minted-token /livez"
+  docker logs "$MINT_ID" >&2 || true
+  exit 1
+fi
+minted="$(docker exec "$MINT_ID" cat /data/control-token)"
+minted="${minted//$'\r'/}"
+minted="${minted//$'\n'/}"
+mint_logs="$(docker logs "$MINT_ID" 2>&1 || true)"
+if [[ "$mint_logs" != *"Control token: ${minted}"* ]]; then
+  err "container logs did not print the minted control token"
+  exit 1
+fi
+mint_health="$(curl -fsS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 10 \
+  -H "Authorization: Bearer ${minted}" \
+  "http://127.0.0.1:${MINT_PORT}/api/health")"
+if [[ "$mint_health" != "200" ]]; then
+  err "GET /api/health with the minted token returned ${mint_health}"
+  exit 1
+fi
+err "minted control token is in the logs and authenticates"
+
 exit 0

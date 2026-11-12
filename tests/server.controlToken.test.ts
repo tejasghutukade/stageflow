@@ -10,6 +10,7 @@ import { buildStageEnvironment } from "../src/runtime/stageEnvironment.js";
 import { SF_STAGE_WORKER } from "../src/runtime/stageWorkerProtocol.js";
 import { startMcpServer } from "../src/server/mcpHost.js";
 import {
+  authHintBody,
   assertBindAllowed,
   authenticateBearer,
   BindRefusedError,
@@ -344,6 +345,47 @@ describe("assertBindAllowed", () => {
   it("allows non-loopback with drive token", () => {
     const tokens = loadControlTokens({ STAGEFLOW_CONTROL_TOKEN: DRIVE });
     expect(() => assertBindAllowed("0.0.0.0", tokens)).not.toThrow();
+  });
+});
+
+describe("auth hint", () => {
+  it("returns the token path to loopback and null otherwise, never the token", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "sf-auth-hint-"));
+    const env: NodeJS.ProcessEnv = { STAGEFLOW_HOME: home };
+    const token = "a".repeat(64);
+    await writeFile(path.join(home, CONTROL_TOKEN_FILENAME), token, { mode: 0o600 });
+    const loop = authHintBody("127.0.0.1", env);
+    expect(loop).toEqual({ tokenFile: path.join(home, CONTROL_TOKEN_FILENAME) });
+    expect(JSON.stringify(loop)).not.toContain(token);
+    expect(authHintBody("::ffff:127.0.0.1", env).tokenFile).toBe(loop.tokenFile);
+    expect(authHintBody("10.1.2.3", env)).toEqual({ tokenFile: null });
+    expect(authHintBody(undefined, env)).toEqual({ tokenFile: null });
+
+    const store = createRunStore({ rootDir: home });
+    const started = await startMcpServer({
+      agent: scriptedFakeAgent([]),
+      cwd: home,
+      rootDir: home,
+      store,
+      port: 0,
+      mcpStateless: true,
+    });
+    const prev = process.env.STAGEFLOW_HOME;
+    process.env.STAGEFLOW_HOME = home;
+    try {
+      const res = await fetch(`${started.url}/api/auth-hint`);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body).toEqual({ tokenFile: path.join(home, CONTROL_TOKEN_FILENAME) });
+      expect(JSON.stringify(body)).not.toContain(token);
+    } finally {
+      if (prev === undefined) delete process.env.STAGEFLOW_HOME;
+      else process.env.STAGEFLOW_HOME = prev;
+      await new Promise<void>((resolve, reject) => {
+        started.server.close((err) => (err ? reject(err) : resolve()));
+      });
+      await store.close();
+    }
   });
 });
 

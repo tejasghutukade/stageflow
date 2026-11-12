@@ -36,7 +36,7 @@ A new volume is seeded from the image, including the baked eval engine. A bind m
 
 ## Run it
 
-Local console, port published only on this machine. The published port stays on `127.0.0.1`. The process inside still binds `0.0.0.0`. The container logs print `Control token: <token>`. Copy that into the console prompt.
+Local console, port published only on this machine. The published port stays on `127.0.0.1`. The process inside still binds `0.0.0.0`. The container logs print `Control token: <token>` on first start. Later starts reuse it and print the file path. Copy that into the console prompt. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`.
 
 ```bash
 docker pull ghcr.io/tejasghutukade/stageflow:0.56.0
@@ -109,11 +109,11 @@ env -u GITHUB_TOKEN -u GH_TOKEN docker compose up -d
 
 Do not pass `--build`. There is nothing to build. Set `STAGEFLOW_CONTROL_TOKEN` before you change the port mapping away from `127.0.0.1`. `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` is an explicit opt-in to start with no token; do not set it when the port is reachable beyond this machine.
 
-After `curl -fsS http://127.0.0.1:3847/livez` returns 200, copy `Control token: <token>` from the container logs and connect the harness as in `host-and-mcp.md`.
+After `curl -fsS http://127.0.0.1:3847/livez` returns 200, copy `Control token: <token>` from the container logs (first start only; later starts print the file path) and connect the harness as in `host-and-mcp.md`. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`.
 
 ## Checkout compose
 
-The Stageflow repository ships a `docker-compose.yml` that builds the image from the checkout and also builds a `stageflow-bash` sandbox. That file sets `image: ghcr.io/tejasghutukade/stageflow:local`, `command: ["sf", "ui"]`, the same localhost publish, and a Docker socket mount so stage shell tools can start sandbox containers. Mounting `/var/run/docker.sock` is root on the host. The container logs print `Control token: <token>`. Use it only when the user has a checkout and asked for that sandbox. It is not the path for a customer who installed this skill into their own project.
+The Stageflow repository ships a `docker-compose.yml` that builds the image from the checkout and also builds a `stageflow-bash` sandbox. That file sets `image: ghcr.io/tejasghutukade/stageflow:local`, `command: ["sf", "ui"]`, the same localhost publish, and a Docker socket mount so stage shell tools can start sandbox containers. Mounting `/var/run/docker.sock` is root on the host. The container logs print `Control token: <token>` on first start. Later starts reuse it and print the file path. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`. Use it only when the user has a checkout and asked for that sandbox. It is not the path for a customer who installed this skill into their own project.
 
 To point that file at a published image instead of a local build, set the service `image` to `ghcr.io/tejasghutukade/stageflow:0.56.0` (or a digest) and remove the `build` key. Keep the socket mount only if you still want the sandbox.
 

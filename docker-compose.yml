@@ -1,8 +1,11 @@
 # Local try Host — see docs/docker.md.
 #
 # Published on 127.0.0.1 only. The process still binds 0.0.0.0 inside the
-# container; that is what Docker port publish needs. sf ui prints
-# `Control token: …` in the container logs. Copy that into the console prompt.
+# container; that is what Docker port publish needs.
+# The container logs print `Control token: …` on first start. Later starts
+# reuse it and print the file path. If the logs don't show it (for example
+# after a restart, when the token is reused), run
+# `docker exec <container> cat /data/control-token`.
 # Do not publish this port beyond localhost.
 #
 # Mounting /var/run/docker.sock is root on the host.

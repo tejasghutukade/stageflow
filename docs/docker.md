@@ -25,7 +25,7 @@ The compose service runs `command: ["sf", "ui"]` on purpose: operator console **
 
 ### Checklist
 
-1. **Control token in the container logs.** The compose file publishes `127.0.0.1:3847:3847`. The process inside the container still binds `0.0.0.0`, which is what Docker port publish needs. Keep the publish address on `127.0.0.1`. On start, `sf ui` prints `Control token: <token>` in the container logs (`docker compose logs`). Copy that line into the console when it asks. The token is not in the page or the URL. To choose the secret yourself, set `STAGEFLOW_CONTROL_TOKEN` (≥32 characters, no whitespace) or `STAGEFLOW_CONTROL_TOKEN_FILE`; the Host then uses that value and does not print it.
+1. **Control token in the container logs.** The compose file publishes `127.0.0.1:3847:3847`. The process inside the container still binds `0.0.0.0`, which is what Docker port publish needs. Keep the publish address on `127.0.0.1`. The container logs print `Control token: <token>` only on first start (`docker compose logs`). Later starts reuse it and print the file path. Copy that line into the console when it asks. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`. The token is not in the page or the URL. To choose the secret yourself, set `STAGEFLOW_CONTROL_TOKEN` (≥32 characters, no whitespace) or `STAGEFLOW_CONTROL_TOKEN_FILE`; the Host then uses that value and does not print it.
 
 2. **Create `.env` from [`.env.example`](../.env.example)** at the repo root. Fill provider and GitHub vars as needed (see below). Compose loads `.env` automatically; do not commit `.env`.
 
@@ -43,9 +43,9 @@ The compose service runs `command: ["sf", "ui"]` on purpose: operator console **
    # → {"ok":true,"status":"live",…}
    ```
 
-5. **Open the console** at [http://127.0.0.1:3847](http://127.0.0.1:3847). Copy `Control token: <token>` from the container logs into the console prompt. API calls need that bearer. `/livez` and `/readyz` stay open.
+5. **Open the console** at [http://127.0.0.1:3847](http://127.0.0.1:3847). The container logs print `Control token: <token>` on first start. Copy it into the console prompt. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`. API calls need that bearer. `/livez` and `/readyz` stay open.
 
-The generated token is already a mode `0600` file at `/data/control-token` inside the container, and it is printed once in the logs. To choose the secret yourself and keep it out of the process environment, bind-mount a file:
+The generated token is already a mode `0600` file at `/data/control-token` inside the container. It is printed on first start; later starts reuse it and print the file path. To choose the secret yourself and keep it out of the process environment, bind-mount a file:
 
 ```bash
 openssl rand -hex 32 > .stageflow-control-token
@@ -130,7 +130,7 @@ docker run --rm --name stageflow \
   sf ui
 ```
 
-Open [http://127.0.0.1:3847](http://127.0.0.1:3847). The published port stays on `127.0.0.1`. The process inside the container still binds `0.0.0.0`. The container logs print `Control token: <token>`. Copy that into the console prompt.
+Open [http://127.0.0.1:3847](http://127.0.0.1:3847). The published port stays on `127.0.0.1`. The process inside the container still binds `0.0.0.0`. The container logs print `Control token: <token>` on first start. Later starts reuse it and print the file path. Copy that into the console prompt. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`.
 
 Prefer a digest pin and a control token when the port is not limited to this machine:
 

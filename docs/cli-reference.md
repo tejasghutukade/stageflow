@@ -1020,7 +1020,7 @@ Prints:
 
 - Operator console URL (default `http://127.0.0.1:3847`; wildcard binds advertise loopback)
 - MCP endpoint URL (`…/mcp`)
-- When this start minted a control token and stdout is a terminal: `Control token: <token>` and `Control token file: <path>`. A reused file, or a start whose stdout is not a terminal, prints `Control token file: <path>` only. Neither line is printed when you set `STAGEFLOW_CONTROL_TOKEN` or `_FILE`
+- When this start minted a control token: `Control token: <token>` and `Control token file: <path>`, including when stdout is not a terminal. A reused file prints the path only. The detached service child does not print the value. Neither line is printed when you set `STAGEFLOW_CONTROL_TOKEN` or `_FILE`
 
 Opens the default browser unless `--no-open` / `STAGEFLOW_NO_OPEN` is set. Prefer **`sf mcp`** as the headless / container entrypoint; `--no-open` only makes `sf ui` usable without a browser.
 

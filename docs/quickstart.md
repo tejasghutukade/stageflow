@@ -21,7 +21,7 @@ docker run --rm --name stageflow \
 
 Open [http://127.0.0.1:3847](http://127.0.0.1:3847). Go to **Settings → Providers** and connect a model, then **New pipeline** on the Pipelines page. Pipelines you save in the console live on the `stageflow-data` volume, under `/data`.
 
-The published port stays on `127.0.0.1`. The process inside the container still binds `0.0.0.0`, which is what Docker port publish needs. The container logs print `Control token: <token>`. Copy that line into the console when it asks. Do not publish the port on `0.0.0.0`. Pass `sf ui` because the image command is `sf mcp`.
+The published port stays on `127.0.0.1`. The process inside the container still binds `0.0.0.0`, which is what Docker port publish needs. The container logs print `Control token: <token>` on first start. Later starts reuse it and print the file path. Copy that line into the console when it asks. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`. Do not publish the port on `0.0.0.0`. Pass `sf ui` because the image command is `sf mcp`.
 
 To browse a project that is already on the machine, mount it and register that path:
 

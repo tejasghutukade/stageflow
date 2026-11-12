@@ -79,7 +79,7 @@ docker run --rm --name stageflow \
 
 Open [http://127.0.0.1:3847](http://127.0.0.1:3847). Connect a provider under **Settings → Providers**, then **New pipeline** on the Pipelines page. The `stageflow-data` volume keeps that state across runs.
 
-The published port stays on `127.0.0.1`. The process inside the container still binds `0.0.0.0`, which is what Docker port publish needs. The container logs print `Control token: <token>`. Copy that line into the console when it asks. Do not publish the port on `0.0.0.0`. `sf ui` is required because the image command is `sf mcp`.
+The published port stays on `127.0.0.1`. The process inside the container still binds `0.0.0.0`, which is what Docker port publish needs. The container logs print `Control token: <token>` on first start. Later starts reuse it and print the file path. Copy that line into the console when it asks. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`. Do not publish the port on `0.0.0.0`. `sf ui` is required because the image command is `sf mcp`.
 
 To show the console a project directory:
 
