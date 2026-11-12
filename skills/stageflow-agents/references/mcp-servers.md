@@ -43,7 +43,7 @@ The user can paste a server, set a secret, start OAuth (open the link, paste the
 
 Base URL: `http://127.0.0.1:${STAGEFLOW_SERVICE_PORT:-3847}`.
 
-These routes do not require an `Origin` header. If the Host has `STAGEFLOW_CONTROL_TOKEN` set, send `Authorization: Bearer` with that token on every call (GET needs `read`, writes need `drive`). The `sf` CLI attaches it for `sf agents`. Do not print the token. Register the project first when a call returns `unknown_project_root`; the curl is in [control-surface.md](control-surface.md#http).
+These routes do not require an `Origin` header. A Host always has a control token (generated into `$STAGEFLOW_HOME/control-token` on first start unless the operator sets one). Send `Authorization: Bearer` with that token on every call (GET needs `read`, writes need `drive`). The `sf` CLI attaches it for `sf agents`. Do not print the token. Register the project first when a call returns `unknown_project_root`; the curl is in [control-surface.md](control-surface.md#http).
 
 A server entry has exactly one of `command` (stdio) or `url` (`http://` or `https://`). Optional: `args` (array of strings), `env` (stdio only), `headers` (url only), `cwd`, and `httpTransport: sse` (streamable HTTP is the default and is omitted).
 
@@ -64,7 +64,9 @@ Name rules: `^[A-Za-z0-9_.-]{1,64}$`. `stageflow` is reserved. A bad entry is `4
 Example, stdio, no secret in the file you write (the user exports `GITHUB_TOKEN`, and the placeholder is filled as in [Secrets](#secrets)):
 
 ```bash
+export STAGEFLOW_CONTROL_TOKEN="$(cat ~/.stageflow/control-token)"
 curl -s -X PUT "http://127.0.0.1:${STAGEFLOW_SERVICE_PORT:-3847}/api/project-mcp/github" \
+  -H "Authorization: Bearer $STAGEFLOW_CONTROL_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"config":{"command":"npx","args":["-y","@modelcontextprotocol/server-github"],"env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"${GITHUB_TOKEN}"}}}'
 ```

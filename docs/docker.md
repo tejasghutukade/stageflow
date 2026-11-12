@@ -431,7 +431,13 @@ volumes:
   stageflow-data:
 ```
 
+## Reverse proxy and public hostname {#reverse-proxy}
+
+To reach the console through a reverse proxy, the proxy must pass the `Host` header through unchanged (nginx: `proxy_set_header Host $host;`). Put the public hostname in `STAGEFLOW_ALLOWED_HOSTS`. The Host checks both `Host` and `Origin` against that list, so a rewritten `Host` or an unlisted name is refused. Keep the control token required, and see [MCP — access control](mcp.md#access-control).
+
 ## CLI via `docker exec` {#cli-via-docker-exec}
+
+A CLI on the host machine that talks to a Docker Host on `127.0.0.1:3847` uses a different data directory. `sf run` and `sf runs` from the host report "Another Stageflow Host with a different data directory is on port 3847". Run CLI commands inside the container (`docker exec <container> sf …`), or use the HTTP API or MCP with the container's token (`docker exec <container> cat /data/control-token`).
 
 A remote harness drives the Host over MCP/REST with a control token. Some CLI commands stay **exec-only** on purpose — see the decision table in [MCP — CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table). Below are literal commands assuming the container is named `stageflow` (replace with your compose service / container id). Prefer catalog-relative paths the Host already knows; mount or bake catalog into the image as your deployment does.
 

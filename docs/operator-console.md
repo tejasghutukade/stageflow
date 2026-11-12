@@ -146,7 +146,7 @@ The Workshop (`#/workshop`) is the interactive pipeline authoring surface. It is
 
 ## MCP co-location
 
-MCP Streamable HTTP is available at `<console-origin>/mcp` while `sf ui` runs (sessions by default). For MCP without the console, use `sf mcp` instead. Both bind the same well-known local port as the one shared global service, so don't run both at once. See [MCP](mcp.md).
+MCP Streamable HTTP is available at `<console-origin>/mcp` while `sf ui` runs (sessions by default). MCP clients send `Authorization: Bearer <token>` (token in `~/.stageflow/control-token`; Docker: `docker exec <container> cat /data/control-token`). For MCP without the console, use `sf mcp` instead. Both bind the same well-known local port as the one shared global service, so don't run both at once. See [MCP](mcp.md).
 
 ## Screenshots
 

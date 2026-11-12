@@ -78,7 +78,7 @@ CLI starts are unattributed (`surface: cli`, null `caller_id`). MCP/REST stamp `
 | `GET`/`HEAD` `/api/*` | `read` |
 | Mutating `/api/*` (`POST`/`PUT`/`PATCH`/`DELETE`) | `drive` |
 | `/mcp` (any method) | `drive` |
-| `GET /api/health` | Host/Origin only — **no bearer** (autostart probe) |
+| `GET /api/health` | `read` (a missing bearer is 401). Open probes: `/livez`, `/readyz`, `/api/auth-hint`, `/api/console-login` |
 | A2A (`/a2a*`, agent card) | Unchanged (own per-caller tokens) |
 | Static console files | Ungated |
 

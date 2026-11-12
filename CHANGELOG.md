@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`/livez` returns `service`, `version` and `home_id`.** `home_id` is a random id kept in `$STAGEFLOW_HOME/host-id`.
 - **Control token file.** A normal `sf ui` or `sf mcp` start writes `$STAGEFLOW_HOME/control-token`. The CLI reads it when `STAGEFLOW_CONTROL_TOKEN` is unset. Export it for curl and MCP (`export STAGEFLOW_CONTROL_TOKEN="$(tr -d '\n' < ~/.stageflow/control-token)"` or `STAGEFLOW_CONTROL_TOKEN_FILE`). A second start on the same port reuses the file and does not replace it. Setting `STAGEFLOW_CONTROL_TOKEN`, `STAGEFLOW_CONTROL_TOKEN_FILE`, or a named `STAGEFLOW_CONTROL_TOKEN_<NAME>` deletes a leftover generated file so the CLI stops sending a token the Host no longer uses. `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` is the only supported way to omit bearer headers.
 - **Editor save when the file changed on disk** offers overwrite, reload, or copy — it does not silently merge.
+- **Every `/api/*` and `/mcp` request, including `GET /api/health`, now needs `Authorization: Bearer <token>`.** `/livez`, `/readyz`, `/api/auth-hint` and `/api/console-login` stay open. The token is in `$STAGEFLOW_HOME/control-token` (`~/.stageflow/control-token`; Docker: `docker exec <container> cat /data/control-token`) unless you set one.
+- **A browser `Origin` must match the `Host` header, including the port.** Public web chat checks its own allow-list, `STAGEFLOW_PUBLIC_CHAT_ORIGINS`, and refuses others with 403 `web_chat.forbidden_origin`.
+- **`pi_home` is no longer a credential source.** `~/.pi/agent/auth.json` is not read. Reconnect with `sf providers login <provider>` or set `STAGEFLOW_PROVIDER_<NAME>_API_KEY`. The setting is rewritten to `sf_owned` once.
+- **A fresh install lists six examples** instead of the larger catalog.
 - **`sf init` default Anthropic model** is `anthropic/claude-sonnet-5-5` when Anthropic is the only configured provider.
 
 ### Security
@@ -23,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A2A `run_stage` is off unless that caller sets `allow_run_stage`.** Invoking a published pipeline is unchanged.
 - **Stage activity is redacted before it is stored.** `redaction-secrets.json` is removed after the worker loads it.
 - **The recommended Docker commands no longer set `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND`.** The token is printed on first start. Later starts reuse it; `docker exec <container> cat /data/control-token` reads the file. Mounting `/var/run/docker.sock` is root on the host.
+
+- **A control token file named by any operator token variable is never retired.** That covers named `_FILE` keys and symlinked spellings. A generated file is renamed to `control-token.retired`.
 
 ### Changed
 
@@ -35,6 +41,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Draft validation no longer writes outside its temp folder.** The validate API, MCP and Workshop handle `../` stage paths and a pipeline id with a path in it.
+- **Cancelling during a process-mode timeout resume leaves the run cancelled.**
+- **Skill installs skip symbolic links.**
+- **A new stage file under a symlinked folder that points outside the project is refused.**
+- **`include:` fragments are validated also when the pipeline has `uses:` stages.**
+- **A task loaded from another folder is saved back there.**
+- **Unknown `/api/*` paths answer a JSON 404.**
+- **The editor's leave guard restores the URL after a cancelled link click, Back or Forward.** A closed Workshop conflict dialog no longer lets the next save overwrite.
+- **A booting Host reports its data directory,** so `sf ui` and autostart never mistake another directory's Host for theirs.
 - **The console editor keeps comments and unknown keys,** and refuses a save when the file changed on disk. Workshop and the stage editor (Catalog → Stages) use the same write. A save changes only the edited lines: comment spacing, flow maps, folded blocks, anchors and CRLF line endings stay as they were, and comments stay with their stage when stages are reordered, inserted or renamed.
 - **Start queues a run when agent slots are full,** until the queue itself is full.
 - **One Host per data directory.** A Host takes `$STAGEFLOW_HOME/host.lock` (pid and URL) before it touches run data, so a second Host on another port or address is refused with "Another Stageflow Host is using this data directory (pid …, http://…)" instead of reconciling the first Host's runs. A lock left by a crashed Host is replaced. A pending restore is applied only after the lock and the port bind, and `sf restore` refuses while a Host holds the lock.

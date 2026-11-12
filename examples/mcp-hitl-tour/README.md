@@ -45,7 +45,7 @@ intake (free_text HITL)
 
 - This Stageflow checkout, built (`npm run build && npm run ui:build`)
 - Provider auth connected
-- An MCP client (Cursor on **another** project is fine) pointed at `http://127.0.0.1:3847/mcp`
+- An MCP client (Cursor on **another** project is fine) pointed at `http://127.0.0.1:3847/mcp`, sending `Authorization: Bearer <token>`. The token is in `~/.stageflow/control-token`. For Docker, run `docker exec <container> cat /data/control-token`.
 
 Host the catalog from **this git root** so `list_pipelines` includes this example:
 

@@ -32,7 +32,7 @@ Connect and inspect Pi model providers. **Connect** opens the API key field when
 
 ## MCP server
 
-The address a client points at to use this console process as an MCP server (`<console-origin>/mcp` while `sf ui` is running). See [MCP](mcp.md).
+The address a client points at to use this console process as an MCP server (`<console-origin>/mcp` while `sf ui` is running). The client sends `Authorization: Bearer <token>`; the token is in `~/.stageflow/control-token` (Docker: `docker exec <container> cat /data/control-token`). See [MCP](mcp.md).
 
 ## Project MCP
 

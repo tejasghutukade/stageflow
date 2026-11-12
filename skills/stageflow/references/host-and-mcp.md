@@ -96,7 +96,7 @@ Do this when the user needs tools the CLI does not have (connections, memories, 
 
 Omit the `Authorization` header only when the Host started with `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`. A normal start writes `$STAGEFLOW_HOME/control-token`; set `Authorization: Bearer <token>` from that file. Prefer an environment substitution over a literal token in a file that will be committed.
 
-There is no MCP OAuth on this Host. A client that starts an OAuth login against `/mcp` will fail. Send the bearer, or run without tokens on loopback.
+There is no MCP OAuth on this Host. A client that starts an OAuth login against `/mcp` will fail. Send the bearer. A Host always has a control token (generated into `$STAGEFLOW_HOME/control-token` on first start unless the operator sets one).
 
 ### Cursor
 
@@ -115,7 +115,7 @@ Project file `.cursor/mcp.json`, or user file `~/.cursor/mcp.json`. A remote ser
 }
 ```
 
-Drop `headers` when the Host has no token. Restart Cursor or reload MCP after saving. The tools are present when `get_started` answers.
+Drop `headers` only when the Host runs with `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`. Restart Cursor or reload MCP after saving. The tools are present when `get_started` answers.
 
 ### Claude Code
 
@@ -147,7 +147,7 @@ url = "http://127.0.0.1:3847/mcp"
 bearer_token_env_var = "STAGEFLOW_CONTROL_TOKEN"
 ```
 
-Omit `bearer_token_env_var` when the Host has no token. Codex's default `auth` is `oauth`, which it tries after bearer tokens. This Host does not implement that login. If Codex opens an OAuth flow, set the bearer variable (or run loopback with no tokens) instead of completing OAuth.
+Omit `bearer_token_env_var` only when the Host runs with `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`. Codex's default `auth` is `oauth`, which it tries after bearer tokens. This Host does not implement that login. If Codex opens an OAuth flow, set the bearer variable instead of completing OAuth. The token is in `$STAGEFLOW_HOME/control-token` unless the operator set one.
 
 ### OpenCode
 
@@ -168,7 +168,7 @@ Omit `bearer_token_env_var` when the Host has no token. Codex's default `auth` i
 }
 ```
 
-Drop `headers` and `oauth` when no token is configured. The default request timeout is 30 seconds, which is shorter than a long `wait_run`. Raise `timeout` on this entry if a wait dies at 30 seconds, or pass a shorter `timeout_ms` to the tool.
+Drop `headers` and `oauth` only when the Host runs with `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`. The default request timeout is 30 seconds, which is shorter than a long `wait_run`. Raise `timeout` on this entry if a wait dies at 30 seconds, or pass a shorter `timeout_ms` to the tool.
 
 ### After it connects
 

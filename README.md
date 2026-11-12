@@ -46,7 +46,7 @@ The same pipeline runs three ways without rewriting anything:
 - **Agents (experimental)** — project-owned, revisioned agents (`agents/*.agent.yaml`) with granted tools, ask-first approvals, traces, channels, schedules and a public web chat page ([guide](docs/agents.md))
 - **Evals** — check a stage or an agent against a dataset: graders, repeats, honest statistics, compare two runs, and sort failures into what to fix ([guide](docs/evals.md))
 - **Operator console** — an Inbox for gates and agent approvals, pipeline runs, agents and their sessions, connections, MCP servers and settings at `http://127.0.0.1:3847` ([guide](docs/operator-console.md))
-- **MCP endpoint** — Streamable HTTP at `/mcp` when `sf ui` or `sf mcp` is running
+- **MCP endpoint** — Streamable HTTP at `/mcp` when `sf ui` or `sf mcp` is running; clients send `Authorization: Bearer <token>` (token in `~/.stageflow/control-token`, see [MCP access control](docs/mcp.md#access-control))
 - **MCP servers for agents and stages** — add servers, secrets and OAuth sign-in from Settings → Project MCP, or in the project `.mcp.json` ([guide](docs/mcp-servers.md))
 - **Connections (experimental)** — Slack, Telegram, iMessage, WhatsApp and AgentMail channels, and email accounts, managed from one page ([guide](docs/channels.md))
 - **Standalone stage execution** — run a single stage directly with `run_stage` (MCP tool, `sf run-stage` CLI, or the A2A `run_stage` operation), no pipeline file required; chain calls with `envelope_ref` (one or many prior results) instead of a pipeline DAG
@@ -289,7 +289,7 @@ Index: [examples/README.md](examples/README.md)
 
 ## Documentation
 
-Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.io/stageflow/)** (GitHub Pages — live after merge to `main` and Pages enabled). Source in [`docs/`](docs/).
+Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.io/stageflow/)** (GitHub Pages). Source in [`docs/`](docs/).
 
 | Doc | Description |
 |-----|-------------|

@@ -230,7 +230,7 @@ sf runs rerun --run <runId> [--json]
 
 Read verbs that open the store themselves (`list`, `show`, `verify`, `waiting`, `wait`) and the related `sf artifact` / `sf envelope` / `sf export-run` commands do not apply migrations in the CLI process. When the database is missing or its schema version is behind, they start the Host the same way mutating verbs do, then open again in assert mode. Autostart may append to `$STAGEFLOW_HOME/service.log`.
 
-Mutating verbs require the global service and do not write the store themselves. They probe `GET http://127.0.0.1:3847/api/health` (1500 ms) and, when nothing answers, spawn a detached `sf mcp` on that port and poll until it is healthy (default 10 s, `STAGEFLOW_AUTOSTART_TIMEOUT_MS`). Exit `1` when the port is held by a non-Stageflow process, the spawn fails, or the wait times out. `sf run` starts runs the same way.
+Mutating verbs require the global service and do not write the store themselves. They probe `GET http://127.0.0.1:3847/livez` (1500 ms) and, when nothing answers, spawn a detached `sf mcp` on that port and poll until it is healthy (default 10 s, `STAGEFLOW_AUTOSTART_TIMEOUT_MS`). Exit `1` when the port is held by a non-Stageflow process, the spawn fails, or the wait times out. `sf run` starts runs the same way.
 
 Until Slot 5 authentication, destructive mutate verbs (`cancel`, `delete`, `gc` and their REST routes) rely on the Host's `isMutatingApi` loopback `Host` / `Origin` gate and local bind assumptions — not a bearer token. Slot 5 must cover MCP tools as well as HTTP.
 
