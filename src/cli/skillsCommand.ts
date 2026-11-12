@@ -12,7 +12,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { lstatSync } from "node:fs";
+import { lstatSync, mkdtempSync, rmSync } from "node:fs";
 import * as readline from "node:readline";
 import { tmpdir } from "node:os";
 import { inflateRawSync } from "node:zlib";
@@ -44,6 +44,45 @@ export function buildSkillDoctorProcessEnv(hostEnv: NodeJS.ProcessEnv): Record<s
   return buildStageEnvironment({ hostEnv }).env;
 }
 
+/**
+ * Run a skill's doctor script with the stage allowlist and an empty, temporary HOME, so the script cannot read
+ * the operator's data directory (control token, credentials) through `~`. Returns the exit code.
+ */
+export function runSkillDoctorScript(scriptPath: string, cwd: string, hostEnv: NodeJS.ProcessEnv): number {
+  const home = mkdtempSync(path.join(tmpdir(), "sf-skill-doctor-home-"));
+  try {
+    const env = { ...buildSkillDoctorProcessEnv(hostEnv), HOME: home, USERPROFILE: home };
+    const result = spawnSync(process.execPath, [scriptPath, "doctor"], { cwd, stdio: "pipe", env });
+    return result.status ?? 1;
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Run the doctor of a skill that is already installed in `projectRoot`. It never reinstalls, so the script that
+ * runs is the one the operator was shown.
+ */
+export async function runInstalledSkillDoctor(input: {
+  projectRoot: string;
+  skillName: string;
+  hostEnv?: NodeJS.ProcessEnv;
+  run?: (scriptPath: string, cwd: string, hostEnv: NodeJS.ProcessEnv) => number;
+}): Promise<{ ok: true; script: string } | { ok: false; status: 400 | 404 | 500; error: string }> {
+  try {
+    assertSafeSkillName(input.skillName);
+  } catch (err) {
+    return { ok: false, status: 400, error: err instanceof Error ? err.message : String(err) };
+  }
+  const destRoot = await resolveSkillInstallDest(input.projectRoot, input.skillName);
+  const rel = skillDoctorScriptRelative(input.skillName);
+  const script = path.join(destRoot, rel);
+  if (!(await pathExists(script))) return { ok: false, status: 404, error: `Skill ${input.skillName} has no doctor script` };
+  const code = (input.run ?? runSkillDoctorScript)(script, input.projectRoot, input.hostEnv ?? process.env);
+  if (code !== 0) return { ok: false, status: 500, error: "skill doctor failed" };
+  return { ok: true, script: rel };
+}
+
 export function skillDoctorScriptRelative(skillName: string): string {
   return path.posix.join("bin", `${skillName}.mjs`);
 }
@@ -69,14 +108,7 @@ const defaultIo: SkillsCommandIo = {
   log: (line) => console.log(line),
   error: (line) => console.error(line),
   fetch: globalThis.fetch.bind(globalThis),
-  runDoctor: (scriptPath, cwd, hostEnv) => {
-    const result = spawnSync(process.execPath, [scriptPath, "doctor"], {
-      cwd,
-      stdio: "pipe",
-      env: buildSkillDoctorProcessEnv(hostEnv),
-    });
-    return result.status ?? 1;
-  },
+  runDoctor: runSkillDoctorScript,
   confirmDoctor: defaultConfirmDoctor,
   stdinIsTTY: process.stdin.isTTY === true,
   hostEnv: process.env,

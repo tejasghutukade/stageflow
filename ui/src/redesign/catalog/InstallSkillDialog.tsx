@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { LuX } from "react-icons/lu";
-import { installSkill } from "../../api";
+import { installSkill, runSkillDoctor } from "../../api";
 import { showToast } from "../../toast";
 
 const MONO = "[font-family:'Geist_Mono',_monospace]";
@@ -77,10 +77,8 @@ export function InstallSkillDialog({
   async function confirmDoctor() {
     if (!doctorPending || submitting) return;
     setSubmitting(true);
-    const result = await installSkill({
-      command: doctorPending.command,
-      runDoctor: true,
-    });
+    // Run the script that was just installed and shown; reinstalling would fetch a possibly different one.
+    const result = await runSkillDoctor(doctorPending.skillName);
     setSubmitting(false);
     if (!result.ok) {
       showToast(result.error);

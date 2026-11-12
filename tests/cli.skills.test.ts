@@ -636,3 +636,64 @@ process.exit(0);
     }
   });
 });
+
+describe("running an installed skill's doctor", () => {
+  it("runs the installed script without reinstalling, and 404s or 400s when it cannot", async () => {
+    const { runInstalledSkillDoctor } = await import("../src/cli/skillsCommand.js");
+    const repo = await initTempGitRepo();
+    const source = await mkdtemp(path.join(tmpdir(), "sf-skill-doctor-src-"));
+    try {
+      await mkdir(path.join(source, "bin"), { recursive: true });
+      await writeFile(path.join(source, "SKILL.md"), "---\nname: doc-skill\ndescription: x\n---\n");
+      await writeFile(path.join(source, "bin", "doc-skill.mjs"), "process.exit(0);\n");
+      expect(
+        await runSkillsCommand(["install", "--from-path", source, "--skill-name", "doc-skill"], {
+          cwd: repo.root,
+          projectRoot: repo.root,
+          io: { log: () => undefined, error: () => undefined, stdinIsTTY: false },
+        }),
+      ).toBe(0);
+      // Change the source after install: the doctor must run the installed copy, not refetch.
+      await writeFile(path.join(source, "bin", "doc-skill.mjs"), "process.exit(9);\n");
+      const ranScripts: string[] = [];
+      const ran = await runInstalledSkillDoctor({
+        projectRoot: repo.root,
+        skillName: "doc-skill",
+        run: (script) => {
+          ranScripts.push(script);
+          return 0;
+        },
+      });
+      expect(ran).toEqual({ ok: true, script: "bin/doc-skill.mjs" });
+      expect(ranScripts[0]).toContain(path.join(".pi", "skills", "doc-skill", "bin", "doc-skill.mjs"));
+
+      expect(await runInstalledSkillDoctor({ projectRoot: repo.root, skillName: "missing-skill", run: () => 0 })).toMatchObject({
+        ok: false,
+        status: 404,
+      });
+      expect(await runInstalledSkillDoctor({ projectRoot: repo.root, skillName: "../escape", run: () => 0 })).toMatchObject({
+        ok: false,
+        status: 400,
+      });
+    } finally {
+      await rm(source, { recursive: true, force: true });
+      await repo.cleanup();
+    }
+  });
+
+  it("gives the doctor script an empty temporary HOME", async () => {
+    const { runSkillDoctorScript } = await import("../src/cli/skillsCommand.js");
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-doctor-home-"));
+    try {
+      const out = path.join(dir, "home.txt");
+      const script = path.join(dir, "doctor.mjs");
+      await writeFile(script, `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(out)}, process.env.HOME ?? "");\n`);
+      expect(runSkillDoctorScript(script, dir, { ...process.env, HOME: "/Users/someone" })).toBe(0);
+      const seen = await readFile(out, "utf8");
+      expect(seen).not.toBe("/Users/someone");
+      expect(seen).toContain("sf-skill-doctor-home-");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

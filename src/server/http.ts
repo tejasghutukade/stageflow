@@ -1,3 +1,4 @@
+import { runInstalledSkillDoctor } from "../cli/skillsCommand.js";
 import { contentHash } from "../config/atomicWrite.js";
 import {
   OVERVIEW_RANGES,
@@ -3618,6 +3619,36 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             }
             throw err;
           }
+          return true;
+        }
+
+        const doctorMatch = /^\/api\/skills\/([^/]+)\/doctor$/.exec(pathname);
+        if (method === "POST" && doctorMatch) {
+          let skillWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot({ store, bootCwd: cwd }, undefined);
+            skillWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const doctorCtx = await resolveStageflowContext(skillWriteRoot);
+          if (doctorCtx.manifestStatus !== "ok") {
+            json(res, 400, { error: "Project root not found; initialize stageflow.yaml" });
+            return true;
+          }
+          const ran = await runInstalledSkillDoctor({
+            projectRoot: doctorCtx.projectRoot,
+            skillName: decodeURIComponent(doctorMatch[1]!),
+          });
+          if (!ran.ok) {
+            json(res, ran.status, { error: ran.error });
+            return true;
+          }
+          json(res, 200, { ok: true, doctor_script: ran.script });
           return true;
         }
 

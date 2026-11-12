@@ -501,6 +501,24 @@ export function fetchSkillUsage(project_root?: string): Promise<SkillUsageIndex>
   return api(`/api/skills/usage${skillsQuery(project_root)}`);
 }
 
+/** Run the doctor script of an installed skill. Never reinstalls. */
+export async function runSkillDoctor(
+  skillName: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const res = await fetch(`/api/skills/${encodeURIComponent(skillName)}/doctor`, {
+      method: "POST",
+      headers: { ...authorizationHeaders() },
+    });
+    if (res.status === 401) notifyControlTokenRequired();
+    if (res.ok) return { ok: true };
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    return { ok: false, error: body.error ?? `Request failed (${res.status})` };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function installSkill(
   input: SkillInstallInput,
 ): Promise<SkillInstallResult> {
