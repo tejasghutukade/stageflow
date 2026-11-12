@@ -40,7 +40,7 @@ export type ControlTokens = {
 };
 
 const CONTROL_TOKEN_PREFIX = "STAGEFLOW_CONTROL_TOKEN_";
-const DEFAULT_CALLER_ID = "default";
+export const DEFAULT_CALLER_ID = "default";
 /** Generated when the operator did not set STAGEFLOW_CONTROL_TOKEN or _FILE. */
 export const CONTROL_TOKEN_FILENAME = "control-token";
 

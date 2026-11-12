@@ -20,7 +20,9 @@ import {
 import { handleConsoleLogin, handleConsoleLoginMint } from "./consoleLogin.js";
 import {
   authHintBody,
+  DEFAULT_CALLER_ID,
   enforceBearerAuth,
+  hasAnyToken,
   loadControlTokens,
   requiredScopeFor,
   resolveClientBearerToken,
@@ -252,8 +254,17 @@ export async function createHttpHost(
         json(res, 403, { error: "loopback only" });
         return;
       }
+      // Only the main drive token may mint: a named token must not trade up to it, and with no token there is nothing to protect.
+      if (!hasAnyToken(controlTokens)) {
+        json(res, 403, { error: "no control token configured" });
+        return;
+      }
       const mintAuth = enforceBearerAuth(controlTokens, req, res, "drive");
       if (!mintAuth.ok) return;
+      if (mintAuth.auth?.caller_id !== DEFAULT_CALLER_ID) {
+        json(res, 403, { error: "main control token required" });
+        return;
+      }
       handleConsoleLoginMint(req, res);
       return;
     }
