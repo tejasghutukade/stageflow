@@ -220,6 +220,8 @@ See [Agents](agents.md). The REST, CLI and MCP surfaces side by side are in [Age
 
 ### Function tools {#function-tools}
 
+What a function is: [Functions](functions.md). The same operations over REST: [Functions API](function-api.md).
+
 Project functions live under `functions/` as `*.function.yaml`, `*.function.yml`, or `*.function.js` (YAML frontmatter plus ESM body). They use the same service as `GET` and `POST /api/functions`. The id is `id` (`^[a-z][a-z0-9_]{0,63}$`). Revisions saved here are recorded as source `api`, author `mcp`. `create_function` writes `functions/<id>.function.js` by default unless the caller requests YAML; `save_function` rewrites the on-disk path the function was loaded from. A source that starts with `export const access` derives `capabilities` and `bindings`; the file omits those fields, and a payload that repeats a different list is refused with `function.invalid` and `function.access_conflict` on each mismatched issue field. A source with no declaration still carries explicit `capabilities` and `bindings`. Attaching a function to a stage, pipeline, or agent still goes through `edit_stage`, `edit_pipeline`, and `save_agent`. `write_catalog_file` rejects marked function files (`*.function.yaml`, `*.function.yml`, `*.function.js`). Unmarked `*.js` / `*.ts` are never function definitions.
 
 Every tool takes an optional `project_root` where it reads or writes the catalog (omit it to use the Host default; see [Catalog roots](#catalog-roots-and-project_root)).

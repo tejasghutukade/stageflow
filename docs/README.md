@@ -38,6 +38,9 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Agent observability](agent-observability.md) | Spans, capture modes, redaction, OTLP export, groundedness evals |
 | [Agent API](agent-api.md) | REST routes, CLI and MCP tools for agents, webhooks and the public chat API |
 | [Set up your first agent](guides-agents-first-agent.md) | Create, test and enable an agent |
+| [Functions](functions.md) | Sandboxed JavaScript a stage or an agent can call: the three kinds, writing the code, access and grants, attaching, revisions, testing, limits and troubleshooting |
+| [Create your first function](guides-functions-first-function.md) | Write, test and attach a verification function, then give it access |
+| [Functions API](function-api.md) | REST routes, request and response shapes, and errors for functions (the MCP tools are in [MCP](mcp.md#function-tools)) |
 | Agent channel guides | [Email (AgentMail)](guides-agents-email.md), [iMessage](guides-agents-imessage.md), [Slack](guides-agents-slack.md), [Telegram](guides-agents-telegram.md), [schedules](guides-agents-schedule.md), [web chat](guides-agents-web-chat.md) |
 | [MCP servers](mcp-servers.md) | Add MCP servers, secrets and OAuth from Settings or `.mcp.json`; use them from agents and stages |
 | [Glossary](glossary.md) | Agent, agent session, pipeline run, connection, Project MCP and other terms |
@@ -62,6 +65,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Console: Pipelines, tasks and catalog](console-pipelines-catalog.md) | Pipeline editor, Tasks, Catalog, Triggers, Workshop |
 | [Console: Evals](console-evals.md) | Evals list, New eval wizard (stage or agent), Datasets and scenarios, Run dialog and live progress, run switcher, results, suggested failure sorting, case drawer and conversation transcript, Compare, Edit eval |
 | [Console: Agents](console-agents.md) | Directory, create and edit, sessions, run inspector |
+| [Console: Functions](console-functions.md) | Directory, create and edit, the Access section, test panel, history, attaching to a stage or agent |
 | [Console: Connections](console-connections.md) | Channels, email accounts, tool servers |
 | [Console: Identity](console-identity.md) | Turn identity on, sign-in connections, people and access levels, check access, activity, setup (policy engine, order API, signing key) |
 | [Console: A2A](console-a2a.md) | Turn A2A on and off, callers and their one-time tokens, published pipelines, status and the snippet for the calling agent |

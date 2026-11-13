@@ -44,6 +44,7 @@ The same pipeline runs three ways without rewriting anything:
 - **Verified stage execution** — after-phase `verify` checks with durable evidence, plus `on_verify_fail` repair or manual operator recovery ([guide](docs/verified-stage-execution.md))
 - **HITL gates** — operator questions in the console; CI exits `2` when a run is waiting
 - **Agents (experimental)** — project-owned, revisioned agents (`agents/*.agent.yaml`) with granted tools, ask-first approvals, traces, channels, schedules and a public web chat page ([guide](docs/agents.md))
+- **Functions** — sandboxed JavaScript a stage or agent can call: verification checks, routing choices and tools, each limited to the files, environment variables and network origins it declares. Revisioned, testable in the console, and pinned per run ([guide](docs/functions.md))
 - **Evals** — check a stage or an agent against a dataset: graders, repeats, honest statistics, compare two runs, and sort failures into what to fix ([guide](docs/evals.md))
 - **Operator console** — an Inbox for gates and agent approvals, pipeline runs, agents and their sessions, connections, MCP servers and settings at `http://127.0.0.1:3847` ([guide](docs/operator-console.md))
 - **MCP endpoint** — Streamable HTTP at `/mcp` when `sf ui` or `sf mcp` is running; clients send `Authorization: Bearer <token>` (token in `~/.stageflow/control-token`, see [MCP access control](docs/mcp.md#access-control))
@@ -183,6 +184,7 @@ Start the console with `sf ui` (default `http://127.0.0.1:3847`).
 - **Run detail** — Timeline, Graph or List of the stages; select a stage for its transcript, events, envelope and artifacts. Created runs show **not started** with a **Start run** action until history exists
 - **Pipelines, Tasks, Catalog, Triggers** — browse and edit the YAML, start runs; **New pipeline** drafts one in the Workshop
 - **Agents** and **Agent sessions** (experimental) — a directory with each agent's reach (web chat link, channel, schedule), cost and status; create and edit with version history; sessions, approvals and a run inspector
+- **Functions** — a directory of functions; create and edit with an Access section that follows the code, a test panel and run history; attach to a stage or agent with one **Allow** ([guide](docs/console-functions.md))
 - **Connections** (experimental) — channels, email accounts and tool servers
 - **Settings** — Providers (`sf_owned` credential storage), Concurrency, MCP server, Project MCP (servers, secrets, sign-in) and Notifications
 - **Command palette** — `⌘K` from any page. Page-by-page guide: [docs/operator-console.md](docs/operator-console.md)
@@ -308,6 +310,7 @@ Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.
 | [docs/providers.md](docs/providers.md) | Pi providers, `sf providers` |
 | [docs/docker.md](docs/docker.md) | Docker Compose local try, image pull/run, backup, self-hosting |
 | [docs/operator-console.md](docs/operator-console.md) | Console navigation, command palette, shortcuts and routes; one page per area ([Inbox](docs/console-inbox.md), [Runs](docs/console-runs.md), [Agents](docs/console-agents.md), [Connections](docs/console-connections.md), [Settings](docs/console-settings.md)) |
+| [docs/functions.md](docs/functions.md) | Functions: the three kinds, writing the code, access and grants, attaching, revisions, testing, limits, troubleshooting. Also [first function](docs/guides-functions-first-function.md), [console](docs/console-functions.md) and [API](docs/function-api.md) |
 | [docs/evals.md](docs/evals.md) | Evals for stages and agents: datasets, graders, runs, compare, failure sorting, the engine |
 | [docs/agents.md](docs/agents.md) | Agents: definition, runtime, approvals, channels, schedules, web chat |
 | [docs/mcp-servers.md](docs/mcp-servers.md) | Add MCP servers, secrets and OAuth; use them from agents and stages |

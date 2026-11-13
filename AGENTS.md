@@ -92,7 +92,7 @@ Related docs: [evals.md](docs/evals.md), [envelopes.md](docs/envelopes.md), [hit
 
 ### Reusable JavaScript functions
 
-Read [docs/specs/reusable-functions.md](docs/specs/reusable-functions.md) before implementing reusable function authoring, execution, or attachments. It is the feature's implementation source of truth, including the selected QuickJS runtime, capability restrictions, verification/routing/tool contracts, and acceptance requirements. Record product-contract changes there before implementation; the specification does not imply the feature is already shipped.
+Read [docs/functions.md](docs/functions.md) before changing function authoring, execution, access or attachments. The field reference is [YAML catalog: Functions](docs/yaml-catalog.md#functions), the REST routes are in [docs/function-api.md](docs/function-api.md), and the MCP tools are in [docs/mcp.md](docs/mcp.md#function-tools). The design spec `docs/specs/reusable-functions.md` is not in the repository; it may exist in a maintainer's local checkout, so ask for it if you need its requirement ids. Where merged code differs from it, the code and the user docs win. Record a contract change in the user docs in the same change.
 
 ### CLI / runtime work
 
