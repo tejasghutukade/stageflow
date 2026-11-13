@@ -2,7 +2,7 @@
 
 One stage whose after-phase check is the project function `score_check`. The function reads `report.json` from the attempt artifacts and compares `score` with the bound `MIN_SCORE`.
 
-The definition lives at the project root, `functions/score_check.function.yaml`, because a function file is project-owned. Its source starts with `export const access`, which derives a read of the artifacts root (`artifacts`) and the env alias `MIN_SCORE` (`env_min_score`). The file does not repeat `capabilities` or `bindings`. The pipeline grants those two derived ids.
+The definition lives at the project root, `functions/score_check.function.js`, because a function file is project-owned. Its source starts with `export const access`, which derives a read of the artifacts root (`artifacts`) and the env alias `MIN_SCORE` (`env_min_score`). The file does not repeat `capabilities` or `bindings`. The pipeline grants those two derived ids.
 
 ## What this demonstrates
 

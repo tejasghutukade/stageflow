@@ -5,9 +5,29 @@ import {
   type FunctionDetail,
   type FunctionInvocation,
   type FunctionKind,
+  type FunctionOnDiskFormat,
   type FunctionRunView,
   type FunctionSummary,
 } from "../../api/functions";
+
+const FUNCTION_FILE_SUFFIX: Record<FunctionOnDiskFormat, string> = {
+  yaml: ".function.yaml",
+  yml: ".function.yml",
+  js: ".function.js",
+};
+
+export function functionDiskPath(input: {
+  id: string;
+  path?: string | null;
+  format?: FunctionOnDiskFormat | null;
+  draftId?: string;
+  isNew?: boolean;
+}): string {
+  if (input.path) return input.path;
+  const id = input.isNew ? (input.draftId?.trim() || "<id>") : input.id;
+  const format: FunctionOnDiskFormat = input.isNew ? "js" : input.format ?? "yaml";
+  return `functions/${id}${FUNCTION_FILE_SUFFIX[format]}`;
+}
 
 const ACCESS_NOTE = `  env: [],           // names; add "?" for optional, e.g. "MIN_SCORE?"
   network: [],       // allowed https origins

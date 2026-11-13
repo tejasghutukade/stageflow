@@ -18,6 +18,7 @@ import {
   clearedTestPanelState,
   deleteUnreferenced,
   followToolFields,
+  functionDiskPath,
   functionGenerationIsCurrent,
   nextFunctionGeneration,
   saveOrSurfaceConflict,
@@ -364,8 +365,37 @@ describe("function editor polish", () => {
     expect(html).toContain("No unsaved changes");
     expect(html).toContain("Delete function");
     expect(html).toContain("functions/score.function.yaml");
+    expect(html).toContain('aria-label="Copy path"');
     expect(html).not.toContain('aria-label="Kind"');
     expect(html).toContain('aria-label="Artifacts"');
+  });
+
+  it("shows the on-disk .function.js path for a JS-backed function", () => {
+    const html = render(
+      createElement(FunctionEditorPage, {
+        functionId: "score",
+        loaded: {
+          ...detail,
+          path: "functions/score.function.js",
+          format: "js",
+        },
+      }),
+    );
+    expect(html).toContain("functions/score.function.js");
+    expect(html).not.toContain("functions/score.function.yaml");
+  });
+
+  it("describes the default .function.js on-disk path when creating", () => {
+    const html = render(createElement(FunctionEditorPage, { creating: true, initialKind: "verification" }));
+    expect(html).toContain("functions/&lt;id&gt;.function.js");
+    expect(html).toContain("A new function is saved to the project as functions/&lt;id&gt;.function.js.");
+  });
+
+  it("resolves catalog paths from API path, format, or create default", () => {
+    expect(functionDiskPath({ id: "demo", path: "functions/demo.function.yml", isNew: false })).toBe("functions/demo.function.yml");
+    expect(functionDiskPath({ id: "demo", format: "js", isNew: false })).toBe("functions/demo.function.js");
+    expect(functionDiskPath({ id: "demo", isNew: true })).toBe("functions/<id>.function.js");
+    expect(functionDiskPath({ id: "demo", draftId: "lane_pick", isNew: true })).toBe("functions/lane_pick.function.js");
   });
 
   it("puts a field issue under its field and any other issue in a summary", () => {
