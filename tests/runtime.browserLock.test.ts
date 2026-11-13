@@ -247,7 +247,7 @@ describe.each(lockImplementations)("browser profile lock in pipelines: %s", (_n,
 
   it("does not let a stage queued behind another run hold an active slot of its run", async () => {
     const locks = makeLock();
-    const { spans, startRun, store } = setup(locks);
+    const { spans, startRun, store, children } = setup(locks, { a: "hang" });
     const first = await startRun([withProfile("a", "acct")]);
     await waitFor(() => spans.length === 1);
     const second = await startRun(
@@ -259,6 +259,18 @@ describe.each(lockImplementations)("browser profile lock in pipelines: %s", (_n,
     expect(events.some((e) => "text" in e && /held by run/.test(String(e.text)))).toBe(true);
     expect(spans.filter((x) => x.runId === second.runId && x.stageId === "b")).toHaveLength(0);
     expect((await locks.holder({ scope: "local", name: "acct" }))?.runId).toBe(first.runId);
+
+    const held = spans.find((x) => x.runId === first.runId && x.stageId === "a");
+    await store.writeEnvelope(
+      first.runId,
+      "a",
+      { status: "success", summary: "ok", artifacts: [], payload: {} },
+      { attempt: 1 },
+    );
+    await store.appendStageEvent(first.runId, "a", { event: "succeeded" }, { attempt: 1 });
+    if (held) held.end = Date.now();
+    children[0]!.emit("exit", 0, null);
+
     expect((await first.done).outcome).toBe("succeeded");
     expect((await second.done).outcome).toBe("succeeded");
   });
