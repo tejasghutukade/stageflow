@@ -116,11 +116,14 @@ export function registerFunctionTools(server: McpServer, deps: McpToolDeps): voi
       description: "Create a function definition.",
       inputSchema: z.object({
         definition: z.record(z.string(), z.unknown()),
+        format: z.enum(["js", "yaml", "yml"]).optional(),
         project_root: projectRootField,
       }),
     },
-    ({ definition, project_root }) =>
-      call(async () => service().create(await writeRoot(project_root), definition, MCP_ACTOR)),
+    ({ definition, format, project_root }) =>
+      call(async () =>
+        service().create(await writeRoot(project_root), definition, MCP_ACTOR, format ? { format } : {}),
+      ),
   );
 
   server.registerTool(
@@ -150,10 +153,22 @@ export function registerFunctionTools(server: McpServer, deps: McpToolDeps): voi
     "duplicate_function",
     {
       description: "Copy a function to a new id with its own revision history.",
-      inputSchema: z.object({ id: functionId, newId: functionId, project_root: projectRootField }),
+      inputSchema: z.object({
+        id: functionId,
+        newId: functionId,
+        format: z.enum(["js", "yaml", "yml"]).optional(),
+        project_root: projectRootField,
+      }),
     },
-    ({ id, newId, project_root }) =>
-      call(async () => service().duplicate(await writeRoot(project_root), id, { id: newId }, MCP_ACTOR)),
+    ({ id, newId, format, project_root }) =>
+      call(async () =>
+        service().duplicate(
+          await writeRoot(project_root),
+          id,
+          { id: newId, ...(format ? { format } : {}) },
+          MCP_ACTOR,
+        ),
+      ),
   );
 
   server.registerTool(
