@@ -51,6 +51,7 @@ export const STAGE_FILE_WIRING_KEYS = [
   "recovery",
   "fork",
   "route",
+  "function",
   "entry",
   "route_select",
   "allow_none",
@@ -218,7 +219,7 @@ function parseIo(
 
 type VerifyPhase = "emit" | "after";
 
-const EMIT_LEGAL_TYPES = new Set(["gate", "artifact"]);
+const EMIT_LEGAL_TYPES = new Set(["gate", "artifact", "function"]);
 
 function parseVerifyWhen(
   item: Record<string, unknown>,

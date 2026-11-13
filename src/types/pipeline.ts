@@ -6,6 +6,7 @@ import type {
   StageGateKind,
   StageIoYaml,
 } from "./stage.js";
+import type { FunctionGrant } from "../config/loadFunction.js";
 import type { CompletionContract, RecoveryPolicy } from "./completion.js";
 import type { StageSecretDecl } from "../runtime/stageSecretDecl.js";
 import type { ToolRequirement } from "../config/toolRequires.js";
@@ -162,6 +163,7 @@ export type PipelineStageRef = {
   replay_safe?: boolean;
   /** Pipeline wiring vocabulary (see docs/yaml-catalog.md). */
   route?: PipelineRouteEntry[];
+  routeFunction?: { id: string; grants: FunctionGrant[] };
   /** Marks this stage as a pipeline entry point. */
   entry?: boolean;
   clone_cap?: number;
@@ -209,6 +211,7 @@ export type NormalizedPipelineStageEntry = {
   recovery?: RecoveryPolicy;
   replay_safe?: boolean;
   route?: PipelineRouteEntry[];
+  routeFunction?: { id: string; grants: FunctionGrant[] };
   entry?: boolean;
   skill?: string;
   mcp?: string[];
@@ -244,6 +247,7 @@ export type ResolvedPipelineStageNode = {
   recovery?: RecoveryPolicy;
   feedback_loop?: FeedbackLoopConfig;
   replay_safe?: boolean;
+  routeFunction?: { id: string; grants: FunctionGrant[] };
   /** Present (true) only when this stage was declared `entry: true`. */
   entry?: boolean;
 };

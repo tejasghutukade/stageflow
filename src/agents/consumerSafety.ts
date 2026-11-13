@@ -15,6 +15,7 @@ export function isConsumerSafeAgent(definition: Pick<AgentDefinition, "model" | 
     && tools.builtin_tools.length === 0
     && tools.stageflow.groups.length === 0
     && tools.stageflow.tools.length === 0
+    && (tools.functions?.length ?? 0) === 0
     && ordersOnly;
 }
 

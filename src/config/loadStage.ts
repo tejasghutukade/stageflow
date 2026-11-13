@@ -8,6 +8,7 @@ import {
   type StageGateKind,
 } from "../types/stage.js";
 import { compilePayloadSchema, UnresolvedSchemaRefError } from "../envelope/payloadSchema.js";
+import { parseStageFunctionTools } from "./loadFunction.js";
 import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
 import { parseIndependenceField } from "./independenceField.js";
 import { parseModelField } from "./modelField.js";
@@ -492,6 +493,21 @@ function parseStageFields(
   }
   if (agentField.value !== undefined) {
     stage.agent = agentField.value;
+  }
+
+  if (raw.tools !== undefined) {
+    const tools = parseStageFunctionTools(raw.tools);
+    if (!tools.ok) {
+      return loadFailure([
+        {
+          code: "stage.invalid_shape",
+          message: `Invalid stage ${label}: ${tools.message}`,
+          category: "stage",
+          stageId: entryId,
+        },
+      ]);
+    }
+    if (tools.value.functions.length > 0) stage.tools = tools.value;
   }
 
   return loadSuccess(stage);

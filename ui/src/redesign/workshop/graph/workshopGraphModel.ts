@@ -278,6 +278,7 @@ const CODE_FIELDS: Record<string, string> = {
   "pipeline.invalid_verify": "verify",
   "pipeline.invalid_recovery": "on_verify_fail",
   "pipeline.route_if_invalid": "route",
+  "function.routing_conflicts_with_if": "route",
   "pipeline.dag_error": "route",
   "pipeline.io_incompatible": "io",
 };

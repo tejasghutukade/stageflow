@@ -1,0 +1,13 @@
+id: score_access
+name: Score access
+description: Checks a report from an access declaration
+kind: verification
+source: |
+  export const access = {
+    artifacts: "read",
+    env: ["MIN_SCORE"],
+    network: [],
+  };
+  export default function execute(context) {
+    return { passed: true };
+  }

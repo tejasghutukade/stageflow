@@ -1,0 +1,37 @@
+id: function-route
+stages:
+  - id: choose
+    entry: true
+    function: pick
+    route:
+      - to: left
+      - to: right
+    system_prompt: Choose the next stages.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: left
+    system_prompt: Left branch.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: right
+    system_prompt: Right branch.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

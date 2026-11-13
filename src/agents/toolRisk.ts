@@ -1,4 +1,5 @@
 import { grantedToolIds, type AgentDefinition } from "../config/loadAgent.js";
+import { classifyEffectivePolicy, effectiveFunctionPolicy, readFunctionDefinitionSync } from "../functions/toolPolicy.js";
 import { isOperatorOnlyTool, STAGEFLOW_GRANT_PREFIX, TOOL_META } from "../toolkit/meta.js";
 import { BUILTIN_TOOL_GROUP_OF } from "./runtime/types.js";
 
@@ -34,7 +35,21 @@ function baseClass(toolId: string): ToolClass {
  * Stageflow tools with risk `read`) or an MCP tool the eval author declares in `read_only_tools` (a declaration never changes a builtin or Stageflow tool). Sub-agents and
  * operator-only tools are never read-only.
  */
-export function classifyTool(_definition: Grants | undefined, toolId: string, readOnlyExtra: readonly string[] = []): ToolClassification {
+export function classifyTool(
+  definition: Grants | undefined,
+  toolId: string,
+  readOnlyExtra: readonly string[] = [],
+  projectRoot?: string,
+): ToolClassification {
+  if (toolId.startsWith("function.")) {
+    const id = toolId.slice("function.".length);
+    const attachment = definition?.tools.functions?.find((item) => item.id === id);
+    if (!attachment || !projectRoot) return { class: "external", readOnly: false };
+    const fn = readFunctionDefinitionSync(projectRoot, id);
+    if (!fn || fn.kind !== "tool") return { class: "external", readOnly: false };
+    const classified = classifyEffectivePolicy(effectiveFunctionPolicy(fn, attachment.grants));
+    return { class: classified.class, readOnly: classified.readOnly };
+  }
   let cls = baseClass(toolId);
   if (cls === "operator_only" || cls === "sub_agent") return { class: cls, readOnly: false };
   const declared = listed(toolId, readOnlyExtra);

@@ -70,6 +70,7 @@ const FIELD_BY_CODE: Record<string, string> = {
   requires_conflict: "requires",
   invalid_agent: "agent",
   route_if_invalid: "route",
+  routing_conflicts_with_if: "route",
   route_all_gated: "route",
   dag_error: "needs",
   missing_stage: "stages",

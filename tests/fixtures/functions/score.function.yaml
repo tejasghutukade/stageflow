@@ -1,0 +1,15 @@
+id: score
+name: Score
+description: Checks a report
+kind: verification
+source: |
+  export default function execute(context) {
+    return { passed: true };
+  }
+capabilities:
+  - id: report
+    type: file
+    root: artifacts
+    path: report.json
+    access: read
+bindings: []

@@ -90,6 +90,10 @@ Related docs: [evals.md](docs/evals.md), [envelopes.md](docs/envelopes.md), [hit
 3. No comments unless logic is non-obvious
 4. Do not commit secrets or `.env` files
 
+### Reusable JavaScript functions
+
+Read [docs/functions.md](docs/functions.md) before changing function authoring, execution, access or attachments. The field reference is [YAML catalog: Functions](docs/yaml-catalog.md#functions), the REST routes are in [docs/function-api.md](docs/function-api.md), and the MCP tools are in [docs/mcp.md](docs/mcp.md#function-tools). The design spec `docs/specs/reusable-functions.md` is not in the repository; it may exist in a maintainer's local checkout, so ask for it if you need its requirement ids. Where merged code differs from it, the code and the user docs win. Record a contract change in the user docs in the same change.
+
 ### CLI / runtime work
 
 - JSON output and exit codes are part of the public contract — see `docs/ci.md` and `tests/cli.*.test.ts`
@@ -180,6 +184,16 @@ Rules every change must keep:
 - **Failure sorting is manual, suggestion-only and its own code.** `src/evals/triage/` (classifiers behind `FailureClassifier`: `jev` over injectable `fetch`, `judge` over the simulator's one-shot model call) never touches the promptfoo engine, never runs after a run on its own, and never tags: only an accept writes tags, through `putEvalReview`. The numbers (`summary`) are computed in `src/evals/read/suggestions.ts`, not the UI. Bump `TRIAGE_PROMPT_VERSION` (not the rubric or simulator constants) when the questions, bucket criteria or judge prompt in `triage/prompts.ts` change. The Jev model id is pinned (`JEV_MODEL_ID`, never `jev-latest`) and recorded on every suggestion; Jev spend is `triage_cost_usd`, outside the run's cost cap. The TypeSafe key comes from `credentials.ts` only (stored `typesafe` credential, then `STAGEFLOW_PROVIDER_TYPESAFE_API_KEY`, `TYPESAFE_API_KEY`, `JEV_API_KEY`) and is never logged, returned, stored or put in an error; status reports source names only. The classifier state is the bounded, redacted `stateBuilder.ts` text (24k chars). Tests use the local System One fixture (`tests/helpers/systemOneFixture.ts`); the real endpoint is opt-in (`STAGEFLOW_JEV_SMOKE=1 npx vitest run tests/evals.jev.smoke.test.ts`). Suggestions are deleted with their run (cascade); keep `docs/evals.md` ("Sort failures automatically" and its privacy lines) in sync.
 - **Judge-capable providers** are the rows of `JUDGE_PROVIDERS` (`anthropic`, `openai`, `openrouter`). Add one only after verifying its mapping against the engine.
 - **Finding codes are public.** Keep `docs/yaml-catalog.md` (eval and dataset tables) in sync when you add or rename one. Update `docs/evals.md` when behavior changes, and keep `examples/evals/` and `tests/fixtures/evals/` in sync. The agent chapter is "Evals for agents" in `docs/evals.md`; its privacy statement must keep saying that a simulator model and the judge read the conversation, that `real` tools act on the project, and that eval sessions are hidden.
+
+## Compound Engineering contributor skills
+
+The project's coding agents can use the 37 [Compound Engineering](https://github.com/EveryInc/compound-engineering-plugin) skills, pinned to revision `4ba48871919650d43a412e3faf0374272fdc209d`.
+
+- Install or restore them in a checkout with `python3 scripts/install-compound-skills.py` (Python 3.9+ and network access required). The installer preserves conflicting existing skills rather than overwriting them.
+- Canonical installed skills live in `.agents/skills/<name>/SKILL.md`; `.claude/skills/`, `.cursor/skills/` and `.pi/skills/` contain per-skill links for their hosts. Installation output is local and gitignored; run the installer in each new checkout.
+- Use `$ce-plan`, `$ce-work`, `$ce-code-review`, or `$ce-help` in Codex; slash-skill hosts use `/ce-plan`, `/ce-work`, etc. A host without automatic discovery can read the relevant `SKILL.md` and its referenced files directly. Reload skills or start a fresh agent session if they are not visible.
+- These are contributor workflow skills. They do not change Stageflow's packaged skills suite or automatically bind a skill to a pipeline stage. Tool-dependent workflows require the tools supported by the current host.
+- Follow this repository's instructions and the user's authorization when applying a skill. Installing the skills does not run their workflows.
 
 ## Documentation
 

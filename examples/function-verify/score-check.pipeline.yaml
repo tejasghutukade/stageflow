@@ -1,0 +1,25 @@
+id: score-check
+stages:
+  - id: score
+    system_prompt: |
+      Write report.json under the attempt artifacts with a numeric score, then emit a success envelope.
+      The score check reads that file and the bound MIN_SCORE threshold.
+    model: anthropic/claude-sonnet-4-5
+    io:
+      input:
+        schema:
+          type: object
+          additionalProperties: false
+      output:
+        schema:
+          type: object
+          additionalProperties: false
+    verify:
+      - id: score-accepted
+        type: function
+        function: score_check
+        grants:
+          - id: artifacts
+            root: artifacts
+            path: ""
+          - id: env_min_score

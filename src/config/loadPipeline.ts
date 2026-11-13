@@ -32,7 +32,9 @@ import { loadStageFromObjectOutcome, loadStageOutcome, afterCompletionForStage }
 import { materializeStageModels } from "./materializeStageModels.js";
 import { predecessorEdges } from "./pipelineNeeds.js";
 import { resolvePipelineDagFromRefs } from "./resolvePipelineDag.js";
+import { attachmentIssuesFromFiles, type FunctionUse } from "./loadFunction.js";
 import { recoveryRequiresCompletionIssue } from "./parseCompletionContract.js";
+import type { ValidationFindingCode } from "./validateCatalog.js";
 import { validateCompletionContractForStage } from "./validateCompletionContract.js";
 import { applyCloneChains } from "./cloneChain.js";
 import {
@@ -488,6 +490,41 @@ async function buildLoadedPipelineFromMerge(
     const completion = nodeById.get(stage.id)?.completion;
     const completionOutcome = validateCompletionContractForStage(stage, completion);
     if (!completionOutcome.ok) return loadFailure(completionOutcome.issues);
+  }
+
+  const uses: FunctionUse[] = [];
+  for (const entry of normalizedEntries) {
+    if (entry.routeFunction) {
+      uses.push({ kind: "routing", id: entry.routeFunction.id, grants: entry.routeFunction.grants });
+    }
+  }
+  for (const stage of loadedStages) {
+    for (const attachment of stage.tools?.functions ?? []) {
+      uses.push({ kind: "tool", id: attachment.id, grants: attachment.grants });
+    }
+  }
+  for (const node of dag.nodes) {
+    for (const check of node.completion?.checks ?? []) {
+      if (check.type === "function") uses.push({ kind: "verification", id: check.function, grants: check.grants });
+    }
+  }
+  for (const stage of loadedStages) {
+    for (const check of stage.pre_emit_checks ?? []) {
+      if (check.type === "function") uses.push({ kind: "verification", id: check.function, grants: check.grants });
+    }
+  }
+  if (uses.length > 0) {
+    const attachmentIssues = await attachmentIssuesFromFiles(projectRoot, uses);
+    if (attachmentIssues.length > 0) {
+      return loadFailure(
+        attachmentIssues.map((item) => ({
+          code: item.code as ValidationFindingCode,
+          message: item.message,
+          category: "pipeline" as const,
+          pipelineId,
+        })),
+      );
+    }
   }
 
   return loadSuccess(

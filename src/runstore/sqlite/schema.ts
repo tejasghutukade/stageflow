@@ -146,6 +146,7 @@ CREATE TABLE IF NOT EXISTS stage_executions (
   cost_usd REAL,
   usage_json TEXT,
   auto_resume_count INTEGER NOT NULL DEFAULT 0,
+  function_route_json TEXT,
   PRIMARY KEY (run_id, stage_id, attempt),
   FOREIGN KEY (run_id) REFERENCES runs(run_id)
 );

@@ -164,6 +164,15 @@ export type StageSnapshot = {
   usage?: StageUsage;
 };
 
+export type FunctionRouteRecord =
+  | {
+      status: "selected";
+      nextStageIds: string[];
+      reason?: string;
+      cloneExpansion?: "pending" | "done" | "not_needed";
+    }
+  | { status: "error"; code?: string; message?: string };
+
 export type StageExecution = {
   run_id: string;
   stage_id: string;
@@ -176,6 +185,7 @@ export type StageExecution = {
   cost_usd?: number;
   usage?: StageUsage;
   auto_resume_count: number;
+  function_route?: FunctionRouteRecord | null;
 };
 
 export type StageExecutionPatch = {
@@ -187,6 +197,7 @@ export type StageExecutionPatch = {
   cost_usd?: number;
   usage?: StageUsage;
   auto_resume_count?: number;
+  function_route?: FunctionRouteRecord | null;
 };
 
 /** The durable disposition of completion verification for one stage attempt. */

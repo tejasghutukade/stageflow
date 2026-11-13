@@ -51,6 +51,7 @@ import {
 } from "./routes";
 import { applyRedesignAttribute, useRedesign } from "./redesign/flag";
 import { AgentsRedesign } from "./redesign/agents/AgentsRedesign";
+import { FunctionsRedesign } from "./redesign/functions/FunctionsRedesign";
 import { agentsRouteProps, railActiveId } from "./routeNav";
 import { AgentSessionsPage } from "./redesign/agents/sessions/AgentSessionsPage";
 import { useAgentApprovals } from "./redesign/agents/model/useAgentApprovals";
@@ -196,6 +197,8 @@ function ConsoleRoot() {
         onNew={() => go("/new")}
       />
     );
+  } else if (route.name === "functions") {
+    content = <FunctionsRedesign functionId={route.functionId} creating={route.creating === true} kind={route.kind} />;
   } else if (route.name === "pipelines") {
     content = <PipelinesPage onNew={go} />;
   } else if (route.name === "pipeline") {

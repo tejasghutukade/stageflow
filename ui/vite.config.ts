@@ -33,6 +33,7 @@ export default defineConfig({
         "../src/runstore/runStatusClock.ts",
       ),
       "@stageflow/guide-card-contract": path.resolve(uiRoot, "../src/guide/cardContract.ts"),
+      "@stageflow/function-access": path.resolve(uiRoot, "../src/functions/accessDeclaration.ts"),
     },
   },
   server: {

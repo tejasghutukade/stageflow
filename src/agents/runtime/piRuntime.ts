@@ -35,6 +35,7 @@ import { forbiddenWriteTarget } from "../policy.js";
 import { prepareExecutionLaunch, type SandboxRunner } from "../sandbox.js";
 import { grantedStageflowTools, isOperatorOnlyTool, type ToolkitTool } from "../../toolkit/index.js";
 import { grantIdForPiTool, STAGEFLOW_PI_PREFIX, type CompleteInput, type CompleteResult, type ConversationBackend, type TurnHooks } from "./types.js";
+import { resolveFunctionTools, type ResolvedFunctionTool } from "../../functions/toolCall.js";
 
 export type PiRuntimeOptions = {
   cwd: string;
@@ -67,6 +68,7 @@ export type OpenSessionInput = {
   /** Defaults to true; one-shot judge sessions have no use for it. */
   workingState?: boolean;
   hooks: () => TurnHooks | undefined;
+  functionTools?: ResolvedFunctionTool[];
 };
 
 export type OpenedSession = {
@@ -121,7 +123,12 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
   const { definition, projectRoot } = input;
   const modelId = definition.model.id ?? (await getModelCatalog(options.cwd).defaultModel());
   // Cursor's SDK agent runs its own file and shell tools beside Pi's, so grants and ask-first cannot hold.
-  if (isCursorModelRef(modelId) && (input.consumerTools !== undefined || process.env.STAGEFLOW_AGENTS_ALLOW_CURSOR_NATIVE_TOOLS !== "1")) {
+  if (
+    isCursorModelRef(modelId) &&
+    ((input.functionTools?.length ?? 0) > 0 ||
+      input.consumerTools !== undefined ||
+      process.env.STAGEFLOW_AGENTS_ALLOW_CURSOR_NATIVE_TOOLS !== "1")
+  ) {
     throw new AgentError(
       "agent.backend_unavailable",
       "Cursor models run their own file and shell tools outside this agent's grants and approvals. Choose another provider's model, or set STAGEFLOW_AGENTS_ALLOW_CURSOR_NATIVE_TOOLS=1 on the Host to accept that.",
@@ -256,6 +263,24 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
       }
     }
 
+    for (const tool of input.functionTools ?? []) {
+      customTools.push(
+        defineTool({
+          name: tool.name,
+          label: tool.name,
+          description: tool.description,
+          parameters: Type.Unsafe(tool.parameters),
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+          execute: async (callId: string, args: unknown) => {
+            const result = await tool.run(args, callId);
+            if (!result.ok) throw new Error(result.text);
+            return { content: [{ type: "text" as const, text: result.text }], details: {} };
+          },
+        }),
+      );
+      if (!toolNames.includes(tool.name)) toolNames.push(tool.name);
+    }
+
     for (const tool of input.stageflowTools ?? []) {
       customTools.push(
         defineTool({
@@ -326,6 +351,7 @@ type Bound = {
   hooks: TurnHooks | undefined;
   mcpServers: string[];
   subAgents: string[];
+  functionTools: ResolvedFunctionTool[];
   /** Armed while no turn runs; releases the session when it fires. */
   idleTimer?: ReturnType<typeof setTimeout> | undefined;
   /** Set while a turn runs: the stall watchdog's pause handle. */
@@ -379,18 +405,36 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
       project_context: false,
       memories: [],
       tools: { ...input.definition.tools, builtin: [], builtin_tools: [], mcp: {}, skills: [], browser: false,
+        functions: [],
         stageflow: { groups: [], tools: [] } },
       sub_agents: input.definition.sub_agents.filter((id) => allowedSubAgents.has(id)),
     };
     if (definition.model.backend !== "pi") {
       throw new AgentError("agent.backend_unavailable", `The ${definition.model.backend} backend is not available for agents yet.`);
     }
+    const attachedFunctions = definition.tools.functions ?? [];
+    if (attachedFunctions.length > 0 && definition.model.id !== undefined && isCursorModelRef(definition.model.id)) {
+      throw new AgentError(
+        "agent.backend_unavailable",
+        "Cursor models run their own file and shell tools outside this agent's grants and approvals. Choose another provider's model, or set STAGEFLOW_AGENTS_ALLOW_CURSOR_NATIVE_TOOLS=1 on the Host to accept that.",
+      );
+    }
+    let functionTools: ResolvedFunctionTool[] = [];
+    if (attachedFunctions.length > 0) {
+      const resolved = await resolveFunctionTools({
+        projectRoot,
+        attachments: attachedFunctions,
+        execution: () => ({ agent: definition.id, session: input.sessionId }),
+      });
+      if (!resolved.ok) throw new AgentError("agent.invalid", resolved.reason);
+      functionTools = resolved.tools;
+    }
     await prepareExecutionLaunch(definition, projectRoot, options.sandbox);
     const mcpServers = Object.keys(definition.tools.mcp);
     const subAgents = [...definition.sub_agents];
     const grantedSf = new Set(grantedStageflowTools(definition.tools.stageflow));
     const stageflowTools = (options.toolkit?.() ?? []).filter((tool) => grantedSf.has(tool.name) && !isOperatorOnlyTool(tool.name));
-    const state: Bound = { opened: undefined as never, definitionKey: definition.id, hooks: undefined, mcpServers, subAgents };
+    const state: Bound = { opened: undefined as never, definitionKey: definition.id, hooks: undefined, mcpServers, subAgents, functionTools };
     const context = definition.project_context ? await projectContext(projectRoot) : "";
     let memory: StageMemory | undefined;
     if (definition.memories?.length) {
@@ -406,7 +450,8 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
       projectRoot,
       definition,
       systemPrompt,
-      toolNames: piToolNames(definition),
+      toolNames: [...piToolNames(definition), ...functionTools.map((tool) => tool.name)],
+      ...(functionTools.length > 0 ? { functionTools } : {}),
       hooks: () => state.hooks,
       ...(input.consumerTools !== undefined ? { consumerTools: input.consumerTools } : {}),
       ...(memory ? { memory } : {}),
@@ -415,8 +460,11 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
       gate: async (call) => {
         const hooks = state.hooks;
         if (!hooks) return { block: true, reason: "No turn is active" };
-        const tool = input.consumerTools?.find((tool) => tool.name === call.toolName)?.grantId
-          ?? grantIdForPiTool(call.toolName, mcpServers, subAgents);
+        const functionTool = functionTools.find((tool) => tool.name === call.toolName);
+        const tool = functionTool
+          ? `function.${functionTool.functionId}`
+          : input.consumerTools?.find((tool) => tool.name === call.toolName)?.grantId
+            ?? grantIdForPiTool(call.toolName, mcpServers, subAgents);
         // Every tool whose arguments name a path is checked, not only write/edit. `bash` cannot be: see forbiddenWriteTarget.
         if (forbiddenWriteTarget(projectRoot, globalStageflowHome(), call.toolName, call.input) !== undefined) {
           return { block: true, reason: "Agent definitions and Stageflow state cannot be written by an agent." };
@@ -517,7 +565,12 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
           const final = textOf(e.message.content);
           if (final && !text) text = final;
         } else if (e.type === "tool_execution_start" && e.toolCallId && e.toolName) {
-          const call = { id: e.toolCallId, tool: grantIdForPiTool(e.toolName, state.mcpServers, state.subAgents), input: e.args ?? {} };
+          const functionTool = state.functionTools.find((tool) => tool.name === e.toolName);
+          const call = {
+            id: e.toolCallId,
+            tool: functionTool ? `function.${functionTool.functionId}` : grantIdForPiTool(e.toolName, state.mcpServers, state.subAgents),
+            input: e.args ?? {},
+          };
           calls.set(e.toolCallId, call);
           toolHolds.set(e.toolCallId, state.stall!.hold());
           input.hooks.toolStarted(call);

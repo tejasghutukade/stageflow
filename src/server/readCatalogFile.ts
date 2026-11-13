@@ -7,7 +7,7 @@ import {
   resolveCatalogRelativePath,
   type ResolveCatalogRelativePathInput,
 } from "../config/catalogRelativePath.js";
-import type { LoadOutcome } from "../config/loadOutcome.js";
+import { loadFailure, type LoadOutcome } from "../config/loadOutcome.js";
 import { contentHash, writeFileAtomic } from "../config/atomicWrite.js";
 import { renderCatalogYaml } from "../config/preserveCatalogYaml.js";
 import { loadPipelineOutcome } from "../config/loadPipeline.js";
@@ -15,6 +15,7 @@ import { loadStageOutcome } from "../config/loadStage.js";
 import { loadStageflowManifestOutcome } from "../config/loadStageflowManifest.js";
 import { loadTaskOutcome } from "../config/loadTask.js";
 import { loadTriggerOutcome } from "../config/loadTrigger.js";
+import { isFunctionDefinitionFile } from "../config/loadFunction.js";
 import { STAGE_FILENAME_SUFFIXES } from "../config/stageFilenameStem.js";
 import {
   findingsFromLoadIssues,
@@ -43,13 +44,15 @@ export type CatalogFileWriteInvalidCode =
   | "pipeline_invalid"
   | "task_invalid"
   | "trigger_invalid"
-  | "manifest_invalid";
+  | "manifest_invalid"
+  | "function_invalid";
 
 export type WriteCatalogFileErrorCode =
   | CatalogFileReadErrorCode
   | CatalogFileWriteInvalidCode
   | "catalog_file_exists"
   | "use_eval_api"
+  | "use_function_api"
   | "FILE_CHANGED";
 
 export type WriteCatalogFileResult =
@@ -171,7 +174,7 @@ export async function readCatalogFileForHttp(
   return { ok: true, path: resolved.relativePath, content };
 }
 
-export type CatalogFileKind = "stage" | "pipeline" | "task" | "trigger" | "manifest";
+export type CatalogFileKind = "stage" | "pipeline" | "task" | "trigger" | "manifest" | "function";
 
 const INVALID_CODE: Record<CatalogFileKind, CatalogFileWriteInvalidCode> = {
   stage: "stage_invalid",
@@ -179,6 +182,7 @@ const INVALID_CODE: Record<CatalogFileKind, CatalogFileWriteInvalidCode> = {
   task: "task_invalid",
   trigger: "trigger_invalid",
   manifest: "manifest_invalid",
+  function: "function_invalid",
 };
 
 /** Eval and dataset files have their own write path (base hash, atomic write); this route refuses them. */
@@ -195,7 +199,9 @@ export function catalogFileKind(relativePath: string, content: string): CatalogF
   if (base.endsWith(".pipeline.yaml") || base.endsWith(".pipeline.yml")) return "pipeline";
   if (base.endsWith(".task.yaml") || base.endsWith(".task.yml")) return "task";
   if (base.endsWith(".trigger.yaml") || base.endsWith(".trigger.yml")) return "trigger";
+  if (isFunctionDefinitionFile(base)) return "function";
   if (STAGE_FILENAME_SUFFIXES.some((suffix) => base.endsWith(suffix))) return "stage";
+  if ((base.endsWith(".js") || base.endsWith(".ts")) && !isFunctionDefinitionFile(base)) return "manifest";
   let raw: unknown;
   try {
     raw = parseYaml(content);
@@ -221,6 +227,14 @@ async function loadCatalogFileOutcome(kind: CatalogFileKind, file: string, root:
       return loadStageflowManifestOutcome(root);
     case "stage":
       return loadStageOutcome(file);
+    case "function":
+      return loadFailure([
+        {
+          code: "function.invalid",
+          message: "Function files are written through the functions API",
+          category: "catalog",
+        },
+      ]);
   }
 }
 
@@ -255,6 +269,9 @@ export async function writeCatalogFileForHttp(
     preserveFormatting?: boolean;
   },
 ): Promise<WriteCatalogFileResult> {
+  if (isFunctionDefinitionFile(path.basename(input.inputPath))) {
+    return writeFailure(400, "Function files are written through the functions API", "use_function_api");
+  }
   if (!isCatalogYamlExtension(input.inputPath)) {
     return writeFailure(400, "Only .yaml and .yml catalog files can be written", "unsupported_file_type");
   }

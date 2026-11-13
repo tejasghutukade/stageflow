@@ -155,6 +155,9 @@ export function appendCloneInstances(
     ...(templateNode.replay_safe !== undefined
       ? { replay_safe: templateNode.replay_safe }
       : {}),
+    ...(templateNode.routeFunction !== undefined
+      ? { routeFunction: templateNode.routeFunction }
+      : {}),
   }));
 
   const remaining = new Map(

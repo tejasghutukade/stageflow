@@ -24,6 +24,9 @@
       ],
       "@stageflow/guide-card-contract": [
         "../src/guide/cardContract.ts"
+      ],
+      "@stageflow/function-access": [
+        "../src/functions/accessDeclaration.ts"
       ]
     }
   },

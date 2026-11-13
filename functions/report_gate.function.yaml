@@ -1,0 +1,25 @@
+id: report_gate
+name: Report gate
+description: Accepts report.json when its score meets MIN_SCORE.
+kind: verification
+timeout_ms: 5000
+source: |
+  export const access = {
+    files: [{ root: "artifacts", path: "report.json", access: "read" }],
+    env: ["MIN_SCORE"],
+    network: [],
+  };
+  export default async function execute(context) {
+    const report = await context.artifacts.readJson("report.json");
+    const threshold = Number(context.env.MIN_SCORE);
+    const score = report && typeof report.score === "number" ? report.score : NaN;
+    if (!Number.isFinite(threshold) || !Number.isFinite(score)) {
+      return { passed: false, message: "Expected report.json score and MIN_SCORE to be numbers" };
+    }
+    const passed = score >= threshold;
+    return {
+      passed,
+      message: passed ? "Score " + score + " meets " + threshold : "Score " + score + " is below " + threshold,
+      details: { score, threshold },
+    };
+  }

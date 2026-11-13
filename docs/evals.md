@@ -29,7 +29,7 @@ An eval is a file in your project, `evals/<id>.eval.yaml`. It names a **target**
 | **Stage run** | The normal Stageflow run started for each result. Marked `origin = eval` and hidden from the Runs list, Inbox and Overview |
 | **Eval session** | For an agent target, the agent session opened for each conversation. Marked as an eval session and hidden the same way |
 | **Config snapshot** | Everything that determined an eval run, stored with it and never edited |
-| **Fingerprint** | The first 8 hex characters of a hash of the config snapshot. Equal fingerprints mean the same setup |
+| **Fingerprint** | The first 8 hex characters of a hash of the config snapshot. Equal fingerprints mean the same setup. When the target attaches a function, the fingerprint includes that function's revision content hash and the effective capability policy, so a source or grant change is a different setup |
 | **Engine** | The component that executes results and grades them. Today [promptfoo](https://github.com/promptfoo/promptfoo), installed on demand |
 
 See also the [Glossary](glossary.md). Agent terms (scenario, driver, simulator, conversation subject, tool policy) are in [Agent concepts](#agent-concepts).
@@ -128,7 +128,7 @@ target: { kind: stage, pipeline: ../pipelines/ship.pipeline.yaml, stage: review 
 target: { kind: stage, file: ../stages/review.yaml }                                 # a standalone stage file
 ```
 
-The stage version hash (first 6 hex characters, shown in the console) changes whenever anything that can change the stage's behavior changes: prompt, model, `io`, `verify`, `mcp`, `gate_kinds`, `timeout_ms`.
+The stage version hash (first 6 hex characters, shown in the console) changes whenever anything that can change the stage's behavior changes: prompt, model, `io`, `verify`, `mcp`, `gate_kinds`, `timeout_ms`. A function attachment stores the function id on the stage or agent file, so that file hash does not change when only the function source changes. The run fingerprint also includes each attached function's revision content hash (`source_hash`) and the effective capability policy (`policy`: the files, env aliases, and API operations the attachment's grants actually allow). Two runs match only when both are unchanged. The cost cap and concurrency stay out of the fingerprint.
 
 ### Defaults
 
@@ -433,7 +433,7 @@ Outcomes you will see on a recorded tool call (`policy_outcome`):
 - `mocked`: it did not execute; the agent received the scenario's canned text. A mock reaches the agent as an error-flagged tool result, because the runtime can only block a call with a reason. Treat mocks as approximate.
 - `would_ask_first` and `denied`: see below.
 
-**Always blocked.** Under `read_only` and `mocked`, `stageflow.run_eval`, `stageflow.sort_eval_failures`, `stageflow.cancel_eval_run`, `stageflow.agent_chat`, `stageflow.fire_trigger`, `stageflow.probe_project_mcp` and every sub-agent call (`agent:<id>`) are blocked and recorded `denied`. Under `real`, `run_eval`, `sort_eval_failures`, `cancel_eval_run`, `agent_chat` and `fire_trigger` stay blocked (no recursion, no triggers). A tool the agent is not granted, a write to a protected path and the operator-only Stageflow tools are denied under every policy. Eval sessions are read only for operators: the console hides the composer, and chat and approval requests on an eval session are refused with `agent.session_eval_readonly`. Sub-agents the agent is allowed to call run in their own eval sessions under the same policy; their cost is summed into the result.
+**Always blocked.** Under `read_only` and `mocked`, `stageflow.run_eval`, `stageflow.sort_eval_failures`, `stageflow.cancel_eval_run`, `stageflow.agent_chat`, `stageflow.fire_trigger`, `stageflow.probe_project_mcp` and every sub-agent call (`agent:<id>`) are blocked and recorded `denied`. Under `real`, `run_eval`, `sort_eval_failures`, `cancel_eval_run`, `agent_chat` and `fire_trigger` stay blocked (no recursion, no triggers). Under every policy, `stageflow.test_function` with `real: true` is blocked and recorded `denied`. A tool the agent is not granted, a write to a protected path and the operator-only Stageflow tools are denied under every policy. Eval sessions are read only for operators: the console hides the composer, and chat and approval requests on an eval session are refused with `agent.session_eval_readonly`. Sub-agents the agent is allowed to call run in their own eval sessions under the same policy; their cost is summed into the result.
 
 **`real` needs two consents.** `tools: real` requires `conversation.allow_real_tools: true` in the file (without it: `eval.real_tools_not_allowed`, an error) **and** consent for each run: `--allow-real-tools` on the CLI, `allow_real_tools: true` in the API and MCP start body, a checkbox in the console's run dialog. Without the run consent the start is refused (`EVAL_REAL_TOOLS_NOT_CONFIRMED`, HTTP 422, exit `1`). Validation always shows `eval.tools_real` as a warning. In `real` mode the agent's write, shell and MCP tools **act on your project and your services from this machine**. Use a throwaway copy of the project, or stay on `read_only`. A run can only make the policy safer than the file says (`tools` to `read_only` or `mocked`, `approvals` to `record_only` or `deny`); a riskier override is refused (`EVAL_INVALID`).
 

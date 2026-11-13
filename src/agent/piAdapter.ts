@@ -106,6 +106,9 @@ import { createReplyEmailTool } from "../tools/replyEmail.js";
 import { createGetEmailTool, createSearchEmailTool, createDownloadEmailAttachmentTool } from "../tools/readEmail.js";
 import "./cursorProvider.js";
 import { isCursorModelRef, readCursorApiKey } from "./cursorProvider.js";
+import { stageFunctionCallPlace } from "../functions/stageCall.js";
+import { cursorFunctionToolReason, functionCatalogRoot, resolveFunctionTools } from "../functions/toolCall.js";
+import { Type } from "typebox";
 import { findProviderSupport } from "./providerSupport.js";
 import { mapSessionEventToActivity, readActivityVerbose, type StageActivityEvent } from "./activity.js";
 import {
@@ -1257,6 +1260,13 @@ async function prepareStageSessionWiring(
   existingAskWaitChannel?: AskOperatorWaitChannel,
 ): Promise<StageSessionWiring | StageRunResult> {
   const { roots } = input;
+  const functionAttachments = input.stage.tools?.functions ?? [];
+  if (functionAttachments.length > 0 && isCursorModelRef(input.stage.model ?? "")) {
+    const projectRoot = functionCatalogRoot(input);
+    const resolved = await resolveFunctionTools({ projectRoot, attachments: functionAttachments });
+    const name = resolved.ok ? (resolved.tools[0]?.name ?? functionAttachments[0]!.id) : functionAttachments[0]!.id;
+    return { ok: false, reason: cursorFunctionToolReason(name) };
+  }
   const provider = findProviderSupport(input.stage.model);
   if (process.env[SF_STAGE_WORKER] === "1" && !provider) {
     if (!roots.authPath || !isUsableAuthFile(roots.authPath)) {
@@ -1575,6 +1585,59 @@ async function prepareStageSessionWiring(
         customTools.push(defineTool(createBashToolDefinition(roots.cwd, {
           spawnHook: (context) => ({ ...context, env: { ...context.env, ...missingBrowserEnv } }),
         })));
+      }
+    }
+    if (functionAttachments.length > 0) {
+      const projectRoot = functionCatalogRoot(input);
+      const resolved = await resolveFunctionTools({
+        projectRoot,
+        attachments: functionAttachments,
+        execution: () => ({
+          stage: runtimeStageId(input),
+          attempt: roots.attempt ?? 1,
+          ...(input.runId !== undefined ? { run: input.runId } : {}),
+        }),
+        place: stageFunctionCallPlace({
+          runWorkspaceDir: roots.runWorkspaceDir,
+          stageId: runtimeStageId(input),
+          attempt: roots.attempt,
+          checkoutRoot: roots.checkoutRoot,
+          cwd: roots.cwd,
+          containerName: roots.containerName,
+          containerDockerBin: roots.containerDockerBin,
+          synced: false,
+        }),
+      });
+      if (!resolved.ok) return failAfterAttach(resolved.reason);
+      const reserved = new Set([
+        ...tools,
+        "read",
+        "write",
+        "edit",
+        "bash",
+        "grep",
+        "find",
+        "ls",
+        "working_state",
+      ]);
+      for (const tool of resolved.tools) {
+        if (reserved.has(tool.name)) {
+          return failAfterAttach(`Function tool "${tool.name}" collides with an existing tool`);
+        }
+        reserved.add(tool.name);
+        customTools.push(defineTool({
+          name: tool.name,
+          label: tool.name,
+          description: tool.description,
+          parameters: Type.Unsafe(tool.parameters),
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+          execute: async (callId: string, args: unknown) => {
+            const result = await tool.run(args, callId);
+            if (!result.ok) throw new Error(result.text);
+            return { content: [{ type: "text" as const, text: result.text }], details: {} };
+          },
+        }));
+        tools.push(tool.name);
       }
     }
 

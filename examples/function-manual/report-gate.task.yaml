@@ -1,0 +1,4 @@
+id: report-gate
+goal: Write a report score of 82 and pass the report gate
+context: The verification reads artifacts/report.json and the host environment variable MIN_SCORE.
+constraints: Do not change the function file during the run. Write the score into report.json before emitting.

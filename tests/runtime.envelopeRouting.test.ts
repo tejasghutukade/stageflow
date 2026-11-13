@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { pipelinePath, catalogLocators, LINEAR_EXPLICIT_PIPELINE } from "./helpers/fixturePaths.js";
-import { access, mkdtemp, unlink } from "node:fs/promises";
+import { access, mkdtemp, readFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,7 +15,13 @@ import {
   appendCloneInstances,
   buildPipelineDagSnapshotFromLoaded,
 } from "../src/runstore/pipelineDagSnapshot.js";
-import { createRunStore } from "../src/runstore/createStore.js";
+import { sqliteConnectionFromStore, createRunStore } from "../src/runstore/createStore.js";
+import { FunctionService } from "../src/functions/service.js";
+import { FunctionStore } from "../src/functions/store.js";
+import { loadTaskFromYaml } from "../src/config/loadTask.js";
+import { runPipelineDag } from "../src/runtime/pipelineScheduler.js";
+import { stageKeyedAgent } from "./helpers/stageKeyedAgent.js";
+import { SAMPLE_TASK } from "./helpers/fixturePaths.js";
 import type { RunStore } from "../src/runstore/port.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
 import {
@@ -442,5 +448,78 @@ describe("resolvePriorEnvelope generic fan-in (U2)", () => {
     expect(text).toContain('"summary": "from-validation"');
     expect(text).not.toContain("clones, clone-list order");
     expect(text).not.toContain("No prior envelope (first stage).");
+  });
+
+  it("a stored function route is not fork_choice and the selected child receives the parent envelope", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-fn-route-prior-"));
+    const store = createRunStore({ rootDir: root });
+    const db = sqliteConnectionFromStore(store);
+    if (!db) throw new Error("run store has no connection");
+    await new FunctionService({ store: new FunctionStore(db) }).create(
+      root,
+      {
+        id: "pick",
+        name: "Pick",
+        kind: "routing",
+        source: "export default function execute() {\n  return { nextStageIds: [] };\n}\n",
+        capabilities: [],
+        bindings: [],
+      },
+      { source: "file" },
+    );
+    const taskYaml = await readFile(SAMPLE_TASK, "utf8");
+    const task = loadTaskFromYaml(taskYaml, SAMPLE_TASK);
+    const loaded = await loadPipeline(pipelinePath("function-route"), {
+      cwd: root,
+      projectRoot: root,
+    });
+    const run = await store.createRun({
+      pipelineId: loaded.pipeline.id,
+      taskYaml,
+      taskId: task.id,
+      pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
+    });
+    const parent: StageEnvelope = {
+      status: "success",
+      summary: "choose-ok",
+      artifacts: [],
+      payload: { tag: "kept" },
+    };
+    const agent = stageKeyedAgent({
+      choose: [{ type: "emit", envelope: parent }],
+      left: [{ type: "emit", envelope: okEnvelope("left-ok") }],
+      right: [{ type: "throw", message: "right must not run" }],
+    });
+    const result = await runPipelineDag({
+      prepared: {
+        task,
+        loaded,
+        run: { runId: run.runId, workspaceDir: run.workspaceDir },
+        agent,
+        store,
+        cwd: root,
+        projectRoot: root,
+      },
+      maxActiveStagesPerRun: 4,
+      executionMode: "inprocess",
+      functionRouteInvoker: {
+        async invoke() {
+          return { ok: true, value: { nextStageIds: ["left"] } };
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+    const stored = await store.readEnvelope(run.runId, "choose");
+    expect(stored.fork_choice).toBeUndefined();
+    expect(stored.payload).toEqual({ tag: "kept" });
+    const prior = await resolvePriorEnvelope({
+      dag: loaded.dag,
+      stageId: "left",
+      completedEnvelopes: new Map([["choose", stored]]),
+    });
+    expect(prior.ok).toBe(true);
+    if (!prior.ok) return;
+    expect(prior.prior?.summary).toBe("choose-ok");
+    await expect(store.readEnvelope(run.runId, "right")).rejects.toThrow(/Envelope not found/);
   });
 });

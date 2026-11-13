@@ -15,6 +15,11 @@ Terms that are easy to mix up.
 | **Revision** | A saved version of an agent definition (`v3`). Sessions are pinned to the revision they started on | A git commit |
 | **Approval** | A paused ask-first tool call waiting for a person | A pipeline gate |
 | **Gate** | A pipeline stage waiting for a human answer ([HITL](hitl.md)) | An agent approval |
+| **Function** | A project file (`functions/<id>.function.{yaml,yml,js}`) of sandboxed JavaScript that a stage or agent calls: a verification check, a routing choice or a tool. See [Functions](functions.md) | A stage, or a `command` check |
+| **Access declaration** | The `export const access = { ... }` block at the top of a function's source that lists the files, environment variables and network origins it needs | A grant |
+| **Grant** | What a stage or agent allows an attached function to use. It repeats the capability id and details. The Host enforces what the function declares, what is granted and Host policy | The function's own request for access |
+| **Capability** | One thing a function may touch: a file root and path, an environment name, or an API origin. Derived from the access declaration | A grant |
+| **Function revision** | A saved, immutable version of a function (`revision 3`). A run keeps the revision it started on | An agent revision |
 | **Inbox** | The console's "Needs you" page: gates and agent approvals | Email |
 | **Connection** | A named external service for channels (AgentMail, Slack, Telegram, iMessage, WhatsApp) in `connections.yaml`. Agents answer on one; stages send on one | An email account, an MCP server |
 | **Channel** | The use of a connection by a stage (`channels:`) or an agent (`channel:`) | A connection |

@@ -74,6 +74,7 @@ docs/specs/browser-sessions.md
 docs/specs/stage-container-sandbox.md
 docs/specs/stage-independence.md
 docs/specs/stage-run-log-panel.md
+docs/specs/reusable-functions.md
 !docs/tickets/
 docs/tickets/*
 !docs/tickets/**/

@@ -29,6 +29,7 @@ On start, Stageflow prints the console URL and MCP endpoint, then opens your def
 | Pipeline runs, run detail, Start a run | [Runs](console-runs.md) |
 | Pipelines, editor, Tasks, Catalog, Triggers, Workshop | [Pipelines, tasks and catalog](console-pipelines-catalog.md) |
 | Agents, Agent sessions, run inspector | [Agents in the console](console-agents.md) |
+| Functions: sandboxed JavaScript for checks, routing and tools | [Functions in the console](console-functions.md) |
 | Evals: check a stage against a dataset, results, compare, datasets | [Evals](console-evals.md) |
 | Connections: channels, email accounts, tool servers | [Connections](console-connections.md) |
 | Memories: a cover and cards a pipeline or an agent can keep | [YAML catalog — Memories](yaml-catalog.md#memories) |
@@ -48,6 +49,7 @@ On start, Stageflow prints the console URL and MCP endpoint, then opens your def
 | Activity | **Agent sessions** | `#/agent-sessions` | Every agent's sessions in one list; the badge counts sessions in flight |
 | Build | **Pipelines** | `#/pipelines` | Browse pipeline files; open one in the editor |
 | Build | **Agents** | `#/agents` | Agent directory, create, edit, detail |
+| Build | **Functions** | `#/functions` | Function directory, create, edit, test. See [Functions in the console](console-functions.md) |
 | Build | **Tasks** | `#/tasks` | Task files |
 | Build | **Catalog** | `#/catalog?tab=stages` | Stages, skills and extensions |
 | Build | **Evals** | `#/evals` | Check a stage against a dataset; results and compare. See [Evals](console-evals.md) |
@@ -133,6 +135,7 @@ Hash-based routing (`ui/src/routes.ts`). A hash that matches no route falls back
 | `#/agents/<id>/edit` | Edit with diff review and version history |
 | `#/agents/<id>/sessions/<sessionId>` | One agent session |
 | `#/agents/<id>/sessions/<sessionId>/runs/<runId>` | Run inspector |
+| `#/functions`, `#/functions/new`, `#/functions/<id>` | [Functions](console-functions.md): directory, create, edit |
 | `#/agent-sessions` (alias `#/agents/sessions`) | Sessions across all agents |
 | `#/settings` | [Settings](console-settings.md) |
 | `#/workshop` | Workshop |

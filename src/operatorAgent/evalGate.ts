@@ -65,6 +65,9 @@ export function createOperatorEvalGate(options: {
         return { ok: false, error: "eval.tool_not_run", content: { error: "eval.tool_not_run", message: result } };
       };
       if (ALWAYS_BLOCKED.has(name)) return deny(`${name} cannot run in an evaluation.`, "denied");
+      if (name === "test_function" && args.real === true) {
+        return deny("Real function tests cannot run in an evaluation.", "denied");
+      }
       if (mock && (options.policy.tools === "mocked" || !mayRun(name))) {
         const text = mock.error ?? (typeof mock.result === "string" ? mock.result : JSON.stringify(mock.result ?? null));
         push({ ...base, policyOutcome: "mocked", status: mock.error !== undefined ? "error" : "ok", result: text });

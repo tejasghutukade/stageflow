@@ -1,0 +1,205 @@
+import type Database from "better-sqlite3";
+import {
+  type FunctionCheckRequest,
+  type FunctionCheckScope,
+} from "../envelope/functionVerification.js";
+import type { FunctionGrant, FunctionKind } from "../config/loadFunction.js";
+import { createFunctionInvoker, type FunctionInvoker } from "../functions/invoke.js";
+import { FunctionService } from "../functions/service.js";
+import { FunctionStore } from "../functions/store.js";
+import { stageFunctionCallPlace } from "../functions/stageCall.js";
+import type { JsonValue } from "../functions/protocol.js";
+import type { CompletionCheck, CompletionContract } from "../types/completion.js";
+import type { ResolvedPipelineDag } from "../types/pipeline.js";
+import type { PreEmitCheck } from "../types/preEmitCheck.js";
+import type { StageConfig } from "../types/stage.js";
+import type { StageEnvelope } from "../types/envelope.js";
+import type { StageRoots } from "./stageRoots.js";
+
+const invokers = new WeakMap<Database.Database, FunctionInvoker>();
+
+export type StageFunctionGrantLookup = {
+  functionId: string;
+  kind: FunctionKind;
+  attachmentId?: string | null;
+  phase?: "emit" | "after" | null;
+};
+
+export function resolveStageFunctionGrants(input: {
+  stage?: StageConfig;
+  completion?: CompletionContract;
+  routeFunction?: { id: string; grants: FunctionGrant[] };
+  lookup: StageFunctionGrantLookup;
+}): readonly FunctionGrant[] | undefined {
+  const { functionId, kind, attachmentId, phase } = input.lookup;
+  if (kind === "routing") {
+    if (input.routeFunction?.id === functionId) return input.routeFunction.grants;
+    return undefined;
+  }
+  if (kind === "tool") {
+    return input.stage?.tools?.functions?.find((item) => item.id === functionId)?.grants;
+  }
+  const emitChecks = (input.stage?.pre_emit_checks ?? []).filter(
+    (check): check is Extract<PreEmitCheck, { type: "function" }> =>
+      check.type === "function" && check.function === functionId,
+  );
+  const afterChecks = (input.completion?.checks ?? []).filter(
+    (check): check is Extract<CompletionCheck, { type: "function" }> =>
+      check.type === "function" && check.function === functionId,
+  );
+  if (attachmentId) {
+    const byId =
+      emitChecks.find((check) => check.id === attachmentId) ??
+      afterChecks.find((check) => check.id === attachmentId);
+    if (byId) return byId.grants;
+    return undefined;
+  }
+  if (phase === "after") {
+    if (afterChecks.length === 1) return afterChecks[0]!.grants;
+    if (afterChecks.length > 1) return undefined;
+    return undefined;
+  }
+  if (phase === "emit" || phase == null) {
+    if (emitChecks.length === 1) return emitChecks[0]!.grants;
+    if (emitChecks.length > 1) return undefined;
+    if (phase == null && afterChecks.length === 1) return afterChecks[0]!.grants;
+  }
+  return undefined;
+}
+
+export function functionIdsForStage(
+  stage: StageConfig,
+  dag: ResolvedPipelineDag | undefined,
+  stageId: string,
+): string[] {
+  const ids = new Set<string>();
+  for (const check of stage.pre_emit_checks ?? []) {
+    if (check.type === "function") ids.add(check.function);
+  }
+  for (const attachment of stage.tools?.functions ?? []) {
+    ids.add(attachment.id);
+  }
+  const node = dag?.nodes.find((item) => item.id === stageId);
+  const definition =
+    node?.definition_id !== undefined && node.definition_id !== node.id
+      ? dag?.nodes.find((item) => item.id === node.definition_id)
+      : undefined;
+  if (node?.routeFunction !== undefined) ids.add(node.routeFunction.id);
+  else if (definition?.routeFunction !== undefined) ids.add(definition.routeFunction.id);
+  for (const check of node?.completion?.checks ?? []) {
+    if (check.type === "function") ids.add(check.function);
+  }
+  return [...ids];
+}
+
+function functionInvokerFor(db: Database.Database): FunctionInvoker {
+  let invoker = invokers.get(db);
+  if (!invoker) {
+    invoker = createFunctionInvoker({ db });
+    invokers.set(db, invoker);
+  }
+  return invoker;
+}
+
+export async function pinMissingRunFunctions(
+  db: Database.Database,
+  projectRoot: string,
+  runId: string,
+  functionIds: readonly string[],
+): Promise<void> {
+  if (functionIds.length === 0) return;
+  const service = new FunctionService({ store: new FunctionStore(db) });
+  const missing: string[] = [];
+  for (const functionId of functionIds) {
+    const pin = await service.getPin(projectRoot, "run", runId, functionId);
+    if (!pin) missing.push(functionId);
+  }
+  if (missing.length > 0) await service.pinRun(projectRoot, runId, missing);
+}
+
+function envelopeSnapshot(envelope: StageEnvelope): JsonValue {
+  return JSON.parse(JSON.stringify({
+    status: envelope.status,
+    summary: envelope.summary,
+    artifacts: envelope.artifacts,
+    ...(envelope.payload !== undefined ? { payload: envelope.payload } : {}),
+    ...(envelope.notes !== undefined ? { notes: envelope.notes } : {}),
+    ...(envelope.stage_id !== undefined ? { stage_id: envelope.stage_id } : {}),
+    ...(envelope.checklist_attestations !== undefined
+      ? { checklist_attestations: envelope.checklist_attestations }
+      : {}),
+  })) as JsonValue;
+}
+
+export function createFunctionCheckScope(input: {
+  db: Database.Database;
+  projectRoot: string;
+  runId: string;
+  stageId: string;
+  attempt: number;
+  roots: StageRoots;
+}): FunctionCheckScope {
+  const service = new FunctionService({ store: new FunctionStore(input.db) });
+  const invoker = functionInvokerFor(input.db);
+  return {
+    runId: input.runId,
+    stageId: input.stageId,
+    attempt: input.attempt,
+    async revision(functionId) {
+      const pin = await service.getPin(input.projectRoot, "run", input.runId, functionId);
+      return pin?.revision;
+    },
+    async invoke(request: FunctionCheckRequest) {
+      try {
+        const view = await invoker.call(input.projectRoot, {
+          functionId: request.functionId,
+          kind: "verification",
+          revision: request.revision,
+          grants: [...request.grants],
+          input: {
+            kind: "verification",
+            input: {},
+            envelope: envelopeSnapshot(request.envelope),
+            execution: {
+              functionId: request.functionId,
+              revision: request.revision,
+              checkId: request.checkId,
+              phase: request.phase,
+              runId: request.runId ?? input.runId,
+              stageId: request.stageId ?? input.stageId,
+              attempt: request.attempt ?? input.attempt,
+            },
+          },
+          runId: request.runId ?? input.runId,
+          stageId: request.stageId ?? input.stageId,
+          attempt: request.attempt ?? input.attempt,
+          attachmentId: request.checkId,
+          ...stageFunctionCallPlace({
+            runWorkspaceDir: input.roots.runWorkspaceDir,
+            stageId: input.stageId,
+            attempt: input.attempt,
+            checkoutRoot: input.roots.checkoutRoot,
+            cwd: input.roots.cwd,
+            containerName: input.roots.containerName,
+            containerDockerBin: input.roots.containerDockerBin,
+            synced: false,
+          }),
+        });
+        return {
+          ok: view.ok,
+          ...(view.value !== undefined ? { value: view.value } : {}),
+          ...(view.code !== undefined ? { code: view.code } : {}),
+          ...(view.message !== undefined ? { message: view.message } : {}),
+          revision: view.revision,
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          code: "exception",
+          message: error instanceof Error ? error.message : String(error),
+          revision: request.revision,
+        };
+      }
+    },
+  };
+}

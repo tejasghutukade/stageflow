@@ -1,0 +1,34 @@
+id: function-verify
+model: anthropic/claude-sonnet-4-5
+stages:
+  - id: check
+    entry: true
+    system_prompt: Check the result.
+    model: anthropic/claude-sonnet-4-5
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+    verify:
+      - id: score
+        type: function
+        function: score
+    route:
+      - to: next
+    on_verify_fail:
+      mode: repair
+      max_attempts: 2
+      retry_safety: idempotent
+  - id: next
+    system_prompt: Continue.
+    model: anthropic/claude-sonnet-4-5
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

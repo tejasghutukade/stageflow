@@ -17,6 +17,7 @@ Run \`validate\` (or \`validate_catalog_draft\` for a draft, \`validate_agent\`,
 | \`stage.invalid_io\` | A stage body lacks \`io.input.schema\` or \`io.output.schema\`. Both are required. |
 | \`pipeline.io_incompatible\` | A child's input schema is not a subset of a parent's output schema. Make the child require only fields the parent's output declares. |
 | \`pipeline.route_if_invalid\` | Bad \`if\`: unknown operator, field not required in the source output, array path, mixed shape, or \`if\` on a loop entry. |
+| \`function.routing_conflicts_with_if\` | One stage has both a routing function and route \`if\`. Remove the function or the \`if\` predicates. |
 | \`pipeline.route_all_gated\` (warning) | Every forward route has \`if\`; the run may skip all successors. |
 | \`pipeline.model_applies\` (warning) | The pipeline \`model\` fills stages. Informational. |
 | \`pipeline.dag_error\` | A cycle, or a backward or circular edge without a \`type: loop\` entry. |

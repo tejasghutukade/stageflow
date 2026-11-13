@@ -143,6 +143,85 @@ describe("loadPipelineFromObjectOutcome", () => {
     expect(outcome.issues.some((i) => i.code === "pipeline.invalid_shape")).toBe(true);
   });
 
+  it("rejects a stage that has a routing function and route if", async () => {
+    const outcome = await loadPipelineFromObjectOutcome({
+      id: "mixed-route",
+      stages: [
+        {
+          id: "choose",
+          entry: true,
+          function: "pick_route",
+          route: [
+            { to: "left", if: { field: "lane", op: "eq", value: "left" } },
+            { to: "right" },
+          ],
+          system_prompt: "Choose.",
+          model: "anthropic/claude-sonnet-4-5",
+          ...REQUIRED_IO,
+        },
+        { id: "left", system_prompt: "Left.", model: "anthropic/claude-sonnet-4-5", ...REQUIRED_IO },
+        { id: "right", system_prompt: "Right.", model: "anthropic/claude-sonnet-4-5", ...REQUIRED_IO },
+      ],
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues).toEqual([
+      expect.objectContaining({
+        code: "function.routing_conflicts_with_if",
+        stageId: "choose",
+        message: 'Stage "choose" has a routing function and route if. Use one.',
+      }),
+    ]);
+  });
+
+  it("rejects a stage that has a routing function and no route", async () => {
+    const outcome = await loadPipelineFromObjectOutcome({
+      id: "route-fn-no-route",
+      stages: [
+        {
+          id: "choose",
+          entry: true,
+          function: "pick_route",
+          system_prompt: "Choose.",
+          model: "anthropic/claude-sonnet-4-5",
+          ...REQUIRED_IO,
+        },
+        { id: "left", system_prompt: "Left.", model: "anthropic/claude-sonnet-4-5", ...REQUIRED_IO },
+      ],
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues).toEqual([
+      expect.objectContaining({
+        code: "function.routing_requires_route",
+        stageId: "choose",
+        message: 'Stage "choose" names a routing function and has no route',
+      }),
+    ]);
+  });
+
+  it("allows a routing function when no route entry has if", async () => {
+    const outcome = await loadPipelineFromObjectOutcome({
+      id: "function-route",
+      stages: [
+        {
+          id: "choose",
+          entry: true,
+          function: "pick_route",
+          route: [{ to: "left" }, { to: "right" }],
+          system_prompt: "Choose.",
+          model: "anthropic/claude-sonnet-4-5",
+          ...REQUIRED_IO,
+        },
+        { id: "left", system_prompt: "Left.", model: "anthropic/claude-sonnet-4-5", ...REQUIRED_IO },
+        { id: "right", system_prompt: "Right.", model: "anthropic/claude-sonnet-4-5", ...REQUIRED_IO },
+      ],
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues.some((issue) => issue.code === "function.routing_conflicts_with_if")).toBe(false);
+  });
+
   it("missing id → pipeline.invalid_shape", async () => {
     const outcome = await loadPipelineFromObjectOutcome({
       id: "",

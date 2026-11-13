@@ -8,7 +8,10 @@ import type {
   ResolvedPipelineStageNode,
 } from "../types/pipeline.js";
 import type { StageScheduleState } from "./pipelineScheduler.js";
+import type { FunctionRouteSelections } from "./functionRoute.js";
 import { evaluateRouteIf, type RouteIfEval } from "./routeIfEval.js";
+
+export type { FunctionRouteSelections };
 
 function definitionInstances(
   dag: ResolvedPipelineDag,
@@ -119,11 +122,61 @@ function anySucceededInboundEdgeMissed(
   return false;
 }
 
+function routeSelectionPending(
+  dag: ResolvedPipelineDag,
+  node: ResolvedPipelineStageNode,
+  states: Map<string, StageScheduleState>,
+  selections: FunctionRouteSelections | undefined,
+): boolean {
+  if (selections === undefined) return false;
+  for (const edge of predecessorEdges(node)) {
+    for (const parentId of expandJoinParent(dag, edge.id)) {
+      if (states.get(parentId) !== "succeeded") continue;
+      const parent = dag.nodes.find((item) => item.id === parentId);
+      if (parent?.routeFunction === undefined) continue;
+      if (!selections.has(parentId)) return true;
+    }
+  }
+  return false;
+}
+
+function functionSelectionExcludesJoin(
+  dag: ResolvedPipelineDag,
+  node: ResolvedPipelineStageNode,
+  states: Map<string, StageScheduleState>,
+  envelopes: Map<string, StageEnvelope>,
+  selections: FunctionRouteSelections | undefined,
+): boolean {
+  if (selections === undefined) return false;
+  const joinIds = new Set<string>();
+  if (node.definition_id !== undefined && node.definition_id !== node.id) {
+    joinIds.add(node.definition_id);
+  } else {
+    joinIds.add(node.id);
+  }
+  for (const edge of predecessorEdges(node)) {
+    for (const parentId of expandJoinParent(dag, edge.id)) {
+      if (states.get(parentId) !== "succeeded") continue;
+      const parent = dag.nodes.find((item) => item.id === parentId);
+      if (parent?.routeFunction === undefined) continue;
+      if (!selections.has(parentId)) continue;
+      if (edge.if !== undefined) {
+        const verdict = evaluateRouteIf(edge.if, envelopes.get(parentId)?.payload);
+        if (verdict !== "fire") continue;
+      }
+      const selected = selections.get(parentId) ?? [];
+      if (!selected.some((id) => joinIds.has(id))) return true;
+    }
+  }
+  return false;
+}
+
 function multiParentJoinAllowsRun(
   dag: ResolvedPipelineDag,
   node: ResolvedPipelineStageNode,
   states: Map<string, StageScheduleState>,
   envelopes: Map<string, StageEnvelope>,
+  selections?: FunctionRouteSelections,
 ): boolean {
   const edges = predecessorEdges(node);
   if (expandJoinParents(dag, edges).length < 2) return false;
@@ -131,6 +184,7 @@ function multiParentJoinAllowsRun(
   if (disposition === undefined || !disposition.allTerminal) return false;
   if (disposition.hasFailed) return false;
   if (!disposition.hasSucceeded) return false;
+  if (functionSelectionExcludesJoin(dag, node, states, envelopes, selections)) return false;
   if (!disposition.hasSkipped) {
     return everySucceededInboundEdgeFired(dag, edges, states, envelopes);
   }
@@ -149,6 +203,7 @@ function isStalledMultiParentJoin(
   node: ResolvedPipelineStageNode,
   states: Map<string, StageScheduleState>,
   envelopes: Map<string, StageEnvelope>,
+  selections?: FunctionRouteSelections,
 ): boolean {
   const edges = predecessorEdges(node);
   if (edges.length <= 1) return false;
@@ -156,6 +211,7 @@ function isStalledMultiParentJoin(
   if (disposition === undefined || !disposition.allTerminal) return false;
   if (disposition.hasFailed) return false;
   if (!disposition.hasSucceeded) return true;
+  if (functionSelectionExcludesJoin(dag, node, states, envelopes, selections)) return true;
   if (disposition.hasSkipped) return false;
   return anySucceededInboundEdgeMissed(dag, edges, envelopes);
 }
@@ -165,21 +221,26 @@ export function joinAllowsRun(
   stageId: string,
   states: Map<string, StageScheduleState>,
   envelopes: Map<string, StageEnvelope>,
+  selections?: FunctionRouteSelections,
 ): boolean {
   const node = dag.nodes.find((n) => n.id === stageId);
   if (!node) return false;
   const edges = predecessorEdges(node);
   if (edges.length === 0) return true;
+  if (routeSelectionPending(dag, node, states, selections)) return false;
   if (expandJoinParents(dag, edges).length >= 2) {
-    return multiParentJoinAllowsRun(dag, node, states, envelopes);
+    return multiParentJoinAllowsRun(dag, node, states, envelopes, selections);
   }
   const edge = edges[0]!;
   const parentNeedId =
     typeof node.needs === "string" && node.needs ? node.needs : edge.id;
   const parentId = expandJoinParent(dag, parentNeedId)[0]!;
   if (states.get(parentId) !== "succeeded") return false;
-  if (edge.if === undefined) return true;
-  return inboundEdgeFired(edge, parentId, states, envelopes);
+  if (edge.if !== undefined && !inboundEdgeFired(edge, parentId, states, envelopes)) {
+    return false;
+  }
+  if (functionSelectionExcludesJoin(dag, node, states, envelopes, selections)) return false;
+  return true;
 }
 
 export type InboundAfterSuccess = RouteIfEval | "ungated";
@@ -212,11 +273,12 @@ export function pickStalledJoinSkips(
   dag: ResolvedPipelineDag,
   states: Map<string, StageScheduleState>,
   completedEnvelopes: Map<string, StageEnvelope> = new Map(),
+  selections?: FunctionRouteSelections,
 ): string[] {
   const ids: string[] = [];
   for (const node of dag.nodes) {
     if (states.get(node.id) !== "pending") continue;
-    if (isStalledMultiParentJoin(dag, node, states, completedEnvelopes)) {
+    if (isStalledMultiParentJoin(dag, node, states, completedEnvelopes, selections)) {
       ids.push(node.id);
     }
   }

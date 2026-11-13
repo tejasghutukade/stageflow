@@ -2,6 +2,7 @@
  * Parse IR `pre_emit_checks` (emit-phase). Target `verify` emit items are mapped
  * in yamlDialect.ts then parsed here. Legacy YAML still authors this key.
  */
+import { parseFunctionGrants } from "./loadFunction.js";
 import { STAGE_GATE_KINDS, type StageGateKind } from "../types/stage.js";
 import type { PreEmitCheck } from "../types/preEmitCheck.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
@@ -48,6 +49,15 @@ function parsePreEmitCheck(
       );
     }
     return loadSuccess({ id, type: "gate", kind: raw.kind });
+  }
+
+  if (raw.type === "function") {
+    const grants = parseFunctionGrants(raw.grants, `[${index}].grants`);
+    if (!grants.ok) return failure(label, grants.message);
+    if (typeof raw.function !== "string" || raw.function.trim() === "") {
+      return failure(label, `[${index}] function check requires a function id`);
+    }
+    return loadSuccess({ id, type: "function", function: raw.function.trim(), grants: grants.value });
   }
 
   if (raw.type === "artifact_declared") {

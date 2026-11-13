@@ -1,0 +1,4 @@
+id: lane-pick
+goal: Emit lane ship so the routing function selects the ship stage
+context: lane_pick reads payload.lane. When that field is missing it uses the optional host variable DEFAULT_LANE.
+constraints: The decide stage must emit lane ship. Do not change the function file during the run.

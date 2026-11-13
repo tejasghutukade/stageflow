@@ -106,10 +106,13 @@ export function createAgentHostContext(options: {
     | "channels"
     | "memories"
     | "evalRunManager"
+    | "functionService"
+    | "functionInvoker"
   >;
 }): AgentHostContext {
   const service = new AgentService({
     store: new AgentStore(options.connection),
+    connection: options.connection,
     environment:
       options.environment ??
       createAgentEnvironment({

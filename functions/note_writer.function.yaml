@@ -1,0 +1,46 @@
+id: note_writer
+name: Note writer
+description: Writes a one-line note into the attempt artifacts. NOTE_LABEL is an optional prefix.
+kind: tool
+tool_name: note_writer
+tool_description: Write a one-line note into the attempt artifacts and return its path and size.
+timeout_ms: 5000
+input_schema:
+  type: object
+  properties:
+    text:
+      type: string
+      description: The note text to store.
+  required:
+    - text
+  additionalProperties: false
+output_schema:
+  type: object
+  properties:
+    path:
+      type: string
+      description: Artifact path that was written.
+    bytes:
+      type: integer
+      description: Number of bytes written.
+    label:
+      type: string
+      description: Prefix taken from NOTE_LABEL, or "note" when that variable is unset.
+  required:
+    - path
+    - bytes
+    - label
+  additionalProperties: false
+source: |
+  export const access = {
+    artifacts: "write",
+    env: ["NOTE_LABEL?"],
+    network: [],
+  };
+  export default async function execute(context) {
+    const text = context.input && typeof context.input.text === "string" ? context.input.text : "";
+    const label = context.env.NOTE_LABEL ? String(context.env.NOTE_LABEL) : "note";
+    const body = label + ": " + text + "\n";
+    await context.artifacts.write("note.txt", body);
+    return { path: "note.txt", bytes: body.length, label };
+  }

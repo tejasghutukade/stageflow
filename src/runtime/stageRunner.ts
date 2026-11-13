@@ -31,7 +31,16 @@ import {
   openStageAttempt,
   type OperatorCatalog,
 } from "./stageAttemptBootstrap.js";
+import { runWithFunctionChecks, type FunctionCheckScope } from "../envelope/functionVerification.js";
+import { commitFunctionRoute, type FunctionRouteInvoker } from "./functionRoute.js";
+import { stageFunctionCallPlace } from "../functions/stageCall.js";
+import { sqliteConnectionFromStore } from "../runstore/createStore.js";
 import { createVerifiedStageExecution } from "./verifiedStageExecution.js";
+import {
+  createFunctionCheckScope,
+  functionIdsForStage,
+  pinMissingRunFunctions,
+} from "./stageFunctionChecks.js";
 import { BROWSER_STAGE_PATTERNS, redact } from "../logging/redact.js";
 import { getNamedSecrets } from "../logging/namedSecrets.js";
 import { isStageTimeoutReason } from "../agent/stageTimeout.js";
@@ -80,6 +89,7 @@ export type RunStageOptions = {
   stageEnv?: Record<string, string>;
   /** Test seam for the Host login check run by a `browser_login` verify item. */
   browser?: Pick<StageBrowserSupport, "runner" | "loginCheck">;
+  functionRouteInvoker?: FunctionRouteInvoker;
   /**
    * Runs after the agent turn and before completion verification records a
    * verdict. Used to copy a sandbox desk back onto the host tree.
@@ -309,6 +319,43 @@ export async function runStage(
       attemptCtx,
     });
   }
+  let functionScope: FunctionCheckScope | undefined;
+  const functionIds = functionIdsForStage(stage, dag, stageId);
+  if (functionIds.length > 0) {
+    const db = sqliteConnectionFromStore(store);
+    if (factoryCwd === undefined || db === undefined) {
+      const reason = "function checks require a project store";
+      await appendLifecycleEventAndPatchExecution({
+        store,
+        runId,
+        stageId,
+        event: { event: "failed", reason },
+        attemptCtx,
+      });
+      return { ok: false, reason };
+    }
+    try {
+      await pinMissingRunFunctions(db, factoryCwd, runId, functionIds);
+      functionScope = createFunctionCheckScope({
+        db,
+        projectRoot: factoryCwd,
+        runId,
+        stageId,
+        attempt,
+        roots,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      await appendLifecycleEventAndPatchExecution({
+        store,
+        runId,
+        stageId,
+        event: { event: "failed", reason },
+        attemptCtx,
+      });
+      return { ok: false, reason };
+    }
+  }
   const verifiedExecution = createVerifiedStageExecution({
     store,
     runId,
@@ -331,6 +378,7 @@ export async function runStage(
           },
         }
       : {}),
+    ...(functionScope !== undefined ? { functions: functionScope } : {}),
   });
   await verifiedExecution.prepare();
   console.error(`Running stage ${stageId} (${stage.model})...`);
@@ -391,22 +439,26 @@ export async function runStage(
 
   let outcome: RunStageYieldLoopResult;
   try {
-    outcome = await runStageYieldLoop({
-      handle,
-      runId,
-      stageId,
-      hitl,
-      workerMode,
-      store: workerMode ? store : undefined,
-      attemptCtx,
-      skipGates,
-      gateContext: await stageGateContext({
-        runDir: workspaceDir ?? store.getWorkspaceDir(runId),
+    const yieldLoop = async () =>
+      runStageYieldLoop({
+        handle,
         runId,
         stageId,
-        browser: stage.browser,
-      }),
-    });
+        hitl,
+        workerMode,
+        store: workerMode ? store : undefined,
+        attemptCtx,
+        skipGates,
+        gateContext: await stageGateContext({
+          runDir: workspaceDir ?? store.getWorkspaceDir(runId),
+          runId,
+          stageId,
+          browser: stage.browser,
+        }),
+      });
+    outcome = await (functionScope !== undefined
+      ? runWithFunctionChecks(functionScope, yieldLoop)
+      : yieldLoop());
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     const synced = await runBeforeVerify(beforeVerify);
@@ -467,7 +519,7 @@ export async function runStage(
         };
       }
     }
-    return await finalizeStageResult({
+    const finalized = await finalizeStageResult({
       store,
       runId,
       stageId,
@@ -476,6 +528,33 @@ export async function runStage(
       attemptCtx,
       browser: stage.browser !== undefined,
     });
+    if (
+      finalized.ok &&
+      finalized.envelope.status === "success" &&
+      finalized.envelope.feedback_loop?.action !== "send_back"
+    ) {
+      await commitFunctionRoute({
+        store,
+        dag,
+        runId,
+        stageId,
+        attempt,
+        envelope: finalized.envelope,
+        projectRoot: factoryCwd,
+        invoker: options.functionRouteInvoker,
+        place: stageFunctionCallPlace({
+          runWorkspaceDir: roots.runWorkspaceDir,
+          stageId,
+          attempt,
+          checkoutRoot: roots.checkoutRoot,
+          cwd: roots.cwd,
+          containerName: roots.containerName,
+          containerDockerBin: roots.containerDockerBin,
+          synced: true,
+        }),
+      });
+    }
+    return finalized;
   } finally {
     const timedOut = isStageTimeoutReason(
       outcome.ok ? undefined : outcome.reason,

@@ -59,9 +59,16 @@ export type FeedbackLoopContext = {
 
 export type StageRunInput = {
   roots: StageRoots;
+  /**
+   * Catalog project that owns `functions/`. Unbound stages use the run
+   * workspace as `roots.cwd`, which does not contain that directory.
+   */
+  projectRoot?: string;
   stage: LoadedStageConfig;
   /** Runtime instance id (`work~2`). Defaults to `stage.id` when omitted. */
   stageId?: string;
+  /** Owning pipeline run, when the Host has one. Used to pin function tools. */
+  runId?: string;
   task: TaskFile;
   priorEnvelope: StageEnvelope | null;
   priorEnvelopes?: StageEnvelope[];

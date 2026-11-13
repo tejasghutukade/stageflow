@@ -49,6 +49,8 @@ import { InstructionsEditor } from "./InstructionsEditor";
 import { McpToolPicker } from "./McpToolPicker";
 import { PermissionTree } from "./PermissionTree";
 import { BUILTIN_PERMISSION_GROUPS, grantedToolIds, operatorOnlyToolNames, stageflowPermissionGroups } from "../model/permissions";
+import { AgentFunctionTools } from "../../functions/AgentFunctionTools";
+import { readAgentFunctions, type FunctionAttachmentDraft } from "../../functions/functionAttachments";
 
 const STREAMED_PROVIDERS = ["agentmail", "imessage"];
 
@@ -405,6 +407,19 @@ export function AgentDefinitionForm({
               : "Can't write anywhere. Tick a write tool to change files. Stageflow sets the project root; the agent can never choose a path."}
           </span>
         </div>
+        <AgentFunctionTools
+          attachments={readAgentFunctions(def.tools as { functions?: FunctionAttachmentDraft[] })}
+          onChange={
+            update
+              ? (next: FunctionAttachmentDraft[]) => {
+                  const tools = { ...def.tools } as AgentDefinition["tools"] & { functions?: FunctionAttachmentDraft[] };
+                  if (next.length === 0) delete tools.functions;
+                  else tools.functions = next;
+                  setTools(tools);
+                }
+              : undefined
+          }
+        />
         <AgentMemoriesField definition={def} onChange={update} />
 
         <div className="flex flex-col gap-2">

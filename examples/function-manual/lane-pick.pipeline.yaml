@@ -1,0 +1,80 @@
+id: lane-pick
+stages:
+  - id: decide
+    entry: true
+    model: openrouter/nvidia/nemotron-3.5-lightning:free
+    function:
+      id: lane_pick
+      grants:
+        - id: env_default_lane
+    route:
+      - to: ship
+      - to: hold
+    system_prompt: |
+      Choose the ship lane.
+      Emit a success envelope whose payload is { "lane": "ship" }.
+      Do not call any other tool after the envelope.
+    io:
+      input:
+        schema:
+          type: object
+          additionalProperties: false
+      output:
+        schema:
+          type: object
+          required:
+            - lane
+          properties:
+            lane:
+              type: string
+          additionalProperties: false
+
+  - id: ship
+    model: openrouter/nvidia/nemotron-3.5-lightning:free
+    system_prompt: |
+      The lane pick selected this stage.
+      Emit a success envelope whose payload is { "lane": "ship" }.
+    io:
+      input:
+        schema:
+          type: object
+          required:
+            - lane
+          properties:
+            lane:
+              type: string
+          additionalProperties: false
+      output:
+        schema:
+          type: object
+          required:
+            - lane
+          properties:
+            lane:
+              type: string
+          additionalProperties: false
+
+  - id: hold
+    model: openrouter/nvidia/nemotron-3.5-lightning:free
+    system_prompt: |
+      The lane pick selected this stage.
+      Emit a success envelope whose payload is { "lane": "hold" }.
+    io:
+      input:
+        schema:
+          type: object
+          required:
+            - lane
+          properties:
+            lane:
+              type: string
+          additionalProperties: false
+      output:
+        schema:
+          type: object
+          required:
+            - lane
+          properties:
+            lane:
+              type: string
+          additionalProperties: false

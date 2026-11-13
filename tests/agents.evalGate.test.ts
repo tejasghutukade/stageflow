@@ -258,6 +258,57 @@ describe("eval gate: registry wiring", () => {
   });
 });
 
+describe("eval gate: function tests", () => {
+  const functionTester = (fx: Awaited<ReturnType<typeof setup>>) =>
+    ({
+      ...fx.definition,
+      tools: { ...fx.definition.tools, stageflow: { groups: [], tools: ["test_function"] } },
+    }) as Awaited<ReturnType<typeof setup>>["definition"];
+
+  const draftSource = "export default function execute() { return { ok: true }; }\n";
+
+  it("denies a real function test under read_only before the project is touched", async () => {
+    const fx = await setup();
+    const { readFile, writeFile } = await import("node:fs/promises");
+    const marker = `${fx.project}/tree-before-real-test.txt`;
+    await writeFile(marker, "untouched");
+    const gate = createEvalGate({ policy: policyOf(), definition: functionTester(fx), projectRoot: fx.project, stageflowHome: fx.home });
+    const decision = gate.decide({
+      id: "fn-real",
+      tool: "stageflow.test_function",
+      input: { id: "score", real: true, source: draftSource },
+    });
+    const record = gate.recordOf("fn-real");
+    expect(record).toMatchObject({ policyOutcome: "denied", status: "not_run" });
+    expect(decision).toMatchObject({ allow: false });
+    expect(await readFile(marker, "utf8")).toBe("untouched");
+  });
+
+  it("allows a draft function test without real", async () => {
+    const fx = await setup();
+    const gate = createEvalGate({ policy: policyOf(), definition: functionTester(fx), projectRoot: fx.project, stageflowHome: fx.home });
+    const decision = gate.decide({
+      id: "fn-draft",
+      tool: "stageflow.test_function",
+      input: { id: "score", source: draftSource },
+    });
+    expect(decision).toMatchObject({ allow: true });
+    expect(gate.recordOf("fn-draft")).toMatchObject({ policyOutcome: "ran", status: "ok" });
+  });
+
+  it("denies a real function test even when the eval policy is real", async () => {
+    const fx = await setup();
+    const gate = createEvalGate({ policy: policyOf({ tools: "real" }), definition: functionTester(fx), projectRoot: fx.project, stageflowHome: fx.home });
+    const decision = gate.decide({
+      id: "fn-real-policy",
+      tool: "stageflow.test_function",
+      input: { id: "score", real: true, source: draftSource },
+    });
+    expect(gate.recordOf("fn-real-policy")).toMatchObject({ policyOutcome: "denied", status: "not_run" });
+    expect(decision).toMatchObject({ allow: false });
+  });
+});
+
 describe("eval sessions are read only for operators", () => {
   it("refuses a console or mcp chat turn on an eval session", async () => {
     const fx = await setup();

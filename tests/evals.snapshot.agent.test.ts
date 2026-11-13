@@ -66,7 +66,7 @@ describe("stage snapshot stays byte-identical", () => {
       engine: { name: "promptfoo", version: "1.0.0", nodeVersion: "22.0.0" },
       stageflowVersion: "0.0.0",
     });
-    expect(JSON.stringify(snapshot)).toBe("{\"snapshot_version\":1,\"eval\":{\"id\":\"e\",\"path\":\"e.eval.yaml\",\"hash\":\"eh\",\"definition\":{\"id\":\"e\"}},\"overrides\":{\"repeats\":null,\"judge\":null,\"model\":null,\"max_cost_usd\":null,\"case_ids\":null,\"tags\":null,\"only_failed_from\":null},\"target\":{\"kind\":\"stage\",\"pipeline_path\":\"p.yaml\",\"stage_id\":\"s\",\"file\":null,\"stage_version_hash\":\"stagehash\",\"stage_definition\":{\"id\":\"s\"},\"model\":\"m\",\"model_tier\":\"t\",\"input_schema_hash\":null,\"output_schema_hash\":null},\"dataset\":{\"path\":\"d.jsonl\",\"hash\":\"dh\",\"format\":\"jsonl\",\"case_count\":1,\"cases_run\":1,\"cases_skipped\":0,\"skipped_case_ids\":[]},\"graders\":[],\"settings\":{\"repeats\":1,\"pass_threshold\":0.8,\"judge\":\"j\",\"judge_same_as_stage\":false,\"max_cost_usd\":1,\"concurrency\":1,\"suite_type\":\"capability\"},\"engine\":{\"name\":\"promptfoo\",\"version\":\"1.0.0\",\"rubric_prompt_version\":1,\"node_version\":\"22.0.0\"},\"stageflow_version\":\"0.0.0\"}");
+    expect(JSON.stringify(snapshot)).toBe("{\"snapshot_version\":2,\"eval\":{\"id\":\"e\",\"path\":\"e.eval.yaml\",\"hash\":\"eh\",\"definition\":{\"id\":\"e\"}},\"overrides\":{\"repeats\":null,\"judge\":null,\"model\":null,\"max_cost_usd\":null,\"case_ids\":null,\"tags\":null,\"only_failed_from\":null},\"target\":{\"kind\":\"stage\",\"pipeline_path\":\"p.yaml\",\"stage_id\":\"s\",\"file\":null,\"stage_version_hash\":\"stagehash\",\"stage_definition\":{\"id\":\"s\"},\"model\":\"m\",\"model_tier\":\"t\",\"input_schema_hash\":null,\"output_schema_hash\":null},\"dataset\":{\"path\":\"d.jsonl\",\"hash\":\"dh\",\"format\":\"jsonl\",\"case_count\":1,\"cases_run\":1,\"cases_skipped\":0,\"skipped_case_ids\":[]},\"graders\":[],\"settings\":{\"repeats\":1,\"pass_threshold\":0.8,\"judge\":\"j\",\"judge_same_as_stage\":false,\"max_cost_usd\":1,\"concurrency\":1,\"suite_type\":\"capability\"},\"engine\":{\"name\":\"promptfoo\",\"version\":\"1.0.0\",\"rubric_prompt_version\":1,\"node_version\":\"22.0.0\"},\"stageflow_version\":\"0.0.0\"}");
   });
 });
 
@@ -118,6 +118,12 @@ describe("agent fingerprint", () => {
 
   it("ignores read_only_tools order", () => {
     expect(fp(agentInput({}, { read_only_tools: ["a", "b"] }))).toBe(fp(agentInput({}, { read_only_tools: ["b", "a"] })));
+  });
+
+  it("changes when only a function source hash changes", () => {
+    const pins = (sourceHash: string) => [{ id: "invoice", source_hash: sourceHash, policy: "{\"apis\":[]}" }];
+    expect(fp({ ...STAGE_INPUT, functions: pins("aaa") })).not.toBe(fp({ ...STAGE_INPUT, functions: pins("bbb") }));
+    expect(fp({ ...STAGE_INPUT, functions: [] })).toBe(fp(STAGE_INPUT));
   });
 
   it("does not depend on cost cap or concurrency: they are snapshot settings, not component inputs", () => {
@@ -172,7 +178,7 @@ function agentSnapshotInput(settings: { max_cost_usd: number; concurrency: numbe
 describe("agent snapshot", () => {
   it("writes an agent target, effective limits, conversation settings and the conversation rubric version", () => {
     const snapshot = buildSnapshot(agentSnapshotInput({ max_cost_usd: 1, concurrency: 2 }));
-    expect(snapshot.snapshot_version).toBe(1);
+    expect(snapshot.snapshot_version).toBe(2);
     expect(snapshot.target.kind).toBe("agent");
     if (snapshot.target.kind !== "agent") return;
     expect(snapshot.target.limits_override.effective.max_turns).toBe(9);

@@ -1,0 +1,24 @@
+id: total-counts
+stages:
+  - id: total
+    system_prompt: |
+      Call the total_counts tool with a counts array of non-negative integers, then emit a success envelope whose payload is { "total": <that sum> }.
+    model: anthropic/claude-sonnet-4-5
+    io:
+      input:
+        schema:
+          type: object
+          additionalProperties: false
+      output:
+        schema:
+          type: object
+          required:
+            - total
+          properties:
+            total:
+              type: integer
+          additionalProperties: false
+    tools:
+      functions:
+        - id: total_counts
+          grants: []

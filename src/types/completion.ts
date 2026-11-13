@@ -1,3 +1,4 @@
+import type { FunctionGrant } from "../config/loadFunction.js";
 import type { StageGateKind } from "./stage.js";
 
 export const COMPLETION_VERIFICATION_FAILURE_PREFIX =
@@ -26,7 +27,8 @@ export type CompletionCheck =
   | { id: string; type: "payload_schema" }
   | { id: string; type: "gate"; kind: StageGateKind }
   | { id: string; type: "checkout_changes"; path_fields?: string[] }
-  | { id: string; type: "browser_login" };
+  | { id: string; type: "browser_login" }
+  | { id: string; type: "function"; function: string; grants: FunctionGrant[] };
 
 export type CompletionContract = {
   mode: "all";

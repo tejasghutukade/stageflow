@@ -132,6 +132,28 @@ describe("escalation guard", () => {
     expect(same).toBeNull();
   });
 
+  it("refuses a real function test even when the agent service is missing", async () => {
+    const refused = await checkAgentCaller(
+      "test_function",
+      { id: "score", real: true, source: "export default function execute() { return {}; }\n" },
+      caller,
+      undefined,
+      "/x",
+    );
+    expect(refused?.message).toContain("real function test");
+  });
+
+  it("allows a draft function test without real", async () => {
+    const allowed = await checkAgentCaller(
+      "test_function",
+      { id: "score", source: "export default function execute() { return {}; }\n" },
+      caller,
+      undefined,
+      "/x",
+    );
+    expect(allowed).toBeNull();
+  });
+
   it("refuses editing itself, restoring or enabling a stronger agent, and deciding its own approvals", async () => {
     const def = { id: "boss", name: "boss", instructions: "x" };
     expect((await checkAgentCaller("save_agent", { id: "boss", definition: def }, caller, fakeService as never, "/x"))?.message).toContain("own definition");

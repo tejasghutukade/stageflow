@@ -19,6 +19,7 @@ my-project/
     hello.pipeline.yaml       # inline or uses: stage entries
   tasks/
     hello.task.yaml
+  functions/                  # optional: <id>.function.{yaml,yml,js} (see Functions)
   evals/                      # optional: *.eval.yaml (see Evals)
   datasets/                   # optional: *.dataset.jsonl|json|csv
   workshop/                   # Workshop Author saves (scan root; created on the first save)
@@ -41,6 +42,7 @@ Runnable examples live under [`examples/`](../examples/). This repo's manifest i
 | Eval | `*.eval.yaml` | `review-findings.eval.yaml` |
 | Dataset | `*.dataset.jsonl`, `*.dataset.json`, `*.dataset.csv` | `review-diffs.dataset.jsonl` |
 | Stage (external) | any `*.yaml` beside pipeline or under shared pool | `research.yaml`, `../stages/clarify.yaml` |
+| Function | `functions/<id>.function.yaml`, `functions/<id>.function.yml`, or `functions/<id>.function.js` | `functions/score_check.function.js` |
 
 CLI **`--pipeline` and `--task` require filesystem paths** — there is no bare-id fallback.
 
@@ -79,7 +81,7 @@ Each stage is an object with one of:
 
 `id` may be omitted when it is inferable from the `uses:` basename (`*.yaml` or `*.stage.yaml`).
 
-**Wiring** (any entry, including `uses:`): `route`, `entry`, `uses`, `on_verify_fail`, `replay_safe`. A Clone Chain emitter also takes `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`) — see [Clone Chain](#clone-chain). `mcp`, `browser`, `secrets`, and `requires` may sit on a `uses:` wrapper or on the body — see [Stage MCP](#stage-mcp), [Stage browser](#stage-browser), [Stage secrets](#stage-secrets), and [Toolchain requires](#toolchain-requires). `skill` is body-only — see [Skill binding](#skill-binding). `needs`, `fork`, `feedback_loop`, `route_select`, `allow_none`, `clonable`, and `clone_actions` are rejected. `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter also fail load.
+**Wiring** (any entry, including `uses:`): `route`, `function`, `entry`, `uses`, `on_verify_fail`, `replay_safe`. A Clone Chain emitter also takes `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`) — see [Clone Chain](#clone-chain). `mcp`, `browser`, `secrets`, and `requires` may sit on a `uses:` wrapper or on the body — see [Stage MCP](#stage-mcp), [Stage browser](#stage-browser), [Stage secrets](#stage-secrets), and [Toolchain requires](#toolchain-requires). `skill` is body-only — see [Skill binding](#skill-binding). `needs`, `fork`, `feedback_loop`, `route_select`, `allow_none`, `clonable`, and `clone_actions` are rejected. `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter also fail load.
 
 **Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `independence` (**optional** — `strict`, `persistent`, or `open`; omitted means `persistent`; see [Independence](#independence)), `checkout_context` (**optional** boolean, stage body only; omitted means off; see [Checkout context](#checkout-context)), `io` (**required** — both `io.input.schema` and `io.output.schema`), `verify`, `gate_kinds`, `skill`, `mcp`, `secrets`, `requires`, `timeout_ms`. Effective `model` is materialized at pipeline load — see [Model defaults and precedence](#model-defaults-and-precedence). `io.output.schema` is the producer contract for success `payload`; `io.input.schema` is what the stage requires to start. Omitting `io`, a side, or `schema` fails load (`stage.invalid_io`). JSON Schema subset: [Envelopes — io schemas](envelopes.md#io-schemas). `io.output.schema` implies emit-time payload validation on success. `verify` is one list of checks with `when: [emit]`, `[after]`, or both — see [Verify](#verify). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted). When the budget elapses the attempt fails with `stage timed out after …ms` and the session is kept so the operator can resume the same attempt (`sf runs resume` / Resume session) instead of retrying from scratch. `clonable` and `clone_actions` are not accepted. `clone_cap` and `clone_mode` belong on the pipeline entry of a Clone Chain emitter, not on the reusable stage body — see [Clone Chain](#clone-chain) and [Rejected clone fields](#rejected-clone-fields).
 
@@ -87,7 +89,7 @@ Each stage is an object with one of:
 
 `uses:` plus any body key except `mcp`, `secrets`, and `requires` is rejected (`pipeline.stage_uses_inline_conflict`). `mcp`, `secrets`, and `requires` may sit on the `uses:` wrapper. `skill:` on a `uses:` wrapper is rejected (`pipeline.stage_wrapper_skill_rejected`) — put it on the stage file or inline body.
 
-`on_verify_fail` is pipeline-stage wiring. It may sit beside `uses:` because a reusable stage can recover differently in different pipelines. `verify` belongs on the body (the `uses:` target or the inline entry), not on the wrapper.
+`on_verify_fail` is pipeline-stage wiring. It may sit beside `uses:` because a reusable stage can recover differently in different pipelines. `verify` belongs on the body (the `uses:` target or the inline entry), not on the wrapper. A routing `function` sits on the pipeline stage entry that owns `route`. A `type: function` check and `tools.functions` sit on the stage body. See [Functions](#functions).
 
 ### Upgrading older catalogs {#upgrading-older-catalogs}
 
@@ -270,7 +272,7 @@ A large `grep`, `find`, or `ls` result shares the per-turn inline cap with `read
 | Default when `when` is omitted | Types |
 | --- | --- |
 | `[emit]` | `gate` |
-| `[after]` | `command`, `checkout_changes`, `checklist`, `payload_schema` (verify check type — not the legacy `payload_schema:` field; see [Upgrading older catalogs](#upgrading-older-catalogs)) |
+| `[after]` | `command`, `checkout_changes`, `checklist`, `payload_schema` (verify check type — not the legacy `payload_schema:` field; see [Upgrading older catalogs](#upgrading-older-catalogs)), `function` |
 
 Emit-phase checks run in-session during `emit_stage_envelope` (soft reject: `isError`, no `terminate`). After-phase checks are Verified Stage Execution — hard proof after a candidate envelope is captured. See [Envelopes — emit-phase verify](envelopes.md#verify-emit) and [Verified Stage Execution](verified-stage-execution.md).
 
@@ -306,6 +308,9 @@ Check discriminator is `type:` (not `kind:`). Gate widgets still use `kind:` on 
 | `browser_login` | `id` | — | `after` only; needs `browser.check` on the stage and `headed` not `false`; see [Human login stage](#browser-human-login) |
 | `payload_schema` | `id` | — | `after` only; requires `io.output.schema` (optional re-check; emit already validates when that schema is present) |
 | `checkout_changes` | `id` | `path_fields` | `after` only |
+| `function` | `id`, `function` | `grants`, `when` | `after` (default), `emit`, or both |
+
+A `type: function` check names one verification function. `function` is that function's id. `grants` lists the capabilities the check allows. Each grant repeats the capability id and, for a file or API capability, the origin, methods, path prefix, credential reference, root, and path the definition declares. A missing function, a function of another kind, or a capability the attachment does not grant fails `sf validate` (`function.missing`, `function.kind_mismatch`, `function.under_granted`, `function.grant_not_requested`). A file grant `path: ""` or `path: "."` is the whole root. See [Functions](#functions).
 
 Check IDs are unique within the stage. `artifact.path` is relative to the stage attempt's artifact directory. Emit `type: artifact` is a basename list check on `envelope.artifacts` (no disk I/O). After `type: artifact` is an on-disk file under the attempt artifacts dir. `gate.kind` must also appear in the stage's `gate_kinds` (and that list must be non-empty so `ask_operator` is registered — omit / `[]` means no HITL tool). Each `checkout_changes.path_fields` entry must name a required array-of-strings field in `io.output.schema`. Optional `type: payload_schema` with `when: [after]` re-checks the captured payload against `io.output.schema` (see [Upgrading older catalogs](#upgrading-older-catalogs) for the legacy field vs this check type); emit-time validation already runs when that schema is present. `type: checklist` is scored against the success envelope's `checklist_attestations` field (one `{ check_id, items }` entry per checklist, matched as a set against the declared `items`) — see [Envelopes — Checklist attestations](envelopes.md#checklist-attestations).
 
@@ -1088,9 +1093,130 @@ Optional when a pipeline or manifest default can fill it:
 
 `checkout_context` is an optional boolean on the stage body. Omitted means off. Nothing fills it from the pipeline or the manifest. See [Checkout context](#checkout-context).
 
-Required on the file (not on the `uses:` wrapper): `io.input.schema` and `io.output.schema`. Optional body fields: `model` (when inherited from a higher default), `independence` (omitted means `persistent`), `checkout_context` (omitted means off; stage body only), `verify`, `gate_kinds`, `timeout_ms`, `skill` — see [Envelopes — io schemas](envelopes.md#io-schemas), [Independence](#independence), [Checkout context](#checkout-context), [Verify](#verify), and [Skill binding](#skill-binding). The loader also accepts `mcp:` here; prefer binding MCP on the pipeline entry (see [Stage MCP](#stage-mcp)). `io.input.schema` is the successor assignment contract (not the child's later `io.output.schema`). Wiring keys (`route`, `entry`, `on_verify_fail`, `needs`, `fork`, `route_select`, `allow_none`, `clonable`, `clone_cap`, `clone_mode`) are errors on an external stage file (body only — put wiring on the pipeline entry). `timeout_ms` is an optional positive integer millisecond attempt budget (default 60 minutes). When it elapses the attempt fails and the session is kept for `sf runs resume`.
+Required on the file (not on the `uses:` wrapper): `io.input.schema` and `io.output.schema`. Optional body fields: `model` (when inherited from a higher default), `independence` (omitted means `persistent`), `checkout_context` (omitted means off; stage body only), `verify`, `gate_kinds`, `timeout_ms`, `skill` — see [Envelopes — io schemas](envelopes.md#io-schemas), [Independence](#independence), [Checkout context](#checkout-context), [Verify](#verify), and [Skill binding](#skill-binding). The loader also accepts `mcp:` here; prefer binding MCP on the pipeline entry (see [Stage MCP](#stage-mcp)). `io.input.schema` is the successor assignment contract (not the child's later `io.output.schema`). Wiring keys (`route`, `function`, `entry`, `on_verify_fail`, `needs`, `fork`, `route_select`, `allow_none`, `clonable`, `clone_cap`, `clone_mode`) are errors on an external stage file (body only — put wiring on the pipeline entry). `timeout_ms` is an optional positive integer millisecond attempt budget (default 60 minutes). When it elapses the attempt fails and the session is kept for `sf runs resume`.
 
 Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixtures/stages/plan-review.yaml).
+
+## Functions (`functions/<id>.function.{yaml,yml,js}`) {#functions}
+
+This section is the field reference. For what a function is and how to write, attach, test and debug one, see [Functions](functions.md); for a first walkthrough, [Create your first function](guides-functions-first-function.md).
+
+A function is project-owned JavaScript. Author it as `functions/<id>.function.yaml` or `functions/<id>.function.yml` with a multiline `source` field, or as `functions/<id>.function.js` with YAML frontmatter (`---` … `---`) for metadata and an ESM body that is the executable `source`. The `id` matches the file stem in every format (`functions/score_check.function.js` has `id: score_check` in frontmatter or in the YAML file). An unmarked `*.js` or `*.ts` under `functions/` is not a definition and never appears in the catalog. TypeScript authoring is out of scope. When both `score_check.function.yaml` and `score_check.function.js` exist, `sf validate` reports `function.format_conflict` and neither file is runnable until one is removed. When the same id appears twice in one format family (for example `.function.yaml` and `.function.yml`), the code is `function.id_conflict`. The console, HTTP, and MCP share one write path. New creates default to `*.function.js`; saving an existing function keeps its format. There is no `sf functions` writer in this release: edit the file, or use the function tools while `sf ui` or `sf mcp` is running. `write_catalog_file` refuses `*.function.yaml`, `*.function.yml`, and `*.function.js`.
+
+On `*.function.js`, frontmatter fields match the table below except `source`, which lives only in the body. Capabilities and bindings follow the same access-declaration rules as YAML-authored source. Issue line numbers for access and syntax refer to the executable body, not frontmatter lines.
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `id` | yes | `[a-z][a-z0-9_]*`, max 64, starting with a letter. Fixed after create. Must match the file name |
+| `name` | yes | Operator-facing name, up to 120 characters |
+| `description` | no | Up to 500 characters |
+| `kind` | yes | `verification`, `routing`, or `tool`. Fixed after create |
+| `source` | yes (YAML files) | JavaScript module, at most 64 KiB. Must be `export default function execute(context)` or `export default async function execute(context)`. The module body is parsed and not executed during validation. It may start with an [`access` declaration](#function-access). On `*.function.js`, omit `source` from frontmatter; the file body after the closing `---` is the source |
+| `timeout_ms` | no | Integer from 1 to 30000. Omitted means 5000 |
+| `capabilities` | no | List of file, env, and API capabilities. Omitted means none. Omitted from the file when `source` declares `access`; the parsed definition still has the derived list |
+| `bindings` | no | Env aliases this function reads, each `{ alias, required? }`. `required` defaults to true. The alias must match an env capability. Omitted means none. Omitted from the file when `source` declares `access` |
+
+A tool also requires:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `tool_name` | yes | `[A-Za-z][A-Za-z0-9_]*`, max 64. The name the model sees |
+| `tool_description` | yes | What the tool does |
+| `input_schema` | yes | JSON Schema. The root is an object. Nesting stops at 8 levels, and one schema object has at most 64 properties |
+| `output_schema` | no | Same schema limits. When set, the returned JSON must match it |
+
+`tool_name`, `tool_description`, `input_schema`, and `output_schema` are rejected on a verification or a routing function.
+
+### Capabilities and bindings
+
+| Type | Fields | Who may declare it |
+|------|--------|--------------------|
+| `file` | `id`, `type: file`, `root: artifacts\|workspace`, `path` (relative, no `..`), `access: read\|write` | `write` is tool-only |
+| `env` | `id`, `type: env`, `alias` | Any kind. The value is copied into `context.env` under that alias |
+| `api` | `id`, `type: api`, `origin` (https origin, no path or user info), `methods` (`GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`), `path_prefix` (starts with `/`), `effect: read\|action`, optional `credential_ref` | `action` is tool-only |
+
+A capability `id` is `[a-z][a-z0-9_]*`, max 64, and unique in the file.
+
+### Access declaration {#function-access}
+
+A module may start with `export const access = { ... };`. Only whitespace and `//` or `/* */` comments may come before it. The Host reads that object as data. It does not run it. Any other `export const access`, or an `export let` / `export var access`, is `function.invalid_access` ("access must be the first statement in the file").
+
+| Key | Form | Default |
+|-----|------|---------|
+| `artifacts` | `"none"`, `"read"`, or `"write"` | `"none"` |
+| `workspace` | same three values. `"read"` or `"write"` grants the whole workspace root. That is broad; leave it `"none"` unless the function needs it | `"none"` |
+| `files` | array of `{ root: artifacts\|workspace, path, access: read\|write }`. `path` is relative to that root, with no `..` and no absolute path | omitted |
+| `env` | array of names. `"MIN_SCORE"` is required. `"REGION?"` is optional | `[]` |
+| `network` | array of `"https://host"` (read, `GET`, path `/`) or `{ origin, effect?: read\|action, methods?: string[], path?: string, credential?: string }`. `path` is the path prefix and defaults to `/`. `effect` defaults to `read`. Default methods are `GET` for read and `GET POST PUT PATCH DELETE` for action | `[]` |
+
+`write` and network `effect: "action"` are tool-only. The literal may use objects, arrays, single or double quotes, simple escapes, `true` / `false` / `null`, numbers, comments, and trailing commas. Spread, computed keys, calls, template strings, and other identifiers are `function.invalid_access` with a line and column in the source.
+
+The Host turns a valid declaration into capabilities, in this order: `artifacts`, `workspace`, `files`, `env`, `network`. Ids are `artifacts`, `workspace`, `file_<root>_<path>`, `env_<alias>` (lowercased), and `api_<host>` (`_port` when the origin's port is not 443). A collision adds `_2`, `_3`. Bindings follow the `env` names. Those derived lists are what grants, preflight, and history see. The file does not store `capabilities` or `bindings`.
+
+A save or a hand-edited file that also includes `capabilities` or `bindings` must leave them out, or they must match the derived lists. Otherwise the envelope code is `function.invalid` and each issue uses `function.access_conflict`: "Remove capabilities and bindings, or make them match the access declaration in the source". A module with no `access` declaration keeps explicit `capabilities` and `bindings`, including an empty list.
+
+`execute` can use `context.files` as before. It can also use `context.artifacts` and `context.workspace`. Each has `exists(path)`, `stat(path)`, `readText(path)`, `readJson(path)`, `list(path)`, and `write(path, content)`. `path` is relative to that root. `list()` and `list("")` and `list(".")` name the root. `context.files.list(root, path)` is the same read. `list` returns the immediate children, `{ name, type: "file" | "directory", size }`, sorted by name, at most 1000. A larger directory is `list_limit`. A file is `not_a_directory`. A missing directory is not found. A path the grant does not cover, including the parent of a file-scoped grant, is the same permission denial as any other file read. Sensitive names, devices, sockets, and symlinks that leave the root are left out of the list.
+
+A workspace write cannot create or replace an agent definition (`agents/**/*.agent.yaml`) or a function definition (`functions/**/*.function.yaml`, `.function.yml`, or `.function.js`) at any depth. The attempt artifacts root can still hold those names, and a non-definition file such as `functions/notes.txt` or a README under `agents/` stays writable.
+
+### HTTP errors {#function-http-errors}
+
+For a granted API capability inside a running function, a request body over 1 MiB is `file_limit` before the request is sent. A response body over 1 MiB is `uncertain_outcome` because the remote may already have acted on the request.
+
+An attachment grant names that capability id. A file grant also repeats `root` and `path`. An API grant also repeats `origin`, `methods`, `path_prefix`, and `credential_ref` when the capability has one. An env grant is only the capability id. A saved change to a capability does not apply to an existing attachment until that attachment grants the updated capability. `sf validate` reports `function.under_granted` when a declared capability is missing or no longer matches, and `function.grant_not_requested` when a grant names a capability the function does not declare.
+
+`context` passed to `execute` depends on kind. A verification receives the candidate success envelope and optional check input. A routing function receives the verified success envelope and the eligible children (`id`, `name`, and routing description). A tool receives model-supplied arguments on `input` and `envelope: null`. `env`, `files`, `artifacts`, `workspace`, and `http` exist only for granted capabilities. The sandbox calls are described in [Functions](functions.md#writing-the-code).
+
+A verification returns `{ passed: boolean, message?: string, details?: JsonValue }`. A routing function returns `{ nextStageIds: string[], reason?: string }` and may select only ids from the eligible children. A tool returns JSON that matches `output_schema` when one is set.
+
+### Attaching a function
+
+A stage check is on the stage body:
+
+```yaml
+verify:
+  - id: score-accepted
+    type: function
+    function: score_check
+    grants:
+      - id: report
+        root: artifacts
+        path: report.json
+      - id: min_score
+```
+
+The pipeline stage entry that owns `route` carries one routing function id. That stage's forward edges have no `if`. A stage uses route `if` or a routing function. `sf validate` reports `function.routing_requires_route` when a stage names a routing function but has no `route`, and `function.routing_conflicts_with_if` when a stage has both. When the function declares capabilities, the field is an object with `id` and `grants`. With no capabilities it is the id:
+
+```yaml
+stages:
+  - id: choose
+    function: pick_route
+    route:
+      - to: left
+      - to: right
+```
+
+```yaml
+function:
+  id: pick_route
+  grants:
+    - id: report
+      root: artifacts
+      path: report.json
+```
+
+Stage tools and agent tools use the same entry shape, `id` plus `grants`, and that list is separate from a `type: function` check:
+
+```yaml
+tools:
+  functions:
+    - id: total_counts
+      grants: []
+```
+
+On an agent the same list sits on `tools.functions` beside the other tool fields. A stage does not inherit an agent's functions, and an agent does not inherit a stage's.
+
+Runnable copies: [`examples/function-verify/`](../examples/function-verify/), [`examples/function-tool/`](../examples/function-tool/), and [`examples/function-manual/`](../examples/function-manual/).
 
 ## Tasks (`*.task.yaml`)
 
@@ -1125,7 +1251,7 @@ An agent is a project-owned definition. The file name is the agent id: `agents/<
 | `execution` | no | `trusted-local` (default) or `sandbox` |
 | `project_context` | no | Default `false`. Give sessions the project context |
 | `model` | no | `{ backend: pi\|claude, id?, thinking: off\|low\|medium\|high }` |
-| `tools` | no | `{ builtin: [read\|write\|shell] (whole groups), builtin_tools: [read\|grep\|find\|ls\|write\|edit\|bash] (single tools), stageflow: { groups: [...], tools: [...] }, mcp: { <server>: [tool names or "*"] }, skills: [], browser: bool }`. Groups and single tools combine: `builtin: [read]` plus `builtin_tools: [edit]` allows the four read tools and `edit`. `read` = read, grep, find, ls; `write` = write, edit; `shell` = bash |
+| `tools` | no | `{ builtin: [read\|write\|shell] (whole groups), builtin_tools: [read\|grep\|find\|ls\|write\|edit\|bash] (single tools), stageflow: { groups: [...], tools: [...] }, mcp: { <server>: [tool names or "*"] }, skills: [], browser: bool, functions: [{ id, grants }] }`. Groups and single tools combine: `builtin: [read]` plus `builtin_tools: [edit]` allows the four read tools and `edit`. `read` = read, grep, find, ls; `write` = write, edit; `shell` = bash. `functions` entries attach tool-kind [functions](#functions); each grant must match a capability the function declares |
 | `approvals` | no | `{ ask_first: [tool ids], approvers: { operators, channel_ids }, timeout_minutes, on_timeout: skip\|deny }`. `bash` always asks first when granted, whether or not it is listed |
 | `sub_agents`, `sub_agent_depth` | no | Agent ids this agent may delegate to; max nesting (default 1) |
 | `guardrails` | no | `{ block_patterns: [regex] }` — applied to assistant text after each turn |

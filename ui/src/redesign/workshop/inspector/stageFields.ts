@@ -1078,7 +1078,7 @@ export function findingsForPipelineField(
   for (const finding of findings) {
     if (finding.category !== "pipeline" && finding.category !== "catalog") continue;
     if (locateFindingField(finding, draft)) {
-      if (finding.code === "pipeline.dag_error" || finding.code === "pipeline.route_if_invalid") {
+      if (finding.code === "pipeline.dag_error" || finding.code === "pipeline.route_if_invalid" || finding.code === "function.routing_conflicts_with_if") {
         out.stages.push(finding);
       }
       continue;
@@ -1090,6 +1090,7 @@ export function findingsForPipelineField(
       finding.code === "pipeline.dag_error" ||
       finding.code === "pipeline.missing_stage" ||
       finding.code === "pipeline.route_if_invalid" ||
+      finding.code === "function.routing_conflicts_with_if" ||
       finding.code === "pipeline.route_all_gated" ||
       finding.code === "pipeline.string_stage_ref" ||
       finding.code === "pipeline.io_incompatible"

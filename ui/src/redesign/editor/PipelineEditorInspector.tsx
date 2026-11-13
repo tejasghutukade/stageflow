@@ -44,6 +44,8 @@ import {
   type InspectorFocusTarget,
 } from "./editorInspectorModel";
 import { stageUsedByCount } from "./pipelineEditorModel";
+import type { FunctionSummary } from "../../api/functions";
+import { FunctionAttachmentPanel } from "../functions/FunctionAttachmentPanel";
 
 const LABEL =
   "w-fit text-[11px] font-medium uppercase leading-normal tracking-[0.88px] text-[#8b8f98]";
@@ -69,6 +71,7 @@ export type PipelineEditorInspectorProps = {
   onOpenYaml?: (path: string) => void;
   focusRequest?: { field: string; nonce: number } | null;
   width?: number;
+  functions?: FunctionSummary[];
 };
 
 export function PipelineEditorInspector({
@@ -86,6 +89,7 @@ export function PipelineEditorInspector({
   onOpenYaml = () => {},
   focusRequest = null,
   width = 300,
+  functions,
 }: PipelineEditorInspectorProps) {
   const form = selectedStageId ? getStageForm(draft, selectedStageId) : null;
   const idKey = `${selectedStageId ?? ""}\0${form?.id ?? ""}`;
@@ -377,6 +381,12 @@ export function PipelineEditorInspector({
             <LuArrowUpRight className="size-3 shrink-0 text-[#8b8f98]" aria-hidden />
           </button>
         </div>
+        <FunctionAttachmentPanel
+          draft={draft}
+          stageId={form.id}
+          catalog={functions}
+          onDraftChange={onDraftChange}
+        />
       </div>
       {notice ? (
         <div className="flex w-full shrink-0 items-start gap-2 border-t border-t-[#ffffff12] px-3.5 py-2.5">

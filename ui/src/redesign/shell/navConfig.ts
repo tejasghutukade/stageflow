@@ -13,6 +13,7 @@ import {
   LuBookOpen,
   LuCompass,
   LuSparkles,
+  LuSquareFunction,
   LuZap,
 } from "react-icons/lu";
 
@@ -53,6 +54,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: "pipelines", label: "Pipelines", href: "#/pipelines", icon: LuLayers },
       { id: "agents", label: "Agents", href: "#/agents", icon: LuBot, experimental: true },
+      { id: "functions", label: "Functions", href: "#/functions", icon: LuSquareFunction },
       { id: "tasks", label: "Tasks", href: "#/tasks", icon: LuList },
       { id: "catalog", label: "Catalog", href: "#/catalog?tab=stages", icon: LuSparkles },
       { id: "evals", label: "Evals", href: "#/evals", icon: LuFlaskConical },

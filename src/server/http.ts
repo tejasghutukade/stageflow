@@ -207,6 +207,7 @@ import { handleAgentAuthorRoutes } from "./agentAuthorRoutes.js";
 import { handleGuideRoutes } from "./guideRoutes.js";
 import { handleInternalAgentRoutes } from "./internalAgentRoutes.js";
 import { handleAgentRoutes } from "./agentRoutes.js";
+import { handleFunctionRoutes } from "./functionRoutes.js";
 import { handleIdentityRoutes } from "./identityRoutes.js";
 import { handleIdentitySetupRoutes } from "./identitySetupRoutes.js";
 import { isListableExtension, listCatalogFiles } from "../config/listCatalogFiles.js";
@@ -454,6 +455,10 @@ export type OperatorRouteDeps = {
   consumerIdentity?: import("../identity/runtime.js").ConsumerIdentityRuntime;
   /** Shared with MCP when set by bootstrap. */
   agentHost?: AgentHostContext;
+  /** Shared with MCP when set by bootstrap. */
+  functionService?: import("../functions/service.js").FunctionService;
+  /** Shared with MCP when set by bootstrap. */
+  functionInvoker?: import("../functions/invoke.js").FunctionInvoker;
   /** Bootstrap fills this once the operator host exists, so evals can run against it. */
   operatorHostSlot?: { current?: import("../operatorAgent/types.js").OperatorAgentHost };
   evalRunManager?: EvalRunManager;
@@ -540,6 +545,8 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
               agentConversationBackend: agentHost.backend,
             }
           : {}),
+        ...(deps.functionService ? { functionService: deps.functionService } : {}),
+        ...(deps.functionInvoker ? { functionInvoker: deps.functionInvoker } : {}),
       },
     });
   if (deps.operatorHostSlot) deps.operatorHostSlot.current = operatorHost;
@@ -670,6 +677,27 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             }
           }
           if (await handleAgentRoutes(req, method, pathname, agentHost, agentProjectRoot, res, json)) return true;
+        }
+        if (pathname === "/api/functions" || pathname.startsWith("/api/functions/")) {
+          if (!deps.functionService) { json(res, 503, { code: "function.store_unavailable" }); return true; }
+          let functionProjectRoot = defaultAgentProjectRoot(cwd);
+          const requestedFunctionRoot = url.searchParams.get("project_root");
+          if (requestedFunctionRoot !== null && path.resolve(requestedFunctionRoot) !== path.resolve(functionProjectRoot)) {
+            try {
+              const resolved =
+                method === "GET"
+                  ? await resolveCatalogStartInput({ store, bootCwd: cwd }, requestedFunctionRoot)
+                  : await resolveWritableCatalogRoot({ store, bootCwd: cwd }, requestedFunctionRoot);
+              functionProjectRoot = resolved.wireRoot.path;
+            } catch (err) {
+              if (err instanceof CatalogPathError) {
+                json(res, 400, catalogPathErrorBody(err));
+                return true;
+              }
+              throw err;
+            }
+          }
+          if (await handleFunctionRoutes(req, method, pathname, deps.functionService, functionProjectRoot, res, json, deps.functionInvoker)) return true;
         }
         if (pathname === "/api/identity" || pathname.startsWith("/api/identity/")) {
           const identityAuthorization = deps.consumerAuthorization ?? deps.consumerIdentity?.current();
@@ -3900,6 +3928,8 @@ export async function startUiServer(
             ? { workshopOperatorHost: options.workshopOperatorHost }
             : {}),
           ...(boot.agentHost ? { agentHost: boot.agentHost } : {}),
+          ...(boot.functionService ? { functionService: boot.functionService } : {}),
+          ...(boot.functionInvoker ? { functionInvoker: boot.functionInvoker } : {}),
           ...(boot.operatorHostSlot ? { operatorHostSlot: boot.operatorHostSlot } : {}),
           ...(boot.evalRunManager ? { evalRunManager: boot.evalRunManager } : {}),
           ...(boot.evalServices ? { evalServices: boot.evalServices } : {}),

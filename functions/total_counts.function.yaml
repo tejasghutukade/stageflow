@@ -1,0 +1,38 @@
+id: total_counts
+name: Total counts
+description: Sum non-negative integer counts supplied by the caller.
+kind: tool
+tool_name: total_counts
+tool_description: Sum non-negative integer counts supplied by the agent.
+timeout_ms: 5000
+input_schema:
+  type: object
+  properties:
+    counts:
+      type: array
+      description: The counts to add together.
+      items:
+        type: integer
+        minimum: 0
+  required:
+    - counts
+  additionalProperties: false
+output_schema:
+  type: object
+  properties:
+    total:
+      type: integer
+      description: The sum of the counts.
+  required:
+    - total
+  additionalProperties: false
+source: |
+  export const access = {
+    artifacts: "none",
+    env: [],
+    network: [],
+  };
+  export default function execute(context) {
+    const counts = context.input.counts;
+    return { total: counts.reduce((sum, count) => sum + count, 0) };
+  }

@@ -1,0 +1,26 @@
+id: lane_pick
+name: Lane pick
+description: Chooses the ship or hold stage from the envelope lane, or DEFAULT_LANE when the envelope omits it.
+kind: routing
+timeout_ms: 5000
+source: |
+  export const access = {
+    artifacts: "none",
+    workspace: "none",
+    env: ["DEFAULT_LANE?"],
+    network: [],
+  };
+  export default function execute(context) {
+    const payload = context.envelope && context.envelope.payload && typeof context.envelope.payload === "object"
+      ? context.envelope.payload
+      : {};
+    const requested = typeof payload.lane === "string" ? payload.lane.trim().toLowerCase() : "";
+    const fallback = typeof context.env.DEFAULT_LANE === "string" ? context.env.DEFAULT_LANE.trim().toLowerCase() : "";
+    const lane = requested || fallback;
+    const children = Array.isArray(context.children) ? context.children : [];
+    const match = children.find((child) => child && child.id === lane);
+    if (!match) {
+      return { nextStageIds: [], reason: "No eligible stage matches lane " + (lane || "(empty)") };
+    }
+    return { nextStageIds: [match.id], reason: "Selected " + match.id };
+  }

@@ -94,7 +94,7 @@ describe("migration 017 and suggestion rows", () => {
     await store.close();
 
     const after = new Database(dbPath);
-    expect(CURRENT_SCHEMA_VERSION).toBe(19);
+    expect(CURRENT_SCHEMA_VERSION).toBe(22);
     expect(after.pragma("user_version", { simple: true })).toBe(CURRENT_SCHEMA_VERSION);
     after.close();
   });

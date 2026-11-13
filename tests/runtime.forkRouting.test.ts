@@ -3,7 +3,9 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createRunStore } from "../src/runstore/createStore.js";
+import { sqliteConnectionFromStore, createRunStore } from "../src/runstore/createStore.js";
+import { FunctionService } from "../src/functions/service.js";
+import { FunctionStore } from "../src/functions/store.js";
 import { RunManager } from "../src/runtime/runManager.js";
 import {
   applyForkSkipsFromEnvelopes,
@@ -717,5 +719,476 @@ describe("resume after exclusive route-if", () => {
     );
     expect(agent.openCounts.get("branch-a")).toBe(1);
     expect(agent.openCounts.get("branch-b")).toBeUndefined();
+  });
+});
+
+type RouteCall = {
+  stageId: string;
+  runId: string;
+  children: Array<{ id: string; name: string }>;
+  envelope: StageEnvelope;
+};
+
+function routeInvoker(
+  select: (call: RouteCall) => unknown,
+  probe?: (call: RouteCall) => Promise<void>,
+) {
+  const calls: RouteCall[] = [];
+  return {
+    calls,
+    async invoke(call: RouteCall) {
+      calls.push(call);
+      if (probe) await probe(call);
+      return { ok: true as const, value: select(call) };
+    },
+  };
+}
+
+async function installPick(root: string, store: ReturnType<typeof createRunStore>) {
+  const db = sqliteConnectionFromStore(store);
+  if (!db) throw new Error("run store has no connection");
+  await new FunctionService({ store: new FunctionStore(db) }).create(
+    root,
+    {
+      id: "pick",
+      name: "Pick",
+      kind: "routing",
+      source: "export default function execute() {\n  return { nextStageIds: [] };\n}\n",
+      capabilities: [],
+      bindings: [],
+    },
+    { source: "file" },
+  );
+}
+
+function attachRoute(loaded: Awaited<ReturnType<typeof loadPipeline>>, stageId: string) {
+  const node = loaded.dag.nodes.find((item) => item.id === stageId);
+  if (!node) throw new Error(`missing ${stageId}`);
+  (node as { routeFunction?: { id: string; grants: [] } }).routeFunction = {
+    id: "pick",
+    grants: [],
+  };
+}
+
+describe("function route", () => {
+  async function preparedRun(
+    pipeline: string,
+    agent: ReturnType<typeof stageKeyedAgent>,
+    invoker: ReturnType<typeof routeInvoker>,
+    mutate?: (loaded: Awaited<ReturnType<typeof loadPipeline>>) => void,
+  ) {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-fn-route-"));
+    const store = createRunStore({ rootDir: root });
+    await installPick(root, store);
+    const taskYaml = await readFile(SAMPLE_TASK, "utf8");
+    const task = loadTaskFromYaml(taskYaml, SAMPLE_TASK);
+    const loaded = await loadPipeline(pipelinePath(pipeline), {
+      cwd: root,
+      projectRoot: root,
+    });
+    mutate?.(loaded);
+    const run = await store.createRun({
+      pipelineId: loaded.pipeline.id,
+      taskYaml,
+      taskId: task.id,
+      pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
+    });
+    const prepared = {
+      task,
+      loaded,
+      run: { runId: run.runId, workspaceDir: run.workspaceDir },
+      agent,
+      store,
+      cwd: root,
+      projectRoot: root,
+    };
+    return { root, store, loaded, run, prepared, invoker };
+  }
+
+  async function runRouted(
+    pipeline: string,
+    behaviors: Parameters<typeof stageKeyedAgent>[0],
+    select: (call: RouteCall) => unknown,
+    mutate?: (loaded: Awaited<ReturnType<typeof loadPipeline>>) => void,
+    probe?: (call: RouteCall, store: ReturnType<typeof createRunStore>) => Promise<void>,
+  ) {
+    const invoker = routeInvoker(select);
+    const setup = await preparedRun(
+      pipeline,
+      stageKeyedAgent(behaviors, {
+        stageKey: (input) => input.stageId ?? input.stage.id,
+      }),
+      invoker,
+      mutate,
+    );
+    if (probe) {
+      const original = invoker.invoke.bind(invoker);
+      invoker.invoke = async (call) => {
+        await probe(call, setup.store);
+        return original(call);
+      };
+    }
+    const result = await runPipelineDag({
+      prepared: setup.prepared,
+      maxActiveStagesPerRun: 4,
+      executionMode: "inprocess",
+      functionRouteInvoker: invoker,
+    });
+    return { ...setup, result };
+  }
+
+  it("two eligible ids schedule both children", async () => {
+    const { result, store, run, invoker, prepared } = await runRouted(
+      "function-route",
+      {
+        choose: [{ type: "emit", envelope: okEnvelope("choose-ok") }],
+        left: [{ type: "emit", envelope: okEnvelope("left-ok") }],
+        right: [{ type: "emit", envelope: okEnvelope("right-ok") }],
+      },
+      () => ({ nextStageIds: ["left", "right"] }),
+    );
+    expect(result.ok).toBe(true);
+    expect(invoker.calls).toHaveLength(1);
+    expect(invoker.calls[0]?.children.map((child) => child.id).sort()).toEqual([
+      "left",
+      "right",
+    ]);
+    expect(prepared.agent.openCounts.get("left")).toBe(1);
+    expect(prepared.agent.openCounts.get("right")).toBe(1);
+    const execution = await store.getLatestStageExecution(run.runId, "choose");
+    expect(execution?.envelope?.fork_choice).toBeUndefined();
+    expect(
+      (execution as { function_route?: { status: string; nextStageIds: string[] } } | null)
+        ?.function_route,
+    ).toEqual({
+      status: "selected",
+      nextStageIds: ["left", "right"],
+      cloneExpansion: "not_needed",
+    });
+  });
+
+  it("an empty selection finishes that branch", async () => {
+    const { result, prepared } = await runRouted(
+      "function-route",
+      {
+        choose: [{ type: "emit", envelope: okEnvelope("choose-ok") }],
+        left: [{ type: "throw", message: "left must not run" }],
+        right: [{ type: "throw", message: "right must not run" }],
+      },
+      () => ({ nextStageIds: [] }),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.outcome).toBe("succeeded");
+    expect(prepared.agent.openCounts.get("left") ?? 0).toBe(0);
+    expect(prepared.agent.openCounts.get("right") ?? 0).toBe(0);
+    const detail = await prepared.store.readRun(prepared.run.runId);
+    expect(detail.stages.find((stage) => stage.stage_id === "left")?.status).toBe("skipped");
+    expect(detail.stages.find((stage) => stage.stage_id === "right")?.status).toBe("skipped");
+  });
+
+  it.each(["duplicate", "unknown"] as const)(
+    "a %s id fails routing and schedules nothing",
+    async (kind) => {
+      const { result, prepared, store, run } = await runRouted(
+        "function-route",
+        {
+          choose: [{ type: "emit", envelope: okEnvelope("choose-ok") }],
+          left: [{ type: "throw", message: "left must not run" }],
+          right: [{ type: "throw", message: "right must not run" }],
+        },
+        () => ({ nextStageIds: kind === "duplicate" ? ["left", "left"] : ["missing"] }),
+      );
+      expect(result.ok).toBe(false);
+      expect(result.outcome).toBe("failed");
+      expect(prepared.agent.openCounts.get("choose")).toBe(1);
+      expect(prepared.agent.openCounts.get("left") ?? 0).toBe(0);
+      expect(prepared.agent.openCounts.get("right") ?? 0).toBe(0);
+      const execution = await store.getLatestStageExecution(run.runId, "choose");
+      expect(
+        (execution as { function_route?: { status: string } } | null)?.function_route?.status,
+      ).toBe("error");
+      expect(execution?.envelope?.fork_choice).toBeUndefined();
+    },
+  );
+
+  it("a crash after the decision is stored resumes without calling the function", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-fn-route-stored-"));
+    const store = createRunStore({ rootDir: root });
+    await installPick(root, store);
+    const taskYaml = await readFile(SAMPLE_TASK, "utf8");
+    const task = loadTaskFromYaml(taskYaml, SAMPLE_TASK);
+    const loaded = await loadPipeline(pipelinePath("function-route"), {
+      cwd: root,
+      projectRoot: root,
+    });
+    const envelope = okEnvelope("choose-ok");
+    const run = await store.createRun({
+      pipelineId: loaded.pipeline.id,
+      taskYaml,
+      taskId: task.id,
+      pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
+    });
+    await store.createStageExecution(run.runId, "choose");
+    await store.appendStageEvent(run.runId, "choose", { event: "started" });
+    await store.appendStageEvent(run.runId, "choose", { event: "succeeded" });
+    await store.writeEnvelope(run.runId, "choose", envelope);
+    await store.updateStageExecution(run.runId, "choose", 1, {
+      function_route: { status: "selected", nextStageIds: ["left"] },
+    } as never);
+    await store.updateRunStatus(run.runId, "running");
+    const agent = stageKeyedAgent({
+      left: [{ type: "emit", envelope: okEnvelope("left-ok") }],
+      right: [{ type: "throw", message: "right must not run" }],
+    });
+    const invoker = routeInvoker(() => ({ nextStageIds: ["left", "right"] }));
+    const result = await resumeRun({
+      prepared: {
+        task,
+        loaded,
+        run: { runId: run.runId, workspaceDir: run.workspaceDir },
+        agent,
+        store,
+        cwd: root,
+        projectRoot: root,
+      },
+      maxActiveStagesPerRun: 4,
+      resumeFromStageId: "choose",
+      initialPrior: envelope,
+      executionMode: "inprocess",
+      functionRouteInvoker: invoker,
+    });
+    expect(result.ok).toBe(true);
+    expect(invoker.calls).toHaveLength(0);
+    expect(agent.openCounts.get("choose") ?? 0).toBe(0);
+    expect(agent.openCounts.get("left")).toBe(1);
+    expect(agent.openCounts.get("right") ?? 0).toBe(0);
+  });
+
+  it("a crash after success and before the decision retries routing once", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-fn-route-missing-"));
+    const store = createRunStore({ rootDir: root });
+    await installPick(root, store);
+    const taskYaml = await readFile(SAMPLE_TASK, "utf8");
+    const task = loadTaskFromYaml(taskYaml, SAMPLE_TASK);
+    const loaded = await loadPipeline(pipelinePath("function-route"), {
+      cwd: root,
+      projectRoot: root,
+    });
+    const envelope = okEnvelope("choose-ok");
+    const run = await store.createRun({
+      pipelineId: loaded.pipeline.id,
+      taskYaml,
+      taskId: task.id,
+      pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
+    });
+    await store.createStageExecution(run.runId, "choose");
+    await store.appendStageEvent(run.runId, "choose", { event: "started" });
+    await store.appendStageEvent(run.runId, "choose", { event: "succeeded" });
+    await store.writeEnvelope(run.runId, "choose", envelope);
+    await store.updateRunStatus(run.runId, "running");
+    const agent = stageKeyedAgent({
+      left: [{ type: "emit", envelope: okEnvelope("left-ok") }],
+      right: [{ type: "throw", message: "right must not run" }],
+    });
+    const childEventsAtInvoke: number[] = [];
+    const invoker = routeInvoker(
+      () => ({ nextStageIds: ["left"] }),
+      async () => {
+        const left = await store.listStageEvents(run.runId, "left");
+        const right = await store.listStageEvents(run.runId, "right");
+        childEventsAtInvoke.push(left.length + right.length);
+      },
+    );
+    const result = await resumeRun({
+      prepared: {
+        task,
+        loaded,
+        run: { runId: run.runId, workspaceDir: run.workspaceDir },
+        agent,
+        store,
+        cwd: root,
+        projectRoot: root,
+      },
+      maxActiveStagesPerRun: 4,
+      resumeFromStageId: "choose",
+      initialPrior: envelope,
+      executionMode: "inprocess",
+      functionRouteInvoker: invoker,
+    });
+    expect(result.ok).toBe(true);
+    expect(invoker.calls).toHaveLength(1);
+    expect(childEventsAtInvoke).toEqual([0]);
+    expect(agent.openCounts.get("choose") ?? 0).toBe(0);
+    expect(agent.openCounts.get("left")).toBe(1);
+    expect(agent.openCounts.get("right") ?? 0).toBe(0);
+  });
+
+  it("a stored routing error stays failed until routing-only recovery", async () => {
+    let next: unknown = { nextStageIds: ["left", "left"] };
+    const invoker = routeInvoker(() => next);
+    const setup = await preparedRun(
+      "function-route",
+      stageKeyedAgent({
+        choose: [{ type: "emit", envelope: okEnvelope("choose-ok") }],
+        left: [{ type: "emit", envelope: okEnvelope("left-ok") }],
+        right: [{ type: "throw", message: "right must not run" }],
+      }),
+      invoker,
+    );
+    const failed = await runPipelineDag({
+      prepared: setup.prepared,
+      maxActiveStagesPerRun: 4,
+      executionMode: "inprocess",
+      functionRouteInvoker: invoker,
+    });
+    expect(failed.ok).toBe(false);
+    expect(setup.prepared.agent.openCounts.get("choose")).toBe(1);
+    expect(setup.prepared.agent.openCounts.get("left") ?? 0).toBe(0);
+    const scheduler = await import("../src/runtime/pipelineScheduler.js");
+    expect(typeof scheduler.recoverFunctionRoute).toBe("function");
+    next = { nextStageIds: ["left"] };
+    const recovered = await scheduler.recoverFunctionRoute!({
+      prepared: setup.prepared,
+      stageId: "choose",
+      maxActiveStagesPerRun: 4,
+      executionMode: "inprocess",
+      functionRouteInvoker: invoker,
+    });
+    expect(recovered.ok).toBe(true);
+    expect(setup.prepared.agent.openCounts.get("choose")).toBe(1);
+    expect(setup.prepared.agent.openCounts.get("left")).toBe(1);
+    expect(setup.prepared.agent.openCounts.get("right") ?? 0).toBe(0);
+  });
+
+  it("send-back releases no forward function selection and continue selects forward ids", async () => {
+    const seen: Array<string | undefined> = [];
+    const { result, prepared, invoker } = await runRouted(
+      "route-loop-basic",
+      {
+        plan: [{ type: "emit", envelope: okEnvelope("plan-ok") }],
+        implement: [
+          { type: "emit", envelope: okEnvelope("implement-1") },
+          { type: "emit", envelope: okEnvelope("implement-2") },
+        ],
+        review: [
+          {
+            type: "emit",
+            envelope: okEnvelope("send-back", {
+              feedback_loop: { action: "send_back", target: "implement" },
+            }),
+          },
+          {
+            type: "emit",
+            envelope: okEnvelope("continue", {
+              feedback_loop: { action: "continue" },
+            }),
+          },
+        ],
+        submit: [{ type: "emit", envelope: okEnvelope("submit-ok") }],
+      },
+      (call) => {
+        seen.push(call.envelope.feedback_loop?.action);
+        return { nextStageIds: ["submit"] };
+      },
+      (loaded) => attachRoute(loaded, "review"),
+    );
+    expect(result.ok).toBe(true);
+    expect(seen).toEqual(["continue"]);
+    expect(invoker.calls).toHaveLength(1);
+    expect(prepared.agent.openCounts.get("submit")).toBe(1);
+    expect(prepared.agent.openCounts.get("implement")).toBe(2);
+  });
+
+  it("a clone selection runs the minted instances", async () => {
+    const { result, prepared } = await runRouted(
+      "clone-chain-smallest",
+      {
+        "emit-items": [
+          {
+            type: "emit",
+            envelope: okEnvelope("emitted", {
+              payload: {
+                items: [
+                  { id: "a", title: "A" },
+                  { id: "b", title: "B" },
+                ],
+              },
+            }),
+          },
+        ],
+        "handle-item~1": [{ type: "emit", envelope: okEnvelope("a", { payload: { id: "a" } }) }],
+        "handle-item~2": [{ type: "emit", envelope: okEnvelope("b", { payload: { id: "b" } }) }],
+        gather: [{ type: "emit", envelope: okEnvelope("gathered") }],
+      },
+      () => ({ nextStageIds: ["handle-item"] }),
+      (loaded) => attachRoute(loaded, "emit-items"),
+    );
+    expect(result.ok).toBe(true);
+    expect(prepared.agent.openCounts.get("handle-item") ?? 0).toBe(0);
+    expect(prepared.agent.openCounts.get("handle-item~1")).toBe(1);
+    expect(prepared.agent.openCounts.get("handle-item~2")).toBe(1);
+    expect(prepared.agent.openCounts.get("gather")).toBe(1);
+  });
+
+  it("an empty clone selection leaves no clone instances", async () => {
+    const { result, prepared, store, run } = await runRouted(
+      "clone-chain-smallest",
+      {
+        "emit-items": [
+          {
+            type: "emit",
+            envelope: okEnvelope("emitted", {
+              payload: { items: [{ id: "a", title: "A" }] },
+            }),
+          },
+        ],
+        "handle-item~1": [{ type: "throw", message: "clone must not run" }],
+        gather: [{ type: "throw", message: "gather must not run" }],
+      },
+      () => ({ nextStageIds: [] }),
+      (loaded) => attachRoute(loaded, "emit-items"),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.outcome).toBe("succeeded");
+    expect(prepared.agent.openCounts.get("handle-item~1") ?? 0).toBe(0);
+    const detail = await store.readRun(run.runId);
+    expect(detail.stages.some((stage) => stage.stage_id.includes("~"))).toBe(false);
+  });
+
+  it("a function exclusion into a join does not run when another parent skipped", async () => {
+    const { result, prepared } = await runRouted(
+      "route-if-join",
+      {
+        kickoff: [
+          {
+            type: "emit",
+            envelope: okEnvelope("kickoff", { fork_choice: ["write"] }),
+          },
+        ],
+        write: [
+          {
+            type: "emit",
+            envelope: okEnvelope("write-ok", { payload: { ready: true } }),
+          },
+        ],
+        draw: [{ type: "throw", message: "draw must not run" }],
+        assemble: [{ type: "throw", message: "assemble must not run" }],
+      },
+      () => ({ nextStageIds: [] }),
+      (loaded) => {
+        const kickoff = loaded.dag.nodes.find((node) => node.id === "kickoff");
+        if (!kickoff) throw new Error("missing kickoff");
+        kickoff.fork = { select: "subset", allow_none: true };
+        attachRoute(loaded, "write");
+      },
+    );
+    expect(result.ok).toBe(true);
+    expect(prepared.agent.openCounts.get("write")).toBe(1);
+    expect(prepared.agent.openCounts.get("draw") ?? 0).toBe(0);
+    expect(prepared.agent.openCounts.get("assemble") ?? 0).toBe(0);
+    const detail = await prepared.store.readRun(prepared.run.runId);
+    expect(detail.stages.find((stage) => stage.stage_id === "assemble")?.status).toBe(
+      "skipped",
+    );
   });
 });

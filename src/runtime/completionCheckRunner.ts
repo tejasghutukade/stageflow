@@ -6,6 +6,12 @@ import { assertEnvelopePayload } from "../envelope/payloadSchema.js";
 import { resolveBashPath } from "../preflight/bash.js";
 import { redactString } from "../logging/redact.js";
 import { getNamedSecrets } from "../logging/namedSecrets.js";
+import {
+  judgeFunctionVerification,
+  type FunctionCheckInvoker,
+  type FunctionRevisionLookup,
+} from "../envelope/functionVerification.js";
+import type { JsonValue } from "../functions/protocol.js";
 import type { CompletionCheck, CompletionContract } from "../types/completion.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { StageGateKind } from "../types/stage.js";
@@ -95,6 +101,11 @@ export type CompletionCheckRunnerInput = {
     logged_in: boolean | null;
     url: string;
   }>;
+  functionRevision?: FunctionRevisionLookup;
+  functions?: FunctionCheckInvoker;
+  runId?: string;
+  stageId?: string;
+  attempt?: number;
   onCheckStart?: (check: CompletionCheck) => Promise<void> | void;
   onCheckComplete?: (result: CompletionCheckResult) => Promise<void> | void;
 };
@@ -154,8 +165,18 @@ export type BrowserLoginCheckEvidence = {
   url?: string;
 };
 
+export type FunctionCheckEvidence = {
+  kind: "function";
+  function_id?: string;
+  revision?: number;
+  code?: string;
+  passed?: boolean;
+  details?: JsonValue;
+};
+
 export type CompletionCheckEvidence =
   | BrowserLoginCheckEvidence
+  | FunctionCheckEvidence
   | CommandCheckEvidence
   | ArtifactCheckEvidence
   | PayloadSchemaCheckEvidence
@@ -594,14 +615,60 @@ async function runCheck(
       return runChecklistCheck(check, input);
     case "browser_login":
       return runBrowserLoginCheck(check, input);
+    case "function":
+      return runFunctionCheck(check, input);
   }
 }
 
-/**
- * Run every after-phase IR check in declaration order. YAML: `verify` when after.
- * A failed check never throws or prevents later checks from producing their own
- * repair evidence.
- */
+async function runFunctionCheck(
+  check: Extract<CompletionCheck, { type: "function" }>,
+  input: CompletionCheckRunnerInput,
+): Promise<CompletionCheckResult> {
+  const revision = await input.functionRevision?.(check.function);
+  const evidence = {
+    kind: "function" as const,
+    function_id: check.function,
+    ...(typeof revision === "number" ? { revision } : {}),
+  };
+  if (typeof revision !== "number") {
+    return result(check, "error", { ...evidence, code: "exception" }, "function revision is not pinned for this run");
+  }
+  if (input.functions === undefined) {
+    return result(check, "error", { ...evidence, code: "exception" }, "function invoker is not available");
+  }
+  let response;
+  try {
+    response = await input.functions.invoke({
+      functionId: check.function,
+      revision,
+      grants: check.grants,
+      phase: "after",
+      checkId: check.id,
+      envelope: input.envelope,
+      runId: input.runId,
+      stageId: input.stageId,
+      attempt: input.attempt,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return result(check, "error", { ...evidence, code: "exception" }, message);
+  }
+  const verdict = judgeFunctionVerification(response, revision);
+  if (verdict.outcome === "error") {
+    return result(check, "error", { ...evidence, code: verdict.code }, verdict.message);
+  }
+  return result(
+    check,
+    verdict.outcome,
+    {
+      ...evidence,
+      passed: verdict.outcome === "passed",
+      ...(verdict.details !== undefined ? { details: verdict.details } : {}),
+    },
+    verdict.message,
+  );
+}
+
 export async function runCompletionContract(
   input: CompletionCheckRunnerInput,
 ): Promise<CompletionVerificationResult> {
@@ -611,6 +678,14 @@ export async function runCompletionContract(
     const completed = await runCheck(check, input);
     await input.onCheckComplete?.(completed);
     checks.push(completed);
+    if (
+      completed.check_type === "function" &&
+      completed.outcome === "error" &&
+      completed.evidence.kind === "function" &&
+      completed.evidence.code === "cancelled"
+    ) {
+      break;
+    }
   }
   const failedCheckIds = checks
     .filter((check) => check.outcome !== "passed")

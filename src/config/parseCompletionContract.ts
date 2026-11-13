@@ -10,6 +10,7 @@ import type {
   RecoveryPolicy,
 } from "../types/completion.js";
 import { STAGE_GATE_KINDS, type StageGateKind } from "../types/stage.js";
+import { parseFunctionGrants } from "./loadFunction.js";
 import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
 
 type ExecutionPolicy = {
@@ -173,6 +174,17 @@ function parseCheck(
       return failure(stageId, "completion", `checks[${index}].kind must be one of ${STAGE_GATE_KINDS.join(", ")}`);
     }
     return loadSuccess({ id, type: "gate", kind: raw.kind });
+  }
+
+  if (raw.type === "function") {
+    const unknown = hasOnlyKeys(raw, ["id", "type", "function", "grants"]);
+    if (unknown) return failure(stageId, "completion", `checks[${index}]: unknown key "${unknown}"`);
+    if (typeof raw.function !== "string" || raw.function.trim() === "") {
+      return failure(stageId, "completion", `checks[${index}] function check requires a function id`);
+    }
+    const grants = parseFunctionGrants(raw.grants, `checks[${index}].grants`);
+    if (!grants.ok) return failure(stageId, "completion", grants.message);
+    return loadSuccess({ id, type: "function", function: raw.function.trim(), grants: grants.value });
   }
 
   if (raw.type === "checkout_changes") {

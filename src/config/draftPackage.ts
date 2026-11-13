@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { InlinePipelineDefinition } from "../types/pipeline.js";
 import type { StageGateKind } from "../types/stage.js";
+import { copyFunctionCatalog } from "./loadFunction.js";
 import { loadPipelineOutcome } from "./loadPipeline.js";
 import type { PipelineListing } from "./listConfig.js";
 import { parseTaskFile } from "./loadTask.js";
@@ -575,6 +576,7 @@ export async function validateDraftPackage(
           projectRealRoot,
         );
       }
+      await copyFunctionCatalog(projectRoot, tempRoot);
       const pipelineResult = await validatePipeline(pipelineFilename, {
         cwd: packageDir,
         projectRoot: tempRoot,

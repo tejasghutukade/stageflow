@@ -1,0 +1,32 @@
+id: note-writer
+stages:
+  - id: write-note
+    model: openrouter/nvidia/nemotron-3.5-lightning:free
+    system_prompt: |
+      Call the note_writer tool once with text "Packed and labeled".
+      Then emit a success envelope whose payload is { "path": "note.txt", "bytes": <the bytes the tool returned> }.
+    io:
+      input:
+        schema:
+          type: object
+          additionalProperties: false
+      output:
+        schema:
+          type: object
+          required:
+            - path
+            - bytes
+          properties:
+            path:
+              type: string
+            bytes:
+              type: integer
+          additionalProperties: false
+    tools:
+      functions:
+        - id: note_writer
+          grants:
+            - id: artifacts
+              root: artifacts
+              path: ""
+            - id: env_note_label
