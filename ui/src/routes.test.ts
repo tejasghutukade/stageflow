@@ -96,6 +96,10 @@ describe("parseHash", () => {
 
   it("parses the provider connect route", () => {
     expect(parseHash("#/connect")).toEqual({ name: "connect" });
+    expect(parseHash("#/connect?preview=1")).toEqual({
+      name: "connect",
+      preview: true,
+    });
   });
 
   it("parses the overview route", () => {
