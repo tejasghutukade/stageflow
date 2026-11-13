@@ -11,8 +11,17 @@ export type ProviderSummaryState = {
 };
 
 const CACHE_MS = 30_000;
+const PROVIDERS_CHANGED = "sf-providers-changed";
 
 let cached: { at: number; value: ProviderSummaryState } | null = null;
+
+/** Drop the rail cache and tell mounted shells to reload provider status. */
+export function notifyProvidersChanged(): void {
+  cached = null;
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(PROVIDERS_CHANGED));
+  }
+}
 
 export function useProviderSummary(): ProviderSummaryState {
   const [state, setState] = useState<ProviderSummaryState>(() =>
@@ -25,9 +34,9 @@ export function useProviderSummary(): ProviderSummaryState {
     },
   );
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false) => {
     const now = Date.now();
-    if (cached && now - cached.at < CACHE_MS) {
+    if (!force && cached && now - cached.at < CACHE_MS) {
       setState(cached.value);
       return;
     }
@@ -87,6 +96,11 @@ export function useProviderSummary(): ProviderSummaryState {
 
   useEffect(() => {
     void load();
+    const onChange = () => {
+      void load(true);
+    };
+    window.addEventListener(PROVIDERS_CHANGED, onChange);
+    return () => window.removeEventListener(PROVIDERS_CHANGED, onChange);
   }, [load]);
 
   return state;

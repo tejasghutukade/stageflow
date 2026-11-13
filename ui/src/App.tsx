@@ -147,6 +147,12 @@ function ConsoleRoot() {
 
   const homeAfterConnect = "/inbox";
 
+  useEffect(() => {
+    if (authBoot !== "needs_connect") return;
+    if (route.name === "settings" || route.name === "connect") return;
+    go("/connect");
+  }, [authBoot, route.name, go]);
+
   let content;
   if (route.name === "overview") {
     content = <OverviewRedesign />;
@@ -310,6 +316,7 @@ function ConsoleRoot() {
   } else if (route.name === "connect") {
     content = (
       <ProviderConnectPage
+        preview={route.preview === true}
         onComplete={() => {
           setAuthBoot("ready");
           go(homeAfterConnect);

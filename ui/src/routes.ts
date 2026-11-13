@@ -61,7 +61,7 @@ export type Route =
     }
   | { name: "extensionFile"; path: string }
   | { name: "settings" }
-  | { name: "connect" }
+  | { name: "connect"; preview?: boolean }
   | { name: "guide"; section: string; sessionId?: string }
   | {
       name: "workshop";
@@ -307,8 +307,8 @@ export function datasetPath(datasetId: string, opts?: { eval?: string }): string
   return withQuery(`/datasets/${encodeURIComponent(datasetId)}`, params);
 }
 
-export function connectPath(): string {
-  return "/connect";
+export function connectPath(opts?: { preview?: boolean }): string {
+  return opts?.preview ? "/connect?preview=1" : "/connect";
 }
 
 export function inboxPath(tab?: InboxTabId): string {
@@ -572,7 +572,11 @@ export function parseHash(hash = window.location.hash): Route {
     if (filePath) return { name: "extensionFile", path: filePath };
   }
   if (path === "settings") return { name: "settings" };
-  if (path === "connect") return { name: "connect" };
+  if (path === "connect") {
+    return params.get("preview") === "1"
+      ? { name: "connect", preview: true }
+      : { name: "connect" };
+  }
   if (path === "guide" || path.startsWith("guide/")) {
     const section =
       path === "guide" ? "chat" : firstSegment(path.slice("guide/".length));
