@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { LuX } from "react-icons/lu";
-import { installSkill } from "../../api";
+import { installSkill, runSkillDoctor } from "../../api";
 import { showToast } from "../../toast";
 
 const MONO = "[font-family:'Geist_Mono',_monospace]";
@@ -9,6 +9,12 @@ const EXAMPLE =
   "npx skills add https://github.com/vercel-labs/skills --skill find-skills";
 const TEXTAREA =
   `min-h-[88px] w-full resize-y rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-2.5 py-2 text-xs leading-[1.55] text-[#ecedee] outline-none placeholder:text-[#8b8f98] focus:border-[#ecedee73] ${MONO}`;
+
+type DoctorPending = {
+  command: string;
+  skillName: string;
+  doctorScript: string;
+};
 
 export type InstallSkillDialogProps = {
   open: boolean;
@@ -23,11 +29,15 @@ export function InstallSkillDialog({
 }: InstallSkillDialogProps) {
   const [command, setCommand] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [doctorPending, setDoctorPending] = useState<DoctorPending | null>(
+    null,
+  );
 
   useEffect(() => {
     if (!open) return;
     setCommand("");
     setSubmitting(false);
+    setDoctorPending(null);
   }, [open]);
 
   useEffect(() => {
@@ -51,10 +61,44 @@ export function InstallSkillDialog({
       showToast(result.error);
       return;
     }
+    if (result.doctorAvailable && result.doctorScript) {
+      setDoctorPending({
+        command: trimmed,
+        skillName: result.skillName,
+        doctorScript: result.doctorScript,
+      });
+      return;
+    }
     showToast(result.message || `Installed ${result.skillName}`);
     onClose();
     onInstalled?.();
   }
+
+  async function confirmDoctor() {
+    if (!doctorPending || submitting) return;
+    setSubmitting(true);
+    // Run the script that was just installed and shown; reinstalling would fetch a possibly different one.
+    const result = await runSkillDoctor(doctorPending.skillName);
+    setSubmitting(false);
+    if (!result.ok) {
+      showToast(result.error);
+      return;
+    }
+    showToast(`Ran ${doctorPending.doctorScript} for ${doctorPending.skillName}`);
+    setDoctorPending(null);
+    onClose();
+    onInstalled?.();
+  }
+
+  function skipDoctor() {
+    if (!doctorPending) return;
+    showToast(`Installed ${doctorPending.skillName}`);
+    setDoctorPending(null);
+    onClose();
+    onInstalled?.();
+  }
+
+  const doctorStep = doctorPending !== null;
 
   return createPortal(
     <div
@@ -75,13 +119,27 @@ export function InstallSkillDialog({
               id="install-skill-title"
               className="text-lg font-semibold tracking-[-0.36px] text-[#ecedee]"
             >
-              Install skill
+              {doctorStep ? "Run skill doctor" : "Install skill"}
             </h2>
             <p className="text-[13px] text-[#a7aab2]">
-              Paste an install command, for example{" "}
-              <span className={`break-all text-[#ecedee] ${MONO} text-xs`}>
-                {EXAMPLE}
-              </span>
+              {doctorStep ? (
+                <>
+                  Installed{" "}
+                  <span className="text-[#ecedee]">{doctorPending.skillName}</span>
+                  . Run{" "}
+                  <span className={`break-all text-[#ecedee] ${MONO} text-xs`}>
+                    {doctorPending.doctorScript}
+                  </span>{" "}
+                  to verify the skill?
+                </>
+              ) : (
+                <>
+                  Paste an install command, for example{" "}
+                  <span className={`break-all text-[#ecedee] ${MONO} text-xs`}>
+                    {EXAMPLE}
+                  </span>
+                </>
+              )}
             </p>
           </div>
           <button
@@ -93,38 +151,63 @@ export function InstallSkillDialog({
             <LuX className="size-4" aria-hidden />
           </button>
         </div>
-        <div className="flex flex-col gap-3.5 px-5 py-3">
-          <label className="flex flex-col gap-[5px]">
-            <span className="font-sans text-xs leading-normal text-[#a7aab2]">
-              Command
-            </span>
-            <textarea
-              className={TEXTAREA}
-              value={command}
-              onChange={(e) => setCommand(e.target.value)}
-              placeholder={EXAMPLE}
-              autoComplete="off"
-              spellCheck={false}
-              autoFocus
-            />
-          </label>
-        </div>
+        {!doctorStep ? (
+          <div className="flex flex-col gap-3.5 px-5 py-3">
+            <label className="flex flex-col gap-[5px]">
+              <span className="font-sans text-xs leading-normal text-[#a7aab2]">
+                Command
+              </span>
+              <textarea
+                className={TEXTAREA}
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                placeholder={EXAMPLE}
+                autoComplete="off"
+                spellCheck={false}
+                autoFocus
+              />
+            </label>
+          </div>
+        ) : null}
         <div className="flex items-center justify-end gap-2 border-t border-t-[#ffffff12] px-5 py-3">
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-8 items-center rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-3 text-[13px] font-medium text-[#ecedee]"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            disabled={submitting || !command.trim()}
-            onClick={() => void submit()}
-            className="flex h-8 items-center rounded-lg bg-[#ecedee] px-3 text-[13px] font-medium text-[#0c0d0f] disabled:opacity-50"
-          >
-            {submitting ? "Installing…" : "Install"}
-          </button>
+          {doctorStep ? (
+            <>
+              <button
+                type="button"
+                onClick={skipDoctor}
+                disabled={submitting}
+                className="flex h-8 items-center rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-3 text-[13px] font-medium text-[#ecedee] disabled:opacity-50"
+              >
+                Skip
+              </button>
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={() => void confirmDoctor()}
+                className="flex h-8 items-center rounded-lg bg-[#ecedee] px-3 text-[13px] font-medium text-[#0c0d0f] disabled:opacity-50"
+              >
+                {submitting ? "Running…" : "Run doctor"}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={onClose}
+                className="flex h-8 items-center rounded-lg border border-[#ffffff1a] bg-[#1a1c21] px-3 text-[13px] font-medium text-[#ecedee]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={submitting || !command.trim()}
+                onClick={() => void submit()}
+                className="flex h-8 items-center rounded-lg bg-[#ecedee] px-3 text-[13px] font-medium text-[#0c0d0f] disabled:opacity-50"
+              >
+                {submitting ? "Installing…" : "Install"}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>,

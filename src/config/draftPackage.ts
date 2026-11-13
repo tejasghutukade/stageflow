@@ -1,4 +1,7 @@
+import { randomBytes } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { parse as parseYaml } from "yaml";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { InlinePipelineDefinition } from "../types/pipeline.js";
@@ -6,6 +9,8 @@ import type { StageGateKind } from "../types/stage.js";
 import { loadPipelineOutcome } from "./loadPipeline.js";
 import type { PipelineListing } from "./listConfig.js";
 import { parseTaskFile } from "./loadTask.js";
+import { commitPackageFiles, contentHash, withPackageDirLock } from "./atomicWrite.js";
+import { renderCatalogYaml } from "./preserveCatalogYaml.js";
 import { stringifyTargetYaml } from "./printTargetYaml.js";
 import { readYamlObject } from "./readYamlObject.js";
 import {
@@ -42,6 +47,8 @@ export type DraftPackage = {
   task?: {
     filename: string;
     body: Record<string, unknown>;
+    /** Project-relative path the task was loaded from; a save writes it back there instead of into the package. */
+    path?: string;
   };
 };
 
@@ -49,7 +56,19 @@ export type ValidateDraftPackageOptions = {
   cwd?: string;
   projectRoot?: string;
   strict?: boolean;
+  validateBeside?: {
+    packageDirectory: string;
+    renderedPipelineYaml: string;
+  };
 };
+
+/** Content hashes of package files, keyed by project-relative path. */
+export type DraftFileHashes = {
+  files: Record<string, string>;
+};
+
+export const DRAFT_FILE_CHANGED_MESSAGE =
+  "The file changed on disk since you opened it.";
 
 export type OverwriteDraftPackageInput = {
   directory: string;
@@ -60,6 +79,11 @@ export type OverwriteDraftPackageInput = {
    * When true, skips the validate gate and writes the package as-is.
    */
   allowInvalid?: boolean;
+  /**
+   * Hashes from the last load or save. When set, a file that changed on disk
+   * refuses the overwrite instead of being replaced.
+   */
+  baseHashes?: DraftFileHashes;
 };
 
 export type CreateDraftPackageInput = OverwriteDraftPackageInput;
@@ -71,11 +95,14 @@ export type DraftPackageWriteResult =
       pipelinePath: string;
       stagePaths: string[];
       taskPath?: string;
+      fileHashes: DraftFileHashes;
     }
   | {
       ok: false;
       status: 400 | 404 | 409 | 422 | 500;
       error: string;
+      code?: "FILE_CHANGED";
+      fileHashes?: DraftFileHashes;
       findings?: ValidationFinding[];
     };
 
@@ -99,6 +126,8 @@ export type LoadDraftPackageResult =
       destination: DraftPackageDestination;
       pipelinePath: string;
       taskPath?: string;
+      fileHashes: DraftFileHashes;
+      hasInclude: boolean;
     }
   | {
       ok: false;
@@ -109,6 +138,8 @@ export type LoadDraftPackageResult =
 export type DraftTaskArtifact = {
   filename: string;
   body: Record<string, unknown>;
+  /** Project-relative path the task was loaded from. */
+  path?: string;
 };
 
 export type LoadTaskArtifactResult =
@@ -129,6 +160,73 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function normalizeStageRelPath(stagePath: string): string {
   return stagePath.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function pathContainsNul(value: string): boolean {
+  return value.includes("\0");
+}
+
+function pipelineIdHasPathSeparator(id: string): boolean {
+  return id.includes("/") || id.includes("\\");
+}
+
+/** The real path of `target`'s nearest existing ancestor, with the missing remainder appended. */
+function realpathOfNearest(target: string): string {
+  let existing = path.resolve(target);
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return path.join(realpathSync(existing), ...rest.reverse());
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT" && (err as NodeJS.ErrnoException).code !== "ENOTDIR") {
+        throw err;
+      }
+      const parent = path.dirname(existing);
+      if (parent === existing) return path.resolve(target);
+      rest.push(path.basename(existing));
+      existing = parent;
+    }
+  }
+}
+
+async function resolveStageWritePath(
+  projectRoot: string,
+  packageDirectory: string,
+  stagePath: string,
+): Promise<{ ok: true; absPath: string } | { ok: false; error: string }> {
+  const rel = normalizeStageRelPath(stagePath);
+  if (!rel || pathContainsNul(rel)) {
+    return { ok: false, error: `Invalid stage path (${stagePath})` };
+  }
+  if (path.isAbsolute(rel)) {
+    return { ok: false, error: `Stage path must be relative (${stagePath})` };
+  }
+  const candidate = path.resolve(packageDirectory, rel);
+  const projectResolved = path.resolve(projectRoot);
+  const relToProject = path.relative(projectResolved, candidate);
+  if (relToProject.startsWith("..") || path.isAbsolute(relToProject)) {
+    return {
+      ok: false,
+      error: `Stage path escapes project root (${stagePath})`,
+    };
+  }
+  // Compare real locations: the file's, or for a new file its nearest existing folder's, against the project's
+  // (resolved the same way, since the project folder itself may not exist yet). A symlinked folder pointing
+  // outside the project cannot carry the write out.
+  const relReal = path.relative(realpathOfNearest(projectResolved), realpathOfNearest(candidate));
+  if (relReal.startsWith("..") || path.isAbsolute(relReal)) {
+    return {
+      ok: false,
+      error: `Stage path escapes project root (${stagePath})`,
+    };
+  }
+  return { ok: true, absPath: candidate };
+}
+
+function pipelineFileHasInclude(raw: Record<string, unknown>): boolean {
+  const include = raw.include;
+  if (!Array.isArray(include) || include.length === 0) return false;
+  return include.some((entry) => entry !== null && typeof entry === "object");
 }
 
 function pipelineHasExternalUses(pipeline: DraftPackage["pipeline"]): boolean {
@@ -224,33 +322,153 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
+/** Deepest a shared stage may sit above its package (`../../stages/x.yaml` is 2). */
+const MAX_STAGE_PARENT_DEPTH = 16;
+
+/** Why a pipeline id or stage path cannot be written as a file, or undefined when it can. */
+function unsafeDraftPaths(draft: DraftPackage): string | undefined {
+  const id = draft.pipeline.id;
+  if (
+    typeof id !== "string" ||
+    id.length === 0 ||
+    pathContainsNul(id) ||
+    pipelineIdHasPathSeparator(id) ||
+    id === "." ||
+    id === ".."
+  ) {
+    return `pipeline id cannot be used as a file name (${String(id)})`;
+  }
+  for (const stage of draft.stages ?? []) {
+    if (typeof stage.path !== "string") return "stage path must be a string";
+    const rel = normalizeStageRelPath(stage.path);
+    if (!rel || pathContainsNul(rel) || path.isAbsolute(rel) || path.posix.isAbsolute(rel) || /^[A-Za-z]:/.test(rel)) {
+      return `Invalid stage path (${stage.path})`;
+    }
+    if (stageParentDepth(rel) > MAX_STAGE_PARENT_DEPTH) return `Stage path climbs too far (${stage.path})`;
+  }
+  return undefined;
+}
+
+/** How many directories a relative stage path climbs above its package, after normalizing. */
+function stageParentDepth(rel: string): number {
+  const segments = path.posix.normalize(rel).split("/");
+  let depth = 0;
+  while (segments[depth] === "..") depth += 1;
+  return depth;
+}
+
+function assertInside(root: string, target: string): void {
+  const rel = path.relative(root, target);
+  if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(`draft path escapes its validation folder (${target})`);
+  }
+}
+
+/** Stage files a fragment's entries point at with `uses:`, relative to the fragment. */
+function fragmentStageUses(raw: unknown): string[] {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return [];
+  const stages = (raw as Record<string, unknown>).stages;
+  if (!Array.isArray(stages)) return [];
+  return stages
+    .map((entry) => (entry !== null && typeof entry === "object" ? (entry as Record<string, unknown>).uses : undefined))
+    .filter((uses): uses is string => typeof uses === "string" && uses.length > 0 && !pathContainsNul(uses));
+}
+
+function includeLocals(raw: unknown): string[] {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return [];
+  const include = (raw as Record<string, unknown>).include;
+  if (!Array.isArray(include)) return [];
+  return include
+    .map((entry) => (entry !== null && typeof entry === "object" ? (entry as Record<string, unknown>).local : undefined))
+    .filter((local): local is string => typeof local === "string" && local.length > 0 && !pathContainsNul(local));
+}
+
+/**
+ * Copy the `include:` fragments a draft pipeline names from the real package into the temp copy, following nested
+ * includes, so validation sees them. Only files inside the project are copied, only into the temp folder, and never
+ * over a file the draft itself provides. A fragment that cannot be copied is left for validation to report.
+ */
+async function copyIncludeFragments(
+  raw: unknown,
+  realDir: string,
+  tempDir: string,
+  tempRoot: string,
+  projectRealRoot: string,
+  seen: Set<string> = new Set(),
+): Promise<void> {
+  const isFragment = seen.size > 0;
+  const refs = [...includeLocals(raw), ...(isFragment ? fragmentStageUses(raw) : [])];
+  for (const local of refs) {
+    const rel = local.replace(/\\/g, "/");
+    if (path.isAbsolute(rel) || path.posix.isAbsolute(rel)) continue;
+    const src = path.resolve(realDir, rel);
+    const dst = path.resolve(tempDir, rel);
+    let srcReal: string;
+    try {
+      srcReal = realpathSync(src);
+    } catch {
+      continue;
+    }
+    const inProject = path.relative(projectRealRoot, srcReal);
+    if (inProject.startsWith("..") || path.isAbsolute(inProject)) continue;
+    const inTemp = path.relative(tempRoot, dst);
+    if (inTemp === "" || inTemp.startsWith("..") || path.isAbsolute(inTemp)) continue;
+    if (seen.has(srcReal)) continue;
+    seen.add(srcReal);
+    if (await fileExists(dst)) continue;
+    let text: string;
+    try {
+      text = await readFile(srcReal, "utf8");
+    } catch {
+      continue;
+    }
+    await mkdir(path.dirname(dst), { recursive: true });
+    await writeFile(dst, text, "utf8");
+    let nested: unknown;
+    try {
+      nested = parseYaml(text);
+    } catch {
+      continue;
+    }
+    await copyIncludeFragments(nested, path.dirname(srcReal), path.dirname(dst), tempRoot, projectRealRoot, seen);
+  }
+}
+
+/**
+ * Write the draft into `tempRoot` for validation. The package sits deep enough below `tempRoot` that every
+ * `../` stage path (a shared stage elsewhere in the project) still lands inside it, and every target is checked
+ * before it is written. Returns the package directory to validate from.
+ */
 async function materializeDraft(
   draft: DraftPackage,
-  dir: string,
+  tempRoot: string,
   pipelineFilename: string,
-): Promise<void> {
+): Promise<string> {
   const migrated = hoistUsesWrapperSkills(draft);
-  await mkdir(dir, { recursive: true });
-  await writeFile(
-    path.join(dir, pipelineFilename),
-    stringifyTargetYaml(pipelineDocument(migrated.pipeline)),
-    "utf8",
+  const depth = Math.max(
+    0,
+    ...(migrated.stages ?? []).map((stage) => stageParentDepth(normalizeStageRelPath(stage.path))),
+    ...includeLocals(migrated.pipeline).map((local) => Math.min(stageParentDepth(local.replace(/\\/g, "/")), MAX_STAGE_PARENT_DEPTH)),
   );
+  const dir = path.join(tempRoot, ...Array.from({ length: depth }, (_, index) => `p${index}`));
+  await mkdir(dir, { recursive: true });
+  const pipelinePath = path.resolve(dir, pipelineFilename);
+  assertInside(tempRoot, pipelinePath);
+  await writeFile(pipelinePath, stringifyTargetYaml(pipelineDocument(migrated.pipeline)), "utf8");
 
   for (const stage of migrated.stages ?? []) {
-    const rel = normalizeStageRelPath(stage.path);
-    const stagePath = path.join(dir, rel);
+    const stagePath = path.resolve(dir, normalizeStageRelPath(stage.path));
+    assertInside(tempRoot, stagePath);
     await mkdir(path.dirname(stagePath), { recursive: true });
     await writeFile(stagePath, stringifyTargetYaml(stage.body), "utf8");
   }
 
   if (draft.task) {
-    await writeFile(
-      path.join(dir, path.basename(draft.task.filename)),
-      stringifyTargetYaml(draft.task.body),
-      "utf8",
-    );
+    const taskPath = path.resolve(dir, path.basename(draft.task.filename));
+    assertInside(tempRoot, taskPath);
+    await writeFile(taskPath, stringifyTargetYaml(draft.task.body), "utf8");
   }
+  return dir;
 }
 
 function collectTaskFindings(
@@ -293,13 +511,72 @@ export async function validateDraftPackage(
     pipelineHasExternalUses(draft.pipeline) ||
     (draft.stages !== undefined && draft.stages.length > 0);
 
-  if (needsMaterialize) {
+  if (options.validateBeside && !needsMaterialize) {
+    const sidecar = path.join(
+      options.validateBeside.packageDirectory,
+      `.sf-validate-${process.pid}-${randomBytes(4).toString("hex")}.yaml`,
+    );
+    try {
+      await writeFile(
+        sidecar,
+        options.validateBeside.renderedPipelineYaml,
+        "utf8",
+      );
+      const relSidecar = path
+        .relative(options.validateBeside.packageDirectory, sidecar)
+        .replace(/\\/g, "/");
+      const pipelineResult = await validatePipeline(relSidecar, {
+        cwd: options.validateBeside.packageDirectory,
+        projectRoot,
+        validateStages: true,
+        strict,
+      });
+      findings.push(...pipelineResult.findings);
+    } finally {
+      await rm(sidecar, { force: true });
+    }
+  } else if (needsMaterialize) {
+    const unsafe = unsafeDraftPaths(draft);
+    if (unsafe !== undefined) {
+      return buildValidationResult(
+        "pipeline",
+        [{ severity: "error", code: "pipeline.invalid_path", path: "<draft>", message: unsafe, category: "pipeline" }],
+        strict,
+      );
+    }
     const tempRoot = await mkdtemp(path.join(tmpdir(), "sf-draft-"));
     try {
       const pipelineFilename = `${draft.pipeline.id}.pipeline.yaml`;
-      await materializeDraft(draft, tempRoot, pipelineFilename);
+      const packageDir = await materializeDraft(draft, tempRoot, pipelineFilename);
+      if (options.validateBeside) {
+        // A pipeline with uses: stages is checked from the temp copy; give it the include fragments it names.
+        let projectRealRoot: string;
+        try {
+          projectRealRoot = realpathSync(projectRoot);
+        } catch {
+          projectRealRoot = path.resolve(projectRoot);
+        }
+        // The editor's pipeline object leaves out include:; the rendered file keeps it, so check that file.
+        const rendered = options.validateBeside.renderedPipelineYaml;
+        let renderedRaw: unknown;
+        try {
+          renderedRaw = parseYaml(rendered);
+        } catch {
+          renderedRaw = undefined;
+        }
+        if (includeLocals(renderedRaw).length > 0) {
+          await writeFile(path.join(packageDir, pipelineFilename), rendered, "utf8");
+        }
+        await copyIncludeFragments(
+          renderedRaw,
+          options.validateBeside.packageDirectory,
+          packageDir,
+          tempRoot,
+          projectRealRoot,
+        );
+      }
       const pipelineResult = await validatePipeline(pipelineFilename, {
-        cwd: tempRoot,
+        cwd: packageDir,
         projectRoot: tempRoot,
         validateStages: true,
         strict,
@@ -427,6 +704,13 @@ function resolveDraftWriteTarget(
   if (!isPlainObject(rawDraft?.pipeline) || typeof rawDraft.pipeline.id !== "string") {
     return { ok: false, status: 400, error: "draft.pipeline.id is required" };
   }
+  if (pipelineIdHasPathSeparator(rawDraft.pipeline.id)) {
+    return {
+      ok: false,
+      status: 400,
+      error: "draft.pipeline.id must not contain path separators",
+    };
+  }
 
   const normalized = normalizeDraftCatalogFilenames(
     rawDraft,
@@ -455,13 +739,31 @@ async function gateDraftWrite(
   projectRoot: string,
   draft: DraftPackage,
   allowInvalid: boolean | undefined,
+  target?: ResolvedDraftWrite,
 ): Promise<DraftPackageWriteResult | null> {
   if (allowInvalid) return null;
-  const validation = await validateDraftPackage(draft, {
+  let validateOptions: ValidateDraftPackageOptions = {
     cwd: projectRoot,
     projectRoot,
     strict: true,
-  });
+  };
+  if (target && (await fileExists(target.pipelineAbsPath))) {
+    await mkdir(target.packageDirectory, { recursive: true });
+    const resolved = await resolveDraftWriteFiles(projectRoot, target);
+    if (resolved.ok) {
+      const pipelineFile = resolved.files.find((file) => file.kind === "pipeline");
+      if (pipelineFile) {
+        validateOptions = {
+          ...validateOptions,
+          validateBeside: {
+            packageDirectory: target.packageDirectory,
+            renderedPipelineYaml: pipelineFile.content,
+          },
+        };
+      }
+    }
+  }
+  const validation = await validateDraftPackage(draft, validateOptions);
   if (validation.ok) return null;
   const errorFinding = validation.findings.find(
     (finding) => finding.severity === "error",
@@ -481,10 +783,10 @@ type DraftWriteFile = {
   content: string;
 };
 
-function resolveDraftWriteFiles(
+async function resolveDraftWriteFiles(
   projectRoot: string,
   target: ResolvedDraftWrite,
-): { ok: true; files: DraftWriteFile[] } | { ok: false; status: 400; error: string } {
+): Promise<{ ok: true; files: DraftWriteFile[] } | { ok: false; status: 400; error: string }> {
   const { packageDirectory, draft, pipelineAbsPath, pipelineRelPath } = target;
   const toRel = (abs: string) => path.relative(projectRoot, abs).replace(/\\/g, "/");
   const files: DraftWriteFile[] = [
@@ -492,64 +794,128 @@ function resolveDraftWriteFiles(
       kind: "pipeline",
       absPath: pipelineAbsPath,
       relPath: pipelineRelPath,
-      content: stringifyTargetYaml(pipelineDocument(draft.pipeline)),
+      content: renderCatalogYaml(
+        await readExisting(pipelineAbsPath),
+        pipelineDocument(draft.pipeline),
+        { keepUnknownTopLevel: true },
+      ),
     },
   ];
 
   for (const stage of draft.stages ?? []) {
-    const rel = normalizeStageRelPath(stage.path);
-    if (!rel || path.isAbsolute(rel) || rel.split(/[/\\]/).includes("..")) {
-      return {
-        ok: false,
-        status: 400,
-        error: `Stage path escapes package directory (${stage.path})`,
-      };
-    }
-    const stageAbs = path.resolve(packageDirectory, rel);
-    const relToPackage = path.relative(packageDirectory, stageAbs);
-    if (relToPackage.startsWith("..") || path.isAbsolute(relToPackage)) {
-      return {
-        ok: false,
-        status: 400,
-        error: `Stage path escapes package directory (${stage.path})`,
-      };
+    const resolvedStage = await resolveStageWritePath(
+      projectRoot,
+      packageDirectory,
+      stage.path,
+    );
+    if (!resolvedStage.ok) {
+      return { ok: false, status: 400, error: resolvedStage.error };
     }
     files.push({
       kind: "stage",
-      absPath: stageAbs,
-      relPath: toRel(stageAbs),
-      content: stringifyTargetYaml(stage.body),
+      absPath: resolvedStage.absPath,
+      relPath: toRel(resolvedStage.absPath),
+      content: renderCatalogYaml(await readExisting(resolvedStage.absPath), stage.body, {
+        keepUnknownTopLevel: false,
+      }),
     });
   }
 
   if (draft.task) {
-    const taskAbs = path.join(packageDirectory, path.basename(draft.task.filename));
+    // A task loaded from elsewhere in the project goes back to where it was loaded (that is the file its base hash
+    // describes). Otherwise it lives in the package.
+    const loadedFrom =
+      typeof draft.task.path === "string" && draft.task.path.trim() && !pathContainsNul(draft.task.path)
+        ? resolveProjectRelativePath(projectRoot, draft.task.path.trim().replace(/\\/g, "/"))
+        : null;
+    const taskAbs =
+      loadedFrom !== null && path.basename(loadedFrom) === path.basename(draft.task.filename)
+        ? loadedFrom
+        : path.join(packageDirectory, path.basename(draft.task.filename));
     files.push({
       kind: "task",
       absPath: taskAbs,
       relPath: toRel(taskAbs),
-      content: stringifyTargetYaml(draft.task.body),
+      content: renderCatalogYaml(await readExisting(taskAbs), draft.task.body, {
+        keepUnknownTopLevel: false,
+      }),
     });
   }
 
   return { ok: true, files };
 }
 
+async function fileContentHash(absPath: string): Promise<string | null> {
+  try {
+    return contentHash(await readFile(absPath));
+  } catch {
+    return null;
+  }
+}
+
+async function hashesForFiles(files: readonly DraftWriteFile[]): Promise<DraftFileHashes> {
+  const out: Record<string, string> = {};
+  for (const file of files) {
+    const hash = await fileContentHash(file.absPath);
+    if (hash !== null) out[file.relPath] = hash;
+  }
+  return { files: out };
+}
+
+async function refuseIfFilesChanged(
+  files: readonly DraftWriteFile[],
+  baseHashes: DraftFileHashes | undefined,
+): Promise<Extract<DraftPackageWriteResult, { ok: false }> | null> {
+  if (!baseHashes) return null;
+  let stale = false;
+  for (const file of files) {
+    const existing = await readExisting(file.absPath);
+    if (existing !== null && baseHashes.files[file.relPath] === undefined) {
+      stale = true;
+      continue;
+    }
+    const expected = baseHashes.files[file.relPath];
+    if (expected === undefined) continue;
+    const current = await fileContentHash(file.absPath);
+    if (current !== expected) stale = true;
+  }
+  if (!stale) return null;
+  return {
+    ok: false,
+    status: 409,
+    code: "FILE_CHANGED",
+    error: DRAFT_FILE_CHANGED_MESSAGE,
+    fileHashes: await hashesForFiles(files),
+  };
+}
+
 async function writeDraftPackageFiles(
   projectRoot: string,
   target: ResolvedDraftWrite,
   allowInvalid: boolean | undefined,
+  baseHashes?: DraftFileHashes,
 ): Promise<DraftPackageWriteResult> {
   const { packageDirectory, draft, pipelineRelPath } = target;
-  const resolved = resolveDraftWriteFiles(projectRoot, target);
+  const resolved = await resolveDraftWriteFiles(projectRoot, target);
   if (!resolved.ok) return resolved;
 
+  const conflict = await refuseIfFilesChanged(resolved.files, baseHashes);
+  if (conflict) return conflict;
+
+  const hashSnapshot = async () => hashesForFiles(resolved.files);
+
   try {
-    await mkdir(packageDirectory, { recursive: true });
-    for (const file of resolved.files) {
-      await mkdir(path.dirname(file.absPath), { recursive: true });
-      await writeFile(file.absPath, file.content, "utf8");
-    }
+    await withPackageDirLock(packageDirectory, async () => {
+      const restale = await refuseIfFilesChanged(resolved.files, baseHashes);
+      if (restale) throw restale;
+      await commitPackageFiles(
+        resolved.files.map((file) => ({
+          absPath: file.absPath,
+          content: file.content,
+        })),
+      );
+    });
+
     const stagePaths = resolved.files
       .filter((file) => file.kind === "stage")
       .map((file) => file.relPath);
@@ -567,6 +933,7 @@ async function writeDraftPackageFiles(
         ok: false,
         status: 500,
         error: loadOutcome.issues[0]?.message ?? "Failed to load written pipeline",
+        fileHashes: await hashSnapshot(),
       };
     }
 
@@ -587,10 +954,24 @@ async function writeDraftPackageFiles(
       pipelinePath: pipelineRelPath,
       stagePaths,
       ...(taskPath !== undefined ? { taskPath } : {}),
+      fileHashes: await hashSnapshot(),
     };
   } catch (err) {
+    if (
+      err !== null &&
+      typeof err === "object" &&
+      "ok" in err &&
+      (err as { ok?: unknown }).ok === false
+    ) {
+      return err as Extract<DraftPackageWriteResult, { ok: false }>;
+    }
     const message = err instanceof Error ? err.message : String(err);
-    return { ok: false, status: 500, error: message };
+    return {
+      ok: false,
+      status: 500,
+      error: message,
+      fileHashes: await hashSnapshot(),
+    };
   }
 }
 
@@ -639,10 +1020,16 @@ export async function overwriteDraftPackage(
     projectRoot,
     resolved.value.draft,
     input.allowInvalid,
+    resolved.value,
   );
   if (blocked) return blocked;
 
-  return writeDraftPackageFiles(projectRoot, resolved.value, input.allowInvalid);
+  return writeDraftPackageFiles(
+    projectRoot,
+    resolved.value,
+    input.allowInvalid,
+    input.baseHashes,
+  );
 }
 
 export async function createDraftPackage(
@@ -666,10 +1053,16 @@ export async function createDraftPackage(
     projectRoot,
     resolved.value.draft,
     input.allowInvalid,
+    resolved.value,
   );
   if (blocked) return blocked;
 
-  return writeDraftPackageFiles(projectRoot, resolved.value, input.allowInvalid);
+  return writeDraftPackageFiles(
+    projectRoot,
+    resolved.value,
+    input.allowInvalid,
+    input.baseHashes,
+  );
 }
 
 export type DraftPlanMode = "create" | "overwrite";
@@ -743,7 +1136,7 @@ export async function planDraftPackage(
 ): Promise<({ ok: true } & DraftPlanResult) | { ok: false; status: 400; error: string }> {
   const resolved = resolveDraftWriteTarget(projectRoot, input);
   if (!resolved.ok) return resolved;
-  const writeFiles = resolveDraftWriteFiles(projectRoot, resolved.value);
+  const writeFiles = await resolveDraftWriteFiles(projectRoot, resolved.value);
   if (!writeFiles.ok) return writeFiles;
 
   const files: DraftPlanFile[] = [];
@@ -838,6 +1231,12 @@ export function parseCreateDraftPackageBody(
   if (typeof body.directory !== "string" || !body.directory.trim()) {
     return { ok: false, status: 400, error: "directory is required" };
   }
+  let baseHashes: DraftFileHashes | undefined;
+  if (body.baseHashes !== undefined) {
+    const parsedHashes = parseDraftFileHashes(body.baseHashes);
+    if ("ok" in parsedHashes) return parsedHashes;
+    baseHashes = parsedHashes;
+  }
   return {
     directory: body.directory.trim(),
     draft: draftParsed,
@@ -845,10 +1244,36 @@ export function parseCreateDraftPackageBody(
       ? { pipelineFilename: body.pipelineFilename }
       : {}),
     ...(body.allowInvalid === true ? { allowInvalid: true } : {}),
+    ...(baseHashes !== undefined ? { baseHashes } : {}),
   };
 }
 
-export const parseOverwriteDraftPackageBody = parseCreateDraftPackageBody;
+export function parseOverwriteDraftPackageBody(
+  body: unknown,
+): OverwriteDraftPackageInput | { ok: false; status: 400; error: string } {
+  const parsed = parseCreateDraftPackageBody(body);
+  if ("ok" in parsed) return parsed;
+  if (!isPlainObject(body) || body.baseHashes === undefined) return parsed;
+  const baseHashes = parseDraftFileHashes(body.baseHashes);
+  if ("ok" in baseHashes) return baseHashes;
+  return { ...parsed, baseHashes };
+}
+
+function parseDraftFileHashes(
+  value: unknown,
+): DraftFileHashes | { ok: false; status: 400; error: string } {
+  if (!isPlainObject(value) || !isPlainObject(value.files)) {
+    return { ok: false, status: 400, error: "baseHashes.files must be an object" };
+  }
+  const files: Record<string, string> = {};
+  for (const [key, hash] of Object.entries(value.files)) {
+    if (typeof hash !== "string" || hash.length === 0) {
+      return { ok: false, status: 400, error: "baseHashes.files values must be hashes" };
+    }
+    files[key.replace(/\\/g, "/")] = hash;
+  }
+  return { files };
+}
 
 export type OpenDraftPackageInput = {
   path: string;
@@ -920,6 +1345,7 @@ export async function loadTaskArtifact(
       task: {
         filename: path.basename(taskAbs),
         body,
+        path: path.relative(projectRoot, taskAbs).replace(/\\/g, "/"),
       },
       taskPath: path.relative(projectRoot, taskAbs).replace(/\\/g, "/"),
     };
@@ -999,6 +1425,9 @@ export async function loadDraftPackage(
   const pipelinePath = path
     .relative(projectRoot, pipelineAbs)
     .replace(/\\/g, "/");
+  const fileHashes: Record<string, string> = {
+    [pipelinePath]: contentHash(await readFile(pipelineAbs)),
+  };
 
   const pipelineStages = raw.stages.filter(isPlainObject) as Array<
     Record<string, unknown>
@@ -1033,6 +1462,8 @@ export async function loadDraftPackage(
     }
     try {
       const body = await readYamlObject(stageAbs);
+      const stageRel = path.relative(projectRoot, stageAbs).replace(/\\/g, "/");
+      fileHashes[stageRel] = contentHash(await readFile(stageAbs));
       stageArtifacts.push({ path: uses, body });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1070,6 +1501,9 @@ export async function loadDraftPackage(
     }
     draft.task = loaded.task;
     attachedTaskPath = loaded.taskPath;
+    fileHashes[attachedTaskPath] = contentHash(
+      await readFile(path.resolve(projectRoot, attachedTaskPath)),
+    );
   }
 
   const migrated = hoistUsesWrapperSkills(draft);
@@ -1080,5 +1514,7 @@ export async function loadDraftPackage(
     destination: { directory, pipelineFilename },
     pipelinePath,
     ...(attachedTaskPath !== undefined ? { taskPath: attachedTaskPath } : {}),
+    fileHashes: { files: fileHashes },
+    hasInclude: pipelineFileHasInclude(raw),
   };
 }

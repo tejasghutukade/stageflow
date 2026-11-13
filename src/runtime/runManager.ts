@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { RunSubmissionExistsError, type RunSubmission, type RunSubmissionRecord } from "../runstore/submission.js";
-import { access, readFile, realpath } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { StagePort, OpaqueAnswer } from "../agent/port.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
@@ -62,6 +62,7 @@ import {
   resumeRun,
   retryRun,
   runPipelineDag,
+  writeTerminalRunStatus,
 } from "./pipelineScheduler.js";
 import {
   resolveFeedbackLoopDecision,
@@ -98,8 +99,15 @@ import {
 import { sweepOrphanBrowserSessions } from "../browser/browserSweep.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import { StageProcessLauncher } from "./stageProcessLauncher.js";
+import {
+  prepareResumeAttemptHome,
+  secretUnavailableMessage,
+} from "./resumeAttemptPrep.js";
 import { logger as rootLogger } from "../logging/logger.js";
-import { registerNamedSecrets } from "../logging/namedSecrets.js";
+import {
+  registerNamedSecrets,
+  REDACTION_SECRETS_FILENAME,
+} from "../logging/namedSecrets.js";
 import { shouldRegisterValue } from "../logging/redact.js";
 import {
   bindingFromFields,
@@ -208,6 +216,7 @@ export type CapacityHealth = {
   activeCount: number;
   maxConcurrent: number;
   slotsAvailable: number;
+  queuedCount: number;
   activeStageProcesses: number;
   maxActiveStageProcesses: number | null;
   disk?: DiskBreakdown;
@@ -294,7 +303,8 @@ type ActiveEntry = {
   done?: Promise<unknown>;
 };
 
-type SchedulingHalt = { halted: boolean; hostShutdown: boolean };
+/** `abandoned`: stages an operator abandoned, with the reason the scheduler records instead of the kill signal. */
+type SchedulingHalt = { halted: boolean; hostShutdown: boolean; abandoned?: Map<string, string> };
 
 const DEFAULT_MAX_CONCURRENT = 3;
 const DEFAULT_MAX_QUEUED = 32;
@@ -767,6 +777,7 @@ export class RunManager {
       activeCount,
       maxConcurrent,
       slotsAvailable: Math.max(0, maxConcurrent - activeCount),
+      queuedCount: this.admissionQueue.size,
       activeStageProcesses,
       maxActiveStageProcesses: Number.isFinite(maxActiveStageProcessesRaw)
         ? maxActiveStageProcessesRaw
@@ -1373,12 +1384,27 @@ export class RunManager {
     }
 
     this.notifyGateClosed(runId, stageId);
+    const halt = this.ensureSchedulingHalt(runId);
+    (halt.abandoned ??= new Map()).set(stageId, OPERATOR_ABANDON_REASON);
     if (this.stageProcessLauncher !== undefined) {
-      const hasActive = this.stageProcessLauncher
+      const active = this.stageProcessLauncher
         .getActiveStageProcesses()
-        .some((entry) => entry.runId === runId);
-      if (hasActive) {
-        await this.stageProcessLauncher.cancelRun(runId);
+        .filter((entry) => entry.runId === runId);
+      const targetActive = active.some((entry) => entry.stageId === stageId);
+      if (targetActive) {
+        const otherLive = detail.stages.some(
+          (stage) =>
+            stage.stage_id !== stageId &&
+            (stage.status === "pending" ||
+              stage.status === "running" ||
+              stage.status === "waiting_for_input" ||
+              stage.status === "interrupted"),
+        );
+        if (otherLive) {
+          await this.stageProcessLauncher.cancelStage(runId, stageId);
+        } else {
+          await this.stageProcessLauncher.cancelRun(runId);
+        }
       }
     }
     await teardownStageBrowser(
@@ -1391,13 +1417,19 @@ export class RunManager {
       },
     ).catch(() => undefined);
 
-    await markStageInterrupted({
-      store: this.options.store,
-      runId,
-      stageId,
-      reason: OPERATOR_ABANDON_REASON,
-      status: "failed",
-    });
+    const latest = await this.options.store.getLatestStageExecution(runId, stageId).catch(() => null);
+    const recorded = await this.options.store
+      .listStageEvents(runId, stageId, latest?.attempt)
+      .catch(() => []);
+    if (!recorded.some((event) => event.event === "failed" && event.reason === OPERATOR_ABANDON_REASON)) {
+      await markStageInterrupted({
+        store: this.options.store,
+        runId,
+        stageId,
+        reason: OPERATOR_ABANDON_REASON,
+        status: "failed",
+      });
+    }
     if (
       this.retryCoordinator.isActive(runId) &&
       this.retryCoordinator.getActiveRoots(runId)?.has(stageId)
@@ -1423,7 +1455,12 @@ export class RunManager {
         },
       ).catch(() => undefined);
     }
-    if (!hasWaiting && this.active.has(runId)) {
+    // A sibling still running keeps the run's slot, checkout lease and scheduling halt, so the cap holds and a later
+    // cancel or shutdown can still stop the run. Pending stages do not count: the scheduler halts after a failure.
+    const otherLiveAfter = after.stages.some(
+      (stage) => stage.stage_id !== stageId && stage.status === "running",
+    );
+    if (!hasWaiting && !otherLiveAfter && this.active.has(runId)) {
       this.removeActiveEntry(runId, false);
     }
 
@@ -1450,6 +1487,27 @@ export class RunManager {
     if (meta.status === "cancelled") {
       await this.interruptLiveStages(runId);
       return { ok: true, runId };
+    }
+
+    if (meta.status === "failed") {
+      // A run reads failed as soon as one stage fails, while its siblings may still run (an abandon does this).
+      // Cancel then stops what is still live and keeps the failed status.
+      const live = (await this.options.store.readRun(runId)).stages.some(
+        (stage) => stage.status === "running" || stage.status === "waiting_for_input",
+      );
+      if (live || this.active.has(runId)) {
+        this.notifyGateClosed(runId);
+        await this.interruptLiveStages(runId);
+        await teardownRunBrowsers(
+          this.browserSupport(),
+          {
+            runId,
+            runDir: this.options.store.getWorkspaceDir(runId),
+            events: (stageId) => this.options.store.listStageEvents(runId, stageId),
+          },
+        ).catch(() => undefined);
+        return { ok: true, runId };
+      }
     }
 
     if (meta.status === "succeeded" || meta.status === "failed") {
@@ -2048,6 +2106,7 @@ export class RunManager {
         ...(this.options.operatorCatalog !== undefined
           ? { operatorCatalog: this.options.operatorCatalog }
           : {}),
+        browser: this.browserSupport(),
       });
       this.registerResumeUntrack(runId, done);
       const outcome = await done;
@@ -2789,60 +2848,87 @@ export class RunManager {
       const resumedStage = loaded.stages.find(
         (s) => s.id === definitionIdForInstance(meta.pipeline_dag, stageId),
       );
-      if (resumedStage?.browser?.profile !== undefined) {
-        await acquireStageProfile(
+      let prep;
+      try {
+        prep = await prepareResumeAttemptHome({
+          workspaceDir,
+          stageId,
+          attempt,
+          secrets: resumedStage?.secrets,
+          hostEnv: process.env,
+          logContext: { run_id: runId, stage_id: stageId },
+        });
+      } catch (err) {
+        throw new Error(secretUnavailableMessage(err));
+      }
+
+      let browserEnv: Record<string, string> | undefined;
+      try {
+        if (resumedStage?.browser?.profile !== undefined) {
+          await acquireStageProfile(
+            this.browserSupport(),
+            {
+              scope: runOwnerScope(this.browserSupport(), { runId }),
+              profile: resumedStage.browser.profile,
+              owner: { runId, stageId },
+              isRunLive: createRunLiveness(store),
+              halted: () => true,
+            },
+          ).then((outcome) => {
+            if (outcome === "halted") {
+              throw new Error(
+                `browser profile "${resumedStage.browser?.profile}" is held by another run`,
+              );
+            }
+          });
+        }
+        browserEnv = await resolveStageBrowserEnv(
           this.browserSupport(),
           {
+            runId,
+            stageId,
             scope: runOwnerScope(this.browserSupport(), { runId }),
-            profile: resumedStage.browser.profile,
-            owner: { runId, stageId },
-            isRunLive: createRunLiveness(store),
-            halted: () => true,
+            runDir: workspaceDir,
+            browser: resumedStage?.browser,
+            attempt,
+            humanLogin: isHumanLoginStage(
+              meta.pipeline_dag,
+              definitionIdForInstance(meta.pipeline_dag, stageId),
+              resumedStage?.browser,
+            ),
+            resuming: true,
           },
-        ).then((outcome) => {
-          if (outcome === "halted") {
-            throw new Error(
-              `browser profile "${resumedStage.browser?.profile}" is held by another run`,
-            );
-          }
-        });
+        );
+      } catch (err) {
+        prep.cleanup();
+        throw err;
       }
-      const browserEnv = await resolveStageBrowserEnv(
-        this.browserSupport(),
-        {
+
+      const launchResult = await launcher
+        .launch({
           runId,
           stageId,
-          scope: runOwnerScope(this.browserSupport(), { runId }),
-          runDir: workspaceDir,
-          browser: resumedStage?.browser,
+          rootDir: runProjectRoot,
+          factoryCwd: runProjectRoot,
+          stage: resumedStage,
+          workspaceDir,
+          ...(browserEnv !== undefined ? { browserEnv } : {}),
+          mode: "resume",
+          resumeAnswer: opaqueAnswer,
           attempt,
-          humanLogin: isHumanLoginStage(
-            meta.pipeline_dag,
-            definitionIdForInstance(meta.pipeline_dag, stageId),
-            resumedStage?.browser,
-          ),
-          resuming: true,
-        },
-      );
-      const launchResult = await launcher.launch({
-        runId,
-        stageId,
-        rootDir: runProjectRoot,
-        factoryCwd: runProjectRoot,
-        stage: resumedStage,
-        workspaceDir,
-        ...(browserEnv !== undefined ? { browserEnv } : {}),
-        mode: "resume",
-        resumeAnswer: opaqueAnswer,
-        attempt,
-        sessionFilePath,
-        env: stageBinding.env,
-        bindingKind: stageBinding.kind,
-        ...(resumedStage !== undefined ? { model: resumedStage.model } : {}),
-        ...(this.options.operatorCatalog !== undefined
-          ? { operatorCatalog: this.options.operatorCatalog }
-          : {}),
-      });
+          sessionFilePath,
+          env: stageBinding.env,
+          bindingKind: stageBinding.kind,
+          grants: prep.grants,
+          attemptHome: prep.attemptHome,
+          ...(resumedStage !== undefined ? { model: resumedStage.model } : {}),
+          ...(this.options.operatorCatalog !== undefined
+            ? { operatorCatalog: this.options.operatorCatalog }
+            : {}),
+        })
+        .finally(() => {
+          prep.cleanup();
+        });
 
       if (launchResult.type === "waiting") {
         return { ok: true };
@@ -2890,16 +2976,32 @@ export class RunManager {
           }
           return { ok: true, verification: "failed_retrying" };
         }
-        await store.appendStageEvent(
-          runId,
-          stageId,
-          {
-            event: "failed",
-            reason: launchResult.reason,
-          },
-          eventOptions,
+        const abandonedReason = this.schedulingHalts.get(runId)?.abandoned?.get(stageId);
+        const failureReason = abandonedReason ?? launchResult.reason;
+        const recordedEvents = await store.listStageEvents(runId, stageId, attempt).catch(() => []);
+        if (!recordedEvents.some((event) => event.event === "failed")) {
+          await store.appendStageEvent(
+            runId,
+            stageId,
+            {
+              event: "failed",
+              reason: failureReason,
+            },
+            eventOptions,
+          );
+        }
+        const siblings = (await store.readRun(runId)).stages.some(
+          (stage) =>
+            stage.stage_id !== stageId &&
+            (stage.status === "running" || stage.status === "waiting_for_input"),
         );
-        await store.updateRunStatus(runId, "failed");
+        if (abandonedReason !== undefined || siblings) {
+          // Other stages are still running under their own scheduler: derive the run status from the stages and
+          // leave their browsers alone. This stage's browser was torn down above.
+          await syncRunStatusFromStages(store, runId);
+          return { ok: false, reason: failureReason };
+        }
+        await writeTerminalRunStatus(store, runId, "failed");
         await teardownRunBrowsers(
           this.browserSupport(),
           {
@@ -2908,7 +3010,7 @@ export class RunManager {
             events: (stageId) => store.listStageEvents(runId, stageId),
           },
         ).catch(() => undefined);
-        return { ok: false, reason: launchResult.reason };
+        return { ok: false, reason: failureReason };
       }
 
       let initialPrior: StageEnvelope | null = null;
@@ -4137,7 +4239,11 @@ export class RunManager {
     const entry = this.active.get(runId);
     if (entry === undefined) return;
     const generation = ++this.trackingGeneration;
-    this.active.set(runId, { ...entry, generation, done });
+    // A scheduler may still drive sibling stages: stay tracked until it and the resumed stage have both settled.
+    const previous = (entry as { done?: Promise<unknown> }).done;
+    const both = previous !== undefined ? Promise.allSettled([previous, done]) : done;
+    this.active.set(runId, { ...entry, generation, done: both as typeof done });
+    done = both;
     void done.finally(() => {
       this.untrackIfGeneration(runId, generation);
     });

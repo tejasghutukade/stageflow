@@ -1,9 +1,9 @@
-import path from "node:path";
 import { Type } from "typebox";
 import { z } from "zod";
 import { isAgentError } from "../agents/errors.js";
 import { defaultAgentProjectRoot } from "../agents/projectRoot.js";
 import { loadDraftPackage, loadTaskArtifact, validateDraftPackage, type DraftPackage } from "../config/draftPackage.js";
+import { stageFilenameStem } from "../config/stageFilenameStem.js";
 import { listTasksMultiProject } from "../config/multiProjectCatalog.js";
 import { loadCatalogTriggers } from "../config/triggerCatalog.js";
 import { MemoryError } from "../memory/host.js";
@@ -134,10 +134,6 @@ function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
-function stemOf(uses: string): string {
-  return path.posix.basename(uses).replace(/(\.stage)?\.ya?ml$/i, "");
-}
-
 function channelNames(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const names: string[] = [];
@@ -159,7 +155,7 @@ function pipelineStages(draft: DraftPackage): GuidePipelineStage[] {
   const stages = draft.pipeline.stages.map((entry) => {
     const uses = str(entry.uses)?.replace(/\\/g, "/");
     const body = uses ? (files.get(uses) ?? {}) : entry;
-    const id = str(entry.id) ?? str(body.id) ?? (uses ? stemOf(uses) : "");
+    const id = str(entry.id) ?? str(body.id) ?? (uses ? stageFilenameStem(uses) : "");
     const prompt = str(body.system_prompt)?.split("\n")[0]?.trim();
     const model = str(body.model);
     const channels = body.channels !== undefined ? body.channels : draft.pipeline.channels;
@@ -352,7 +348,7 @@ async function taskResource(
     const loaded = await loadTaskArtifact(root, id);
     if (!loaded.ok) throw new GuideUiError(loaded.status === 404 ? "guide.ui_not_found" : "guide.ui_read_failed");
     const body = loaded.task.body;
-    const taskId = str(body.id) ?? stemOf(loaded.taskPath).replace(/\.task$/, "");
+    const taskId = str(body.id) ?? stageFilenameStem(loaded.taskPath).replace(/\.task$/, "");
     return {
       kind: "task",
       fields: fields([

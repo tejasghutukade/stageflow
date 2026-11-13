@@ -8,11 +8,14 @@ import {
   type ResolveCatalogRelativePathInput,
 } from "../config/catalogRelativePath.js";
 import type { LoadOutcome } from "../config/loadOutcome.js";
+import { contentHash, writeFileAtomic } from "../config/atomicWrite.js";
+import { renderCatalogYaml } from "../config/preserveCatalogYaml.js";
 import { loadPipelineOutcome } from "../config/loadPipeline.js";
 import { loadStageOutcome } from "../config/loadStage.js";
 import { loadStageflowManifestOutcome } from "../config/loadStageflowManifest.js";
 import { loadTaskOutcome } from "../config/loadTask.js";
 import { loadTriggerOutcome } from "../config/loadTrigger.js";
+import { STAGE_FILENAME_SUFFIXES } from "../config/stageFilenameStem.js";
 import {
   findingsFromLoadIssues,
   type ValidationFinding,
@@ -46,10 +49,11 @@ export type WriteCatalogFileErrorCode =
   | CatalogFileReadErrorCode
   | CatalogFileWriteInvalidCode
   | "catalog_file_exists"
-  | "use_eval_api";
+  | "use_eval_api"
+  | "FILE_CHANGED";
 
 export type WriteCatalogFileResult =
-  | { ok: true; path: string; content: string }
+  | { ok: true; path: string; content: string; hash: string }
   | {
       ok: false;
       status: 400 | 404 | 409 | 413;
@@ -191,7 +195,7 @@ export function catalogFileKind(relativePath: string, content: string): CatalogF
   if (base.endsWith(".pipeline.yaml") || base.endsWith(".pipeline.yml")) return "pipeline";
   if (base.endsWith(".task.yaml") || base.endsWith(".task.yml")) return "task";
   if (base.endsWith(".trigger.yaml") || base.endsWith(".trigger.yml")) return "trigger";
-  if (base.endsWith(".stage.yaml") || base.endsWith(".stage.yml")) return "stage";
+  if (STAGE_FILENAME_SUFFIXES.some((suffix) => base.endsWith(suffix))) return "stage";
   let raw: unknown;
   try {
     raw = parseYaml(content);
@@ -239,8 +243,17 @@ function writeFailure(status: 400 | 404 | 409 | 413, error: string, code: WriteC
   return { ok: false, status, error, code };
 }
 
+/**
+ * `baseHash`: refuse with FILE_CHANGED when the file on disk is no longer the one the editor opened.
+ * `preserveFormatting`: apply `content` onto the existing file so comments, quoting and untouched lines stay.
+ */
 export async function writeCatalogFileForHttp(
-  input: ResolveCatalogRelativePathInput & { content: string; create?: boolean },
+  input: ResolveCatalogRelativePathInput & {
+    content: string;
+    create?: boolean;
+    baseHash?: string;
+    preserveFormatting?: boolean;
+  },
 ): Promise<WriteCatalogFileResult> {
   if (!isCatalogYamlExtension(input.inputPath)) {
     return writeFailure(400, "Only .yaml and .yml catalog files can be written", "unsupported_file_type");
@@ -303,10 +316,29 @@ export async function writeCatalogFileForHttp(
   }
   if (input.create === true) return writeFailure(409, "Catalog file already exists", "catalog_file_exists");
   const previous = await readFile(fileReal, "utf8");
-  await writeFile(fileReal, input.content, "utf8");
-  return validateWritten(input, resolved.relativePath, rootReal, fileReal, async () => {
-    await writeFile(fileReal, previous, "utf8");
+  if (input.baseHash !== undefined && contentHash(previous) !== input.baseHash) {
+    return writeFailure(409, CATALOG_FILE_CHANGED_MESSAGE, "FILE_CHANGED");
+  }
+  const content = input.preserveFormatting === true ? preserveOnto(previous, input.content) : input.content;
+  await writeFileAtomic(fileReal, content);
+  return validateWritten({ content }, resolved.relativePath, rootReal, fileReal, async () => {
+    await writeFileAtomic(fileReal, previous);
   });
+}
+
+export const CATALOG_FILE_CHANGED_MESSAGE =
+  "The file changed on disk since you opened it. Your edits were not saved.";
+
+/** The editor's YAML applied onto the file as it is, keeping comments and untouched text. */
+function preserveOnto(previous: string, content: string): string {
+  let next: unknown;
+  try {
+    next = parseYaml(content);
+  } catch {
+    return content;
+  }
+  if (next === null || typeof next !== "object" || Array.isArray(next)) return content;
+  return renderCatalogYaml(previous, next as Record<string, unknown>, { keepUnknownTopLevel: false });
 }
 
 /** Loads the written file as what it is; on failure undoes the write and answers with catalog-relative findings. */
@@ -319,7 +351,7 @@ async function validateWritten(
 ): Promise<WriteCatalogFileResult> {
   const kind = catalogFileKind(relativePath, input.content);
   const outcome = await loadCatalogFileOutcome(kind, fileReal, rootReal);
-  if (outcome.ok) return { ok: true, path: relativePath, content: input.content };
+  if (outcome.ok) return { ok: true, path: relativePath, content: input.content, hash: contentHash(input.content) };
   await undo();
   const findings = findingsFromLoadIssues(rootReal, fileReal, outcome.issues).map((finding) => ({
     ...finding,

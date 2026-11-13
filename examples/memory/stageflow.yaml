@@ -1,5 +1,5 @@
 version: 1
-model: openrouter/nvidia/nemotron-3.5-lightning:free
+model: anthropic/claude-haiku-4-5
 catalog:
   pipelines:
     - .

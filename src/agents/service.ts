@@ -140,6 +140,12 @@ function sameDefinition(left: AgentDefinition, right: AgentDefinition): boolean 
   return serializeAgentDefinition(left) === serializeAgentDefinition(right);
 }
 
+/** How many of the previous session's last messages a rolled channel session starts with, as context. */
+const ROLLOVER_CARRIED_MESSAGES = 6;
+
+/** A channel thread's cost cap counts spend across rollovers inside this window. */
+const THREAD_COST_WINDOW_MS = 24 * 60 * 60_000;
+
 export class AgentService {
   private readonly store: AgentStore;
   private readonly environment: AgentEnvironment;
@@ -993,7 +999,14 @@ export class AgentService {
       return this.store.transaction(() => {
         // A retry takes over the earlier turn's unanswered message instead of adding it a second time.
         const retried = input.resumeTurnId ? this.store.listMessages(sessionId).find((m) => m.turnId === input.resumeTurnId && m.role === "user") : undefined;
-        const history = this.store.listMessages(sessionId).filter((m) => m.id !== retried?.id);
+        const own = this.store.listMessages(sessionId).filter((m) => m.id !== retried?.id);
+        // A channel thread that rolled onto this session starts from the previous session's last few messages, so the
+        // agent keeps the conversation. They are context for the model only; this session's transcript stays its own.
+        const carried =
+          own.length === 0 && session.rolledFromSessionId !== undefined
+            ? this.store.listMessages(session.rolledFromSessionId).slice(-ROLLOVER_CARRIED_MESSAGES)
+            : [];
+        const history = [...carried, ...own];
         const turn = this.store.insertTurn({
           id: id("turn"),
           sessionId,
@@ -1032,27 +1045,85 @@ export class AgentService {
     });
   }
 
+  /**
+   * Spend on this session and the sessions it rolled from, inside the window.
+   * Always-on agents use the last 24 hours. The walk stops at 1000 sessions.
+   */
+  private threadSpend(session: AgentSession, since: number): number {
+    let spent = 0;
+    const seen = new Set<string>();
+    let cursor: { id: string; rolledFromSessionId?: string } | undefined = session;
+    for (let depth = 0; cursor !== undefined && depth < 1000; depth += 1) {
+      if (seen.has(cursor.id)) break;
+      seen.add(cursor.id);
+      spent += this.store
+        .listTurns(cursor.id)
+        .filter((turn) => Date.parse(turn.startedAt) >= since)
+        .reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0);
+      const previousId = cursor.rolledFromSessionId;
+      if (previousId === undefined) break;
+      cursor = this.store.getSession(previousId);
+    }
+    return spent;
+  }
+
+  /**
+   * Thread spend in the last 24 hours, across rollovers. This is what decides whether a channel thread may roll
+   * onto a new session: a rollover never resets it, and it clears once the window passes.
+   */
+  private threadCostBlocked(definition: AgentDefinition, session: AgentSession): boolean {
+    const { limits } = definition;
+    if (limits.cost_usd === null) return false;
+    return this.threadSpend(session, this.now().getTime() - THREAD_COST_WINDOW_MS) >= limits.cost_usd;
+  }
+
+  /**
+   * True when a new turn on this session is over its cost cap: the thread's last 24 hours, or (for agents that are
+   * not always-on) everything this one session has spent.
+   */
+  private costBlocked(definition: AgentDefinition, session: AgentSession): boolean {
+    const { limits } = definition;
+    if (limits.cost_usd === null) return false;
+    if (this.threadCostBlocked(definition, session)) return true;
+    if (limits.always_on) return false;
+    const sessionSpend = this.store.listTurns(session.id).reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0);
+    return sessionSpend >= limits.cost_usd;
+  }
+
+  /** The session ran out of turns or time (never true for always-on agents). */
+  private turnOrTimeLimit(definition: AgentDefinition, session: AgentSession): { kind: "turns" | "minutes"; message: string } | null {
+    const { limits } = definition;
+    if (limits.always_on) return null;
+    if (this.store.listTurns(session.id).length >= limits.max_turns) {
+      return { kind: "turns", message: `This session reached its limit of ${limits.max_turns} turns.` };
+    }
+    const ageMinutes = (this.now().getTime() - Date.parse(session.createdAt)) / 60_000;
+    if (ageMinutes >= limits.session_minutes) {
+      return { kind: "minutes", message: `This session reached its limit of ${limits.session_minutes} minutes.` };
+    }
+    return null;
+  }
+
+  /**
+   * Why a new turn on this session would be refused, or null while it is still inside its limits.
+   * Cost is checked first so the sender is told the limit that actually applies. Always-on sessions skip the time
+   * and turn caps. A channel thread rolls onto a new session at its turn or time limit; its cost limit counts the
+   * whole thread's last 24 hours, so a rollover does not reset it.
+   */
+  private limitBlockReason(definition: AgentDefinition, session: AgentSession): { kind: "turns" | "minutes" | "cost"; message: string } | null {
+    const { limits } = definition;
+    if (this.costBlocked(definition, session)) {
+      const sessionSpend = this.store.listTurns(session.id).reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0);
+      const today = limits.always_on || sessionSpend < (limits.cost_usd ?? 0);
+      return { kind: "cost", message: `This session reached its cost limit of $${limits.cost_usd}${today ? " for today" : ""}.` };
+    }
+    return this.turnOrTimeLimit(definition, session);
+  }
+
   /** Session limits (`limits` in the pinned revision) are checked before each new turn. */
   private assertWithinLimits(definition: AgentDefinition, session: AgentSession): void {
-    const { limits } = definition;
-    const turns = this.store.listTurns(session.id);
-    if (!limits.always_on) {
-      if (turns.length >= limits.max_turns) {
-        throw new AgentError("agent.limit_reached", `This session reached its limit of ${limits.max_turns} turns.`);
-      }
-      const ageMinutes = (this.now().getTime() - Date.parse(session.createdAt)) / 60_000;
-      if (ageMinutes >= limits.session_minutes) {
-        throw new AgentError("agent.limit_reached", `This session reached its limit of ${limits.session_minutes} minutes.`);
-      }
-    }
-    if (limits.cost_usd !== null) {
-      // An always-on session has no end, so its cap is per day instead of per session.
-      const since = limits.always_on ? this.now().getTime() - 24 * 60 * 60_000 : 0;
-      const spent = turns.filter((turn) => Date.parse(turn.startedAt) >= since).reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0);
-      if (spent >= limits.cost_usd) {
-        throw new AgentError("agent.limit_reached", `This session reached its cost limit of $${limits.cost_usd}${limits.always_on ? " for today" : ""}.`);
-      }
-    }
+    const blocked = this.limitBlockReason(definition, session);
+    if (blocked) throw new AgentError("agent.limit_reached", blocked.message);
   }
 
   /**
@@ -1285,11 +1356,23 @@ export class AgentService {
       const threadKey = agentThreadKey(message);
       const now = this.iso();
       const existing = this.store.findSessionByThread(projectKey, target.agentId, threadKey);
+      // Channel threads never continue an eval session, and this path never opens one.
+      if (existing && isEvalSession(existing)) throw new AgentError("agent.session_not_found");
       if (!this.store.rememberInboundEvent(projectKey, inboundDedupeKey(message), now)) {
         if (!existing) throw new AgentError("agent.session_not_found");
         return { agentId: target.agentId, sessionId: existing.id, duplicate: true };
       }
-      if (existing) return { agentId: target.agentId, sessionId: existing.id, duplicate: false };
+      const definition = existing ? await this.effectiveDefinition(projectRoot, existing) : null;
+      // Roll onto a new session at a turn or time limit, unless the thread is over its cost cap for the last 24 hours.
+      const rollOver = Boolean(
+        existing &&
+          definition &&
+          !this.threadCostBlocked(definition, existing) &&
+          this.turnOrTimeLimit(definition, existing) !== null,
+      );
+      if (existing && !rollOver) {
+        return { agentId: target.agentId, sessionId: existing.id, duplicate: false };
+      }
       const session: AgentSession = {
         id: id("ses"),
         agentId: target.agentId,
@@ -1299,11 +1382,16 @@ export class AgentService {
         source: message.provider,
         sourceRef: message.from ?? null,
         threadKey,
+        ...(existing ? { rolledFromSessionId: existing.id } : {}),
         title: null,
         createdAt: now,
         updatedAt: now,
       };
-      this.store.insertSession(projectKey, session);
+      // The thread index allows one session. A session past its turns or minutes gives the key up.
+      this.store.transaction(() => {
+        if (existing) this.store.clearSessionThread(existing.id, now);
+        this.store.insertSession(projectKey, session);
+      });
       return { agentId: target.agentId, sessionId: session.id, duplicate: false };
     });
   }

@@ -1,5 +1,5 @@
 id: retry-tour
-model: cursor/auto
+model: anthropic/claude-haiku-4-5
 schemas:
   empty:
     type: object

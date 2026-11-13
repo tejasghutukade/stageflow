@@ -4,22 +4,25 @@ import type { A2aCaller, A2aPublication } from "../../api/a2a";
 import { CARD, DANGER, EYEBROW, EmptyState, Field, GHOST, INPUT, MONO, PRIMARY, SECONDARY, Tag } from "../identity/identityParts";
 import { callerNameProblem, callerUsage } from "./a2aView";
 
-const GRID = "grid grid-cols-[minmax(0,1.2fr)_minmax(0,1.6fr)_200px] items-center gap-4";
+const GRID = "grid grid-cols-[minmax(0,1.1fr)_minmax(0,1.3fr)_168px_200px] items-center gap-4";
 
 export function CallersPanel({
   callers,
   publications,
   busy,
   onAdd,
+  onAllowRunStage,
   onRevoke,
 }: {
   callers: readonly A2aCaller[];
   publications: readonly A2aPublication[];
   busy: boolean;
-  onAdd: (name: string) => void;
+  onAdd: (name: string, allowRunStage: boolean) => void;
+  onAllowRunStage: (id: string, allowRunStage: boolean) => void;
   onRevoke: (id: string) => void;
 }) {
   const [name, setName] = useState("");
+  const [allowRunStage, setAllowRunStage] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
   const trimmed = name.trim();
   const problem = callerNameProblem(trimmed, callers.map((row) => row.id));
@@ -28,25 +31,42 @@ export function CallersPanel({
   return (
     <div className="flex flex-col gap-4">
       <form
-        className="flex items-end gap-3"
+        className="flex flex-col items-start gap-3"
         onSubmit={(event) => {
           event.preventDefault();
           if (!ready) return;
-          onAdd(trimmed);
+          onAdd(trimmed, allowRunStage);
           setName("");
+          setAllowRunStage(false);
         }}
       >
-        <Field label="Caller name" hint="The outside agent that will call, for example procurement-assistant." error={problem} className="w-full max-w-[360px]">
+        <div className="flex items-end gap-3">
+          <Field label="Caller name" hint="The outside agent that will call, for example procurement-assistant." error={problem} className="w-full max-w-[360px]">
+            <input
+              className={`${INPUT} ${MONO}`}
+              value={name}
+              placeholder="procurement-assistant"
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(event) => setName(event.target.value)}
+            />
+          </Field>
+          <button type="submit" className={PRIMARY} disabled={busy || !ready}>Add caller</button>
+        </div>
+        <label className="flex items-start gap-2 text-[13px] text-[#ecedee]">
           <input
-            className={`${INPUT} ${MONO}`}
-            value={name}
-            placeholder="procurement-assistant"
-            autoComplete="off"
-            spellCheck={false}
-            onChange={(event) => setName(event.target.value)}
+            type="checkbox"
+            className="mt-0.5"
+            checked={allowRunStage}
+            disabled={busy}
+            aria-label="Allow run_stage"
+            onChange={(event) => setAllowRunStage(event.target.checked)}
           />
-        </Field>
-        <button type="submit" className={PRIMARY} disabled={busy || !ready}>Add caller</button>
+          <span className="flex flex-col gap-0.5">
+            <span>Allow run_stage</span>
+            <span className="text-xs text-[#8b8f98]">Stays off until you set it. An opted-in caller has shell on the Host and can read any run&apos;s envelopes.</span>
+          </span>
+        </label>
       </form>
 
       {callers.length === 0 ? (
@@ -58,6 +78,7 @@ export function CallersPanel({
           <div className={`${GRID} px-4 py-2.5`}>
             <span className={EYEBROW}>Caller</span>
             <span className={EYEBROW}>May call</span>
+            <span className={EYEBROW}>Allow run_stage</span>
             <span />
           </div>
           {callers.map((row) => {
@@ -71,6 +92,16 @@ export function CallersPanel({
                 <span className={`truncate text-xs ${used.length > 0 ? `text-[#ecedee] ${MONO}` : "text-[#8b8f98]"}`}>
                   {used.length > 0 ? used.join(", ") : "No published pipeline"}
                 </span>
+                <label className="flex items-center gap-2 text-xs text-[#ecedee]">
+                  <input
+                    type="checkbox"
+                    checked={row.allowRunStage}
+                    disabled={busy}
+                    aria-label={`Allow run_stage for ${row.id}`}
+                    onChange={(event) => onAllowRunStage(row.id, event.target.checked)}
+                  />
+                  <span className="text-[#8b8f98]">{row.allowRunStage ? "On" : "Off"}</span>
+                </label>
                 <div className="flex items-center justify-end gap-2">
                   {confirming === row.id ? (
                     <>

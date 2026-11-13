@@ -172,6 +172,14 @@ export function AppRail({
                     <span className="rounded-sm border border-dashed border-[#ffffff2e] px-[5px] text-[11px] text-[var(--sf-text-3)]">
                       Soon
                     </span>
+                  ) : item.experimental ? (
+                    <span
+                      className="rounded-sm border border-[#ffffff2e] px-[5px] text-[11px] text-[var(--sf-text-3)]"
+                      title="Experimental"
+                    >
+                      <span className="sr-only">experimental</span>
+                      <span aria-hidden="true">Exp</span>
+                    </span>
                   ) : null}
                   {item.badge === "waiting" && waitingCount > 0 ? (
                     <span className="rounded-full bg-[var(--sf-needs)] px-1.5 py-px font-['Geist_Mono',monospace] text-[11px] font-semibold text-[#1a1306] shadow-[0px_0px_10px_rgba(245,181,68,0.45)]">

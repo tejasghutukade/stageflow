@@ -5,7 +5,7 @@ stages:
     route:
       - to: middle
     system_prompt: Implement.
-    model: cursor/auto
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -18,7 +18,7 @@ stages:
     route:
       - to: review
     system_prompt: A stage on the replay route that is not safe to replay.
-    model: cursor/auto
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -35,7 +35,7 @@ stages:
         on_max_replays: require_continue
         replay_session: resume
     system_prompt: Review.
-    model: cursor/auto
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -45,7 +45,7 @@ stages:
           type: object
   - id: submit
     system_prompt: Submit.
-    model: cursor/auto
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:

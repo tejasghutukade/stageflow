@@ -161,13 +161,6 @@ const artifactBackedParamsSchema = Type.Object({
   id: Type.Optional(Type.String()),
 });
 
-const KIND_PARAM_SCHEMAS = {
-  free_text: freeTextParamsSchema,
-  confirm: confirmParamsSchema,
-  multi_question: multiQuestionParamsSchema,
-  artifact_backed: artifactBackedParamsSchema,
-} as const;
-
 export const askOperatorParamsSchema = Type.Union([
   freeTextParamsSchema,
   confirmParamsSchema,
@@ -180,15 +173,57 @@ export const askOperatorParamsSchema = Type.Union([
  * (stage `gate_kinds` allowlist). Omitted/empty falls back to the full
  * union so back-compat stages keep accepting every kind.
  */
+/**
+ * Tool parameters: one object at the root, because OpenAI rejects a tool whose parameters are not
+ * `type: "object"`. Which fields each kind needs is checked by `parseAskOperatorParams` in `execute`.
+ */
 export function askOperatorParamsSchemaFor(
   allowedKinds?: readonly AskOperatorKind[],
 ) {
-  if (!allowedKinds || allowedKinds.length === 0) {
-    return askOperatorParamsSchema;
-  }
-  const schemas = allowedKinds.map((kind) => KIND_PARAM_SCHEMAS[kind]);
-  if (schemas.length === 1) return schemas[0];
-  return Type.Union(schemas as [typeof schemas[0], typeof schemas[0], ...typeof schemas]);
+  const kinds: readonly AskOperatorKind[] =
+    allowedKinds && allowedKinds.length > 0 ? allowedKinds : ASK_OPERATOR_KINDS;
+  const kindSchema =
+    kinds.length === 1
+      ? Type.Literal(kinds[0]!)
+      : Type.Union(
+          kinds.map((kind) => Type.Literal(kind)) as [
+            ReturnType<typeof Type.Literal>,
+            ReturnType<typeof Type.Literal>,
+            ...ReturnType<typeof Type.Literal>[],
+          ],
+        );
+  const has = (kind: AskOperatorKind) => kinds.includes(kind);
+  return Type.Object({
+    kind: kindSchema,
+    ...(has("free_text") || has("confirm") || has("artifact_backed")
+      ? {
+          message: Type.Optional(
+            Type.String({ minLength: 1, description: "The question. Required unless kind is multi_question." }),
+          ),
+        }
+      : {}),
+    ...(has("multi_question")
+      ? {
+          questions: Type.Optional(
+            Type.Array(multiQuestionItemSchema, {
+              minItems: 1,
+              description: "Required when kind is multi_question.",
+            }),
+          ),
+        }
+      : {}),
+    ...(has("artifact_backed")
+      ? {
+          artifacts: Type.Optional(
+            Type.Array(Type.String({ minLength: 1 }), {
+              minItems: 1,
+              description: "Required when kind is artifact_backed: artifact paths to show the operator.",
+            }),
+          ),
+        }
+      : {}),
+    id: Type.Optional(Type.String()),
+  });
 }
 
 const decisionSchema = Type.Union([

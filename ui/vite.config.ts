@@ -41,6 +41,15 @@ export default defineConfig({
       "/api": {
         target: "http://127.0.0.1:3847",
         changeOrigin: true,
+        configure: (proxy) => {
+          // Rewrite only the dev server's own Origin; any other page keeps its Origin and the Host refuses it.
+          proxy.on("proxyReq", (proxyReq, req) => {
+            const origin = req.headers.origin;
+            if (origin === "http://localhost:5173" || origin === "http://127.0.0.1:5173") {
+              proxyReq.setHeader("origin", "http://127.0.0.1:3847");
+            }
+          });
+        },
       },
     },
   },

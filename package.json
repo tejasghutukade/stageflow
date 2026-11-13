@@ -1,6 +1,6 @@
 {
   "name": "stageflow",
-  "version": "0.56.0",
+  "version": "0.57.0",
   "description": "Stageflow — CLI pipeline runtime for configurable stages on Pi",
   "type": "module",
   "main": "./dist/index.js",
@@ -20,6 +20,7 @@
     "skills",
     "builtin-skills",
     "examples",
+    "!examples/evals/guide-*",
     "docker-compose.consumer-identity.yml",
     "docker/consumer-cerbos.yaml",
     "policy-samples/consumer-orders.yaml",

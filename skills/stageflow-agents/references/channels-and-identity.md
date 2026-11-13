@@ -103,7 +103,9 @@ A send that may have reached the provider is never resent automatically (`agent.
 
 ```bash
 # REST only. <action> is resend or delivered. Agent routes do not need Origin.
+# export STAGEFLOW_CONTROL_TOKEN="$(cat ~/.stageflow/control-token)"
 curl -s -X POST "http://127.0.0.1:${STAGEFLOW_SERVICE_PORT:-3847}/api/agents/<id>/sessions/<sessionId>/turns/<turnId>/delivery/<action>" \
+  -H "Authorization: Bearer $STAGEFLOW_CONTROL_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{}'
 ```

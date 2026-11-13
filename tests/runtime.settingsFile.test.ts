@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   INVALID_CREDENTIAL_SOURCE_MESSAGE,
+  PI_HOME_CREDENTIAL_SOURCE_NOTICE,
   parseCredentialSource,
   readCredentialSourceFromFile,
   readFactorySettings,
@@ -34,16 +35,31 @@ describe("settingsFile credentialSource", () => {
     expect(readCredentialSourceFromFile(root)).toBe("sf_owned");
   });
 
-  it("maps legacy pi_home on disk to sf_owned when read", async () => {
+  it("migrates pi_home on disk to sf_owned with one notice", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-settings-legacy-pi-"));
+    const settingsPath = path.join(storeRootFor(root), "settings.json");
     await mkdir(storeRootFor(root), { recursive: true });
     await writeFile(
-      path.join(storeRootFor(root), "settings.json"),
+      settingsPath,
       `${JSON.stringify({ credentialSource: "pi_home", maxConcurrent: 2 }, null, 2)}\n`,
     );
-    expect(readCredentialSourceFromFile(root)).toBe("sf_owned");
-    expect(readMaxConcurrentFromFile(root)).toBe(2);
-    expect(parseCredentialSource("pi_home")).toBe("sf_owned");
+    const notices: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((msg: unknown) => {
+      notices.push(String(msg));
+    });
+    try {
+      expect(readCredentialSourceFromFile(root)).toBe("sf_owned");
+      expect(readCredentialSourceFromFile(root)).toBe("sf_owned");
+      expect(readMaxConcurrentFromFile(root)).toBe(2);
+      expect(parseCredentialSource("pi_home")).toBeUndefined();
+      expect(JSON.parse(await readFile(settingsPath, "utf8"))).toEqual({
+        maxConcurrent: 2,
+        credentialSource: "sf_owned",
+      });
+      expect(notices).toEqual([PI_HOME_CREDENTIAL_SOURCE_NOTICE]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("preserves credentialSource when writing maxConcurrent", async () => {

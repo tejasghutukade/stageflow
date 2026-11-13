@@ -23,7 +23,7 @@ system_prompt: |
 
   Rules:
   - Copy from priorEnvelopesByStage only. Do not use a single priorEnvelope.
-model: cursor/auto
+model: anthropic/claude-haiku-4-5
 io:
   input:
     schema:

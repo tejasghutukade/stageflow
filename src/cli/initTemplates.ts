@@ -14,7 +14,7 @@ catalog:
 export const LOUD_MODEL_PLACEHOLDER = "CHANGE_ME/<provider-model>";
 
 const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
-  anthropic: "anthropic/claude-sonnet-4-5",
+  anthropic: "anthropic/claude-sonnet-5-5",
   openrouter: "openrouter/auto",
   cursor: "cursor/auto",
 };
@@ -53,7 +53,7 @@ stages:
 }
 
 export const HELLO_PIPELINE_YAML = helloPipelineYaml(
-  "anthropic/claude-sonnet-4-5",
+  "anthropic/claude-sonnet-5-5",
 );
 
 export const HELLO_TASK_YAML = `id: hello

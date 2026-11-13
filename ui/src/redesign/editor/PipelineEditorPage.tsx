@@ -9,6 +9,7 @@ import {
   overwriteDraftPackageWithDetails,
   validateDraftPackage,
   writeCatalogFile,
+  type DraftFileHashes,
   type DraftPackagePayload,
   type DraftValidationResult,
   type PipelineListing,
@@ -32,12 +33,22 @@ import {
 import { stagePathLabel } from "../workshop/inspector/stageFields";
 import type { StageFocusRequest } from "../workshop/inspector/WorkshopStageInspector";
 import {
+  afterEditorPackageWrite,
+  beforeUnloadReturnValue,
+  draftPackageClipboardText,
+  EDITOR_HISTORY_POS_KEY,
+  editorLeaveCancelAction,
+  historyPos,
   filterEditorPipelineRuns,
   isDraftDirty,
+  isDraftFileChangedError,
+  isDraftIdCollisionError,
   mergeEditorFindings,
+  shouldBlockEditorLeave,
   type EditorHistorySessionEvent,
   type EditorTabId,
 } from "./pipelineEditorModel";
+import { EditorFileChangedDialog } from "./EditorFileChangedDialog";
 import { PipelineEditorGraph } from "./PipelineEditorGraph";
 import { PipelineEditorHeader } from "./PipelineEditorHeader";
 import { PipelineEditorHistory } from "./PipelineEditorHistory";
@@ -52,7 +63,7 @@ import {
   yamlPathsMatch,
 } from "./draftYaml";
 import {
-  editorReadOnlyNotice,
+  editorHeaderNotice,
   editorSaveLabel,
   unsavedChangeCount,
 } from "./editorHeaderModel";
@@ -160,6 +171,9 @@ export function PipelineEditorPage({
     : normalizeYamlPath(pipeline.path);
   const [draft, setDraft] = useState<DraftPackagePayload | null>(null);
   const [baseline, setBaseline] = useState<DraftPackagePayload | null>(null);
+  const [fileHashes, setFileHashes] = useState<DraftFileHashes | null>(null);
+  const [hasInclude, setHasInclude] = useState(false);
+  const [stageFileHash, setStageFileHash] = useState<string | null>(null);
   const [destination, setDestination] = useState<{
     directory: string;
     pipelineFilename: string;
@@ -211,6 +225,11 @@ export function PipelineEditorPage({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftValidateGen = useRef(0);
   const catalogValidateGen = useRef(0);
+  const [fileChangedOpen, setFileChangedOpen] = useState(false);
+  const conflictBaseHashesRef = useRef<DraftFileHashes | null>(null);
+  const leaveFromPopstateRef = useRef(false);
+  const lastHashRef = useRef(window.location.hash);
+  const leavingRef = useRef(false);
 
   // Must not equal the stage file path — YamlPanel routes pipeline vs stage edits by path.
   const pipelinePath = stageMode
@@ -224,7 +243,98 @@ export function PipelineEditorPage({
     : pipeline.path;
 
   const dirty = isDraftDirty(draft, baseline);
+  const unsaved = dirty || yamlParseError !== null;
   const unsavedCount = unsavedChangeCount(draft, baseline);
+  const unsavedRef = useRef(unsaved);
+  unsavedRef.current = unsaved;
+  const leaveRouteRef = useRef({
+    mode: stageMode ? ("stage" as const) : ("pipeline" as const),
+    pipelineId,
+    stagePath: stageFilePath,
+    projectRoot: catalogProjectRoot,
+  });
+  leaveRouteRef.current = {
+    mode: stageMode ? "stage" : "pipeline",
+    pipelineId,
+    stagePath: stageFilePath,
+    projectRoot: catalogProjectRoot,
+  };
+
+  useEffect(() => {
+    // Stamp the editor's history entry with a position, so a cancelled Back or Forward knows which way to undo.
+    const stamp = (pos: number) => {
+      const state = window.history.state;
+      const base = state !== null && typeof state === "object" ? (state as Record<string, unknown>) : {};
+      window.history.replaceState({ ...base, [EDITOR_HISTORY_POS_KEY]: pos }, "");
+    };
+    let editorPos = historyPos(window.history.state) ?? window.history.length;
+    stamp(editorPos);
+    let lastLength = window.history.length;
+    function onPopState() {
+      leaveFromPopstateRef.current = true;
+    }
+    function restoreEditorUrl() {
+      window.history.replaceState({ [EDITOR_HISTORY_POS_KEY]: editorPos }, "", lastHashRef.current);
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    }
+    function onHash() {
+      const next = window.location.hash;
+      if (leavingRef.current) {
+        lastHashRef.current = next;
+        leaveFromPopstateRef.current = false;
+        lastLength = window.history.length;
+        return;
+      }
+      if (next === lastHashRef.current) {
+        leaveFromPopstateRef.current = false;
+        return;
+      }
+      if (shouldBlockEditorLeave(unsavedRef.current, leaveRouteRef.current, next)) {
+        const leave = window.confirm(
+          "You have unsaved changes. Leave this page?",
+        );
+        if (!leave) {
+          const cancel = editorLeaveCancelAction({
+            historyGrew: window.history.length > lastLength,
+            targetPos: historyPos(window.history.state),
+            editorPos,
+          });
+          leaveFromPopstateRef.current = false;
+          lastLength = window.history.length;
+          if (cancel === "forward") window.history.forward();
+          else if (cancel === "back") window.history.back();
+          else restoreEditorUrl();
+          // Whatever the browser did, end on the editor's URL.
+          window.setTimeout(() => {
+            if (window.location.hash !== lastHashRef.current) restoreEditorUrl();
+          }, 150);
+          return;
+        }
+      }
+      lastHashRef.current = next;
+      leaveFromPopstateRef.current = false;
+      lastLength = window.history.length;
+      editorPos = historyPos(window.history.state) ?? editorPos + 1;
+      stamp(editorPos);
+    }
+    function onBeforeUnload(event: BeforeUnloadEvent) {
+      const message = beforeUnloadReturnValue(
+        unsavedRef.current && !leavingRef.current,
+      );
+      if (message === undefined) return;
+      event.preventDefault();
+      event.returnValue = message;
+    }
+    window.addEventListener("popstate", onPopState);
+    window.addEventListener("hashchange", onHash);
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+      window.removeEventListener("hashchange", onHash);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+    };
+  }, []);
+
   const dirtyPaths = useMemo(
     () => editorDirtyPaths(draft, baseline, pipelinePath),
     [baseline, draft, pipelinePath],
@@ -292,6 +402,8 @@ export function PipelineEditorPage({
         );
         setDraft(pkg.draft);
         setBaseline(cloneDraft(pkg.draft));
+        setFileHashes(null);
+        setStageFileHash(file.hash ?? null);
         setDestination(null);
         setSourceOrigin(null);
         setSelectedStageId(pkg.stageId);
@@ -300,6 +412,8 @@ export function PipelineEditorPage({
         setLoadError(err instanceof Error ? err.message : String(err));
         setDraft(null);
         setBaseline(null);
+        setFileHashes(null);
+        setHasInclude(false);
         setLoading(false);
       }
       return;
@@ -315,12 +429,16 @@ export function PipelineEditorPage({
       setLoadError(opened.error);
       setDraft(null);
       setBaseline(null);
+      setFileHashes(null);
+      setHasInclude(false);
       return;
     }
     const origin = draftOriginFromResponse(opened);
     if (origin) setSourceOrigin(origin);
     setDraft(opened.draft);
     setBaseline(cloneDraft(opened.draft));
+    setFileHashes(opened.fileHashes ?? null);
+    setHasInclude(opened.hasInclude === true);
     setDestination(opened.destination);
   }, [catalogProjectRoot, pipeline.path, stageFilePath, stageMode]);
 
@@ -450,7 +568,54 @@ export function PipelineEditorPage({
     showToast("Discarded local edits");
   }, [reloadDraft, runCatalogValidate, stageMode]);
 
-  const onSave = useCallback(async () => {
+  const applyPackageWriteSuccess = useCallback(
+    (
+      writtenDraft: DraftPackagePayload,
+      result: {
+        pipeline: PipelineListing;
+        pipelinePath: string;
+        fileHashes?: DraftFileHashes;
+        project_root?: string;
+        root_kind?: import("../../api").CatalogRootKind;
+        read_only?: boolean;
+      },
+      readOnlyCopy: boolean,
+    ) => {
+      const applied = afterEditorPackageWrite({
+        writtenDraft,
+        readOnlyCopy,
+        currentPipelineId: pipelineId,
+        currentProjectRoot: catalogProjectRoot,
+        result: {
+          pipeline: result.pipeline,
+          pipelinePath: result.pipelinePath,
+          fileHashes: result.fileHashes,
+          project_root: result.project_root,
+          root_kind: result.root_kind,
+          read_only: result.read_only,
+        },
+      });
+      if (applied.origin) setSourceOrigin(applied.origin);
+      if (applied.destination) setDestination(applied.destination);
+      if (applied.fileHashes) setFileHashes(applied.fileHashes);
+      setDraft(applied.writtenDraft);
+      setBaseline(cloneDraft(applied.writtenDraft));
+      setOpenPaths([applied.openPipelinePath]);
+      setYamlPath(applied.openPipelinePath);
+      setYamlKey((key) => key + 1);
+      setFileChangedOpen(false);
+      conflictBaseHashesRef.current = null;
+      if (applied.routePath) {
+        leavingRef.current = true;
+        onNew(applied.routePath);
+        leavingRef.current = false;
+        lastHashRef.current = window.location.hash;
+      }
+    },
+  [catalogProjectRoot, onNew, pipelineId],
+  );
+
+  const onSave = useCallback(async (overwriteHashes?: DraftFileHashes | null) => {
     if (!draft) return;
     setSaving(true);
     if (stageMode) {
@@ -459,6 +624,8 @@ export function PipelineEditorPage({
         path: stageFilePath,
         content,
         ...(catalogProjectRoot ? { project_root: catalogProjectRoot } : {}),
+        ...(stageFileHash ? { base_hash: stageFileHash } : {}),
+        preserve_formatting: true,
       });
       setSaving(false);
       if (!result.ok) {
@@ -481,6 +648,7 @@ export function PipelineEditorPage({
         return;
       }
       let nextDraft = draft;
+      setStageFileHash(result.hash ?? null);
       try {
         const pkg = buildStageDraftPackage(
           stageFilePath,
@@ -502,34 +670,37 @@ export function PipelineEditorPage({
       void runDraftValidate(nextDraft);
       return;
     }
+    let writtenDraft = draft;
     let result;
     if (readOnlySource) {
-      const directory = defaultPackageDirectory("workspace", draft.pipeline.id);
+      const directory = defaultPackageDirectory("workspace", writtenDraft.pipeline.id);
       result = await createDraftPackageWithDetails({
         directory,
         pipelineFilename: destination?.pipelineFilename,
-        draft,
+        draft: writtenDraft,
         ...omitDefaultWriteProjectRoot(
           DEFAULT_WRITE_CATALOG_WIRE_ID,
           DEFAULT_WRITE_CATALOG_WIRE_ID,
         ),
       });
-      if (!result.ok && result.status === 409) {
+      if (!result.ok && isDraftIdCollisionError(result)) {
         const nextId = window.prompt(
           "A pipeline with this id already exists in Workspace. Enter a new pipeline id:",
-          `${draft.pipeline.id}-copy`,
+          `${writtenDraft.pipeline.id}-copy`,
         );
         if (nextId?.trim()) {
-          const renamed = { ...draft, pipeline: { ...draft.pipeline, id: nextId.trim() } };
+          writtenDraft = {
+            ...writtenDraft,
+            pipeline: { ...writtenDraft.pipeline, id: nextId.trim() },
+          };
           result = await createDraftPackageWithDetails({
             directory: defaultPackageDirectory("workspace", nextId.trim()),
-            draft: renamed,
+            draft: writtenDraft,
             ...omitDefaultWriteProjectRoot(
               DEFAULT_WRITE_CATALOG_WIRE_ID,
               DEFAULT_WRITE_CATALOG_WIRE_ID,
             ),
           });
-          if (result.ok) setDraft(renamed);
         }
       }
     } else {
@@ -537,15 +708,22 @@ export function PipelineEditorPage({
         setSaving(false);
         return;
       }
+      const baseHashes = overwriteHashes ?? fileHashes;
       result = await overwriteDraftPackageWithDetails({
         directory: destination.directory,
         pipelineFilename: destination.pipelineFilename,
-        draft,
+        draft: writtenDraft,
+        ...(baseHashes ? { baseHashes } : {}),
         ...(catalogProjectRoot ? { project_root: catalogProjectRoot } : {}),
       });
     }
     setSaving(false);
     if (!result.ok) {
+      if (isDraftFileChangedError(result)) {
+        if (result.fileHashes) conflictBaseHashesRef.current = result.fileHashes;
+        setFileChangedOpen(true);
+        return;
+      }
       showToast(result.error ?? "Save failed");
       if (result.findings) setDraftValidation({
         scope: "full",
@@ -559,23 +737,45 @@ export function PipelineEditorPage({
       });
       return;
     }
-    const nextOrigin = draftOriginFromResponse(result);
-    if (nextOrigin) setSourceOrigin(nextOrigin);
-    setBaseline(cloneDraft(draft));
+    applyPackageWriteSuccess(writtenDraft, result, readOnlySource);
     showToast(readOnlySource ? "Saved copy to Workspace" : "Saved");
     appendSession(readOnlySource ? "Saved copy" : "Saved");
     void runCatalogValidate();
   }, [
     appendSession,
+    applyPackageWriteSuccess,
     catalogProjectRoot,
     destination,
     draft,
+    fileHashes,
     readOnlySource,
     runCatalogValidate,
     runDraftValidate,
     stageFilePath,
     stageMode,
   ]);
+
+  const onOverwriteFileChanged = useCallback(() => {
+    void onSave(conflictBaseHashesRef.current);
+  }, [onSave]);
+
+  const onReloadAfterFileChanged = useCallback(() => {
+    setFileChangedOpen(false);
+    conflictBaseHashesRef.current = null;
+    void reloadDraft();
+    void runCatalogValidate();
+  }, [reloadDraft, runCatalogValidate]);
+
+  const onCopyDraftAfterFileChanged = useCallback(() => {
+    if (!draft) return;
+    const path = stageMode ? stageFilePath : pipeline.path;
+    const text = draftPackageClipboardText(draft, path);
+    void navigator.clipboard.writeText(text).then(
+      () => showToast("Copied draft to clipboard"),
+      () => showToast("Could not copy draft"),
+    );
+    setFileChangedOpen(false);
+  }, [draft, pipeline.path, stageFilePath, stageMode]);
 
   const openYamlPath = useCallback((path: string) => {
     setOpenPaths((current) =>
@@ -809,7 +1009,10 @@ export function PipelineEditorPage({
         saveDisabled={saveDisabled}
         saving={saving}
         workshopHref={workshopHref}
-        readOnlyNotice={editorReadOnlyNotice(readOnlySource)}
+        readOnlyNotice={editorHeaderNotice({
+          readOnly: readOnlySource,
+          hasInclude,
+        })}
         saveLabel={editorSaveLabel(readOnlySource, dirty)}
         onDiscard={onDiscard}
         onStartRun={() =>
@@ -949,6 +1152,15 @@ export function PipelineEditorPage({
             quickFixFor={quickFixFor}
           />
         </>
+      ) : null}
+      {fileChangedOpen ? (
+        <EditorFileChangedDialog
+          busy={saving}
+          onClose={() => setFileChangedOpen(false)}
+          onOverwrite={onOverwriteFileChanged}
+          onReload={onReloadAfterFileChanged}
+          onCopy={onCopyDraftAfterFileChanged}
+        />
       ) : null}
     </div>
   );

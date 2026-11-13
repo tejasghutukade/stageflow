@@ -185,7 +185,15 @@ export function useStartRunForm({
     }));
   }, [selectedPipeline]);
 
-  const slotsFull = health != null && health.slotsAvailable === 0;
+  const queuedCount =
+    health != null && typeof health.queuedCount === "number"
+      ? health.queuedCount
+      : 0;
+  const queue = startQueueDecision({
+    slotsAvailable: health == null ? null : health.slotsAvailable,
+    queuedCount,
+    maxQueued: maxQueuedRuns(health),
+  });
   const heldWaiting =
     health != null
       ? waitingRunsAmongView(snapshot, health.activeRunIds).length
@@ -295,7 +303,8 @@ export function useStartRunForm({
     selectedTask,
     selectedPipeline,
     previewStages,
-    slotsFull,
+    queueFull: queue.queueFull,
+    queueLabel: queue.queueLabel,
     heldWaiting,
     health,
     displayError,
@@ -310,9 +319,43 @@ export function useStartRunForm({
     submit,
     canStart:
       Boolean(task && pipeline) &&
-      !slotsFull &&
+      !queue.queueFull &&
       !starting &&
       providerReady !== false &&
       pipelineValidation !== "invalid",
   };
+}
+
+/** Matches the host default when `/api/health` does not echo `config.maxQueued`. */
+export const DEFAULT_MAX_QUEUED_RUNS = 32;
+
+export function maxQueuedRuns(
+  health: { config?: { maxQueued?: number } } | null,
+): number {
+  const maxQueued = health?.config?.maxQueued;
+  if (typeof maxQueued === "number" && Number.isFinite(maxQueued) && maxQueued >= 0) {
+    return maxQueued;
+  }
+  return DEFAULT_MAX_QUEUED_RUNS;
+}
+
+/**
+ * Slots full still starts a run when the server would queue it.
+ * Start stays disabled only when that queue is already full.
+ */
+export function startQueueDecision(input: {
+  slotsAvailable: number | null;
+  queuedCount: number;
+  maxQueued: number;
+}): { queueFull: boolean; queueLabel: string | null } {
+  if (input.slotsAvailable === null || input.slotsAvailable > 0) {
+    return { queueFull: false, queueLabel: null };
+  }
+  if (input.maxQueued > 0 && input.queuedCount < input.maxQueued) {
+    return {
+      queueFull: false,
+      queueLabel: `will queue (position ${input.queuedCount + 1})`,
+    };
+  }
+  return { queueFull: true, queueLabel: null };
 }

@@ -50,13 +50,62 @@ describe("scoreResult", () => {
     expect(r.hasGraderErrors).toBe(true);
   });
 
+  it("must-pass pass with a rubric error and no other grade has a null score and fails", () => {
+    // Hand-computed: schema is must_pass (weight 100) and passed, so it is excluded from the mean.
+    // The rubric (weight 2) errored and produced no grade. It is the only grader that is not must_pass.
+    // weightedSum = 0, weightTotal = 0, so the score is null and the result fails.
+    const r = run(
+      [g("schema", { mustPass: true, weight: 100 }), g("rubric", { type: "rubric", weight: 2 })],
+      [grade("schema", 1, 1), { graderId: "rubric", status: "error", passed: null, score: null }],
+    );
+    expect(r).toEqual({ score: null, passed: false, hasGraderErrors: true, budgetWarnings: [] });
+  });
+
+  it("an errored must-pass grader fails the result even when other graders pass", () => {
+    // Hand-computed: schema is must_pass and errored, so it fails the result and is excluded.
+    // coverage weight 4 score 1, tone weight 1 score 0.
+    // score = (4 * 1 + 1 * 0) / (4 + 1) = 0.8, which meets the 0.8 threshold.
+    // passed is still false because the must_pass grader errored.
+    const r = run(
+      [g("schema", { mustPass: true, weight: 100 }), g("coverage", { weight: 4 }), g("tone", { weight: 1 })],
+      [
+        { graderId: "schema", status: "error", passed: null, score: null },
+        grade("coverage", 1, 1),
+        grade("tone", 0, 0),
+      ],
+    );
+    expect(r).toEqual({ score: 0.8, passed: false, hasGraderErrors: true, budgetWarnings: [] });
+  });
+
+  it("must-pass pass and rubric pass keep the weighted pass score", () => {
+    // Hand-computed: schema is must_pass (weight 100) and passed, so it is excluded.
+    // rubric weight 3 score 1, field weight 1 score 0.5.
+    // score = (3 * 1 + 1 * 0.5) / (3 + 1) = 3.5 / 4 = 0.875.
+    // 0.875 >= 0.8 and no must_pass grader failed, so the result passes.
+    const r = run(
+      [g("schema", { mustPass: true, weight: 100 }), g("rubric", { type: "rubric", weight: 3 }), g("field", { weight: 1 })],
+      [grade("schema", 1, 1), grade("rubric", 1, 1), grade("field", 0.5, 0)],
+    );
+    expect(r).toEqual({ score: 0.875, passed: true, hasGraderErrors: false, budgetWarnings: [] });
+  });
+
   it("no scored graders: 1 if must-pass pass, else 0", () => {
     expect(run([g("m", { mustPass: true })], [grade("m", 1, 1)])).toMatchObject({ score: 1, passed: true });
     expect(run([g("m", { mustPass: true })], [grade("m", 0, 0)])).toMatchObject({ score: 0, passed: false });
-    expect(run([g("a")], [{ graderId: "a", status: "error", passed: null, score: null }])).toMatchObject({
-      score: 1,
-      hasGraderErrors: true,
-    });
+  });
+
+  it("all grader errors leave no score and fail", () => {
+    // Hand-computed: weights 3 and 1, both grades error, so both are dropped.
+    // weightedSum = 0, weightTotal = 0, and no must_pass grader passed.
+    // score = null and passed = false, not the empty-mean default of 1.
+    const r = run(
+      [g("a", { weight: 3 }), g("b", { weight: 1 })],
+      [
+        { graderId: "a", status: "error", passed: null, score: null },
+        { graderId: "b", status: "error", passed: null, score: null },
+      ],
+    );
+    expect(r).toEqual({ score: null, passed: false, hasGraderErrors: true, budgetWarnings: [] });
   });
 
   it("weights", () => {

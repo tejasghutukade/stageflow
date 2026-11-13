@@ -8,5 +8,5 @@ event:
   match:
     action: opened
   config:
-    repo: tejasghutukade/stageflow
+    repo: your-org/stageflow
     secretRef: GITHUB_TOKEN

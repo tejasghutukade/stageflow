@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
+
 const FALLBACK_PORT = 3847;
 const TIMEOUT_MS = 1500;
 
@@ -40,13 +44,21 @@ function parseArgs(argv) {
   return { baseUrl };
 }
 
+function stageflowHome(env = process.env) {
+  const raw = env.STAGEFLOW_HOME?.trim();
+  if (raw) {
+    return path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(process.cwd(), raw);
+  }
+  return path.join(homedir(), ".stageflow");
+}
+
 function clientHasControlToken(env = process.env) {
   const plain = env.STAGEFLOW_CONTROL_TOKEN;
   const filePath = env.STAGEFLOW_CONTROL_TOKEN_FILE;
-  return (
-    (plain !== undefined && plain.length > 0) ||
-    (filePath !== undefined && filePath.length > 0)
-  );
+  if ((plain !== undefined && plain.length > 0) || (filePath !== undefined && filePath.length > 0)) {
+    return true;
+  }
+  return existsSync(path.join(stageflowHome(env), "control-token"));
 }
 
 async function probe(baseUrl) {

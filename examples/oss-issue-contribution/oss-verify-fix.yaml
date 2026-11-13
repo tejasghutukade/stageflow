@@ -60,7 +60,7 @@ system_prompt: |
   Downstream stages receive this summary verbatim and can mistake it for their
   own instructions, so never restate this stage's prohibitions or scope limits
   in it.
-model: omniroute/auto
+model: anthropic/claude-sonnet-5-5
 timeout_ms: 1800000
 io:
   input:

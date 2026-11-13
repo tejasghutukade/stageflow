@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   allowListenAddress,
+  assertAllowedHttpAccess,
   isHostAllowed,
   isLoopbackHostname,
   isLoopbackRemoteAddress,
@@ -79,6 +80,83 @@ describe("isLoopbackRemoteAddress", () => {
     expect(isLoopbackRemoteAddress("::ffff:127.0.0.1")).toBe(true);
     expect(isLoopbackRemoteAddress("8.8.8.8")).toBe(false);
     expect(isLoopbackRemoteAddress(undefined)).toBe(false);
+  });
+});
+
+describe("assertAllowedHttpAccess origin", () => {
+  function decide(headers: Record<string, string>): number | "ok" {
+    let status: number | undefined;
+    const res = {
+      writeHead(code: number) {
+        status = code;
+        return res;
+      },
+      end() {},
+    } as unknown as ServerResponse;
+    const ok = assertAllowedHttpAccess(
+      resolveAllowedHosts({}),
+      { headers } as IncomingMessage,
+      res,
+    );
+    return ok ? "ok" : (status ?? 0);
+  }
+
+  it("rejects an origin whose port does not match the Host header", () => {
+    expect(
+      decide({ host: "localhost:3847", origin: "http://localhost:5173" }),
+    ).toBe(403);
+    expect(
+      decide({ host: "localhost:3847", origin: "http://127.0.0.1:3847" }),
+    ).toBe(403);
+  });
+
+  it("allows an origin that matches the Host header, and requests with no origin", () => {
+    expect(
+      decide({ host: "localhost:3847", origin: "http://localhost:3847" }),
+    ).toBe("ok");
+    expect(
+      decide({ host: "[::1]:3847", origin: "http://[::1]:3847" }),
+    ).toBe("ok");
+    expect(decide({ host: "localhost", origin: "http://localhost" })).toBe("ok");
+    expect(decide({ host: "localhost", origin: "https://localhost" })).toBe("ok");
+    expect(decide({ host: "localhost:3847" })).toBe("ok");
+  });
+
+  it("can skip Origin-must-match-Host while still enforcing the Host allow-list", () => {
+    let status: number | undefined;
+    const res = {
+      writeHead(code: number) {
+        status = code;
+        return res;
+      },
+      end() {},
+    } as unknown as ServerResponse;
+    const allowed = resolveAllowedHosts({});
+    const ok = assertAllowedHttpAccess(
+      allowed,
+      {
+        headers: {
+          host: "127.0.0.1:3847",
+          origin: "https://site.example",
+        },
+      } as IncomingMessage,
+      res,
+      { skipOriginHostMatch: true },
+    );
+    expect(ok).toBe(true);
+    const blocked = assertAllowedHttpAccess(
+      allowed,
+      {
+        headers: {
+          host: "evil.example",
+          origin: "https://site.example",
+        },
+      } as IncomingMessage,
+      res,
+      { skipOriginHostMatch: true },
+    );
+    expect(blocked).toBe(false);
+    expect(status).toBe(403);
   });
 });
 

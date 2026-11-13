@@ -23,44 +23,34 @@ function branchesOf(schema: { anyOf?: Branch[]; oneOf?: Branch[] }): Branch[] {
   return schema.anyOf ?? schema.oneOf ?? [];
 }
 
-function statusOf(branch: Branch): string {
-  const status = branch.properties?.status as { const?: string } | undefined;
-  return status?.const ?? "";
-}
-
-function branchFields(
+/** The Pi tool is one flat object (OpenAI needs `type: "object"` at the root); Claude keeps a union per status. */
+function fieldNames(
   forkEmitContext?: ForkEmitContext,
   cloneEmitContext?: CloneEmitContext,
-): { typebox: Map<string, { fields: string[]; required: string[] }>; zod: Map<string, { fields: string[]; required: string[] }> } {
+): { typebox: string[]; zod: string[]; typeboxRequired: string[]; zodRequired: string[][] } {
   const def = createEmitStageEnvelopeTool({}, undefined, forkEmitContext, cloneEmitContext);
+  const root = def.parameters as { type?: string; properties?: Record<string, unknown>; required?: string[] };
+  expect(root.type).toBe("object");
   const zodJson = z.toJSONSchema(buildEmitStageEnvelopeShape({ forkEmitContext, cloneEmitContext })) as {
     anyOf?: Branch[];
     oneOf?: Branch[];
   };
-  const collect = (branches: Branch[]) => {
-    const map = new Map<string, { fields: string[]; required: string[] }>();
-    for (const branch of branches) {
-      map.set(statusOf(branch), {
-        fields: Object.keys(branch.properties ?? {}).sort(),
-        required: [...(branch.required ?? [])].sort(),
-      });
-    }
-    return map;
-  };
+  const branches = branchesOf(zodJson);
   return {
-    typebox: collect(branchesOf(def.parameters as { anyOf?: Branch[] })),
-    zod: collect(branchesOf(zodJson)),
+    typebox: Object.keys(root.properties ?? {}).sort(),
+    zod: [...new Set(branches.flatMap((branch) => Object.keys(branch.properties ?? {})))].sort(),
+    typeboxRequired: [...(root.required ?? [])].sort(),
+    zodRequired: branches.map((branch) => [...(branch.required ?? [])].sort()),
   };
 }
 
-function fieldNames(
-  forkEmitContext?: ForkEmitContext,
-  cloneEmitContext?: CloneEmitContext,
-): { typebox: string[]; zod: string[] } {
-  const { typebox, zod } = branchFields(forkEmitContext, cloneEmitContext);
-  const names = (map: Map<string, { fields: string[] }>) =>
-    [...new Set([...map.values()].flatMap((branch) => branch.fields))].sort();
-  return { typebox: names(typebox), zod: names(zod) };
+function expectParity(forkEmitContext?: ForkEmitContext, cloneEmitContext?: CloneEmitContext): void {
+  const fields = fieldNames(forkEmitContext, cloneEmitContext);
+  expect(fields.zod).toEqual(fields.typebox);
+  // Whatever the flat schema requires, every Claude branch requires too.
+  for (const required of fields.zodRequired) {
+    for (const name of fields.typeboxRequired) expect(required).toContain(name);
+  }
 }
 
 const CLONE_CONTEXT: CloneEmitContext = {
@@ -74,9 +64,7 @@ const FORK_CONTEXT: ForkEmitContext = {
 
 describe("emit_stage_envelope schema parity — typebox (Pi) vs Zod (Claude)", () => {
   it("same field names with no fork/clone context", () => {
-    const fields = fieldNames();
-    expect(fields.zod).toEqual(fields.typebox);
-    expect(branchFields().zod).toEqual(branchFields().typebox);
+    expectParity();
   });
 
   it("clone_forks is never on the emit schema, even when a cloneEmitContext is passed", () => {
@@ -87,11 +75,7 @@ describe("emit_stage_envelope schema parity — typebox (Pi) vs Zod (Claude)", (
   });
 
   it("same field names with both a fork and a clone context", () => {
-    const fields = fieldNames(FORK_CONTEXT, CLONE_CONTEXT);
-    expect(fields.zod).toEqual(fields.typebox);
-    expect(branchFields(FORK_CONTEXT, CLONE_CONTEXT).zod).toEqual(
-      branchFields(FORK_CONTEXT, CLONE_CONTEXT).typebox,
-    );
+    expectParity(FORK_CONTEXT, CLONE_CONTEXT);
   });
 });
 

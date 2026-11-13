@@ -20,7 +20,7 @@ system_prompt: |
      the envelope or in changes.json.
 
   Do not call ask_operator. Do not stop after a chat reply. Do not select types yourself.
-model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
+model: anthropic/claude-haiku-4-5
 io:
   input:
     schema:

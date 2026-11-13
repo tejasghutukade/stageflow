@@ -1,3 +1,5 @@
+import { runInstalledSkillDoctor } from "../cli/skillsCommand.js";
+import { contentHash } from "../config/atomicWrite.js";
 import {
   OVERVIEW_RANGES,
   buildOverview,
@@ -220,6 +222,7 @@ import {
 } from "./bootstrap.js";
 import {
   assertAllowedHttpAccess,
+  isPublicChatApiPath,
   isTrustedLocalHttpRequest,
   resolveAllowedHosts,
   type AllowedHosts,
@@ -569,6 +572,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
         if (
           !assertAllowedHttpAccess(allowedHosts, req, res, {
             requireOrigin: isCredentialMutatingApi(method, pathname),
+            skipOriginHostMatch: isPublicChatApiPath(pathname),
           })
         ) {
           return true;
@@ -1745,7 +1749,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
               json(res, result.status, { error: result.error, code: result.code });
               return true;
             }
-            json(res, 200, { path: result.path, content: result.content });
+            json(res, 200, { path: result.path, content: result.content, hash: contentHash(result.content) });
             return true;
           } catch (err) {
             if (err instanceof CatalogPathError) {
@@ -1815,6 +1819,8 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
               inputPath: relPath,
               content: record.content,
               ...(record.create === true ? { create: true } : {}),
+              ...(typeof record.base_hash === "string" ? { baseHash: record.base_hash } : {}),
+              ...(record.preserve_formatting === true ? { preserveFormatting: true } : {}),
               projectRoot: wireRoot.project_root,
               roots,
               fieldName: "path",
@@ -1829,7 +1835,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
               });
               return true;
             }
-            json(res, 200, { path: result.path, content: result.content });
+            json(res, 200, { path: result.path, content: result.content, hash: result.hash });
             return true;
           } catch (err) {
             if (err instanceof CatalogPathError) {
@@ -2273,6 +2279,8 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           if (!result.ok) {
             json(res, result.status, {
               error: result.error,
+              ...(result.code ? { code: result.code } : {}),
+              ...(result.fileHashes ? { fileHashes: result.fileHashes } : {}),
               ...(result.findings ? { findings: result.findings } : {}),
             });
             return true;
@@ -2281,6 +2289,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             pipeline: result.pipeline,
             pipelinePath: result.pipelinePath,
             stagePaths: result.stagePaths,
+            fileHashes: result.fileHashes,
             catalog_root_path: ctx.projectRoot,
             ...draftCatalogRootWire(draftWriteWireRoot),
             ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
@@ -2339,6 +2348,8 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           if (!result.ok) {
             json(res, result.status, {
               error: result.error,
+              ...(result.code ? { code: result.code } : {}),
+              ...(result.fileHashes ? { fileHashes: result.fileHashes } : {}),
               ...(result.findings ? { findings: result.findings } : {}),
             });
             return true;
@@ -2347,6 +2358,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             pipeline: result.pipeline,
             pipelinePath: result.pipelinePath,
             stagePaths: result.stagePaths,
+            fileHashes: result.fileHashes,
             catalog_root_path: ctx.projectRoot,
             ...draftCatalogRootWire(draftWriteWireRoot),
             ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
@@ -2486,6 +2498,8 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             draft: result.draft,
             destination: result.destination,
             pipelinePath: result.pipelinePath,
+            fileHashes: result.fileHashes,
+            hasInclude: result.hasInclude,
             ...draftCatalogRootWire(wireRoot),
             ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
           });
@@ -3608,6 +3622,36 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           return true;
         }
 
+        const doctorMatch = /^\/api\/skills\/([^/]+)\/doctor$/.exec(pathname);
+        if (method === "POST" && doctorMatch) {
+          let skillWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot({ store, bootCwd: cwd }, undefined);
+            skillWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const doctorCtx = await resolveStageflowContext(skillWriteRoot);
+          if (doctorCtx.manifestStatus !== "ok") {
+            json(res, 400, { error: "Project root not found; initialize stageflow.yaml" });
+            return true;
+          }
+          const ran = await runInstalledSkillDoctor({
+            projectRoot: doctorCtx.projectRoot,
+            skillName: decodeURIComponent(doctorMatch[1]!),
+          });
+          if (!ran.ok) {
+            json(res, ran.status, { error: ran.error });
+            return true;
+          }
+          json(res, 200, { ok: true, doctor_script: ran.script });
+          return true;
+        }
+
         if (method === "POST" && pathname === "/api/skills/install") {
           let body: unknown;
           try {
@@ -3649,6 +3693,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           const result = await installSkillFromCommand({
             projectRoot: stageflowCtx.projectRoot,
             command: parsed.command,
+            runDoctor: parsed.runDoctor,
           });
           if (!result.ok) {
             json(res, result.status ?? 400, { error: result.error });
@@ -3659,6 +3704,12 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             skill_name: result.skill_name,
             dest_path: result.dest_path,
             project_root: result.project_root,
+            ...(result.doctor !== undefined
+              ? {
+                  doctor_available: true,
+                  doctor_script: result.doctor.script,
+                }
+              : {}),
           });
           return true;
         }
@@ -3777,6 +3828,12 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           return true;
         }
 
+        // An API path no route answered is a 404, never the console page.
+        if (pathname === "/api" || pathname.startsWith("/api/")) {
+          json(res, 404, { error: "Not found", code: "not_found" });
+          return true;
+        }
+
         if (method === "GET" && uiDistDir !== undefined) {
           const served = await serveStatic(res, uiDistDir, pathname);
           if (served) return true;
@@ -3813,7 +3870,10 @@ export async function startUiServer(
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? DEFAULT_PORT;
   const uiDistDir = options.uiDistDir ?? defaultUiDistDir();
-  const boot = await bootstrapStageflowHost(options as StageflowHostOptions);
+  const boot = await bootstrapStageflowHost({
+    ...(options as StageflowHostOptions),
+    listen: { host, port },
+  });
   const { cwd, agentDir, rootDir } = boot;
   const providerAuthContext = boot.providerAuthContext;
   const allowedHosts = options.allowedHosts ?? resolveAllowedHosts();
@@ -3858,6 +3918,7 @@ export async function startUiServer(
     allowedHosts,
     controlTokens,
     routes,
+    ...(boot.boundPort !== undefined ? { bound: boot.boundPort } : {}),
   });
   boot.setEvalCallbackBase?.(envelope.url);
   const closeServer = envelope.server.close.bind(envelope.server);

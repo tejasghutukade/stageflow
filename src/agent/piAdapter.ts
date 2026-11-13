@@ -6,7 +6,7 @@
  * and global Pi resources. The stage assignment is the system prompt. Opt-in
  * checkout AGENTS.md is extra text; the sealed loader stays off. Operator credentials come from
  * `ModelRuntime.create({ authPath })` using the factory-resolved binding
- * (`pi_home` or `.stageflow/agent/auth.json`).
+ * (`~/.stageflow/agent/auth.json`).
  *
  * Extension-backed providers (e.g. Cursor via pi-cursor-sdk) plug in through
  * `StageProviderSupport` — see `providerSupport.ts` / `cursorProvider.ts`.

@@ -15,7 +15,7 @@ system_prompt: |
   (failed_checkouts, duration_min, recovery_ts): the next stage writes the
   postmortem from your envelope alone and must not estimate those numbers.
   Call emit_stage_envelope exactly once.
-model: openrouter/deepseek/deepseek-chat-v3.1
+model: anthropic/claude-sonnet-5-5
 timeout_ms: 1200000
 io:
   input:

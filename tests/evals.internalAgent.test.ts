@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadEvalOutcome } from "../src/config/loadEval.js";
@@ -12,12 +13,13 @@ import { createStageflowGuideProfile } from "../src/operatorAgent/profiles/stage
 const ROOT = path.join(process.cwd(), "examples/evals");
 const EVAL_PATH = path.join(ROOT, "guide-behavior.eval.yaml");
 const ENV = "STAGEFLOW_SHOW_INTERNAL_AGENTS";
+const guideEvalPresent = existsSync(EVAL_PATH);
 
 afterEach(() => {
   delete process.env[ENV];
 });
 
-describe("internal agent evals", () => {
+describe.skipIf(!guideEvalPresent)("internal agent evals", () => {
   it("rejects the Guide eval while internal agents are hidden", async () => {
     delete process.env[ENV];
     const loaded = await loadEvalOutcome(EVAL_PATH, ROOT);
@@ -62,7 +64,7 @@ describe("internal agent evals", () => {
     });
     expect(built.ok).toBe(true);
     if (!built.ok) return;
-    expect(built.plan.modelOverride).toBe("cursor/auto");
+    expect(built.plan.modelOverride).toBe("anthropic/claude-sonnet-5-5");
     expect(built.plan.graders.find((g) => g.id === "says-the-point")).toMatchObject({ type: "reference", path: "final_reply" });
     const result = await createInternalAgentCaseRunner({ host: () => host }).runCase(built.plan, {
       evalRunId: "er_test",

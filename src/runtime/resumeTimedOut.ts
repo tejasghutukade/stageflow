@@ -4,8 +4,19 @@ import { fakeHitlResumePath } from "../agent/fakeAgent.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type { RunStore } from "../runstore/port.js";
 import { attemptSessionPath } from "../runstore/workspaceLayout.js";
+import {
+  defaultStageBrowserSupport,
+  resolveStageBrowserEnv,
+} from "../browser/stageBrowserEnv.js";
+import type { StageBrowserSupport } from "../browser/browserHost.js";
+import { runOwnerScope } from "../browser/ownerScope.js";
+import { isHumanLoginStage } from "../browser/humanLogin.js";
+import { createRunLiveness } from "../browser/runLiveness.js";
+import { acquireStageProfile } from "../browser/stageProfileLock.js";
+import { teardownRunBrowsers, teardownStageBrowser } from "../browser/browserTeardown.js";
 import { WAIT_WITHOUT_WORKER_DISPATCH } from "./answerResume.js";
-import { resumeRun } from "./pipelineScheduler.js";
+import { resumeRun, writeTerminalRunStatus } from "./pipelineScheduler.js";
+import { syncRunStatusFromStages } from "./stageRecovery.js";
 import { loadRunContext } from "./resumeReconstruct.js";
 import type { StageExecutionMode } from "./stageConcurrency.js";
 import type { StageProcessLauncher } from "./stageProcessLauncher.js";
@@ -16,7 +27,12 @@ import {
   openStageAttempt,
   type OperatorCatalog,
 } from "./stageAttemptBootstrap.js";
-import { buildStageRoots, withResolvedAuthPath } from "./stageRoots.js";
+import { buildStageRoots, stageBindingEnvFromRun, withResolvedAuthPath } from "./stageRoots.js";
+import {
+  prepareResumeAttemptHome,
+  secretUnavailableMessage,
+} from "./resumeAttemptPrep.js";
+import type { StageEnvelope } from "../types/envelope.js";
 import {
   isStageTimeoutReason,
   lastFailedReason,
@@ -35,6 +51,7 @@ export type ResumeTimedOutContext = {
   factoryCwd?: string;
   maxActiveStagesPerRun: number;
   operatorCatalog?: OperatorCatalog;
+  browser?: StageBrowserSupport;
 };
 
 export function assertResumableStage(
@@ -118,6 +135,189 @@ export async function reconstructTimedOutAndContinue(
     }
     await store.updateRunStatus(runId, "running");
 
+  async function continueAfterStageSuccess(
+    resultEnvelope: StageEnvelope | undefined,
+  ): Promise<{ ok: boolean; reason?: string }> {
+    const rest = await resumeRun({
+      prepared: {
+        task,
+        loaded,
+        run: { runId, workspaceDir },
+        agent,
+        store,
+        cwd,
+        projectRoot: factoryCwd,
+        checkoutRoot,
+        hitl: ctx.hitl,
+        operatorCatalog: ctx.operatorCatalog,
+        ...(ctx.browser !== undefined ? { browser: ctx.browser } : {}),
+      },
+      maxActiveStagesPerRun: ctx.maxActiveStagesPerRun,
+      resumeFromStageId: stageId,
+      initialPrior: resultEnvelope ?? null,
+      executionMode: ctx.executionMode,
+      stageProcessLauncher: ctx.stageProcessLauncher,
+    });
+    if (rest.outcome === "failed") {
+      return { ok: false, reason: rest.reason };
+    }
+    return { ok: true };
+  }
+
+    if (ctx.executionMode === "process") {
+      const launcher = ctx.stageProcessLauncher;
+      if (!launcher) {
+        const reason = "stage process launcher is not configured";
+        await store.appendStageEvent(
+          runId,
+          stageId,
+          { event: "failed", reason },
+          attemptOpt,
+        );
+        await store.updateRunStatus(runId, "failed");
+        return { ok: false, reason };
+      }
+      const browser = ctx.browser ?? defaultStageBrowserSupport();
+      let prep;
+      try {
+        prep = await prepareResumeAttemptHome({
+          workspaceDir,
+          stageId,
+          attempt,
+          secrets: stage.secrets,
+          hostEnv: process.env,
+          logContext: { run_id: runId, stage_id: stageId },
+        });
+      } catch (err) {
+        const reason = secretUnavailableMessage(err);
+        await store.appendStageEvent(
+          runId,
+          stageId,
+          { event: "failed", reason },
+          attemptOpt,
+        );
+        await store.updateRunStatus(runId, "failed");
+        return { ok: false, reason };
+      }
+
+      const stageBinding = stageBindingEnvFromRun({
+        meta,
+        task,
+        runWorkspaceDir: workspaceDir,
+        hostEnv: process.env,
+      });
+
+      try {
+        if (stage.browser?.profile !== undefined) {
+          const acquired = await acquireStageProfile(browser, {
+            scope: runOwnerScope(browser, { runId }),
+            profile: stage.browser.profile,
+            owner: { runId, stageId },
+            isRunLive: createRunLiveness(store),
+            halted: () => true,
+          });
+          if (acquired === "halted") {
+            throw new Error(
+              `browser profile "${stage.browser.profile}" is held by another run`,
+            );
+          }
+        }
+        let browserEnv: Record<string, string> | undefined;
+        try {
+          browserEnv = await resolveStageBrowserEnv(browser, {
+            runId,
+            stageId,
+            scope: runOwnerScope(browser, { runId }),
+            runDir: workspaceDir,
+            browser: stage.browser,
+            attempt,
+            humanLogin: isHumanLoginStage(dag, definitionId, stage.browser),
+            resuming: true,
+          });
+        } catch (err) {
+          prep.cleanup();
+          throw err;
+        }
+
+        const launchResult = await launcher
+          .launch({
+            runId,
+            stageId,
+            rootDir: factoryCwd,
+            factoryCwd,
+            stage,
+            workspaceDir,
+            ...(browserEnv !== undefined ? { browserEnv } : {}),
+            mode: "timeout_resume",
+            attempt,
+            sessionFilePath: sessionFile,
+            env: stageBinding.env,
+            bindingKind: stageBinding.kind,
+            grants: prep.grants,
+            attemptHome: prep.attemptHome,
+            model: stage.model,
+            ...(ctx.operatorCatalog !== undefined
+              ? { operatorCatalog: ctx.operatorCatalog }
+              : {}),
+          })
+          .finally(() => {
+            prep.cleanup();
+          });
+
+        if (launchResult.type === "waiting") {
+          return { ok: true };
+        }
+
+        await teardownStageBrowser(browser, {
+          runId,
+          runDir: workspaceDir,
+          stageId,
+          events: () => store.listStageEvents(runId, stageId),
+        }).catch(() => undefined);
+
+        if (launchResult.type === "failed") {
+          const recorded = await store.listStageEvents(runId, stageId, attempt);
+          if (!recorded.some((event) => event.event === "failed")) {
+            await store.appendStageEvent(
+              runId,
+              stageId,
+              { event: "failed", reason: launchResult.reason },
+              attemptOpt,
+            );
+          }
+          // Same rules as an answer resume: a cancelled run stays cancelled, and a stage that ends while siblings
+          // still run (an abandon) leaves the run status to the stages and the siblings' browsers alone.
+          const siblingsLive = (await store.readRun(runId)).stages.some(
+            (snap) =>
+              snap.stage_id !== stageId &&
+              (snap.status === "running" || snap.status === "waiting_for_input"),
+          );
+          if (siblingsLive) {
+            await syncRunStatusFromStages(store, runId);
+          } else {
+            await writeTerminalRunStatus(store, runId, "failed");
+            await teardownRunBrowsers(browser, {
+              runId,
+              runDir: workspaceDir,
+              events: (id) => store.listStageEvents(runId, id),
+            }).catch(() => undefined);
+          }
+          return { ok: false, reason: launchResult.reason };
+        }
+
+        let initialPrior: StageEnvelope | null = null;
+        try {
+          initialPrior = await store.readEnvelope(runId, stageId);
+        } catch {
+          // downstream resume may read envelope from store
+        }
+        return continueAfterStageSuccess(initialPrior ?? undefined);
+      } catch (err) {
+        prep.cleanup();
+        throw err;
+      }
+    }
+
     const opened = await openStageAttempt({
       agent,
       store,
@@ -181,29 +381,7 @@ export async function reconstructTimedOutAndContinue(
       return { ok: false, reason: result.reason };
     }
 
-    const rest = await resumeRun({
-      prepared: {
-        task,
-        loaded,
-        run: { runId, workspaceDir },
-        agent,
-        store,
-        cwd,
-        projectRoot: factoryCwd,
-        checkoutRoot,
-        hitl: ctx.hitl,
-        operatorCatalog: ctx.operatorCatalog,
-      },
-      maxActiveStagesPerRun: ctx.maxActiveStagesPerRun,
-      resumeFromStageId: stageId,
-      initialPrior: result.envelope ?? null,
-      executionMode: ctx.executionMode,
-      stageProcessLauncher: ctx.stageProcessLauncher,
-    });
-    if (rest.outcome === "failed") {
-      return { ok: false, reason: rest.reason };
-    }
-    return { ok: true };
+    return continueAfterStageSuccess(result.envelope);
   } catch (err) {
     const reason =
       err instanceof Error ? err.message : `timeout resume failed: ${String(err)}`;

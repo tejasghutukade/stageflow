@@ -108,7 +108,7 @@ describe("resolveCredentialBinding", () => {
     });
   });
 
-  it("legacy pi_home on disk normalizes to sf_owned binding", async () => {
+  it("pi_home on disk is rewritten to sf_owned", async () => {
     await withIsolatedHome(async (home) => {
       await mkdir(storeRootFor(home), { recursive: true });
       await writeFile(

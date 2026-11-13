@@ -402,6 +402,73 @@ describe("validateCatalog stage scope", () => {
     expect(result.findings).toHaveLength(0);
   });
 
+  it("stage id matches name for name.stage.yaml and name.yaml", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-validate-stage-stem-"));
+    const check = async (filename: string, id: string) => {
+      const stagePath = path.join(root, filename);
+      await writeFile(stagePath, validStageYaml(id));
+      return validateCatalog({ scope: "stage", stage: stagePath, cwd: root });
+    };
+    const dottedMatch = await check("x.stage.yaml", "x");
+    expect(dottedMatch.ok).toBe(true);
+    expect(dottedMatch.findings.some((f) => f.code === "stage.id_filename_mismatch")).toBe(false);
+
+    const plainMatch = await check("x.yaml", "x");
+    expect(plainMatch.ok).toBe(true);
+    expect(plainMatch.findings.some((f) => f.code === "stage.id_filename_mismatch")).toBe(false);
+
+    const dottedStem = await check("x.stage.yaml", "x.stage");
+    expect(dottedStem.ok).toBe(false);
+    expect(dottedStem.findings.filter((f) => f.code === "stage.id_filename_mismatch")).toEqual([
+      expect.objectContaining({
+        message: 'Stage id "x.stage" does not match filename stem "x"',
+      }),
+    ]);
+
+    const otherId = await check("x.stage.yaml", "y");
+    expect(otherId.ok).toBe(false);
+    expect(otherId.findings.filter((f) => f.code === "stage.id_filename_mismatch")).toEqual([
+      expect.objectContaining({
+        message: 'Stage id "y" does not match filename stem "x"',
+      }),
+    ]);
+
+    const missingPath = path.join(root, "x.stage.yaml");
+    await writeFile(missingPath, validStageYaml("x").replace("id: x\n", ""));
+    const missing = await validateCatalog({ scope: "stage", stage: missingPath, cwd: root });
+    expect(missing.findings.some((f) => f.code === "stage.id_filename_mismatch")).toBe(false);
+    expect(missing.findings.some((f) => f.code === "stage.invalid_shape")).toBe(true);
+  });
+
+  it("stage id matches name for name.stage.yml and name.yml", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-validate-stage-stem-yml-"));
+    const check = async (filename: string, id: string) => {
+      const stagePath = path.join(root, filename);
+      await writeFile(stagePath, validStageYaml(id));
+      return validateCatalog({ scope: "stage", stage: stagePath, cwd: root });
+    };
+
+    const dottedYml = await check("x.stage.yml", "x");
+    expect(dottedYml.ok).toBe(true);
+    expect(dottedYml.findings.some((f) => f.code === "stage.id_filename_mismatch")).toBe(false);
+
+    const plainYml = await check("x.yml", "x");
+    expect(plainYml.ok).toBe(true);
+    expect(plainYml.findings.some((f) => f.code === "stage.id_filename_mismatch")).toBe(false);
+
+    const dottedYaml = await check("x.stage.yaml", "x");
+    expect(dottedYaml.ok).toBe(true);
+    expect(dottedYaml.findings.some((f) => f.code === "stage.id_filename_mismatch")).toBe(false);
+
+    const mismatched = await check("x.stage.yml", "y");
+    expect(mismatched.ok).toBe(false);
+    expect(mismatched.findings.filter((f) => f.code === "stage.id_filename_mismatch")).toEqual([
+      expect.objectContaining({
+        message: 'Stage id "y" does not match filename stem "x"',
+      }),
+    ]);
+  });
+
   it("invalid shape produces stage finding", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-validate-stage-"));
     const stagePath = path.join(root, "bad.yaml");

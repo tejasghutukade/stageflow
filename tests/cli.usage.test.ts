@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
-import { sameCliEntry } from "../src/cli.js";
+import { resolveCliHelp, sameCliEntry } from "../src/cli.js";
 import { runRunCommand } from "../src/cli/runCommand.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { RunManager } from "../src/runtime/runManager.js";
@@ -71,9 +71,15 @@ describe("CLI stub", { timeout: 15_000 }, () => {
     expect(result.stdout).toMatch(/logout/);
     expect(result.stdout).toMatch(/Stageflow \(sf\)/);
     expect(result.stdout).not.toMatch(/software-factory \(sf\)/);
-    expect(result.stdout).toMatch(/Data under \.stageflow\/\./);
+    expect(result.stdout).toMatch(/Data under ~\/\.stageflow\/\./);
     expect(result.stdout).toMatch(/sf --version/);
     expect(result.stdout).toMatch(/sf -V/);
+    expect(result.stdout).toMatch(/sf <command> --help/);
+    expect(result.stdout).toMatch(/sf trigger/);
+    expect(result.stdout).toMatch(/sf eval/);
+    expect(result.stdout).toMatch(/sf agents/);
+    expect(result.stdout).not.toMatch(/Manage saved browser logins/);
+    expect(result.stdout).not.toMatch(/Agent evals:/);
     expect(result.stdout).toMatch(/sf runs list/);
     expect(result.stdout).toMatch(/sf runs show/);
     expect(result.stdout).toMatch(/sf runs waiting/);
@@ -84,6 +90,131 @@ describe("CLI stub", { timeout: 15_000 }, () => {
     expect(result.stdout).toMatch(/sf runs abandon/);
     expect(result.stdout).toMatch(/sf runs rerun/);
     expect(result.stdout).not.toMatch(/\.software-factory/);
+  });
+
+  it("prints the overview on -h and exits zero", () => {
+    const result = runCli(["-h"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/Usage:/);
+    expect(result.stdout).toMatch(/sf <command> --help/);
+    expect(result.stdout).toMatch(/sf ui/);
+    expect(result.stdout).toMatch(/sf run[^\n]*--json/);
+    expect(result.stdout).toMatch(/sf validate/);
+    expect(result.stdout).toMatch(/sf init/);
+    expect(result.stdout).toMatch(/sf providers list/);
+    expect(result.stdout).toMatch(/sf runs list/);
+    expect(result.stdout).toMatch(/Stageflow \(sf\)/);
+    expect(result.stdout).not.toMatch(/Manage saved browser logins/);
+  });
+
+  it("unknown command fails with the overview", () => {
+    const result = runCli(["not-a-command"]);
+    expect(result.status).not.toBe(0);
+    const out = result.stdout + result.stderr;
+    expect(out).toMatch(/Unknown command: not-a-command/);
+    expect(out).toMatch(/Usage:/);
+    expect(out).toMatch(/sf <command> --help/);
+    expect(out).toMatch(/sf ui/);
+    expect(out).toMatch(/sf run[^\n]*--json/);
+    expect(out).toMatch(/sf validate/);
+    expect(out).toMatch(/sf init/);
+    expect(out).toMatch(/sf providers list/);
+    expect(out).toMatch(/sf runs list/);
+    expect(out).not.toMatch(/Manage saved browser logins/);
+  });
+
+  it("routes --help to that command's usage", () => {
+    const commands = [
+      "init",
+      "run",
+      "run-stage",
+      "validate",
+      "doctor",
+      "graph",
+      "a2a",
+      "migrate-yaml",
+      "artifact",
+      "envelope",
+      "export-run",
+      "debug-run",
+      "backup",
+      "restore",
+      "export",
+      "runs",
+      "trigger",
+      "eval",
+      "agents",
+      "providers",
+      "skills",
+      "browser",
+      "ui",
+      "mcp",
+    ] as const;
+    const overview = resolveCliHelp(["node", "sf", "--help"]);
+    expect(overview).toEqual({
+      text: expect.stringMatching(/sf <command> --help/),
+      exitCode: 0,
+    });
+    expect(overview?.text).toMatch(/Data under ~\/\.stageflow\/\./);
+    expect(overview?.text).not.toMatch(/Manage saved browser logins/);
+    expect(resolveCliHelp(["node", "sf", "-h"])).toEqual(overview);
+    expect(resolveCliHelp(["node", "sf"])).toEqual({
+      text: overview?.text,
+      exitCode: 1,
+    });
+    expect(resolveCliHelp(["node", "sf", "not-a-command"])).toBeUndefined();
+
+    for (const command of commands) {
+      const direct = resolveCliHelp(["node", "sf", command, "--help"]);
+      const short = resolveCliHelp(["node", "sf", command, "-h"]);
+      const nested = resolveCliHelp(["node", "sf", command, "sub", "--help"]);
+      expect(direct?.exitCode, command).toBe(0);
+      expect(direct?.text, command).toBe(short?.text);
+      expect(direct?.text, command).toBe(nested?.text);
+      expect(direct?.text, command).not.toMatch(/Data under ~\/\.stageflow\/\./);
+      expect(direct?.text, command).not.toBe(overview?.text);
+    }
+
+    expect(resolveCliHelp(["node", "sf", "ui", "--help"])?.text).toMatch(/--no-open/);
+    expect(resolveCliHelp(["node", "sf", "mcp", "-h"])?.text).toMatch(/--mcp-stateless/);
+    expect(resolveCliHelp(["node", "sf", "mcp", "--help"])?.text).not.toMatch(/--no-open/);
+    expect(resolveCliHelp(["node", "sf", "mcp", "--help"])?.text).not.toMatch(/sf ui/);
+    expect(resolveCliHelp(["node", "sf", "run", "--task", "t.yaml", "--help"])?.text).toMatch(
+      /sf run[^\n]*--json/,
+    );
+    expect(resolveCliHelp(["node", "sf", "a2a", "status", "--help"])?.text).toMatch(
+      /sf a2a status/,
+    );
+    expect(resolveCliHelp(["node", "sf", "browser", "profiles", "--help"])?.text).toMatch(
+      /Manage saved browser logins/,
+    );
+    expect(resolveCliHelp(["node", "sf", "validate", "--help"])?.text).toMatch(/manifest-all/);
+    expect(resolveCliHelp(["node", "sf", "runs", "list", "--help"])?.text).toMatch(/sf runs answer/);
+  });
+
+  it("ui and mcp --help exit zero with only that command", { timeout: 30_000 }, () => {
+    for (const args of [
+      ["ui", "--help"],
+      ["ui", "-h"],
+      ["mcp", "--help"],
+      ["mcp", "-h"],
+    ]) {
+      const result = runCli(args);
+      const label = args.join(" ");
+      expect(result.status, label).toBe(0);
+      const out = result.stdout + result.stderr;
+      expect(out, label).not.toMatch(/Data under ~\/\.stageflow\/\./);
+      expect(out, label).not.toMatch(/sf providers list/);
+      if (args[0] === "ui") {
+        expect(out, label).toMatch(/sf ui \[--host/);
+        expect(out, label).toMatch(/--no-open/);
+      } else {
+        expect(out, label).toMatch(/sf mcp \[--host/);
+        expect(out, label).toMatch(/--mcp-stateless/);
+        expect(out, label).not.toMatch(/--no-open/);
+        expect(out, label).not.toMatch(/sf ui/);
+      }
+    }
   });
 
   it("runs with no subcommand exits non-zero with usage", () => {

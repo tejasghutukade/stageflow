@@ -19,6 +19,8 @@ See also [CLI reference — Storage locations](cli-reference.md#storage-location
 
 | Path under `$STAGEFLOW_HOME` | Keep / disposable | Notes |
 |------------------------------|-------------------|-------|
+| `host.lock` | disposable | Pid and URL of the Host using this directory. Only one Host may run per data directory; a second one is refused. Removed on shutdown; a lock left by a crashed Host is replaced at the next start |
+| `host-id` | disposable | Random id `/livez` reports as `home_id`, so `sf ui` can tell this directory's Host from another |
 | `state.db` (+ `-wal`, `-shm`) | **keep** | Run store (SQLite, WAL mode), including the durable **projects registry** and the agent tables ([agent](agents.md#storage)): `agent_definitions`, `agent_revisions`, `agent_sessions` (eval conversations are rows here with `source = 'eval'`, hidden from agent lists and removed with their eval run), `agent_messages`, `agent_turns`, `agent_spans`, `agent_eval_scores`, `agent_approvals`, `agent_executed_payloads`, `agent_outbound_sends`, `agent_inbound_events`, `agent_deliveries`, `agent_schedules`, and the eval tables (`eval_runs`, `eval_cases`, `eval_results`, `eval_grades`, `eval_result_reviews`, `eval_result_tags` and their support tables). Agent YAML stays in the project; only history is here |
 | `settings.json` | **keep** | Global settings (credential source, concurrency, …) |
 | `agent/auth.json` | **keep** | Operator auth file when this directory is the credential root |

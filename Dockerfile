@@ -16,8 +16,8 @@ COPY ui ./ui
 COPY scripts ./scripts
 COPY skills ./skills
 COPY builtin-skills ./builtin-skills
-COPY examples/triggers-readiness ./examples/triggers-readiness
-COPY examples/evals ./examples/evals
+# The whole examples folder, as npm ships it: examples/stageflow.yaml seeds the six catalog examples.
+COPY examples ./examples
 COPY README.md LICENSE ./
 RUN npm run build \
   && npm run ui:build \
@@ -33,8 +33,8 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/* \
   && groupadd --gid 10001 stageflow \
   && useradd --uid 10001 --gid 10001 --home-dir /data --create-home --shell /usr/sbin/nologin stageflow \
-  && mkdir -p /data/tmp /etc/stageflow /opt/stageflow \
-  && chown stageflow:stageflow /data /data/tmp
+  && mkdir -p /data/tmp /tmp/stageflow /etc/stageflow /opt/stageflow \
+  && chown stageflow:stageflow /data /data/tmp /tmp/stageflow
 
 ARG PROMPTFOO_VERSION=0.124.0
 USER stageflow:stageflow
@@ -53,7 +53,7 @@ COPY --from=build --chown=stageflow:stageflow /src/dist ./dist
 COPY --from=build --chown=stageflow:stageflow /src/skills ./skills
 COPY --from=build --chown=stageflow:stageflow /src/builtin-skills ./builtin-skills
 COPY --from=build --chown=stageflow:stageflow /src/examples/triggers-readiness ./catalog/triggers-readiness
-COPY --from=build --chown=stageflow:stageflow /src/examples/evals ./examples/evals
+COPY --from=build --chown=stageflow:stageflow /src/examples ./examples
 COPY --from=build --chown=stageflow:stageflow /src/README.md /src/LICENSE ./
 COPY --from=build /src/scripts/generate-toolchain-manifest.mjs ./scripts/generate-toolchain-manifest.mjs
 RUN node ./scripts/generate-toolchain-manifest.mjs /etc/stageflow/toolchain.json \
@@ -70,7 +70,7 @@ ENV STAGEFLOW_HOME=/data \
   STAGEFLOW_BIND=0.0.0.0 \
   STAGEFLOW_NO_AUTOSTART=1 \
   STAGEFLOW_NO_OPEN=1 \
-  TMPDIR=/data/tmp \
+  TMPDIR=/tmp/stageflow \
   SQLITE_TMPDIR=/data/tmp \
   STAGEFLOW_BUILD_SHA=${STAGEFLOW_BUILD_SHA} \
   NODE_ENV=production

@@ -199,6 +199,8 @@ Stage operation keys are limited to 120 characters. The host hashes the run, sta
 
 ## Start a pipeline from incoming email
 
+Experimental. Email rules work; their shape may still change.
+
 Use the local management interface to configure a rule:
 
 | Request | Result |

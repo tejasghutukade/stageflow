@@ -92,10 +92,11 @@ export function A2aPage() {
         setIssued(null);
       })}
       onReload={() => void act(() => a2aApi.reload())}
-      onAddCaller={(name) => void act(async () => {
-        const created = await a2aApi.createCaller(name);
+      onAddCaller={(name, allowRunStage) => void act(async () => {
+        const created = await a2aApi.createCaller(name, allowRunStage);
         setIssued({ caller: created.id, token: created.token });
       })}
+      onAllowRunStage={(id, allowRunStage) => void act(() => a2aApi.updateCaller(id, allowRunStage))}
       onRevokeCaller={(id) => void act(async () => {
         await a2aApi.revokeCaller(id);
         setIssued((current) => (current?.caller === id ? null : current));

@@ -7,7 +7,7 @@ export const modelsAndProvidersTopic: GuideKnowledgeTopic = {
     "How a stage's model is resolved (stage, pipeline, stageflow.yaml), what must be connected before a run works, model ids and the catalog, agent and eval models, and where credentials live.",
   body: `# Models and providers
 
-Stages and agents run on **Pi**. A model id is \`provider/model\` (for example \`anthropic/claude-sonnet-4-5\` or \`openrouter/…\`). A provider must be connected on the Host before runs that use it can succeed.
+Stages and agents run on **Pi**. A model id is \`provider/model\` (for example \`anthropic/claude-sonnet-5-5\` or \`openrouter/…\`). A provider must be connected on the Host before runs that use it can succeed.
 
 ## Connecting a provider
 

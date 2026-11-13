@@ -4,7 +4,7 @@ memories:
 stages:
   - id: blocked
     entry: true
-    model: openrouter/nvidia/nemotron-3.5-lightning:free
+    model: anthropic/claude-haiku-4-5
     system_prompt: |
       This pipeline must not start. The memory it names does not exist.
     io:

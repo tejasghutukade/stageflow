@@ -16,7 +16,7 @@ title: Console - Settings
 | [Project MCP](#project-mcp) | MCP servers and their secrets and sign-ins |
 | [Notifications](#notifications) | Desktop notifications |
 
-The console is dark; there is no theme picker.
+The console is dark; there is no theme picker. If a request is rejected, the control-token dialog shows the token file path from the Host (`cat <path>`). The token is printed on first start; later starts reuse it and print the file path. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`.
 
 ## General
 
@@ -32,7 +32,7 @@ Connect and inspect Pi model providers. **Connect** opens the API key field when
 
 ## MCP server
 
-The address a client points at to use this console process as an MCP server (`<console-origin>/mcp` while `sf ui` is running). See [MCP](mcp.md).
+The address a client points at to use this console process as an MCP server (`<console-origin>/mcp` while `sf ui` is running). The client sends `Authorization: Bearer <token>`; the token is in `~/.stageflow/control-token` (Docker: `docker exec <container> cat /data/control-token`). See [MCP](mcp.md).
 
 ## Project MCP
 

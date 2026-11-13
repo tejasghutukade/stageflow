@@ -36,7 +36,9 @@ Facts that change how you call things (all verified in code):
 - `sf agents` always talks to a running Host, and starts a headless one (`sf mcp` on port 3847, or `STAGEFLOW_SERVICE_PORT`) when nothing answers, unless `STAGEFLOW_NO_AUTOSTART` is set. There is no offline mode, not even for `validate`.
 - `sf agents` sends the project of the current directory. If the Host has never seen that project it answers `unknown_project_root`. Register the project once, then retry:
   ```bash
+  export STAGEFLOW_CONTROL_TOKEN="$(cat ~/.stageflow/control-token)"
   curl -s -X POST "http://127.0.0.1:${STAGEFLOW_SERVICE_PORT:-3847}/api/projects" \
+    -H "Authorization: Bearer $STAGEFLOW_CONTROL_TOKEN" \
     -H 'Content-Type: application/json' -d "{\"project_root\":\"$(pwd)\"}"
   ```
   (`sf run` registers the project the same way.)

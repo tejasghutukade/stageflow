@@ -8,5 +8,5 @@ event:
   match:
     action: opened
   config:
-    repo: tejasghutukade/software-factory
+    repo: your-org/your-repo
     secretRef: GITHUB_TOKEN

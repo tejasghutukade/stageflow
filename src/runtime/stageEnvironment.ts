@@ -26,7 +26,6 @@ export const STAGE_ENV_ALLOWLIST: readonly string[] = [
   "http_proxy",
   "https_proxy",
   "no_proxy",
-  "STAGEFLOW_HOME",
   "STAGEFLOW_CURSOR_EXTENSION",
   "STAGEFLOW_STAGE_CONTAINER_IMAGE",
   "STAGEFLOW_STAGE_CONTAINER_DOCKER_BIN",
@@ -81,6 +80,9 @@ export const FOREVER_DENIED_SECRET_NAMES: ReadonlySet<string> = new Set([
   "PI_MCP_ADAPTER_OAUTH_FILE_KEY",
   // The hosting platform's token for this Host (remote browsers); stages get a browser address, never this.
   "STAGEFLOW_PLATFORM_TOKEN",
+  "STAGEFLOW_HOME",
+  "STAGEFLOW_CREDENTIAL_HOME",
+  "SF_WORKER_STAGEFLOW_HOME",
 ]);
 
 /** Blocked from ambient / ALLOW / PASSTHROUGH; `as: env` grants may still inject. */

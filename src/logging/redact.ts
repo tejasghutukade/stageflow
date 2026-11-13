@@ -1,8 +1,10 @@
 import { COMMON_WORDS } from "./commonWords.js";
 
+const GITHUB_TOKEN = /\bgh[pours]_[A-Za-z0-9_]{20,}\b/g;
+
 const SECRET_PATTERNS: RegExp[] = [
   /\bsk-[A-Za-z0-9_-]{16,}\b/g,
-  /\bghp_[A-Za-z0-9]{20,}\b/g,
+  GITHUB_TOKEN,
   /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
   /\bBearer\s+[A-Za-z0-9\-._~+/]+=*/gi,
   /\b[A-Za-z_]*KEY[A-Za-z_]*\s*[:=]\s*['"]?[A-Za-z0-9+/_-]{16,}['"]?/gi,

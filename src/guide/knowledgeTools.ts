@@ -31,10 +31,14 @@ export function createGuideKnowledgeTools(): OperatorAgentTool[] {
       name: "read_guide_topic",
       description:
         "Read Stageflow knowledge. Pass { id } to get a topic's full text (ids from list_guide_topics), or { query } to get the best matching topics with a short excerpt. Prefer the limitations topic before promising a feature.",
-      parameters: Type.Union([
-        Type.Object({ id: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
-        Type.Object({ query: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
-      ]),
+      // One object at the root (OpenAI needs `type: "object"`); the handler requires id or query.
+      parameters: Type.Object(
+        {
+          id: Type.Optional(Type.String({ minLength: 1, description: "A topic id from list_guide_topics." })),
+          query: Type.Optional(Type.String({ minLength: 1, description: "Words to search for, when there is no id." })),
+        },
+        { additionalProperties: false },
+      ),
       handler: (args) => {
         const id = textArg(args, "id");
         if (id !== undefined) {

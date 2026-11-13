@@ -71,7 +71,7 @@ system_prompt: |
   can mistake it for its own instructions, so never put this stage's own
   prohibitions or scope limits in it — in particular, no "no source edits"
   language, which applies here and not downstream.
-model: omniroute/auto
+model: anthropic/claude-sonnet-5-5
 timeout_ms: 3600000
 io:
   input:

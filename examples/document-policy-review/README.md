@@ -22,7 +22,7 @@ From the repository root, with `OPENROUTER_API_KEY` or `STAGEFLOW_PROVIDER_OPENR
 docker compose -p policy-review -f docker-compose.yml -f docker-compose.policy-review.yml up -d --build
 ```
 
-Compose bind-mounts this directory at `/catalog/document-policy-review` and registers it with `STAGEFLOW_ENSURE_PROJECT_ROOTS`, so the agent is available when the host starts. The console lists it under Agents. The model is `openrouter/nvidia/nemotron-3.5-lightning:free`.
+Compose bind-mounts this directory at `/catalog/document-policy-review` and registers it with `STAGEFLOW_ENSURE_PROJECT_ROOTS`, so the agent is available when the host starts. The console lists it under Agents. The model is `openrouter/anthropic/claude-haiku-4.5` (any OpenRouter model works; a free model may be rate-limited or withdrawn).
 
 `docker-compose.policy-review.yml` publishes the host on **3849** (when 3847 is already in use) and runs the process as the `stageflow` user so email state under `/data` can be created on first boot.
 

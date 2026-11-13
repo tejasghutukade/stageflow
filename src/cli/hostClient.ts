@@ -17,7 +17,25 @@ import type { DeliverAnswerResult } from "../runtime/stageHitl.js";
 import type { RetryStageResult } from "../runtime/runRetryCoordinator.js";
 import { resolveStoreRoot, runWorkspaceDir } from "../runstore/paths.js";
 import type { RunDetail, RunStore } from "../runstore/port.js";
-import { clientAuthorizationHeaders } from "../server/controlToken.js";
+import { clientAuthorizationHeaders, describeClientTokenSource } from "../server/controlToken.js";
+
+let unauthorizedHintShown = false;
+
+/** Like fetch, but the first 401 says which token the CLI sent, so a stale or wrong token is easy to spot. */
+async function fetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+  const res = await globalThis.fetch(input, init);
+  if (res.status === 401 && !unauthorizedHintShown) {
+    unauthorizedHintShown = true;
+    const method = (init?.method ?? "GET").toUpperCase();
+    const source = describeClientTokenSource(method);
+    console.error(
+      source === "no token"
+        ? "The Host needs a control token and this command sent none. Set STAGEFLOW_CONTROL_TOKEN, or run it where $STAGEFLOW_HOME/control-token is readable."
+        : `The Host refused the control token from ${source}. Check it matches the running Host (for example a token left from another start or another data directory).`,
+    );
+  }
+  return res;
+}
 import type { TriggerListItem } from "../server/triggerRoutes.js";
 import type { TaskFile } from "../types/task.js";
 

@@ -1,5 +1,7 @@
 # Guide: set up web chat
 
+Experimental. Web chat works; its shape may still change.
+
 Web chat gives an agent a shareable page at `/chat/<slug>` on the Host: a plain chat window, new conversations, earlier conversations, nothing else. Reference: [Agents — Web chat](agents.md#web-chat-public-page).
 
 ## Turn it on
@@ -33,6 +35,7 @@ Behind a reverse proxy every visitor shares the proxy's address, so the per-IP l
 ## Behind a reverse proxy
 
 - Forward `GET /chat/<slug>`, its assets, and `/api/public/chat/<slug>/…` (streamed NDJSON, so disable response buffering and use a long read timeout). Do not forward the rest of `/api`.
+- Pass the browser's original `Host` through to Stageflow unchanged. The Host allow-list still applies on public chat; a rewritten or internal hostname is refused.
 - Add the public hostname to `STAGEFLOW_ALLOWED_HOSTS`.
 - The page works same-origin. To host the page elsewhere, list its origin in `STAGEFLOW_PUBLIC_CHAT_ORIGINS` (comma-separated) so the browser may call the API.
 - The console shows links using the address you opened it from. There is no separate "public base URL" setting; open the console through the public address (or copy the path `/chat/<slug>`) when sharing.

@@ -134,7 +134,7 @@ export function CreatePublicationDialog({
       })}
       footer={
         <>
-          <span className="text-xs text-[#8b8f98]">Nothing is exposed until you tick a caller.</span>
+          <span className="text-xs text-[#8b8f98]">Nothing is exposed until you tick a caller. run_stage stays off until allow_run_stage is set on that caller.</span>
           <div className="flex items-center gap-2">
             <button type="button" className={GHOST} onClick={onClose} disabled={busy}>Cancel</button>
             <button type="submit" className={PRIMARY} disabled={busy || !ready}>{busy ? "Publishing…" : "Publish"}</button>

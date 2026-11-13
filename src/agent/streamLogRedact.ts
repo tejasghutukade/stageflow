@@ -35,3 +35,10 @@ export function redactBrowserActivityEvent<T extends { event: string }>(
     namedSecrets: getNamedSecrets(),
   }) as unknown as T;
 }
+
+/** Scrub known secret values from every field of an activity event before it is stored. */
+export function redactActivityEvent<T extends { event: string }>(event: T): T {
+  return redact(event as unknown as Record<string, unknown>, {
+    namedSecrets: getNamedSecrets(),
+  }) as unknown as T;
+}

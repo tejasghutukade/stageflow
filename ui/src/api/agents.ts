@@ -126,6 +126,8 @@ export type AgentSession = {
   source: string;
   sourceRef: string | null;
   threadKey: string | null;
+  /** The session this one continues, when a channel thread rolled over at its turn or time limit. */
+  rolledFromSessionId?: string;
   title: string | null;
   createdAt: string;
   updatedAt: string;

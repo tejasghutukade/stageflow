@@ -57,6 +57,8 @@ export type AgentSession = {
   source: string;
   sourceRef: string | null;
   threadKey: string | null;
+  /** Previous session when a channel thread rolled for turns or minutes. */
+  rolledFromSessionId?: string;
   title: string | null;
   createdAt: string;
   updatedAt: string;
@@ -237,6 +239,9 @@ function toSession(row: Row): AgentSession {
     source: str(row.source),
     sourceRef: strOrNull(row.source_ref),
     threadKey: strOrNull(row.thread_key),
+    ...(strOrNull(row.rolled_from_session_id)
+      ? { rolledFromSessionId: strOrNull(row.rolled_from_session_id)! }
+      : {}),
     title: strOrNull(row.title),
     createdAt: str(row.created_at),
     updatedAt: str(row.updated_at),
@@ -494,8 +499,8 @@ export class AgentStore {
       .prepare(
         `INSERT INTO agent_sessions
            (session_id, project_key, agent_id, revision, backend, status, source, source_ref, thread_key, title,
-            created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            created_at, updated_at, rolled_from_session_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -510,6 +515,7 @@ export class AgentStore {
         session.title,
         session.createdAt,
         session.updatedAt,
+        session.rolledFromSessionId ?? null,
       );
   }
 
@@ -525,6 +531,11 @@ export class AgentStore {
       .prepare(`SELECT * FROM agent_sessions WHERE project_key = ? AND agent_id = ? AND thread_key = ?`)
       .get(projectKey, agentId, threadKey) as Row | undefined;
     return row ? toSession(row) : undefined;
+  }
+
+  /** Drop a session's thread so another session can own it. The unique index allows one session per thread. */
+  clearSessionThread(sessionId: string, now: string): void {
+    this.db.prepare(`UPDATE agent_sessions SET thread_key = NULL, updated_at = ? WHERE session_id = ?`).run(now, sessionId);
   }
 
   updateSession(

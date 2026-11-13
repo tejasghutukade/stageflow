@@ -4,7 +4,7 @@ memories:
 stages:
   - id: revise
     entry: true
-    model: openrouter/nvidia/nemotron-3.5-lightning:free
+    model: anthropic/claude-haiku-4-5
     system_prompt: |
       The task input has "key" and "note".
       The note is the full new card body. Copy it unchanged, including tables and lists.

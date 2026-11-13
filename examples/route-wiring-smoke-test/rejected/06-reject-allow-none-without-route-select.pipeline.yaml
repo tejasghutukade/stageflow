@@ -7,7 +7,7 @@ stages:
       - to: path-a
       - to: path-b
     system_prompt: Decide.
-    model: cursor/auto
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -17,7 +17,7 @@ stages:
           type: object
   - id: path-a
     system_prompt: A.
-    model: cursor/auto
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -27,7 +27,7 @@ stages:
           type: object
   - id: path-b
     system_prompt: B.
-    model: cursor/auto
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:

@@ -17,7 +17,7 @@ import { createRunStore } from "../src/runstore/createStore.js";
 import { stageStatusFromEvents } from "../src/runstore/port.js";
 import { RunManager } from "../src/runtime/runManager.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
-import type { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.js";
+import { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.js";
 import {
   markStageInterrupted,
   OPERATOR_CANCEL_REASON,
@@ -837,6 +837,71 @@ describe("runtime stage recovery abandon", () => {
     expect(detail.stages.find((s) => s.stage_id === "build")?.status).toBe(
       "failed",
     );
+  });
+
+  it("abandon stops only that stage when a sibling is still running", async () => {
+    const root = await mkdtemp(
+      path.join(tmpdir(), "sf-recovery-abandon-sibling-proc-"),
+    );
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    await store.appendStageEvent(run.runId, "design-doc", { event: "started" });
+    await store.appendStageEvent(run.runId, "implementation-plan", {
+      event: "started",
+    });
+    await store.updateRunStatus(run.runId, "running");
+
+    const mockWorker = fileURLToPath(
+      new URL("./fixtures/mockStageWorker.mjs", import.meta.url),
+    );
+    const launcher = new StageProcessLauncher({
+      maxActiveStageProcesses: 4,
+      cliEntry: mockWorker,
+      env: { MOCK_DELAY: "60000" },
+    });
+    const design = launcher.launch({
+      runId: run.runId,
+      stageId: "design-doc",
+      rootDir: root,
+    });
+    const impl = launcher.launch({
+      runId: run.runId,
+      stageId: "implementation-plan",
+      rootDir: root,
+    });
+    try {
+      await vi.waitFor(() => expect(launcher.activeCount()).toBe(2), {
+        timeout: 2000,
+      });
+
+      const manager = new RunManager({
+        agent: reconcileAgent(),
+        store,
+        cwd: fixtures,
+        executionMode: "process",
+        stageProcessLauncher: launcher,
+      });
+      const result = await manager.abandonStage(run.runId, "design-doc");
+      expect(result.ok).toBe(true);
+      await expect(design).resolves.toMatchObject({ type: "failed" });
+      expect(
+        launcher.getActiveStageProcesses().map((entry) => entry.stageId),
+      ).toEqual(["implementation-plan"]);
+
+      const detail = await store.readRun(run.runId);
+      expect(
+        detail.stages.find((s) => s.stage_id === "design-doc")?.status,
+      ).toBe("failed");
+      expect(
+        detail.stages.find((s) => s.stage_id === "implementation-plan")?.status,
+      ).toBe("running");
+    } finally {
+      await launcher.cancelRun(run.runId, 100);
+      await Promise.allSettled([design, impl]);
+    }
   });
 
   it("returns 409 when stage is not running", async () => {

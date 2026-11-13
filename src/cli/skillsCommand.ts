@@ -7,38 +7,111 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  realpath,
   rm,
   stat,
   writeFile,
 } from "node:fs/promises";
+import { lstatSync, mkdtempSync, rmSync } from "node:fs";
+import * as readline from "node:readline";
 import { tmpdir } from "node:os";
 import { inflateRawSync } from "node:zlib";
 import path from "node:path";
 import { findProjectRoot } from "../project/findProjectRoot.js";
+import { buildStageEnvironment } from "../runtime/stageEnvironment.js";
 
 export const SKILLS_USAGE = `Usage:
   sf skills list
-  sf skills install --from-path <dir> [--skill-name <name>]
-  sf skills install --from-zip <url-or-path> [--skill-name <name>] [--checksum sha256:<hex>]`;
+  sf skills install --from-path <dir> [--skill-name <name>] [--run-doctor]
+  sf skills install --from-zip <url-or-path> [--skill-name <name>] [--checksum sha256:<hex>] [--run-doctor]`;
+
+export type SkillDoctorDescriptor = {
+  available: true;
+  script: string;
+};
 
 export type SkillsCommandIo = {
   log: (line: string) => void;
   error: (line: string) => void;
   fetch: typeof globalThis.fetch;
-  runDoctor: (scriptPath: string, cwd: string) => number;
+  runDoctor: (scriptPath: string, cwd: string, hostEnv: NodeJS.ProcessEnv) => number;
+  confirmDoctor?: (scriptPath: string) => boolean | Promise<boolean>;
+  stdinIsTTY?: boolean;
+  hostEnv?: NodeJS.ProcessEnv;
 };
+
+export function buildSkillDoctorProcessEnv(hostEnv: NodeJS.ProcessEnv): Record<string, string> {
+  return buildStageEnvironment({ hostEnv }).env;
+}
+
+/**
+ * Run a skill's doctor script with the stage allowlist and an empty, temporary HOME, so the script cannot read
+ * the operator's data directory (control token, credentials) through `~`. Returns the exit code.
+ */
+export function runSkillDoctorScript(scriptPath: string, cwd: string, hostEnv: NodeJS.ProcessEnv): number {
+  const home = mkdtempSync(path.join(tmpdir(), "sf-skill-doctor-home-"));
+  try {
+    const env = { ...buildSkillDoctorProcessEnv(hostEnv), HOME: home, USERPROFILE: home };
+    const result = spawnSync(process.execPath, [scriptPath, "doctor"], { cwd, stdio: "pipe", env });
+    return result.status ?? 1;
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Run the doctor of a skill that is already installed in `projectRoot`. It never reinstalls, so the script that
+ * runs is the one the operator was shown.
+ */
+export async function runInstalledSkillDoctor(input: {
+  projectRoot: string;
+  skillName: string;
+  hostEnv?: NodeJS.ProcessEnv;
+  run?: (scriptPath: string, cwd: string, hostEnv: NodeJS.ProcessEnv) => number;
+}): Promise<{ ok: true; script: string } | { ok: false; status: 400 | 404 | 500; error: string }> {
+  try {
+    assertSafeSkillName(input.skillName);
+  } catch (err) {
+    return { ok: false, status: 400, error: err instanceof Error ? err.message : String(err) };
+  }
+  const destRoot = await resolveSkillInstallDest(input.projectRoot, input.skillName);
+  const rel = skillDoctorScriptRelative(input.skillName);
+  const script = path.join(destRoot, rel);
+  if (!(await pathExists(script))) return { ok: false, status: 404, error: `Skill ${input.skillName} has no doctor script` };
+  const code = (input.run ?? runSkillDoctorScript)(script, input.projectRoot, input.hostEnv ?? process.env);
+  if (code !== 0) return { ok: false, status: 500, error: "skill doctor failed" };
+  return { ok: true, script: rel };
+}
+
+export function skillDoctorScriptRelative(skillName: string): string {
+  return path.posix.join("bin", `${skillName}.mjs`);
+}
+
+async function defaultConfirmDoctor(scriptPath: string): Promise<boolean> {
+  if (process.stdin.isTTY !== true) {
+    return false;
+  }
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stderr,
+    terminal: true,
+  });
+  return new Promise((resolve) => {
+    rl.question(`Run skill doctor ${scriptPath}? [y/N] `, (answer) => {
+      rl.close();
+      resolve(/^y(es)?$/i.test(answer.trim()));
+    });
+  });
+}
 
 const defaultIo: SkillsCommandIo = {
   log: (line) => console.log(line),
   error: (line) => console.error(line),
   fetch: globalThis.fetch.bind(globalThis),
-  runDoctor: (scriptPath, cwd) => {
-    const result = spawnSync(process.execPath, [scriptPath, "doctor"], {
-      cwd,
-      stdio: "pipe",
-    });
-    return result.status ?? 1;
-  },
+  runDoctor: runSkillDoctorScript,
+  confirmDoctor: defaultConfirmDoctor,
+  stdinIsTTY: process.stdin.isTTY === true,
+  hostEnv: process.env,
 };
 
 type ParsedSkillsArgs = {
@@ -48,6 +121,7 @@ type ParsedSkillsArgs = {
   fromZip?: string;
   skillName?: string;
   checksum?: string;
+  runDoctor?: boolean;
 };
 
 function parseSkillsArgs(args: string[]): ParsedSkillsArgs {
@@ -67,6 +141,7 @@ function parseSkillsArgs(args: string[]): ParsedSkillsArgs {
   let fromZip: string | undefined;
   let skillName: string | undefined;
   let checksum: string | undefined;
+  let runDoctor = false;
   let help = false;
 
   for (let i = 1; i < args.length; i++) {
@@ -97,6 +172,8 @@ function parseSkillsArgs(args: string[]): ParsedSkillsArgs {
         throw new Error("Missing value for --checksum");
       }
       checksum = value;
+    } else if (arg === "--run-doctor") {
+      runDoctor = true;
     } else if (arg.startsWith("-")) {
       throw new Error(`Unknown flag: ${arg}`);
     } else {
@@ -111,11 +188,56 @@ function parseSkillsArgs(args: string[]): ParsedSkillsArgs {
     fromZip,
     skillName,
     checksum,
+    ...(runDoctor ? { runDoctor: true } : {}),
   };
 }
 
 function skillsDirForRoot(projectRoot: string): string {
   return path.join(projectRoot, ".pi", "skills");
+}
+
+/** Single path segment: letters, numbers, dot, underscore, hyphen. Not empty, `.`, or `..`. */
+const SAFE_SKILL_NAME = /^[A-Za-z0-9._-]+$/;
+
+export function assertSafeSkillName(name: string): void {
+  if (name.length === 0 || name === "." || name === ".." || !SAFE_SKILL_NAME.test(name)) {
+    throw new Error(`invalid skill name "${name}"`);
+  }
+}
+
+function skillDestStaysInside(realSkillsDir: string, candidate: string): boolean {
+  const relative = path.relative(realSkillsDir, candidate);
+  return (
+    relative !== "" &&
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
+}
+
+async function resolveExistingRealPath(target: string): Promise<string> {
+  try {
+    return await realpath(target);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") throw err;
+    const parent = path.dirname(target);
+    if (parent === target) throw err;
+    return path.resolve(await realpath(parent), path.basename(target));
+  }
+}
+
+async function resolveSkillInstallDest(projectRoot: string, skillName: string): Promise<string> {
+  assertSafeSkillName(skillName);
+  const skillsDir = skillsDirForRoot(projectRoot);
+  await mkdir(skillsDir, { recursive: true });
+  const realSkillsDir = await realpath(skillsDir);
+  const destRoot = path.resolve(realSkillsDir, skillName);
+  const realDest = await resolveExistingRealPath(destRoot);
+  if (!skillDestStaysInside(realSkillsDir, realDest)) {
+    throw new Error("skill destination escapes the skills directory");
+  }
+  return destRoot;
 }
 
 function shouldCopyRelative(rel: string): boolean {
@@ -136,16 +258,26 @@ function shouldCopyRelative(rel: string): boolean {
   return true;
 }
 
-async function copySkillTree(sourceRoot: string, destRoot: string): Promise<void> {
+/**
+ * Copy a skill without its symbolic links: a link in a downloaded skill (`references/x.md -> ../../../.env`) would
+ * point into the project once installed. Returns the skipped links, relative to the skill root.
+ */
+async function copySkillTree(sourceRoot: string, destRoot: string): Promise<string[]> {
   await rm(destRoot, { recursive: true, force: true });
   await mkdir(destRoot, { recursive: true });
+  const skipped: string[] = [];
   await cp(sourceRoot, destRoot, {
     recursive: true,
     filter: (src) => {
       const rel = path.relative(sourceRoot, src);
+      if (rel !== "" && lstatSync(src).isSymbolicLink()) {
+        skipped.push(rel.split(path.sep).join("/"));
+        return false;
+      }
       return shouldCopyRelative(rel);
     },
   });
+  return skipped;
 }
 
 function inferSkillNameFromPath(sourcePath: string): string {
@@ -370,11 +502,19 @@ export type InstallProjectSkillInput = {
   zipBytes?: Uint8Array;
   skillName?: string;
   checksum?: string;
+  runDoctor?: boolean;
+  doctorPolicy?: "prompt" | "defer";
   io?: Partial<SkillsCommandIo>;
 };
 
 export type InstallProjectSkillResult =
-  | { ok: true; skillName: string; destPath: string; message: string }
+  | {
+      ok: true;
+      skillName: string;
+      destPath: string;
+      message: string;
+      doctor?: SkillDoctorDescriptor;
+    }
   | { ok: false; error: string; doctorFailed?: boolean };
 
 type InstallSourceInput = {
@@ -412,6 +552,7 @@ async function resolveInstallSource(
       throw new Error("source path not found");
     }
     const skillName = input.skillName ?? inferSkillNameFromPath(input.fromPath);
+    assertSafeSkillName(skillName);
     return { sourceRoot, skillName };
   }
 
@@ -436,8 +577,10 @@ async function resolveInstallSource(
   const extractDir = await mkdtemp(path.join(tmpdir(), "sf-skill-zip-"));
   await extractZipBuffer(zipBytes, extractDir);
   const lookupName = input.skillName ?? inferredZipName ?? "skill";
+  assertSafeSkillName(lookupName);
   const sourceRoot = await findSkillRoot(extractDir, lookupName);
   const skillName = input.skillName ?? inferredZipName ?? path.basename(sourceRoot);
+  assertSafeSkillName(skillName);
   return {
     sourceRoot,
     skillName,
@@ -486,6 +629,9 @@ export async function installProjectSkill(
 ): Promise<InstallProjectSkillResult> {
   const io: SkillsCommandIo = { ...defaultIo, ...input.io };
   try {
+    if (input.skillName !== undefined) {
+      assertSafeSkillName(input.skillName);
+    }
     const resolved = await resolveInstallSource(
       {
         fromPath: input.fromPath,
@@ -497,15 +643,37 @@ export async function installProjectSkill(
       io,
     );
     try {
-      const destRoot = path.join(skillsDirForRoot(input.projectRoot), resolved.skillName);
-      await copySkillTree(resolved.sourceRoot, destRoot);
+      assertSafeSkillName(resolved.skillName);
+      const destRoot = await resolveSkillInstallDest(input.projectRoot, resolved.skillName);
+      const skippedLinks = await copySkillTree(resolved.sourceRoot, destRoot);
+      if (skippedLinks.length > 0) {
+        io.error(`Skipped symbolic links in the skill (not installed): ${skippedLinks.join(", ")}`);
+      }
 
-      const doctorScript = path.join(destRoot, "bin", `${resolved.skillName}.mjs`);
+      const doctorRel = skillDoctorScriptRelative(resolved.skillName);
+      const doctorScript = path.join(destRoot, doctorRel);
+      let doctor: SkillDoctorDescriptor | undefined;
       if (await pathExists(doctorScript)) {
-        const doctorCode = io.runDoctor(doctorScript, input.projectRoot);
-        if (doctorCode !== 0) {
-          io.error("skill doctor failed");
-          return { ok: false, error: "skill doctor failed", doctorFailed: true };
+        doctor = { available: true, script: doctorRel };
+        const policy = input.doctorPolicy ?? "prompt";
+        if (policy === "defer") {
+          // install only; doctor runs after explicit confirmation elsewhere
+        } else {
+          let shouldRun = input.runDoctor === true;
+          if (!shouldRun) {
+            const tty = io.stdinIsTTY ?? defaultIo.stdinIsTTY === true;
+            if (tty && io.confirmDoctor) {
+              shouldRun = await Promise.resolve(io.confirmDoctor(doctorScript));
+            }
+          }
+          if (shouldRun) {
+            const hostEnv = io.hostEnv ?? defaultIo.hostEnv ?? process.env;
+            const doctorCode = io.runDoctor(doctorScript, input.projectRoot, hostEnv);
+            if (doctorCode !== 0) {
+              io.error("skill doctor failed");
+              return { ok: false, error: "skill doctor failed", doctorFailed: true };
+            }
+          }
         }
       }
 
@@ -516,6 +684,7 @@ export async function installProjectSkill(
         skillName: resolved.skillName,
         destPath: destRoot,
         message,
+        ...(doctor !== undefined ? { doctor } : {}),
       };
     } finally {
       if (resolved.cleanup) {
@@ -560,6 +729,7 @@ export async function runSkillsCommand(
       fromZip: parsed.fromZip,
       skillName: parsed.skillName,
       checksum: parsed.checksum,
+      runDoctor: parsed.runDoctor,
       io,
     });
     return result.ok ? 0 : 1;

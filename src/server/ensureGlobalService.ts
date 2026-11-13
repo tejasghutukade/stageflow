@@ -1,11 +1,13 @@
 import { type ChildProcess, spawn as spawnDefault } from "node:child_process";
-import { openSync } from "node:fs";
+import { chmodSync, openSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readStageflowHomeId } from "../diagnostics/checks.js";
 import { ensureGlobalHome } from "../project/globalHome.js";
 import {
   assertBindAllowed,
   BindRefusedError,
+  hasDriveToken,
   loadControlTokens,
 } from "./controlToken.js";
 import { DEFAULT_PORT } from "./createHttpHost.js";
@@ -53,32 +55,86 @@ export type HostProbeResult = "up" | "down";
  * listening on the port but didn't answer with valid health JSON, so it's
  * almost certainly not our service and spawning would just collide).
  */
-export type ServiceProbeResult = "up" | "unreachable" | "unhealthy";
+export type ServiceProbeResult =
+  | "up"
+  | "starting"
+  | "unreachable"
+  | "unhealthy"
+  | "foreign"
+  | "other_home"
+  | "old_stageflow";
+
+/** An older Stageflow Host (before 0.57) still holds the port, usually the service left running across an upgrade. */
+export function oldHostRunningMessage(port: number | string): string {
+  return `An older Stageflow Host is running on port ${port}. Stop it (end its "sf mcp" or "sf ui" process, or restart the container), then run this again.`;
+}
+
+export function otherHostHomeMessage(port: number | string): string {
+  return `Another Stageflow Host with a different data directory is on port ${port}. Stop it or use --port.`;
+}
 
 export function hostBaseUrl(): string {
   return `http://127.0.0.1:${resolveServicePort()}`;
 }
 
-export async function probeGlobalServiceDetailed(): Promise<ServiceProbeResult> {
+/**
+ * Whether a Host's reported home id is another data directory. `expected` may be a function, read after the Host
+ * answered (so a Host that just created its id is seen). An expected id of undefined means no Host ever used this
+ * directory, so any reported id is someone else's.
+ */
+function homeMismatch(
+  expected: string | (() => string | undefined) | undefined,
+  reported: unknown,
+): boolean {
+  if (expected === undefined) return false;
+  const mine = typeof expected === "function" ? expected() : expected;
+  if (typeof reported !== "string") return false;
+  return mine === undefined || reported !== mine;
+}
+
+export async function probeStageflowHost(
+  baseUrl: string,
+  options?: { expectedHomeId?: string | (() => string | undefined) },
+): Promise<ServiceProbeResult> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 1500);
   try {
     let res: Response;
     try {
-      res = await fetch(`${hostBaseUrl()}/livez`, { signal: ac.signal });
+      res = await fetch(`${baseUrl}/livez`, { signal: ac.signal });
     } catch {
       return "unreachable";
     }
     if (res.status !== 200) return "unhealthy";
+    let body: { ok?: unknown; status?: unknown; service?: unknown; home_id?: unknown };
     try {
-      JSON.parse(await res.text());
+      body = JSON.parse(await res.text()) as typeof body;
     } catch {
       return "unhealthy";
     }
+    if (body === null || typeof body !== "object") return "foreign";
+    if (body.service === "stageflow" && body.status === "starting") {
+      // A booting Host names its data directory too; one from another directory is not ours.
+      if (homeMismatch(options?.expectedHomeId, body.home_id)) return "other_home";
+      return "starting";
+    }
+    if (body.service !== "stageflow") {
+      // Hosts before 0.57 answer {"ok":true,"status":"live"} with no service field.
+      return body.service === undefined && body.ok === true && body.status === "live"
+        ? "old_stageflow"
+        : "foreign";
+    }
+    if (homeMismatch(options?.expectedHomeId, body.home_id)) return "other_home";
     return "up";
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function probeGlobalServiceDetailed(): Promise<ServiceProbeResult> {
+  return probeStageflowHost(hostBaseUrl(), {
+    expectedHomeId: () => readStageflowHomeId(),
+  });
 }
 
 export async function defaultProbeHost(): Promise<HostProbeResult> {
@@ -90,6 +146,9 @@ const DEFAULT_TIMEOUT_MS =
   Number(process.env.STAGEFLOW_AUTOSTART_TIMEOUT_MS) || 10_000;
 
 export const STAGEFLOW_NO_AUTOSTART = "STAGEFLOW_NO_AUTOSTART";
+
+/** Set on the process `ensureGlobalService` spawns so it does not print the control token. */
+export const SF_SERVICE_CHILD = "SF_SERVICE_CHILD";
 
 /** Truthy when set and not empty / `0` / `false` (case-insensitive). */
 export function isNoAutostartEnabled(
@@ -110,7 +169,8 @@ export type EnsureGlobalServiceResult =
         | "spawn_failed"
         | "timed_out"
         | "autostart_disabled"
-        | "bind_refused";
+        | "bind_refused"
+        | "old_host_running";
       message: string;
     };
 
@@ -150,7 +210,52 @@ export async function ensureGlobalService(
   if (initial === "up") {
     return { ok: true, alreadyRunning: true };
   }
-  if (initial === "unhealthy") {
+  if (initial === "starting") {
+    let last: ServiceProbeResult = "starting";
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await sleep(pollIntervalMs);
+      const next = await probeHost();
+      if (next === "up") return { ok: true, alreadyRunning: true };
+      if (next !== "starting") {
+        last = next;
+        break;
+      }
+    }
+    if (last === "other_home") {
+      return { ok: false, reason: "port_occupied", message: otherHostHomeMessage(resolveServicePort()) };
+    }
+    if (last === "old_stageflow") {
+      return { ok: false, reason: "old_host_running", message: oldHostRunningMessage(resolveServicePort()) };
+    }
+    if (last === "unreachable") {
+      return {
+        ok: false,
+        reason: "timed_out",
+        message: `The starting Stageflow Host on port ${resolveServicePort()} stopped before it became ready. Check its log, then try again.`,
+      };
+    }
+    return {
+      ok: false,
+      reason: "timed_out",
+      message: `Timed out after ${timeoutMs}ms waiting for the starting Stageflow Host to become ready.`,
+    };
+  }
+  if (initial === "old_stageflow") {
+    return {
+      ok: false,
+      reason: "old_host_running",
+      message: oldHostRunningMessage(resolveServicePort()),
+    };
+  }
+  if (initial === "other_home") {
+    return {
+      ok: false,
+      reason: "port_occupied",
+      message: otherHostHomeMessage(resolveServicePort()),
+    };
+  }
+  if (initial === "unhealthy" || initial === "foreign") {
     return {
       ok: false,
       reason: "port_occupied",
@@ -169,7 +274,14 @@ export async function ensureGlobalService(
 
   try {
     const bind = resolveListenHost({ env });
-    assertBindAllowed(bind, loadControlTokens(env));
+    const tokens = loadControlTokens(env);
+    // The spawned `sf mcp` writes a token before it binds. Do not refuse here,
+    // and do not set STAGEFLOW_CONTROL_TOKEN_FILE on this parent process.
+    const childGeneratesToken =
+      !hasDriveToken(tokens) && env.STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND !== "1";
+    if (!childGeneratesToken) {
+      assertBindAllowed(bind, tokens, env);
+    }
   } catch (err) {
     if (err instanceof BindRefusedError) {
       return {
@@ -187,7 +299,8 @@ export async function ensureGlobalService(
 
   let logFd: number;
   try {
-    logFd = openSync(logPath, "a");
+    logFd = openSync(logPath, "a", 0o600);
+    chmodSync(logPath, 0o600);
   } catch (err) {
     return {
       ok: false,
@@ -201,6 +314,7 @@ export async function ensureGlobalService(
     const child = spawnFn(process.execPath, spawnArgs, {
       detached: true,
       stdio: ["ignore", logFd, logFd],
+      env: { ...process.env, [SF_SERVICE_CHILD]: "1" },
     });
     child.unref();
   } catch (err) {

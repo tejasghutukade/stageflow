@@ -33,7 +33,9 @@ import type Database from "better-sqlite3";
 import { A2aStore, type A2aTaskRow, type PinnedPublication, type TaskState } from "./store.js";
 import { MAX_NONTERMINAL_TASKS_PER_CALLER, RateLimiter } from "./limits.js";
 
-export type Caller = { id: string };
+export type Caller = { id: string; allow_run_stage?: boolean };
+
+export const RUN_STAGE_OPT_IN_ERROR = "run_stage is off for this caller. Set allow_run_stage to enable it.";
 
 export type PublicQuestion = { handle: string; message: string };
 
@@ -116,6 +118,9 @@ export class A2aInvocations {
       return this.invoke(caller, message.messageId, message.contextId, message.capability, message.input);
     }
     if (message.kind === "run_stage") {
+      if (caller.allow_run_stage !== true) {
+        throw new A2aApplicationError("forbidden", RUN_STAGE_OPT_IN_ERROR);
+      }
       return this.runStandalone(caller, message);
     }
     return this.answer(caller, message.messageId, message.taskId, message.handle, message.answer);
@@ -257,13 +262,11 @@ export class A2aInvocations {
   }
 
   /**
-   * ADR-0001's wildcard-access operation: run any catalog or inline
-   * stage/pipeline directly. Deliberately does NOT call `this.registry.get`/
-   * `.list` — that allowlist lookup is the entire mechanism `invoke` uses to
-   * restrict a caller to its published capabilities, and this operation's
-   * whole point is to bypass it. The caller is still authenticated (by the
-   * time `send` reaches here) and still rate-limited/admission-capped like
-   * any other task.
+   * Run any catalog or inline stage/pipeline directly. Does not call
+   * `this.registry.get` / `.list` — that allowlist is how `invoke` limits a
+   * caller to published capabilities. `send` already required
+   * `caller.allow_run_stage` before calling here. The caller is authenticated
+   * and still rate-limited and admission-capped like any other task.
    */
   private async runStandalone(caller: Caller, cmd: RunStageCommand): Promise<PublicTask> {
     let taskInput: string | TaskFile;

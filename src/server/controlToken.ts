@@ -1,7 +1,25 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  closeSync,
+  constants as fsConstants,
+  fchmodSync,
+  fsyncSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+  realpathSync,
+} from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { readSecretFromEnvOrFile } from "../config/secretFromEnvOrFile.js";
-import { isLoopbackHostname } from "./allowedHosts.js";
+import os from "node:os";
+import path from "node:path";
+import { SecretFromEnvError, readSecretFromEnvOrFile } from "../config/secretFromEnvOrFile.js";
+import { createOwnerOnlyDirectory, globalStageflowHome } from "../project/globalHome.js";
+import { SF_STAGE_WORKER } from "../runtime/stageWorkerProtocol.js";
+import { isLoopbackHostname, isLoopbackRemoteAddress } from "./allowedHosts.js";
 import { isEvalInternalPath } from "./evalInternalRoutes.js";
 import { matchLiveViewRoute } from "./liveViewPath.js";
 
@@ -24,7 +42,9 @@ export type ControlTokens = {
 };
 
 const CONTROL_TOKEN_PREFIX = "STAGEFLOW_CONTROL_TOKEN_";
-const DEFAULT_CALLER_ID = "default";
+export const DEFAULT_CALLER_ID = "default";
+/** Generated when the operator did not set STAGEFLOW_CONTROL_TOKEN or _FILE. */
+export const CONTROL_TOKEN_FILENAME = "control-token";
 
 function digest(value: string): Buffer {
   return createHash("sha256").update(value).digest();
@@ -87,8 +107,13 @@ function assertUniqueDigests(
 
 export function loadControlTokens(
   env: NodeJS.ProcessEnv = process.env,
+  extraDriveToken?: string,
 ): ControlTokens {
-  const driveRaw = readSecretFromEnvOrFile(env, "STAGEFLOW_CONTROL_TOKEN");
+  const driveRaw =
+    readSecretFromEnvOrFile(env, "STAGEFLOW_CONTROL_TOKEN") ??
+    (extraDriveToken !== undefined && extraDriveToken.length > 0
+      ? extraDriveToken
+      : undefined);
   const readRaw = readSecretFromEnvOrFile(env, "STAGEFLOW_READ_TOKEN");
 
   const callerBases = new Map<string, string>();
@@ -136,6 +161,348 @@ export function loadControlTokens(
   return { driveDigest, readDigest, namedDrive };
 }
 
+export type EnsuredHostControlToken = {
+  /** True only when this process minted a token that is not on disk yet. */
+  generated: boolean;
+  /** Plaintext when this process minted it or read a reusable file. */
+  token?: string;
+  filePath?: string;
+  /** Write `filePath` only after listen succeeds. */
+  pendingWrite?: boolean;
+};
+
+function operatorSetControlToken(env: NodeJS.ProcessEnv): boolean {
+  const plain = env.STAGEFLOW_CONTROL_TOKEN;
+  const file = env.STAGEFLOW_CONTROL_TOKEN_FILE;
+  if (
+    (plain !== undefined && plain.length > 0) ||
+    (file !== undefined && file.length > 0)
+  ) {
+    return true;
+  }
+  return listNamedControlTokenEnvKeys(env).some((named) => {
+    const value = env[named.envKey];
+    return value !== undefined && value.length > 0;
+  });
+}
+
+function resolveControlTokenHome(env: NodeJS.ProcessEnv): string | undefined {
+  const raw = env.STAGEFLOW_HOME?.trim();
+  if (raw) {
+    return path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(process.cwd(), raw);
+  }
+  if (env === process.env) return path.join(os.homedir(), ".stageflow");
+  return undefined;
+}
+
+export function controlTokenFilePath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(controlTokenDirectory(env), CONTROL_TOKEN_FILENAME);
+}
+
+/** Path only, and only for a loopback caller. Never the token. */
+export function authHintBody(
+  remoteAddress: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): { tokenFile: string | null; source?: "env" } {
+  if (!isLoopbackRemoteAddress(remoteAddress)) return { tokenFile: null };
+  return activeControlTokenSource(env);
+}
+
+/**
+ * Where the drive token this process uses lives: the operator's `STAGEFLOW_CONTROL_TOKEN_FILE`, the plain env var
+ * (no file to show), or `$STAGEFLOW_HOME/control-token`.
+ */
+export function activeControlTokenSource(
+  env: NodeJS.ProcessEnv = process.env,
+): { tokenFile: string | null; source?: "env" } {
+  const file = env.STAGEFLOW_CONTROL_TOKEN_FILE?.trim();
+  if (file) return { tokenFile: file };
+  if (env.STAGEFLOW_CONTROL_TOKEN?.trim()) return { tokenFile: null, source: "env" };
+  return { tokenFile: controlTokenFilePath(env) };
+}
+
+function controlTokenDirectory(env: NodeJS.ProcessEnv): string {
+  const raw = env.STAGEFLOW_HOME?.trim();
+  if (raw) {
+    return path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(process.cwd(), raw);
+  }
+  if (env === process.env) return globalStageflowHome();
+  return path.join(os.homedir(), ".stageflow");
+}
+
+/** Read a regular file without following a symlink. Missing, symlink, or loop → undefined. */
+function readControlTokenFile(filePath: string): string | undefined {
+  let st;
+  try {
+    st = lstatSync(filePath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return undefined;
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new SecretFromEnvError(
+      `Failed to read control token file ${filePath}: ${detail}`,
+    );
+  }
+  if (st.isSymbolicLink() || !st.isFile()) return undefined;
+  const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+  let fd: number;
+  try {
+    fd = openSync(filePath, fsConstants.O_RDONLY | noFollow);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ELOOP") return undefined;
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new SecretFromEnvError(
+      `Failed to read control token file ${filePath}: ${detail}`,
+    );
+  }
+  try {
+    return readFileSync(fd, "utf8").replace(/\r?\n$/, "");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Reuse only a regular file owned by this user, mode 0600, with a valid token.
+ * 0644, a symlink, or another owner is not reusable.
+ */
+type ReusableControlToken = { token: string } | { reason: string } | undefined;
+
+/** The token in `filePath` if it may be reused, the reason it may not, or undefined when there is no file. */
+function readReusableControlToken(filePath: string): ReusableControlToken {
+  let st;
+  try {
+    st = lstatSync(filePath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return undefined;
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new SecretFromEnvError(
+      `Failed to read control token file ${filePath}: ${detail}`,
+    );
+  }
+  if (st.isSymbolicLink()) return { reason: "it is a symbolic link" };
+  if (!st.isFile()) return { reason: "it is not a regular file" };
+  if (process.platform !== "win32") {
+    const uid = process.getuid?.();
+    if (uid === undefined || st.uid !== uid) return { reason: "it is owned by another user" };
+    const mode = st.mode & 0o777;
+    if (mode !== 0o600) return { reason: `its mode is ${mode.toString(8).padStart(4, "0")}, not 0600` };
+  }
+  const text = readControlTokenFile(filePath);
+  if (text === undefined || text.length === 0) return { reason: "it is empty" };
+  try {
+    return { token: validateToken(text, "STAGEFLOW_CONTROL_TOKEN") };
+  } catch {
+    return { reason: "it does not hold a valid token (32+ characters, no whitespace)" };
+  }
+}
+
+function readInstalledControlToken(env: NodeJS.ProcessEnv): string | undefined {
+  const home = resolveControlTokenHome(env);
+  if (home === undefined) return undefined;
+  return readControlTokenFile(path.join(home, CONTROL_TOKEN_FILENAME));
+}
+
+/**
+ * Write `control-token.<pid>.tmp` with O_EXCL and mode 0600, fsync, then rename
+ * over the destination. rename replaces a symlink; it does not follow one.
+ */
+function openExclusiveTokenTemp(tmp: string): number {
+  try {
+    return openSync(tmp, "wx", 0o600);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    const st = lstatSync(tmp);
+    if (!st.isFile() && !st.isSymbolicLink()) throw err;
+    unlinkSync(tmp);
+    return openSync(tmp, "wx", 0o600);
+  }
+}
+
+function writeControlTokenAtomic(filePath: string, token: string): void {
+  const tmp = path.join(
+    path.dirname(filePath),
+    `${CONTROL_TOKEN_FILENAME}.${process.pid}.tmp`,
+  );
+  const fd = openExclusiveTokenTemp(tmp);
+  try {
+    writeFileSync(fd, token, { encoding: "utf8" });
+    fchmodSync(fd, 0o600);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  try {
+    renameSync(tmp, filePath);
+  } catch (err) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // the rename error is the one that matters
+    }
+    throw err;
+  }
+}
+
+/**
+ * When the operator did not set a control token, reuse
+ * `$STAGEFLOW_HOME/control-token` if it is a regular 0600 file owned by this
+ * user and the token is valid. Otherwise mint a token in memory. The file is
+ * written by `commitHostControlToken` after listen succeeds, so a failed bind
+ * does not replace the live Host's token.
+ * `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` stays an explicit opt-in to start
+ * with no token.
+ */
+export function ensureHostControlToken(
+  env: NodeJS.ProcessEnv = process.env,
+): EnsuredHostControlToken {
+  if (
+    operatorSetControlToken(env) ||
+    env.STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND === "1"
+  ) {
+    return { generated: false };
+  }
+  const home = controlTokenDirectory(env);
+  const filePath = path.join(home, CONTROL_TOKEN_FILENAME);
+  const existing = readReusableControlToken(filePath);
+  if (existing !== undefined && "token" in existing) {
+    env.STAGEFLOW_CONTROL_TOKEN_FILE = filePath;
+    return { generated: false, token: existing.token, filePath };
+  }
+  if (existing !== undefined) {
+    console.error(`Ignoring ${filePath}: ${existing.reason}. A new token was created.`);
+  }
+  const token = randomBytes(32).toString("hex");
+  return { generated: true, token, filePath, pendingWrite: true };
+}
+
+/** Persist a minted token. No-op when this process reused a file or the operator set one. */
+export function commitHostControlToken(
+  ensured: EnsuredHostControlToken,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (!ensured.pendingWrite || ensured.token === undefined || ensured.filePath === undefined) {
+    return;
+  }
+  createOwnerOnlyDirectory(path.dirname(ensured.filePath));
+  writeControlTokenAtomic(ensured.filePath, ensured.token);
+  delete env.STAGEFLOW_CONTROL_TOKEN;
+  env.STAGEFLOW_CONTROL_TOKEN_FILE = ensured.filePath;
+  ensured.pendingWrite = false;
+}
+
+/** Two paths name the same file: same device and inode, else the same real path. */
+function sameFile(a: string, b: string): boolean {
+  try {
+    const sa = statSync(a);
+    const sb = statSync(b);
+    if (sa.dev === sb.dev && sa.ino === sb.ino) return true;
+  } catch {
+    // fall through to path comparison
+  }
+  const real = (value: string) => {
+    try {
+      return realpathSync(value);
+    } catch {
+      return path.resolve(value);
+    }
+  };
+  return real(a) === real(b);
+}
+
+/** Every file the operator pointed a token variable at: the drive and read `_FILE`s and each named `_FILE`. */
+function operatorTokenFiles(env: NodeJS.ProcessEnv): string[] {
+  const files = [env.STAGEFLOW_CONTROL_TOKEN_FILE, env.STAGEFLOW_READ_TOKEN_FILE];
+  for (const named of listNamedControlTokenEnvKeys(env)) {
+    if (named.isFile) files.push(env[named.envKey]);
+  }
+  return files.filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+}
+
+/** Token values the operator set, from plain variables and from the files they named. */
+function operatorTokenValues(env: NodeJS.ProcessEnv): Set<string> {
+  const values = new Set<string>();
+  const add = (value: string | undefined) => {
+    const trimmed = value?.trim();
+    if (trimmed) values.add(trimmed);
+  };
+  add(env.STAGEFLOW_CONTROL_TOKEN);
+  add(env.STAGEFLOW_READ_TOKEN);
+  for (const named of listNamedControlTokenEnvKeys(env)) {
+    if (!named.isFile) add(env[named.envKey]);
+  }
+  for (const file of operatorTokenFiles(env)) {
+    try {
+      add(readFileSync(file, "utf8"));
+    } catch {
+      // unreadable: nothing to compare
+    }
+  }
+  return values;
+}
+
+/**
+ * When the operator set their own token, move a token file a previous start generated out of the way, so the CLI
+ * does not keep sending a token this Host no longer accepts. Never touches a file the operator named in any token
+ * variable (by inode or real path, symlinked spellings included) or a file holding a token the operator set. The
+ * file is renamed to `control-token.retired`, not deleted. Failures are reported, never thrown.
+ */
+export function retireGeneratedControlToken(
+  ensured: EnsuredHostControlToken,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  try {
+    if (ensured.generated || ensured.pendingWrite || ensured.filePath !== undefined) return;
+    if (!operatorSetControlToken(env)) return;
+    const filePath = path.join(controlTokenDirectory(env), CONTROL_TOKEN_FILENAME);
+    let stat: ReturnType<typeof lstatSync>;
+    try {
+      stat = lstatSync(filePath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw err;
+    }
+    if (!stat.isSymbolicLink() && !stat.isFile()) return;
+    if (operatorTokenFiles(env).some((file) => sameFile(file, filePath))) return;
+    let content: string | undefined;
+    try {
+      content = readFileSync(filePath, "utf8").trim();
+    } catch {
+      content = undefined;
+    }
+    if (content !== undefined && content.length > 0 && operatorTokenValues(env).has(content)) return;
+    const retired = `${filePath}.retired`;
+    renameSync(filePath, retired);
+    console.error(
+      `Moved ${filePath} to ${retired}: this Host uses the token you set, so the generated one is no longer valid.`,
+    );
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code ?? "unknown";
+    console.error(`Could not retire the generated control token file (${code}). Remove it by hand if the CLI gets 401.`);
+  }
+}
+
+/**
+ * Lines printed once next to the listen URL. The token value is included only
+ * when this process just minted it and `revealToken` is set. A reused file
+ * prints the path only. Empty when the operator set the token.
+ */
+export function generatedControlTokenLines(
+  ensured: EnsuredHostControlToken,
+  options?: { revealToken?: boolean },
+): readonly string[] {
+  if (ensured.filePath === undefined) return [];
+  if (options?.revealToken === true && ensured.generated && ensured.token !== undefined) {
+    return [
+      `Control token: ${ensured.token}`,
+      `Control token file: ${ensured.filePath}`,
+    ];
+  }
+  return [`Control token file: ${ensured.filePath}`];
+}
+
 /** Plain bearer for CLI→host calls. Drive preferred; read only for GET/HEAD. */
 export function resolveClientBearerToken(
   method: string,
@@ -145,6 +512,12 @@ export function resolveClientBearerToken(
   if (driveRaw !== undefined) {
     return validateToken(driveRaw, "STAGEFLOW_CONTROL_TOKEN");
   }
+  if (env[SF_STAGE_WORKER] !== "1") {
+    const installed = readInstalledControlToken(env);
+    if (installed !== undefined && installed.length > 0) {
+      return validateToken(installed, "STAGEFLOW_CONTROL_TOKEN");
+    }
+  }
   if (method === "GET" || method === "HEAD") {
     const readRaw = readSecretFromEnvOrFile(env, "STAGEFLOW_READ_TOKEN");
     if (readRaw !== undefined) {
@@ -152,6 +525,30 @@ export function resolveClientBearerToken(
     }
   }
   return undefined;
+}
+
+/** Where the CLI's bearer for `method` comes from, for a 401 message. Names variables and paths, never the token. */
+export function describeClientTokenSource(
+  method: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  if (env.STAGEFLOW_CONTROL_TOKEN?.trim()) return "STAGEFLOW_CONTROL_TOKEN";
+  const file = env.STAGEFLOW_CONTROL_TOKEN_FILE?.trim();
+  if (file) return `STAGEFLOW_CONTROL_TOKEN_FILE (${file})`;
+  const home = resolveControlTokenHome(env);
+  if (env[SF_STAGE_WORKER] !== "1" && home !== undefined) {
+    const installed = path.join(home, CONTROL_TOKEN_FILENAME);
+    try {
+      lstatSync(installed);
+      return installed;
+    } catch {
+      // no installed file
+    }
+  }
+  if ((method === "GET" || method === "HEAD") && (env.STAGEFLOW_READ_TOKEN?.trim() || env.STAGEFLOW_READ_TOKEN_FILE?.trim())) {
+    return "STAGEFLOW_READ_TOKEN";
+  }
+  return "no token";
 }
 
 export function clientAuthorizationHeaders(

@@ -19,6 +19,7 @@ import { githubMatchActionError, isGithubTriggerAction } from "./githubTriggerAc
 import { loadEvalCatalog } from "./evalCatalog.js";
 import { evalFindingsFromIssues } from "./validateEval.js";
 import { readYamlObject } from "./readYamlObject.js";
+import { stageFilenameStem } from "./stageFilenameStem.js";
 import { resolveCatalogContext } from "./resolveCatalogContext.js";
 import { getCatalogScanPaths } from "./browseCatalog.js";
 import { manifestPathForProject } from "./loadStageflowManifest.js";
@@ -502,7 +503,7 @@ async function checkStageIdFilename(
   cwd: string,
   stagePath: string,
 ): Promise<ValidationFinding | null> {
-  const fileStem = path.basename(stagePath, ".yaml");
+  const fileStem = stageFilenameStem(stagePath);
   try {
     const raw = await readYamlObject(stagePath);
     if (typeof raw?.id === "string" && raw.id !== fileStem) {
@@ -528,14 +529,10 @@ async function validateStageFile(
     return findings;
   }
 
-  if (!mismatch && path.basename(stagePath, ".yaml") !== outcome.value.id) {
+  const fileStem = stageFilenameStem(stagePath);
+  if (!mismatch && fileStem !== outcome.value.id) {
     findings.push(
-      findingStageIdFilenameMismatch(
-        cwd,
-        stagePath,
-        path.basename(stagePath, ".yaml"),
-        outcome.value.id,
-      ),
+      findingStageIdFilenameMismatch(cwd, stagePath, fileStem, outcome.value.id),
     );
   }
 

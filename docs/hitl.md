@@ -9,6 +9,8 @@ Stages can pause for **operator input** via the `ask_operator` Pi tool. The oper
 
 HITL is optional — pipelines with no `ask_operator` calls run fully headless.
 
+A stage does not receive the control token. Its cache, temporary and working directories are inside the data directory (`~/.stageflow` by default, `/data` in Docker), and an unsandboxed stage runs as your user, so it can find and read the token file. Use the stage container sandbox (`STAGEFLOW_STAGE_CONTAINER_IMAGE`) when a stage runs untrusted code.
+
 Agents (not pipeline stages) have their own approval gate: a call to an `ask_first` tool, and every `bash` call, pauses the agent until someone decides. Those approvals appear in the Inbox next to pipeline gates and can be decided from the console, CLI, MCP or an allowed channel. See [Agents](agents.md#runtime).
 
 ## Gate kinds

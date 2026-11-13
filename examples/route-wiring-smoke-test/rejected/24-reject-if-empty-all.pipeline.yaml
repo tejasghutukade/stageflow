@@ -7,7 +7,7 @@ stages:
         if:
           all: []
     system_prompt: Triage.
-    model: cursor/auto
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -21,7 +21,7 @@ stages:
               type: string
   - id: page
     system_prompt: Page.
-    model: cursor/auto
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:

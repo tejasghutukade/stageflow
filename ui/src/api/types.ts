@@ -538,12 +538,15 @@ export type CreateStageResult =
 
 export type SkillInstallInput = {
   command: string;
+  runDoctor?: boolean;
 };
 
 export type SkillInstallOk = {
   skillName: string;
   destPath: string;
   message: string;
+  doctorAvailable?: boolean;
+  doctorScript?: string;
 };
 
 export type SkillInstallResult =
@@ -589,6 +592,8 @@ export type CatalogRootsResult = {
 export type CatalogFileResult = {
   path: string;
   content: string;
+  /** Hash of the file as read; send it back as base_hash so a save refuses a file changed on disk. */
+  hash?: string;
 };
 
 export type DraftPackagePayload = {
@@ -604,6 +609,11 @@ export type DraftPackagePayload = {
   };
   stages?: Array<{ path: string; body: Record<string, unknown> }>;
   task?: { filename: string; body: Record<string, unknown> };
+};
+
+/** Content hashes of package files, keyed by project-relative path. */
+export type DraftFileHashes = {
+  files: Record<string, string>;
 };
 
 export type CreateDraftPackageInput = {
@@ -625,15 +635,21 @@ export type CreateDraftPackageResult =
       root_kind?: CatalogRootKind;
       read_only?: boolean;
       taskPath?: string;
+      fileHashes?: DraftFileHashes;
     }
   | {
       ok: false;
       status: number;
       error: string;
+      code?: string;
+      fileHashes?: DraftFileHashes;
       findings?: ValidationFinding[];
     };
 
-export type OverwriteDraftPackageInput = CreateDraftPackageInput;
+export type OverwriteDraftPackageInput = CreateDraftPackageInput & {
+  /** Hashes from the last open or save. A mismatch refuses the overwrite. */
+  baseHashes?: DraftFileHashes;
+};
 export type OverwriteDraftPackageResult = CreateDraftPackageResult;
 
 export type PlanDraftPackageInput = {
@@ -679,6 +695,8 @@ export type OpenDraftPackageResult =
       root_kind?: CatalogRootKind;
       read_only?: boolean;
       taskPath?: string;
+      fileHashes?: DraftFileHashes;
+      hasInclude?: boolean;
     }
   | {
       ok: false;
@@ -952,6 +970,11 @@ export type CapacityHealth = {
   activeCount: number;
   maxConcurrent: number;
   slotsAvailable: number;
+  queuedCount: number;
+  /** Host config echo from `/api/health`, when the server includes it. */
+  config?: {
+    maxQueued?: number;
+  };
   activeStageProcesses?: number;
   maxActiveStageProcesses?: number | null;
   disk?: {

@@ -11,21 +11,29 @@ See also [Data directory](data-directory.md), [CLI reference](cli-reference.md),
 
 ## Stage sandbox in Compose
 
-The shipped [`docker-compose.yml`](../docker-compose.yml) sets `STAGEFLOW_STAGE_CONTAINER_IMAGE=stageflow-bash:local` and mounts `/var/run/docker.sock`. `read`, `write`, `edit`, and `bash` then run in a sibling container built from [`docker/Dockerfile.bash-sandbox`](../docker/Dockerfile.bash-sandbox). The Stageflow process still runs as the `stageflow` user. Compose starts that service as root only so [`docker/stageflow-entry.sh`](../docker/stageflow-entry.sh) can join the socket's group, then drops to `stageflow`. There is no `privileged` and no extra capabilities.
+The shipped [`docker-compose.yml`](../docker-compose.yml) does **not** mount `/var/run/docker.sock` or set `STAGEFLOW_STAGE_CONTAINER_IMAGE`. Stage file tools then run in the Host container.
 
-That mount lets this container create and remove those sandbox containers on the host daemon. A plain `docker run` of the published image does not set the variable and does not mount the socket, so sandboxing stays off. To run Compose the same way, delete `STAGEFLOW_STAGE_CONTAINER_IMAGE` and the socket mount.
+Optional [`docker-compose.sandbox.yml`](../docker-compose.sandbox.yml) adds the socket mount and `STAGEFLOW_STAGE_CONTAINER_IMAGE=stageflow-bash:local`. Mounting `/var/run/docker.sock` is root on the host: anyone who can use that socket can start containers as root on the machine. `read`, `write`, `edit`, and `bash` then run in a sibling container built from [`docker/Dockerfile.bash-sandbox`](../docker/Dockerfile.bash-sandbox). The Stageflow process still runs as the `stageflow` user. Compose starts that service as root only so [`docker/stageflow-entry.sh`](../docker/stageflow-entry.sh) can join the socket's group, then drops to `stageflow`. There is no `privileged` and no extra capabilities.
+
+Use both files when you want the sandbox:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up --build -d
+```
+
+A plain `docker run` of the published image does not set the variable and does not mount the socket, so sandboxing stays off.
 
 The [hardened egress reference](#hardened-egress-reference-compose) below is documentation only. It does not mount the socket.
 
 ## Local try (Compose)
 
-First-run checklist for the shipped [`docker-compose.yml`](../docker-compose.yml). The compose file builds the local `Dockerfile`, mounts a named volume at `/data`, publishes port **3847**, and sets `STAGEFLOW_HOME=/data`, `STAGEFLOW_CREDENTIAL_HOME=/data`, and `TMPDIR=/data/tmp` (`STAGEFLOW_BIND=0.0.0.0` is already in the image). The image, Compose, and `scripts/docker-smoke.sh` set `STAGEFLOW_CREDENTIAL_HOME` to that data directory, so the volume is the container's operator store. A data directory is its own operator only when that override is set. This is a **local try** surface — not the hardened egress sandbox.
+First-run checklist for the shipped [`docker-compose.yml`](../docker-compose.yml). The compose file builds the local `Dockerfile`, mounts a named volume at `/data`, publishes port **3847**, and sets `STAGEFLOW_HOME=/data`, `STAGEFLOW_CREDENTIAL_HOME=/data`, `TMPDIR=/tmp/stageflow` and `SQLITE_TMPDIR=/data/tmp` (`STAGEFLOW_BIND=0.0.0.0` is already in the image). The image, Compose, and `scripts/docker-smoke.sh` set `STAGEFLOW_CREDENTIAL_HOME` to that data directory, so the volume is the container's operator store. A data directory is its own operator only when that override is set. This is a **local try** surface — not the hardened egress sandbox.
 
 The compose service runs `command: ["sf", "ui"]` on purpose: operator console **and** MCP on the same Host. The image `CMD` is still `sf mcp` (headless); override to `sf mcp` only when you want a UI-less Host. Do not run both `sf ui` and `sf mcp` at once — they share port **3847**.
 
 ### Checklist
 
-1. **No control token for this compose file.** It publishes `127.0.0.1:3847:3847` and sets `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`. The process inside the container still binds `0.0.0.0`, which is what Docker port publish needs, and with the opt-in it starts without a bearer. Keep the publish address on `127.0.0.1`. To require a token again, remove the opt-in and set `STAGEFLOW_CONTROL_TOKEN` (≥32 characters, no whitespace).
+1. **Control token in the container logs.** The compose file publishes `127.0.0.1:3847:3847`. The process inside the container still binds `0.0.0.0`, which is what Docker port publish needs. Keep the publish address on `127.0.0.1`. The container logs print `Control token: <token>` only on first start (`docker compose logs`). Later starts reuse it and print the file path. Copy that line into the console when it asks. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`. The token is not in the page or the URL. To choose the secret yourself, set `STAGEFLOW_CONTROL_TOKEN` (≥32 characters, no whitespace) or `STAGEFLOW_CONTROL_TOKEN_FILE`; the Host then uses that value and does not print it.
 
 2. **Create `.env` from [`.env.example`](../.env.example)** at the repo root. Fill provider and GitHub vars as needed (see below). Compose loads `.env` automatically; do not commit `.env`.
 
@@ -43,16 +51,15 @@ The compose service runs `command: ["sf", "ui"]` on purpose: operator console **
    # → {"ok":true,"status":"live",…}
    ```
 
-5. **Open the console** at [http://127.0.0.1:3847](http://127.0.0.1:3847). With the shipped compose file, API calls do not need a bearer.
+5. **Open the console** at [http://127.0.0.1:3847](http://127.0.0.1:3847). The container logs print `Control token: <token>` on first start. Copy it into the console prompt. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`. API calls need that bearer. `/livez` and `/readyz` stay open.
 
-Prefer a file secret when the token must not appear in the process environment on the host:
+The generated token is already a mode `0600` file at `/data/control-token` inside the container. It is printed on first start; later starts reuse it and print the file path. To choose the secret yourself and keep it out of the process environment, bind-mount a file:
 
 ```bash
 openssl rand -hex 32 > .stageflow-control-token
 chmod 600 .stageflow-control-token
-# Point STAGEFLOW_CONTROL_TOKEN_FILE at that path inside the container
-# (e.g. bind-mount the file and set STAGEFLOW_CONTROL_TOKEN_FILE=/run/secrets/…),
-# or pass STAGEFLOW_CONTROL_TOKEN from `.env` as above.
+# Bind-mount that file and set STAGEFLOW_CONTROL_TOKEN_FILE to its path
+# inside the container. The Host does not print a token you set yourself.
 ```
 
 ### Provider boot (Compose)
@@ -119,20 +126,19 @@ Mandatory bar: `GET /livez` → 200. Optional stretch flags: `--readyz`, `--chec
 
 ## Pull and run (GHCR) {#pull-and-run-ghcr}
 
-Published image: **`ghcr.io/tejasghutukade/stageflow`**. This is the recommended way to run Stageflow. Tags per release: semver `x.y.z` and major.minor `x.y` (same digest). The current minor tag is `0.39`.
+Published image: **`ghcr.io/tejasghutukade/stageflow`**. This is the recommended way to run Stageflow. Tags per release: semver `x.y.z` and major.minor `x.y` (same digest). The current minor tag is `0.57` (`0.57.0` is that exact release).
 
 This starts the console on this machine. The `stageflow-data` volume keeps providers and pipelines you save in the console. Pass `sf ui` because the image command is `sf mcp`. This command does not mount the Docker socket, so stage file tools run in the Stageflow container. [Compose from a checkout](#local-try-compose) is what turns the stage sandbox on.
 
 ```bash
 docker run --rm --name stageflow \
-  -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.39 \
+  ghcr.io/tejasghutukade/stageflow:0.57 \
   sf ui
 ```
 
-Open [http://127.0.0.1:3847](http://127.0.0.1:3847). Keep the published port on `127.0.0.1`. The allow flag is only for that localhost publish: the process inside the container binds `0.0.0.0`.
+Open [http://127.0.0.1:3847](http://127.0.0.1:3847). The published port stays on `127.0.0.1`. The process inside the container still binds `0.0.0.0`. The container logs print `Control token: <token>` on first start. Later starts reuse it and print the file path. Copy that into the console prompt. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`.
 
 Prefer a digest pin and a control token when the port is not limited to this machine:
 
@@ -146,7 +152,8 @@ DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/tejasghutuk
 docker run --rm \
   -e STAGEFLOW_HOME=/data \
   -e STAGEFLOW_CREDENTIAL_HOME=/data \
-  -e TMPDIR=/data/tmp \
+  -e TMPDIR=/tmp/stageflow \
+  -e SQLITE_TMPDIR=/data/tmp \
   -e STAGEFLOW_CONTROL_TOKEN \
   -v stageflow-data:/data \
   -p 3847:3847 \
@@ -335,7 +342,7 @@ Rich health reports `store_filesystem`.
 
 ## Writable paths and `read_only: true`
 
-Supported writable set: `$STAGEFLOW_HOME` and a writable `TMPDIR` (also used as `SQLITE_TMPDIR` when unset). When `TMPDIR` / `TMP` / `TEMP` are unset or whitespace-empty, Host boot soft-defaults to `$STAGEFLOW_HOME/tmp` (creates it) then asserts writability. Boot still fails with `tmpdir_unusable` if that path (or an explicit `TMPDIR`) is not writable. Compose/images often set `TMPDIR=/data/tmp` explicitly — that remains valid.
+Supported writable set: `$STAGEFLOW_HOME` and a writable `TMPDIR` (also used as `SQLITE_TMPDIR` when unset). When `TMPDIR` / `TMP` / `TEMP` are unset or whitespace-empty, Host boot soft-defaults to `$STAGEFLOW_HOME/tmp` (creates it) then asserts writability. Boot still fails with `tmpdir_unusable` if that path (or an explicit `TMPDIR`) is not writable. The shipped image and Compose set `TMPDIR=/tmp/stageflow`, outside the data directory, and keep `SQLITE_TMPDIR=/data/tmp` on the volume. An explicit `TMPDIR=/data/tmp` still works.
 
 ## Logging budget
 
@@ -398,7 +405,8 @@ services:
       STAGEFLOW_BIND: 0.0.0.0
       STAGEFLOW_CONTROL_TOKEN_FILE: /run/secrets/control_token
       STAGEFLOW_BUILD_SHA: "<git sha>"
-      TMPDIR: /data/tmp
+      TMPDIR: /tmp/stageflow
+      SQLITE_TMPDIR: /data/tmp
       HTTPS_PROXY: http://egress-proxy:3128
       HTTP_PROXY: http://egress-proxy:3128
       NO_PROXY: 127.0.0.1,localhost,egress-proxy
@@ -423,7 +431,13 @@ volumes:
   stageflow-data:
 ```
 
+## Reverse proxy and public hostname {#reverse-proxy}
+
+To reach the console through a reverse proxy, the proxy must pass the `Host` header through unchanged (nginx: `proxy_set_header Host $host;`). Put the public hostname in `STAGEFLOW_ALLOWED_HOSTS`. The Host checks both `Host` and `Origin` against that list, so a rewritten `Host` or an unlisted name is refused. Keep the control token required, and see [MCP — access control](mcp.md#access-control).
+
 ## CLI via `docker exec` {#cli-via-docker-exec}
+
+A CLI on the host machine that talks to a Docker Host on `127.0.0.1:3847` uses a different data directory. `sf run` and `sf runs` from the host report "Another Stageflow Host with a different data directory is on port 3847". Run CLI commands inside the container (`docker exec <container> sf …`), or use the HTTP API or MCP with the container's token (`docker exec <container> cat /data/control-token`).
 
 A remote harness drives the Host over MCP/REST with a control token. Some CLI commands stay **exec-only** on purpose — see the decision table in [MCP — CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table). Below are literal commands assuming the container is named `stageflow` (replace with your compose service / container id). Prefer catalog-relative paths the Host already knows; mount or bake catalog into the image as your deployment does.
 

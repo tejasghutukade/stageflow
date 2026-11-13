@@ -31,7 +31,7 @@ system_prompt: |
   payload or artifact — if something is genuinely unknown, say what you'd
   need to find out and why you couldn't, and still record what you did
   verify.
-model: openrouter/minimax/minimax-m3:free
+model: anthropic/claude-sonnet-5-5
 timeout_ms: 7200000
 io:
   input:

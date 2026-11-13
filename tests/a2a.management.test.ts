@@ -173,7 +173,36 @@ describe("A2A management API", () => {
     expect(created.body.token_source).toBe("store");
     expect(await agentCardStatus(url, created.body.token)).toBe(200);
     expect(await agentCardStatus(url, "x".repeat(48))).toBe(401);
-    expect((await api("GET", "/api/a2a/callers")).body).toEqual({ callers: [{ id: "acme", token_source: "store" }] });
+    expect((await api("GET", "/api/a2a/callers")).body).toEqual({ callers: [{ id: "acme", token_source: "store", allow_run_stage: false }] });
+    expect(created.body.allow_run_stage).toBe(false);
+  });
+
+  it("keeps allow_run_stage off by default, lets management set it, and enforces it for run_stage", async () => {
+    const { api, host, configFile } = await setup();
+    await api("POST", "/api/a2a/enable", {});
+    const created = await api("POST", "/api/a2a/callers", { id: "acme" });
+    expect(created.body.allow_run_stage).toBe(false);
+    expect(host.registry()?.allowsRunStage("acme")).toBe(false);
+
+    const optedIn = await api("POST", "/api/a2a/callers", { id: "beta", allow_run_stage: true });
+    expect(optedIn.body.allow_run_stage).toBe(true);
+    expect((await api("GET", "/api/a2a/callers")).body.callers).toEqual([
+      { id: "acme", token_source: "store", allow_run_stage: false },
+      { id: "beta", token_source: "store", allow_run_stage: true },
+    ]);
+
+    const updated = await api("PATCH", "/api/a2a/callers/acme", { allow_run_stage: true });
+    expect(updated.status).toBe(200);
+    expect(updated.body).toEqual({ id: "acme", token_source: "store", allow_run_stage: true });
+    expect(host.registry()?.allowsRunStage("acme")).toBe(true);
+
+    const off = await api("PATCH", "/api/a2a/callers/acme", { allow_run_stage: false });
+    expect(off.body.allow_run_stage).toBe(false);
+    expect(host.registry()?.allowsRunStage("acme")).toBe(false);
+
+    const config = parse(await readFile(configFile, "utf8")) as { callers: Array<{ id: string; allow_run_stage?: boolean }> };
+    expect(config.callers.find((row) => row.id === "beta")?.allow_run_stage).toBe(true);
+    expect(config.callers.find((row) => row.id === "acme")?.allow_run_stage).toBeUndefined();
   });
 
   it("revokes a caller so its token stops working, removes it from allowed callers, and allows revoking the last one", async () => {
@@ -752,6 +781,16 @@ describe("sf a2a management commands", () => {
     expect(await run(["caller", "list"])).toBe(0);
     expect(out.join("\n")).toContain("acme\tstore");
     expect(out.join("\n")).not.toContain(token);
+    out.length = 0;
+    expect(await run(["caller", "create", "opted", "--allow-run-stage"])).toBe(0);
+    expect(out.join("\n")).toContain("allow_run_stage: true");
+    out.length = 0;
+    expect(await run(["caller", "list"])).toBe(0);
+    expect(out.join("\n")).toMatch(/opted\tstore\tallow_run_stage=true/);
+    expect(out.join("\n")).toMatch(/acme\tstore\tallow_run_stage=false/);
+    out.length = 0;
+    expect(await run(["caller", "update", "acme", "--no-allow-run-stage"])).toBe(0);
+    expect(out.join("\n")).toContain("acme\tallow_run_stage=false");
 
     const file = path.join(base, "publication.yaml");
     await writeFile(file, stringify(publicationBody(project, { allowed_callers: ["acme"] })));

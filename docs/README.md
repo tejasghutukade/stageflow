@@ -45,7 +45,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Evals](evals.md) | Check a stage or an agent against a dataset: eval files, datasets, graders (schema, field, reference, rubric, code, and for agents tool_calls, conversation_check, goal_reached), repeats and honest statistics, compare, sorting failures into buckets, cost limits, the engine, error codes, [Evals for agents](evals.md#evals-for-agents) (scenarios, tool and approval policy, eval sessions), privacy, what is not built |
 | [Browser sessions](browser.md) | Stage `browser` field, saved logins (profiles), login check and human login pattern, queueing, teardown, headed vs headless, live view and watch-the-agent for Hosts with no screen, container browser host (development), attach host and login handoff (log in with your own Chrome, run headless, blocked-site fallback), seeing and managing saved logins, Host config keys, what is not built |
 | [Browser sessions internals](browser-internals.md) | For contributors: module map, lifecycle, file layout, env contract, invariants, seams, extension recipes, test and debug guide for browser sessions |
-| [Providers](providers.md) | Pi model auth — `pi_home` vs `sf_owned` |
+| [Providers](providers.md) | Pi model auth — `sf_owned` credential storage |
 | [Email accounts](email-accounts.md) | IMAP accounts for email triggers |
 | [Communication channels](channels.md) | connecting AgentMail, Slack, Telegram, iMessage and WhatsApp, linking a connection to a stage, `connections.yaml` and secret handling, run-start checks, the Connections page API, and troubleshooting |
 
@@ -70,7 +70,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Migrating stage environments](migration-stage-environment.md) | Move stages to declared secrets and the curated stage environment |
 | [Triggers readiness](triggers-readiness.md) | Checklist: which trigger kinds and console options the Host runs today vs manual-only |
 | [MCP](mcp.md) | Streamable HTTP tools when `sf ui` or `sf mcp` is running, including standalone `run_stage` and the eval tools |
-| [A2A](a2a.md) | Publish pipelines for other agents to invoke over JSON-RPC, plus the wildcard-access `run_stage` operation |
+| [A2A](a2a.md) | Publish pipelines for other agents to invoke over JSON-RPC, plus `run_stage` when that caller has `allow_run_stage` (off by default) |
 | [CI / headless](ci.md) | `--json`, exit codes, `sf eval run` in CI, GitHub Actions, PR diagram dogfood |
 
 ## Featured example

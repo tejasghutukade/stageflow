@@ -27,7 +27,7 @@ instructions: |
   Ask a question only when the text can be read two ways and the verdict depends on it.
 model:
   backend: pi
-  id: openrouter/nvidia/nemotron-3.5-lightning:free
+  id: openrouter/anthropic/claude-haiku-4.5
   thinking: medium
 tools:
   builtin:

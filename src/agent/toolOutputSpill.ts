@@ -5,6 +5,7 @@
  */
 import { resolveArtifactTarget } from "../runstore/workspaceLayout.js";
 import { writeContainedArtifact } from "../runstore/writeContainedArtifact.js";
+import { redactSecrets } from "./streamLogRedact.js";
 import { tryParseJson, utf8ByteLength } from "./toolOutputBudget.js";
 
 export const TOOL_OUTPUT_ARTIFACT_DIR = "tool-output";
@@ -103,6 +104,7 @@ export async function spillToolOutput(
   options: SpillToolOutputOptions,
 ): Promise<SpilledToolOutput> {
   const normalized = normalizeSpillBody(options.text);
+  const body = redactSecrets(normalized.body);
   const fileName = `${sanitizeNamePart(options.toolCallId)}-${sanitizeNamePart(options.toolName)}.${normalized.format === "json" ? "json" : "txt"}`;
   const { absolutePath, runRelativePath, artifactsDir } = resolveArtifactTarget(
     options.runWorkspaceDir,
@@ -114,17 +116,20 @@ export async function spillToolOutput(
     options.runWorkspaceDir,
     artifactsDir,
     absolutePath,
-    normalized.body,
+    body,
   );
+  const parsed = normalized.format === "json" ? tryParseJson(body) : undefined;
   return {
     runRelativePath,
     absolutePath,
-    body: normalized.body,
-    bytes: utf8ByteLength(normalized.body),
-    lines: normalized.body.split("\n").length,
+    body,
+    bytes: utf8ByteLength(body),
+    lines: body.split("\n").length,
     format: normalized.format,
     wrapped: normalized.wrapped,
-    hasLongLines: normalized.hasLongLines,
-    ...(normalized.json !== undefined ? { json: normalized.json } : {}),
+    hasLongLines:
+      normalized.format === "json" &&
+      body.split("\n").some((line) => utf8ByteLength(line) > SPILL_WRAP_LINE_BYTES),
+    ...(parsed?.ok ? { json: parsed.value } : {}),
   };
 }

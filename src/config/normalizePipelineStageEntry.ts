@@ -5,6 +5,7 @@
  * Legacy YAML keys are dual-read via legacyYaml.ts.
  */
 import path from "node:path";
+import { stageFilenameStem } from "./stageFilenameStem.js";
 import type { CompletionContract, RecoveryPolicy } from "../types/completion.js";
 import type {
   CloneMode,
@@ -37,15 +38,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 export function inferIdFromUsesPath(usesPath: string): string | null {
   const base = path.basename(usesPath);
   if (!base) return null;
-  if (base.endsWith(".stage.yaml")) {
-    const id = base.slice(0, -".stage.yaml".length);
-    return id || null;
-  }
-  if (base.endsWith(".yaml")) {
-    const id = base.slice(0, -".yaml".length);
-    return id || null;
-  }
-  return base;
+  return stageFilenameStem(base) || null;
 }
 
 function extractBodyRaw(raw: Record<string, unknown>): Record<string, unknown> {

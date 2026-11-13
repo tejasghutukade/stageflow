@@ -1,5 +1,5 @@
 id: mcp-hitl-tour
-model: cursor/auto
+model: anthropic/claude-sonnet-5-5
 schemas:
   Angle:
     type: object

@@ -1,6 +1,8 @@
+import { stageflowHomeId } from "../diagnostics/checks.js";
 import {
   createServer,
   type IncomingMessage,
+  type RequestListener,
   type ServerResponse,
   type Server,
 } from "node:http";
@@ -12,13 +14,19 @@ import type { StageflowHostBootstrap } from "./bootstrap.js";
 import {
   allowListenAddress,
   assertAllowedHttpAccess,
+  isLoopbackRemoteAddress,
   resolveAllowedHosts,
   type AllowedHosts,
 } from "./allowedHosts.js";
+import { handleConsoleLogin, handleConsoleLoginMint } from "./consoleLogin.js";
 import {
+  authHintBody,
+  DEFAULT_CALLER_ID,
   enforceBearerAuth,
+  hasAnyToken,
   loadControlTokens,
   requiredScopeFor,
+  resolveClientBearerToken,
   type ControlTokens,
 } from "./controlToken.js";
 import {
@@ -58,6 +66,11 @@ export type HttpHostRouteContext = {
   boot: StageflowHostBootstrap;
 };
 
+export type BoundHostPort = {
+  server: Server;
+  setRequestHandler: (handler: RequestListener) => void;
+};
+
 export type CreateHttpHostOptions = {
   boot: StageflowHostBootstrap;
   host: string;
@@ -67,7 +80,75 @@ export type CreateHttpHostOptions = {
   controlTokens?: ControlTokens;
   requestTimeoutMs?: number;
   maxConnections?: number;
+  /** Already listening. createHttpHost installs the request handler and does not bind again. */
+  bound?: BoundHostPort;
 };
+
+function listenServer(server: Server, host: string, port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onError = (err: Error) => {
+      server.off("error", onError);
+      reject(err);
+    };
+    server.once("error", onError);
+    server.listen(port, host, () => {
+      server.off("error", onError);
+      resolve();
+    });
+  });
+}
+
+/**
+ * Bind the host port before startup mutates run data. Connections are dropped
+ * until {@link createHttpHost} installs the real handler. A failure is the
+ * Node listen error (EADDRINUSE when another host already owns the port).
+ */
+/** The data directory's id, so a probe can tell this booting Host from one using another directory. */
+function startingHomeId(): string | undefined {
+  try {
+    return stageflowHomeId();
+  } catch {
+    return undefined;
+  }
+}
+
+function startingResponse(req: IncomingMessage, res: ServerResponse): void {
+  const url = new URL(req.url ?? "/", "http://127.0.0.1");
+  const method = req.method ?? "GET";
+  const live = url.pathname === "/livez" && (method === "GET" || method === "HEAD");
+  const body = live
+    ? { ok: true, status: "starting", service: "stageflow", home_id: startingHomeId() }
+    : { status: "starting" };
+  const payload = JSON.stringify(body);
+  res.writeHead(live ? 200 : 503, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Content-Length": Buffer.byteLength(payload),
+    ...(live ? {} : { "Retry-After": "1" }),
+  });
+  res.end(payload);
+}
+
+export async function bindHostPort(host: string, port: number): Promise<BoundHostPort> {
+  let requestHandler: RequestListener = (req, res) => {
+    req.socket?.on("error", () => undefined);
+    startingResponse(req, res);
+  };
+  const server = createServer((req, res) => {
+    requestHandler(req, res);
+  });
+  try {
+    await listenServer(server, host, port);
+  } catch (err) {
+    server.close(() => undefined);
+    throw err;
+  }
+  return {
+    server,
+    setRequestHandler(next) {
+      requestHandler = next;
+    },
+  };
+}
 
 export type HttpHostEnvelope = {
   server: Server;
@@ -107,16 +188,20 @@ export async function createHttpHost(
     options.requestTimeoutMs ?? resolveRequestTimeoutMs();
   const maxConnections = options.maxConnections ?? resolveMaxConnections();
 
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const method = req.method ?? "GET";
     const url = new URL(req.url ?? "/", `http://${advertisedHost(host)}:${port}`);
     const pathname = url.pathname;
 
     if (
-      (pathname === "/livez" || pathname === "/readyz") &&
+      (pathname === "/livez" || pathname === "/readyz" || pathname === "/api/auth-hint") &&
       (method === "GET" || method === "HEAD")
     ) {
       if (!assertAllowedHttpAccess(allowedHosts, req, res)) return;
+      if (pathname === "/api/auth-hint") {
+        json(res, 200, authHintBody(req.socket?.remoteAddress));
+        return;
+      }
       if (pathname === "/livez") {
         handleLivez(req, res);
         return;
@@ -184,6 +269,32 @@ export async function createHttpHost(
       return;
     }
 
+    if (pathname === "/api/console-login" && method === "POST") {
+      if (!assertAllowedHttpAccess(allowedHosts, req, res)) return;
+      await handleConsoleLogin(req, res, () => resolveClientBearerToken("POST"));
+      return;
+    }
+    if (pathname === "/api/console-login/mint" && method === "POST") {
+      if (!assertAllowedHttpAccess(allowedHosts, req, res)) return;
+      if (!isLoopbackRemoteAddress(req.socket?.remoteAddress)) {
+        json(res, 403, { error: "loopback only" });
+        return;
+      }
+      // Only the main drive token may mint: a named token must not trade up to it, and with no token there is nothing to protect.
+      if (!hasAnyToken(controlTokens)) {
+        json(res, 403, { error: "no control token configured" });
+        return;
+      }
+      const mintAuth = enforceBearerAuth(controlTokens, req, res, "drive");
+      if (!mintAuth.ok) return;
+      if (mintAuth.auth?.caller_id !== DEFAULT_CALLER_ID) {
+        json(res, 403, { error: "main control token required" });
+        return;
+      }
+      handleConsoleLoginMint(req, res);
+      return;
+    }
+
     const handled = await routes({
       req,
       res,
@@ -195,7 +306,12 @@ export async function createHttpHost(
     });
     if (handled) return;
     json(res, 404, { error: "Not found" });
-  });
+  };
+
+  const server = options.bound?.server ?? createServer(handleRequest);
+  if (options.bound) {
+    options.bound.setRequestHandler(handleRequest);
+  }
 
   // requestTimeout bounds receiving the request body (408); idle socket timeout
   // stays 0 so MCP SSE can outlive requestTimeout.
@@ -210,10 +326,9 @@ export async function createHttpHost(
     void boot.mcpHandler.close();
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.listen(port, host, () => resolve());
-    server.on("error", reject);
-  });
+  if (options.bound === undefined) {
+    await listenServer(server, host, port);
+  }
 
   server.on("error", (err) => {
     log.error("host.server_error", err instanceof Error ? err.message : String(err));

@@ -62,6 +62,7 @@ import type {
   CreateDraftPackageInput,
   CreateDraftPackageResult,
   CreateWorkshopSessionResult,
+  DraftFileHashes,
   DraftPackagePayload,
   DraftValidationResult,
   GetWorkshopAutosaveResult,
@@ -500,6 +501,24 @@ export function fetchSkillUsage(project_root?: string): Promise<SkillUsageIndex>
   return api(`/api/skills/usage${skillsQuery(project_root)}`);
 }
 
+/** Run the doctor script of an installed skill. Never reinstalls. */
+export async function runSkillDoctor(
+  skillName: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const res = await fetch(`/api/skills/${encodeURIComponent(skillName)}/doctor`, {
+      method: "POST",
+      headers: { ...authorizationHeaders() },
+    });
+    if (res.status === 401) notifyControlTokenRequired();
+    if (res.ok) return { ok: true };
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    return { ok: false, error: body.error ?? `Request failed (${res.status})` };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function installSkill(
   input: SkillInstallInput,
 ): Promise<SkillInstallResult> {
@@ -507,7 +526,10 @@ export async function installSkill(
     const res = await fetch("/api/skills/install", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authorizationHeaders() },
-      body: JSON.stringify({ command: input.command }),
+      body: JSON.stringify({
+        command: input.command,
+        ...(input.runDoctor ? { run_doctor: true } : {}),
+      }),
     });
     const body = (await res.json().catch(() => ({}))) as {
       skill_name?: string;
@@ -516,6 +538,8 @@ export async function installSkill(
       destPath?: string;
       message?: string;
       error?: string;
+      doctor_available?: boolean;
+      doctor_script?: string;
     };
     const skillName =
       typeof body.skill_name === "string"
@@ -530,6 +554,9 @@ export async function installSkill(
           ? body.destPath
           : undefined;
     if (res.ok && skillName !== undefined && destPath !== undefined) {
+      const doctorAvailable = body.doctor_available === true;
+      const doctorScript =
+        typeof body.doctor_script === "string" ? body.doctor_script : undefined;
       return {
         ok: true,
         skillName,
@@ -538,6 +565,9 @@ export async function installSkill(
           typeof body.message === "string"
             ? body.message
             : `Installed ${skillName}`,
+        ...(doctorAvailable && doctorScript !== undefined
+          ? { doctorAvailable: true, doctorScript }
+          : {}),
       };
     }
     return {
@@ -1185,6 +1215,18 @@ export async function validateDraftPackage(
   });
 }
 
+function readDraftFileHashes(value: unknown): DraftFileHashes | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const files = (value as { files?: unknown }).files;
+  if (!files || typeof files !== "object" || Array.isArray(files)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, hash] of Object.entries(files)) {
+    if (typeof hash !== "string" || hash.length === 0) return undefined;
+    out[key] = hash;
+  }
+  return { files: out };
+}
+
 export async function createDraftPackageWithDetails(
   input: CreateDraftPackageInput,
 ): Promise<CreateDraftPackageResult> {
@@ -1201,7 +1243,9 @@ export async function createDraftPackageWithDetails(
       project_root?: string;
       catalog_root_path?: string;
       taskPath?: string;
+      fileHashes?: unknown;
       error?: string;
+      code?: string;
       findings?: ValidationFinding[];
     };
     if (
@@ -1210,6 +1254,7 @@ export async function createDraftPackageWithDetails(
       typeof body.pipelinePath === "string" &&
       Array.isArray(body.stagePaths)
     ) {
+      const fileHashes = readDraftFileHashes(body.fileHashes);
       return {
         ok: true,
         pipeline: body.pipeline,
@@ -1222,12 +1267,16 @@ export async function createDraftPackageWithDetails(
           ? { catalog_root_path: body.catalog_root_path }
           : {}),
         ...(body.taskPath !== undefined ? { taskPath: body.taskPath } : {}),
+        ...(fileHashes ? { fileHashes } : {}),
       };
     }
+    const conflictHashes = readDraftFileHashes(body.fileHashes);
     return {
       ok: false,
       status: res.status,
       error: body.error ?? `Request failed (${res.status})`,
+      ...(typeof body.code === "string" ? { code: body.code } : {}),
+      ...(conflictHashes ? { fileHashes: conflictHashes } : {}),
       ...(body.findings ? { findings: body.findings } : {}),
     };
   } catch (err) {
@@ -1255,7 +1304,9 @@ export async function overwriteDraftPackageWithDetails(
       project_root?: string;
       catalog_root_path?: string;
       taskPath?: string;
+      fileHashes?: unknown;
       error?: string;
+      code?: string;
       findings?: ValidationFinding[];
     };
     if (
@@ -1264,6 +1315,7 @@ export async function overwriteDraftPackageWithDetails(
       typeof body.pipelinePath === "string" &&
       Array.isArray(body.stagePaths)
     ) {
+      const fileHashes = readDraftFileHashes(body.fileHashes);
       return {
         ok: true,
         pipeline: body.pipeline,
@@ -1276,12 +1328,16 @@ export async function overwriteDraftPackageWithDetails(
           ? { catalog_root_path: body.catalog_root_path }
           : {}),
         ...(body.taskPath !== undefined ? { taskPath: body.taskPath } : {}),
+        ...(fileHashes ? { fileHashes } : {}),
       };
     }
-  return {
+    const fileHashes = readDraftFileHashes(body.fileHashes);
+    return {
       ok: false,
       status: res.status,
       error: body.error ?? `Request failed (${res.status})`,
+      ...(typeof body.code === "string" ? { code: body.code } : {}),
+      ...(fileHashes ? { fileHashes } : {}),
       ...(body.findings ? { findings: body.findings } : {}),
     };
   } catch (err) {
@@ -1348,6 +1404,8 @@ export async function openDraftPackage(
       pipelinePath?: string;
       project_root?: string;
       taskPath?: string;
+      fileHashes?: unknown;
+      hasInclude?: boolean;
       error?: string;
     };
     if (
@@ -1356,6 +1414,7 @@ export async function openDraftPackage(
       body.destination &&
       typeof body.pipelinePath === "string"
     ) {
+      const fileHashes = readDraftFileHashes(body.fileHashes);
       return {
         ok: true,
         draft: body.draft,
@@ -1365,6 +1424,8 @@ export async function openDraftPackage(
           ? { project_root: body.project_root }
           : {}),
         ...(body.taskPath !== undefined ? { taskPath: body.taskPath } : {}),
+        ...(fileHashes ? { fileHashes } : {}),
+        ...(body.hasInclude === true ? { hasInclude: true } : {}),
       };
     }
     return {
@@ -2231,11 +2292,12 @@ export async function fetchCatalogFile(input: {
 }
 
 export type WriteCatalogFileResult =
-  | { ok: true; path: string; content: string }
+  | { ok: true; path: string; content: string; hash?: string }
   | {
       ok: false;
       status: number;
       error: string;
+      code?: string;
       findings?: ValidationFinding[];
     };
 
@@ -2243,6 +2305,10 @@ export async function writeCatalogFile(input: {
   path: string;
   content: string;
   project_root?: string;
+  /** Refuse when the file on disk is no longer the one that was opened. */
+  base_hash?: string;
+  /** Apply the content onto the existing file, keeping comments and untouched lines. */
+  preserve_formatting?: boolean;
 }): Promise<WriteCatalogFileResult> {
   const res = await fetch("/api/catalog/file", {
     method: "PUT",
@@ -2254,11 +2320,15 @@ export async function writeCatalogFile(input: {
       path: input.path,
       content: input.content,
       ...(input.project_root ? { project_root: input.project_root } : {}),
+      ...(input.base_hash ? { base_hash: input.base_hash } : {}),
+      ...(input.preserve_formatting ? { preserve_formatting: true } : {}),
     }),
   });
   const body = (await res.json().catch(() => ({}))) as {
     path?: string;
     content?: string;
+    hash?: string;
+    code?: string;
     error?: string;
     findings?: ValidationFinding[];
   };
@@ -2270,6 +2340,7 @@ export async function writeCatalogFile(input: {
       ok: false,
       status: res.status,
       error: body.error ?? `Request failed (${res.status})`,
+      ...(body.code ? { code: body.code } : {}),
       ...(body.findings ? { findings: body.findings } : {}),
     };
   }
@@ -2277,6 +2348,7 @@ export async function writeCatalogFile(input: {
     ok: true,
     path: body.path ?? input.path,
     content: body.content ?? input.content,
+    ...(body.hash ? { hash: body.hash } : {}),
   };
 }
 

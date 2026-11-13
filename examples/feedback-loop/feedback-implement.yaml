@@ -4,7 +4,7 @@ system_prompt: |
   Keep the deliverable short (a brief outline or draft).
   Emit a success envelope summarizing what you produced.
   On a feedback replay, read Feedback Loop Context and address the review feedback.
-model: omniroute/auto
+model: anthropic/claude-sonnet-5-5
 io:
   input:
     schema:

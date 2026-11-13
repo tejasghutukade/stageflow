@@ -1,4 +1,5 @@
-import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -105,6 +106,16 @@ describe("locateSkillDirectory", () => {
     });
   });
 
+  it("rejects a frontmatter name that is not a single safe path segment", async () => {
+    const locateRoot = await mkdtemp(path.join(tmpdir(), "sf-skill-bad-name-"));
+    await writeFile(
+      path.join(locateRoot, "SKILL.md"),
+      "---\nname: ../..\ndescription: x\n---\n",
+      "utf8",
+    );
+    await expect(locateSkillDirectory(locateRoot)).rejects.toThrow(/invalid skill name/);
+  });
+
   it("uses the sole root SKILL.md when --skill omitted", async () => {
     const locateRoot = await mkdtemp(path.join(tmpdir(), "sf-skill-locate-one-"));
     await writeFile(
@@ -131,9 +142,38 @@ describe("installSkillFromCommand", () => {
         ok: true,
         skill_name: "test-skill",
         project_root: repo.root,
+        doctor: { available: true, script: "bin/test-skill.mjs" },
       });
       if (!result.ok) throw new Error(result.error);
-      expect(result.dest_path).toBe(path.join(repo.root, ".pi", "skills", "test-skill"));
+      expect(realpathSync(result.dest_path)).toBe(
+        realpathSync(path.join(repo.root, ".pi", "skills", "test-skill")),
+      );
+    } finally {
+      await repo.cleanup();
+    }
+  });
+
+  it("does not install a cloned skill whose frontmatter name escapes the skills folder", async () => {
+    const repo = await initTempGitRepo();
+    const keep = path.join(repo.root, "KEEP");
+    await writeFile(keep, "safe", "utf8");
+    try {
+      const result = await installSkillFromCommand({
+        projectRoot: repo.root,
+        command: "npx skills add owner/escaped",
+        cloneRepo: async (_url, destDir) => {
+          await mkdir(destDir, { recursive: true });
+          await writeFile(
+            path.join(destDir, "SKILL.md"),
+            "---\nname: ../..\ndescription: x\n---\n",
+            "utf8",
+          );
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toMatch(/invalid skill name/);
+      expect(await readFile(keep, "utf8")).toBe("safe");
     } finally {
       await repo.cleanup();
     }
@@ -157,6 +197,71 @@ describe("installSkillFromCommand", () => {
       await access(path.join(repo.root, ".pi", "skills", "md-only-skill", "SKILL.md"));
     } finally {
       await repo.cleanup();
+    }
+  });
+
+  it("does not execute bin doctor and reports it as available", async () => {
+    const repo = await initTempGitRepo();
+    const marker = path.join(repo.root, "doctor-ran.txt");
+    const source = await mkdtemp(path.join(tmpdir(), "sf-skill-api-doctor-"));
+    const script = `#!/usr/bin/env node
+import fs from "node:fs";
+const marker = ${JSON.stringify(marker)};
+if (process.argv[2] === "doctor") {
+  fs.writeFileSync(marker, "ran");
+  process.exit(0);
+}
+process.exit(1);
+`;
+    try {
+      await mkdir(path.join(source, "bin"), { recursive: true });
+      await writeFile(path.join(source, "bin", "api-skill.mjs"), script, "utf8");
+      await writeFile(path.join(source, "SKILL.md"), "---\nname: api-skill\n---\n", "utf8");
+      const result = await installSkillFromCommand({
+        projectRoot: repo.root,
+        command: `npx skills add ${pathToFileURL(source).href} --skill api-skill`,
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.error);
+      expect(result.doctor).toEqual({ available: true, script: "bin/api-skill.mjs" });
+      await expect(access(marker)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await repo.cleanup();
+      await rm(source, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
+
+  it("installs --skill foo when root frontmatter name is invalid", async () => {
+    const repo = await initTempGitRepo();
+    const source = await mkdtemp(path.join(tmpdir(), "sf-skill-bad-root-name-"));
+    try {
+      await writeFile(
+        path.join(source, "SKILL.md"),
+        "---\nname: My Skill\ndescription: root\n---\n",
+        "utf8",
+      );
+      await mkdir(path.join(source, "foo", "bin"), { recursive: true });
+      await writeFile(
+        path.join(source, "foo", "SKILL.md"),
+        "---\nname: foo\ndescription: nested\n---\n",
+        "utf8",
+      );
+      await writeFile(
+        path.join(source, "foo", "bin", "foo.mjs"),
+        `#!/usr/bin/env node\nif (process.argv[2]==='doctor') process.exit(0); process.exit(1);\n`,
+        "utf8",
+      );
+      const result = await installSkillFromCommand({
+        projectRoot: repo.root,
+        command: `npx skills add ${pathToFileURL(source).href} --skill foo`,
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.error);
+      expect(result.skill_name).toBe("foo");
+      await access(path.join(repo.root, ".pi", "skills", "foo", "SKILL.md"));
+    } finally {
+      await repo.cleanup();
+      await rm(source, { recursive: true, force: true }).catch(() => undefined);
     }
   });
 });

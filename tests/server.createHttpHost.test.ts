@@ -4,11 +4,13 @@ import { networkInterfaces, tmpdir } from "node:os";
 import path from "node:path";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { createRunStore } from "../src/runstore/createStore.js";
+import { linearCompatDagSnapshot } from "../src/runstore/pipelineDagSnapshot.js";
 import { startUiServer } from "../src/server/http.js";
 import { startMcpServer } from "../src/server/mcpHost.js";
 import { loadControlTokens } from "../src/server/controlToken.js";
 import { resolveAllowedHosts } from "../src/server/allowedHosts.js";
 import {
+  bindHostPort,
   DEFAULT_MAX_CONNECTIONS,
   DEFAULT_REQUEST_TIMEOUT_MS,
 } from "../src/server/createHttpHost.js";
@@ -43,6 +45,46 @@ describe("createHttpHost shared listen", () => {
       expect(started.mcpStateless).toBe(true);
       expect(started.host).toBe("127.0.0.1");
       expect(started.port).toBeGreaterThan(0);
+    } finally {
+      await closeServer(started.server);
+    }
+  });
+
+  it("a second host on a taken port leaves the live host's running stage unchanged", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-host-busy-"));
+    const store = createRunStore({ rootDir: root });
+    const started = await startMcpServer({
+      agent: scriptedFakeAgent([]),
+      cwd: root,
+      rootDir: root,
+      store,
+      port: 0,
+      mcpStateless: true,
+    });
+    try {
+      const created = await store.createRun({
+        pipelineId: "p",
+        taskYaml: "id: t\ngoal: g\n",
+        status: "running",
+        pipelineDag: linearCompatDagSnapshot(["work"]),
+      });
+      await store.appendStageEvent(created.runId, "work", { event: "started" });
+      const before = await store.readRun(created.runId);
+      expect(before.stages.find((stage) => stage.stage_id === "work")?.status).toBe("running");
+
+      await expect(
+        startMcpServer({
+          agent: scriptedFakeAgent([]),
+          cwd: root,
+          rootDir: root,
+          store,
+          port: started.port,
+          mcpStateless: true,
+        }),
+      ).rejects.toMatchObject({ code: "EADDRINUSE" });
+
+      const after = await store.readRun(created.runId);
+      expect(after.stages.find((stage) => stage.stage_id === "work")?.status).toBe("running");
     } finally {
       await closeServer(started.server);
     }
@@ -396,6 +438,27 @@ describe("createHttpHost shared listen", () => {
       }).not.toThrow();
     } finally {
       await closeServer(started.server);
+    }
+  });
+
+  it("answers starting on /livez and 503 elsewhere before the real handler", async () => {
+    const bound = await bindHostPort("127.0.0.1", 0);
+    const address = bound.server.address();
+    const port = address && typeof address !== "string" ? address.port : 0;
+    try {
+      const live = await fetch(`http://127.0.0.1:${port}/livez`);
+      expect(live.status).toBe(200);
+      expect(await live.json()).toEqual({
+        ok: true,
+        status: "starting",
+        service: "stageflow",
+        home_id: expect.stringMatching(/^[0-9a-f]{16}$/),
+      });
+      const other = await fetch(`http://127.0.0.1:${port}/api/runs`);
+      expect(other.status).toBe(503);
+      expect(other.headers.get("retry-after")).toBe("1");
+    } finally {
+      await closeServer(bound.server);
     }
   });
 });

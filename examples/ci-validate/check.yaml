@@ -3,7 +3,7 @@ system_prompt: |
   Validate-only CI demo stage. In real CI you typically run sf validate
   without invoking agents; this stage exists so the catalog is a valid,
   runnable example if you extend it later.
-model: anthropic/claude-sonnet-4-5
+model: anthropic/claude-haiku-4-5
 io:
   input:
     schema:

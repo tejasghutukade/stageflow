@@ -19,7 +19,7 @@ Open-source runtime for **configurable multi-stage agent workflows** with typed 
   <a href="https://github.com/tejasghutukade/stageflow/releases/download/media/stageflow-demo-long.mp4">Full walkthrough (3 min)</a>
 </p>
 
-Author pipeline-owned YAML in your project. Stageflow schedules each stage in a fresh agent session, moves context through explicit envelopes and artifacts, and persists run state under `.stageflow/`. [Pi](https://github.com/badlogic/pi-mono) is the current agent execution backend. Bins: **`sf`** and **`stageflow`**.
+Author pipeline-owned YAML in your project. Stageflow schedules each stage in a fresh agent session, moves context through explicit envelopes and artifacts, and persists run state under `~/.stageflow/`. [Pi](https://github.com/badlogic/pi-mono) is the current agent execution backend. Bins: **`sf`** and **`stageflow`**.
 
 ## Why Stageflow?
 
@@ -39,21 +39,23 @@ The same pipeline runs three ways without rewriting anything:
 
 - **Pipeline-owned YAML** — `*.pipeline.yaml` with inline stages or `uses:` refs; separate `*.task.yaml` files; optional repo-root `stageflow.yaml` manifest
 - **Path-based CLI** — `--pipeline` and `--task` take filesystem paths (no bare-id lookup)
-- **Pi-native** — runs on `@earendil-works/pi-coding-agent`; reuse an existing Pi login (`pi_home`) or store credentials in `~/.stageflow/agent/auth.json` (`sf_owned`)
+- **Pi-native** — runs on `@earendil-works/pi-coding-agent`; store credentials in `~/.stageflow/agent/auth.json` (`sf_owned`)
 - **Envelope handoffs** — typed stage payloads and artifacts via `write_stage_artifact` / `emit_stage_envelope`
 - **Verified stage execution** — after-phase `verify` checks with durable evidence, plus `on_verify_fail` repair or manual operator recovery ([guide](docs/verified-stage-execution.md))
 - **HITL gates** — operator questions in the console; CI exits `2` when a run is waiting
-- **Agents** — project-owned, revisioned agents (`agents/*.agent.yaml`) with granted tools, ask-first approvals, traces, channels, schedules and a public web chat page ([guide](docs/agents.md))
+- **Agents (experimental)** — project-owned, revisioned agents (`agents/*.agent.yaml`) with granted tools, ask-first approvals, traces, channels, schedules and a public web chat page ([guide](docs/agents.md))
 - **Evals** — check a stage or an agent against a dataset: graders, repeats, honest statistics, compare two runs, and sort failures into what to fix ([guide](docs/evals.md))
 - **Operator console** — an Inbox for gates and agent approvals, pipeline runs, agents and their sessions, connections, MCP servers and settings at `http://127.0.0.1:3847` ([guide](docs/operator-console.md))
-- **MCP endpoint** — Streamable HTTP at `/mcp` when `sf ui` or `sf mcp` is running
+- **MCP endpoint** — Streamable HTTP at `/mcp` when `sf ui` or `sf mcp` is running; clients send `Authorization: Bearer <token>` (token in `~/.stageflow/control-token`, see [MCP access control](docs/mcp.md#access-control))
 - **MCP servers for agents and stages** — add servers, secrets and OAuth sign-in from Settings → Project MCP, or in the project `.mcp.json` ([guide](docs/mcp-servers.md))
-- **Connections** — Slack, Telegram, iMessage, WhatsApp and AgentMail channels, and email accounts, managed from one page ([guide](docs/channels.md))
+- **Connections (experimental)** — Slack, Telegram, iMessage, WhatsApp and AgentMail channels, and email accounts, managed from one page ([guide](docs/channels.md))
 - **Standalone stage execution** — run a single stage directly with `run_stage` (MCP tool, `sf run-stage` CLI, or the A2A `run_stage` operation), no pipeline file required; chain calls with `envelope_ref` (one or many prior results) instead of a pipeline DAG
 - **CI / headless** — `sf validate --strict --json`, `sf run --json` with exit codes `0` / `1` / `2`
 - **Parallel stages** — pipeline DAG with fan-out, join, and Clone Chains (one Clone Instance per Clone Array element; see [YAML catalog](docs/yaml-catalog.md#clone-chain))
 - **Definition-time graph view** — `sf graph --pipeline <path>` prints how a pipeline is wired before any run (terminal diagram or `--json`)
-- **SQLite run store** — global `~/.stageflow/.stageflow/` state plus per-run workspaces, shared across every project since Stageflow became a single auto-starting service
+- **SQLite run store** — global `~/.stageflow/` state (`state.db` plus per-run workspaces), shared across every project since Stageflow became a single auto-starting service
+
+**Experimental.** These work today, but their shape may still change between releases: agents and their public web chat, connections (channels and email accounts, including email rules), A2A, identity, browser attach, container browser hosts and live view, the Claude and Cursor stage backends, and automatic failure sorting in evals (Jev). The console marks Agents, Agent sessions, Connections, Identity and A2A with **Exp**. Pipelines, stages, HITL gates, the CLI, MCP, the run store and evals themselves are the stable core.
 
 ## Architecture at a glance
 
@@ -67,31 +69,29 @@ See [Architecture](docs/architecture.md) for component boundaries, execution flo
 
 ### Docker (recommended)
 
-Run Stageflow from the published image. It is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.42` is the current minor tag (`0.42.0` is that exact release).
+Run Stageflow from the published image. It is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.57` is the current minor tag (`0.57.0` is that exact release).
 
 ```bash
 docker run --rm --name stageflow \
-  -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.42 \
+  ghcr.io/tejasghutukade/stageflow:0.57 \
   sf ui
 ```
 
 Open [http://127.0.0.1:3847](http://127.0.0.1:3847). Connect a provider under **Settings → Providers**, then **New pipeline** on the Pipelines page. The `stageflow-data` volume keeps that state across runs.
 
-The process inside the container binds `0.0.0.0`, which is what Docker port publish needs. The `-p` address keeps the port on this machine, and the allow flag lets it start without a bearer. Do not publish the port on `0.0.0.0` with that flag set. `sf ui` is required because the image command is `sf mcp`.
+The published port stays on `127.0.0.1`. The process inside the container still binds `0.0.0.0`, which is what Docker port publish needs. The container logs print `Control token: <token>` on first start. Later starts reuse it and print the file path. Copy that line into the console when it asks. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`. Do not publish the port on `0.0.0.0`. `sf ui` is required because the image command is `sf mcp`.
 
 To show the console a project directory:
 
 ```bash
 docker run --rm --name stageflow \
-  -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
   -e STAGEFLOW_ENSURE_PROJECT_ROOTS=/project \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
   -v "$PWD":/project \
-  ghcr.io/tejasghutukade/stageflow:0.42 \
+  ghcr.io/tejasghutukade/stageflow:0.57 \
   sf ui
 ```
 
@@ -143,7 +143,7 @@ Expanded walkthrough: [docs/quickstart.md](docs/quickstart.md)
 
 ## Connect a model provider
 
-Each stage sets a **`model`** id in YAML (e.g. `anthropic/claude-sonnet-4-5`). The matching provider must be authenticated before runs succeed — `sf validate` does not check auth.
+Each stage sets a **`model`** id in YAML (e.g. `anthropic/claude-sonnet-5-5`). The matching provider must be authenticated before runs succeed — `sf validate` does not check auth.
 
 **Operator console** (easiest for local setup):
 
@@ -163,11 +163,11 @@ sf providers login anthropic --type api_key --api-key-env ANTHROPIC_API_KEY
 
 Use `sf providers list` to see provider ids and supported auth types (`api_key`, `oauth`).
 
-**Credential storage:** reuse Pi's shared auth file (`pi_home`) or keep credentials in Stageflow's global store (`sf_owned`):
+**Credential storage:** credentials live in Stageflow's global store (`sf_owned`), at `~/.stageflow/agent/auth.json`:
 
 ```bash
 sf providers detect
-sf providers source set pi_home    # or sf_owned
+sf providers source set sf_owned
 ```
 
 Pi is Stageflow's current agent execution backend. Stageflow owns the workflow layer around it, and you do not need Pi CLI `/login` as a prerequisite when providers are configured through the console or `sf providers`.
@@ -182,9 +182,9 @@ Start the console with `sf ui` (default `http://127.0.0.1:3847`).
 - **Pipeline runs** — active and recent runs, capacity, and status at a glance
 - **Run detail** — Timeline, Graph or List of the stages; select a stage for its transcript, events, envelope and artifacts. Created runs show **not started** with a **Start run** action until history exists
 - **Pipelines, Tasks, Catalog, Triggers** — browse and edit the YAML, start runs; **New pipeline** drafts one in the Workshop
-- **Agents** and **Agent sessions** — a directory with each agent's reach (web chat link, channel, schedule), cost and status; create and edit with version history; sessions, approvals and a run inspector
-- **Connections** — channels, email accounts and tool servers
-- **Settings** — Providers (`pi_home` or `sf_owned` credential storage), Concurrency, MCP server, Project MCP (servers, secrets, sign-in) and Notifications
+- **Agents** and **Agent sessions** (experimental) — a directory with each agent's reach (web chat link, channel, schedule), cost and status; create and edit with version history; sessions, approvals and a run inspector
+- **Connections** (experimental) — channels, email accounts and tool servers
+- **Settings** — Providers (`sf_owned` credential storage), Concurrency, MCP server, Project MCP (servers, secrets, sign-in) and Notifications
 - **Command palette** — `⌘K` from any page. Page-by-page guide: [docs/operator-console.md](docs/operator-console.md)
 
 Brand assets live under `docs/img/` (`stageflow-og.svg`, `stageflow-icon.svg`).
@@ -232,7 +232,7 @@ See [docs/ci.md](docs/ci.md) for the full CI recipe and [`.github/actions/sf-run
 
 ## State
 
-Runtime state (SQLite run store + per-run workspaces) is **global** — `~/.stageflow/.stageflow/` — shared across every project on the machine, since Stageflow became a single auto-starting service. Global config and `sf_owned` auth live directly under **`~/.stageflow/`**; per-project settings (`maxConcurrent`, `credentialSource`) still live at `<git-root>/.stageflow/settings.json`. If `.stageflow` is missing and `.software-factory` exists from an older install, the next store open renames it to `.stageflow` once.
+Runtime state (SQLite `state.db` and per-run workspaces) is **global** — `~/.stageflow/` (`$STAGEFLOW_HOME`) — shared across every project on the machine. `sf_owned` auth lives at `~/.stageflow/agent/auth.json`. Per-project settings (`maxConcurrent`, `credentialSource`) still live at `<git-root>/.stageflow/settings.json`. If `.stageflow` is missing and `.software-factory` exists from an older install, the next store open renames it to `.stageflow` once.
 
 ## MCP
 
@@ -246,11 +246,11 @@ Stages use project `.mcp.json` plus stage `mcp` names. See [YAML catalog — Sta
 
 ## Standalone stages
 
-Run a single stage directly, without authoring a pipeline: the MCP `run_stage` tool, the `sf run-stage` CLI command, and (over A2A, wildcard-access — see below) the `run_stage` operation all give a calling agent (Claude Code, Cursor, Codex, Pi, ...) the same capability, so it can decide what to run next itself rather than following a pre-authored DAG. Chain calls with `envelope_ref` — a reference to a previous call's stored envelope, one or many at once — instead of copying results around by hand. Full reference: [docs/mcp.md#run_stage](docs/mcp.md#run_stage), [docs/cli-reference.md#sf-run-stage](docs/cli-reference.md#sf-run-stage).
+Run a single stage directly, without authoring a pipeline: the MCP `run_stage` tool, the `sf run-stage` CLI command, and (over A2A, only when that caller has `allow_run_stage` — see below) the `run_stage` operation all give a calling agent (Claude Code, Cursor, Codex, Pi, ...) the same capability, so it can decide what to run next itself rather than following a pre-authored DAG. Chain calls with `envelope_ref` — a reference to a previous call's stored envelope, one or many at once — instead of copying results around by hand. Full reference: [docs/mcp.md#run_stage](docs/mcp.md#run_stage), [docs/cli-reference.md#sf-run-stage](docs/cli-reference.md#sf-run-stage).
 
-## A2A
+## A2A (experimental)
 
-MCP is for your own trusted, local tools. A2A's `invoke` operation is a second, gated door for other agents on the network: publish specific pipelines in a separate `a2a.yaml`, and outside callers invoke them over JSON-RPC with a bearer token, poll for results, and download frozen artifacts -- never touching your internal run IDs or unpublished pipelines. A2A also exposes `run_stage` (above) with deliberately no gate: any caller with a valid bearer token can run any catalog or inline stage/pipeline, the same wildcard-access default MCP and the CLI give a local harness -- a temporary trade-off, not a hardened access boundary; keep that in mind before exposing a host with real callers.
+MCP is for your own trusted, local tools. A2A's `invoke` operation is a second, gated door for other agents on the network: publish specific pipelines in a separate `a2a.yaml`, and outside callers invoke them over JSON-RPC with a bearer token, poll for results, and download frozen artifacts -- never touching your internal run IDs or unpublished pipelines. A2A `run_stage` (above) stays off until that caller has `allow_run_stage: true`. A caller without it can invoke only the pipelines published to them.
 
 Drop `a2a.yaml` next to `stageflow.yaml` and it's auto-discovered when `sf ui` starts -- no extra flag needed. `sf a2a add-caller <id>` registers a caller and generates its token. Full reference: [docs/a2a.md](docs/a2a.md).
 
@@ -289,7 +289,7 @@ Index: [examples/README.md](examples/README.md)
 
 ## Documentation
 
-Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.io/stageflow/)** (GitHub Pages — live after merge to `main` and Pages enabled). Source in [`docs/`](docs/).
+Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.io/stageflow/)** (GitHub Pages). Source in [`docs/`](docs/).
 
 | Doc | Description |
 |-----|-------------|
@@ -304,7 +304,7 @@ Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.
 | [docs/hitl.md](docs/hitl.md) | Gate kinds, `--skip-gates`, exit code `2` |
 | [docs/ci.md](docs/ci.md) | `--json`, env vars, GitHub Actions |
 | [docs/mcp.md](docs/mcp.md) | MCP tool reference, including standalone `run_stage` |
-| [docs/a2a.md](docs/a2a.md) | Publish pipelines for other agents to call over JSON-RPC (A2A), plus the wildcard-access `run_stage` operation |
+| [docs/a2a.md](docs/a2a.md) | Publish pipelines for other agents to call over JSON-RPC (A2A), plus `run_stage` when that caller has `allow_run_stage` (off by default) |
 | [docs/providers.md](docs/providers.md) | Pi providers, `sf providers` |
 | [docs/docker.md](docs/docker.md) | Docker Compose local try, image pull/run, backup, self-hosting |
 | [docs/operator-console.md](docs/operator-console.md) | Console navigation, command palette, shortcuts and routes; one page per area ([Inbox](docs/console-inbox.md), [Runs](docs/console-runs.md), [Agents](docs/console-agents.md), [Connections](docs/console-connections.md), [Settings](docs/console-settings.md)) |

@@ -5,7 +5,7 @@ title: Providers
 
 # Providers
 
-Stageflow runs stages on **Pi** (`@earendil-works/pi-coding-agent`). Model provider authentication is Pi-compatible — reuse an existing Pi login or store credentials in a Stageflow-owned file.
+Stageflow runs stages on **Pi** (`@earendil-works/pi-coding-agent`). The Claude and Cursor backends are experimental. Model provider credentials are stored in a Stageflow-owned file.
 
 Provider management is via `sf providers` and the console **Settings → Providers** page.
 
@@ -38,7 +38,7 @@ Persist the store choice (always Stageflow-owned):
 sf providers source set sf_owned
 ```
 
-Legacy `pi_home` in `settings.json` is treated as `sf_owned` on read.
+`source set` accepts only `sf_owned`. A legacy `pi_home` value in `settings.json` is rewritten to `sf_owned` on the next read (one notice on stderr). Stageflow no longer reads `~/.pi/agent/auth.json`. Reconnect with `sf providers login <provider>` (or the console **Connect**), or set `STAGEFLOW_PROVIDER_<NAME>_API_KEY`.
 
 ## Non-interactive Host boot credentials
 

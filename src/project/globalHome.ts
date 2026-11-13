@@ -1,6 +1,7 @@
-import { accessSync, chmodSync, constants, mkdirSync } from "node:fs";
+import { accessSync, chmodSync, constants, lstatSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { SF_STAGE_WORKER } from "../runtime/stageWorkerProtocol.js";
 
 export type StageflowHomeErrorCode = "stageflow_home_not_writable";
 
@@ -58,12 +59,56 @@ function relativeInside(base: string, target: string): string | undefined {
   return relative.split(path.sep).join("/");
 }
 
+/**
+ * Remember the data directory without advertising it as `STAGEFLOW_HOME`.
+ * Stage workers pass the directory on the command line and set `exportEnv: false`
+ * so a stage shell cannot read `$STAGEFLOW_HOME/control-token`.
+ */
+export function pinStageflowHome(
+  dir: string,
+  options?: { exportEnv?: boolean },
+): void {
+  const resolved = path.resolve(dir);
+  memoizedHome = resolved;
+  if (options?.exportEnv === false) return;
+  process.env.STAGEFLOW_HOME = resolved;
+}
+
 export function globalStageflowHome(): string {
   if (memoizedHome === undefined) {
     memoizedHome = resolveStageflowHomeFromEnv();
-    process.env.STAGEFLOW_HOME = memoizedHome;
+    if (process.env[SF_STAGE_WORKER] !== "1") {
+      process.env.STAGEFLOW_HOME = memoizedHome;
+    }
   }
   return memoizedHome;
+}
+
+/** Create `dir` at mode 0700 when it is missing. An existing directory is left as it is. */
+export function createOwnerOnlyDirectory(dir: string): void {
+  try {
+    const st = lstatSync(dir);
+    if (st.isDirectory() && process.platform !== "win32") {
+      const uid = process.getuid?.();
+      if (uid !== undefined && st.uid === uid && (st.mode & 0o077) !== 0) {
+        try {
+          chmodSync(dir, 0o700);
+          console.error(`Tightened ${dir} to 0700 (it was readable by other users).`);
+        } catch {
+          // best-effort on non-POSIX
+        }
+      }
+    }
+    return;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try {
+    chmodSync(dir, 0o700);
+  } catch {
+    // best-effort on non-POSIX
+  }
 }
 
 function resolveCredentialRootFromEnv(): string {
@@ -125,9 +170,9 @@ export function assertStageflowHomeWritable(): void {
 export function ensureGlobalHome(): string {
   assertStageflowHomeWritable();
   const globalHome = globalStageflowHome();
-  mkdirSync(globalHome, { recursive: true });
+  createOwnerOnlyDirectory(globalHome);
   const agentDir = path.join(globalHome, "agent");
-  mkdirSync(agentDir, { recursive: true });
+  mkdirSync(agentDir, { recursive: true, mode: 0o700 });
   try {
     chmodSync(agentDir, 0o700);
   } catch {

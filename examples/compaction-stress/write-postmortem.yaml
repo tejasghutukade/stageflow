@@ -17,7 +17,7 @@ system_prompt: |
   for rollout canarying, and one for ledger-db pool capacity.
   Call emit_stage_envelope exactly once with postmortem_artifact set to the
   path write_stage_artifact returned.
-model: openrouter/deepseek/deepseek-chat-v3.1
+model: anthropic/claude-sonnet-5-5
 timeout_ms: 1200000
 io:
   input:

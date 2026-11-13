@@ -40,6 +40,7 @@ const health = (
 ): CapacityHealth => ({
   ok: true,
   activeRunIds: [],
+  queuedCount: 0,
   ...overrides,
 });
 

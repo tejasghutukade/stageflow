@@ -276,24 +276,17 @@ const proposeDraftTool: OperatorAgentTool = {
   name: "propose_draft",
   description:
     "Legacy bulk draft replace. Prefer create_*/edit_* tools. Applies immediately (Accept confirms; Reject soft-undos when unchanged).",
-  parameters: Type.Union([
-    Type.Object(
-      {
-        draft: jsonObject,
-        summary: Type.Optional(Type.String()),
-      },
-      closed,
-    ),
-    Type.Object(
-      {
-        pipeline: jsonObject,
-        stages: Type.Optional(Type.Array(Type.Unknown())),
-        task: Type.Optional(jsonObject),
-        summary: Type.Optional(Type.String()),
-      },
-      closed,
-    ),
-  ]),
+  // One object at the root (OpenAI needs `type: "object"`); the handler takes draft, or pipeline with stages and task.
+  parameters: Type.Object(
+    {
+      draft: Type.Optional(jsonObject),
+      pipeline: Type.Optional(jsonObject),
+      stages: Type.Optional(Type.Array(Type.Unknown())),
+      task: Type.Optional(jsonObject),
+      summary: Type.Optional(Type.String()),
+    },
+    closed,
+  ),
   handler(args, ctx): OperatorAgentToolResult {
     const summary =
       typeof args.summary === "string" && args.summary.trim()

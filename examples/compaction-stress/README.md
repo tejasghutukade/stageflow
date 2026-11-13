@@ -13,14 +13,9 @@ stage still emits a correct envelope after compaction and that the next stage us
 3. Start `compaction-stress` in the console, or `sf run`.
 4. Check the result: `node examples/compaction-stress/check-run.mjs <runId> <dir>.expected.json`.
 
-## If a model leaks tool calls
+## Model
 
-Some OpenRouter providers return a model's tool calls as plain text (for example `<｜tool▁calls▁begin｜>` in the reasoning), so a stage ends with `missing emit_stage_envelope`. Pin the providers in the Host's `$STAGEFLOW_HOME/agent/models.json`:
-
-```json
-{ "providers": { "openrouter": { "modelOverrides": { "deepseek/deepseek-chat-v3.1": {
-  "compat": { "openRouterRouting": { "order": ["SiliconFlow", "CoreWeave"], "allow_fallbacks": false } } } } } } }
-```
+Stages use `anthropic/claude-sonnet-5-5`.
 
 ## What to look for
 

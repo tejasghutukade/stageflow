@@ -46,6 +46,7 @@ import { VALIDATE_USAGE, runValidateCommand } from "./cli/validateCommand.js";
 import { GRAPH_USAGE, runGraphCommand } from "./cli/graphCommand.js";
 import { MIGRATE_YAML_USAGE, runMigrateYamlCommand } from "./cli/migrateYamlCommand.js";
 import { DOCTOR_USAGE, runDoctorCommand } from "./cli/doctorCommand.js";
+import { pinStageflowHome } from "./project/globalHome.js";
 import { resolveStageflowContext } from "./project/resolveStageflowContext.js";
 import { exitForOutcome, runStageWorker } from "./runtime/stageWorker.js";
 import { scheduleExitWithDrain } from "./runtime/stageWorkerProtocol.js";
@@ -57,13 +58,64 @@ import { resolveListenHost } from "./server/listenHost.js";
 import {
   assertBindAllowed,
   BindRefusedError,
+  activeControlTokenSource,
+  commitHostControlToken,
+  ensureHostControlToken,
+  retireGeneratedControlToken,
+  generatedControlTokenLines,
   loadControlTokens,
+  resolveClientBearerToken,
+  type EnsuredHostControlToken,
 } from "./server/controlToken.js";
+import { readStageflowHomeId } from "./diagnostics/checks.js";
+import { mintConsoleLoginCode } from "./server/consoleLoginCode.js";
+import {
+  oldHostRunningMessage,
+  otherHostHomeMessage,
+  probeStageflowHost,
+  SF_SERVICE_CHILD,
+} from "./server/ensureGlobalService.js";
 import { resolveMcpStateless } from "./mcp/server.js";
 import { PACKAGE_VERSION, BUILD_SHA } from "./package-meta.js";
 import { installProxyDispatcher } from "./net/proxy.js";
 import { warnMissingCaPaths } from "./preflight/tls.js";
 import { logger as cliLogger } from "./logging/logger.js";
+
+const UI_USAGE_LINE = `sf ui [--host <addr>] [--port ${DEFAULT_PORT}] [--no-open] [--mcp-stateless]`;
+const MCP_USAGE_LINE = `sf mcp [--host <addr>] [--port ${DEFAULT_PORT}] [--mcp-stateless]`;
+
+const UI_USAGE = `Usage:
+  ${UI_USAGE_LINE}`;
+
+const MCP_USAGE = `Usage:
+  ${MCP_USAGE_LINE}`;
+
+const COMMAND_USAGE: Record<string, string> = {
+  init: INIT_USAGE,
+  run: RUN_USAGE,
+  "run-stage": RUN_STAGE_USAGE,
+  validate: VALIDATE_USAGE,
+  doctor: DOCTOR_USAGE,
+  graph: GRAPH_USAGE,
+  a2a: A2A_USAGE,
+  "migrate-yaml": MIGRATE_YAML_USAGE,
+  artifact: ARTIFACT_USAGE,
+  envelope: ENVELOPE_USAGE,
+  "export-run": EXPORT_RUN_USAGE,
+  "debug-run": DEBUG_RUN_USAGE,
+  backup: BACKUP_USAGE,
+  restore: RESTORE_USAGE,
+  export: EXPORT_ALL_USAGE,
+  runs: RUNS_USAGE,
+  trigger: TRIGGER_USAGE,
+  eval: EVAL_USAGE,
+  agents: AGENTS_USAGE,
+  providers: PROVIDERS_USAGE,
+  skills: SKILLS_USAGE,
+  browser: BROWSER_USAGE,
+  ui: UI_USAGE,
+  mcp: MCP_USAGE,
+};
 
 const USAGE = `Usage:
   sf init
@@ -91,8 +143,11 @@ const USAGE = `Usage:
   sf runs resume --run <runId> --stage <stageId> [--json]
   sf runs abandon --run <runId> --stage <stageId> [--json]
   sf runs rerun --run <runId> [--pinned] [--json]
-  sf ui [--host <addr>] [--port ${DEFAULT_PORT}] [--no-open] [--mcp-stateless]
-  sf mcp [--host <addr>] [--port ${DEFAULT_PORT}] [--mcp-stateless]
+  sf trigger …   (see sf trigger --help)
+  sf eval …      (see sf eval --help)
+  sf agents …    (see sf agents --help)
+  ${UI_USAGE_LINE}
+  ${MCP_USAGE_LINE}
   sf providers list
   sf providers status [--provider <id>]
   sf providers detect
@@ -110,6 +165,7 @@ const USAGE = `Usage:
   sf --version
   sf -V
   sf --help
+  sf <command> --help
   sf a2a status|enable|reload [--json]
   sf a2a caller list|create|revoke [<id>] [--json]
   sf a2a publication list|create|edit|remove [<id>] [<file>] [--json]
@@ -118,54 +174,31 @@ const USAGE = `Usage:
 
 Stageflow (sf) runs YAML-defined automatic stage pipelines.
 
-Store backend: SF_STORE=sqlite only. SF_STORE=disk is rejected; disk-era .stageflow/runs trees import when the SQLite store is empty. Data under .stageflow/.
+Store backend: SF_STORE=sqlite only. SF_STORE=disk is rejected; disk-era .stageflow/runs trees import when the SQLite store is empty. Data under ~/.stageflow/.
+`;
 
-${INIT_USAGE}
+function isHelpFlag(arg: string): boolean {
+  return arg === "--help" || arg === "-h";
+}
 
-${RUN_USAGE}
-
-${RUN_STAGE_USAGE}
-
-${VALIDATE_USAGE}
-
-${DOCTOR_USAGE}
-
-${GRAPH_USAGE}
-
-${A2A_USAGE}
-
-${MIGRATE_YAML_USAGE}
-
-${ARTIFACT_USAGE}
-
-${ENVELOPE_USAGE}
-
-${EXPORT_RUN_USAGE}
-
-${DEBUG_RUN_USAGE}
-
-${BACKUP_USAGE}
-
-${RESTORE_USAGE}
-
-${EXPORT_ALL_USAGE}
-
-${RUNS_USAGE}
-
-${TRIGGER_USAGE}
-
-${EVAL_USAGE}
-
-${AGENTS_USAGE}
-
-${PROVIDERS_USAGE}
-
-${SKILLS_USAGE}
-
-${BROWSER_USAGE}`;
+export function resolveCliHelp(
+  argv: string[],
+): { text: string; exitCode: number } | undefined {
+  const parsed = parseArgs(argv);
+  if (parsed.help) {
+    return { text: USAGE, exitCode: argv.slice(2).length === 0 ? 1 : 0 };
+  }
+  if (parsed.commandHelp !== undefined) {
+    const text = COMMAND_USAGE[parsed.commandHelp];
+    if (text === undefined) return undefined;
+    return { text, exitCode: 0 };
+  }
+  return undefined;
+}
 
 function parseArgs(argv: string[]): {
   help: boolean;
+  commandHelp?: string;
   version?: boolean;
   versionJson?: boolean;
   command?: string;
@@ -183,10 +216,7 @@ function parseArgs(argv: string[]): {
   if (args.length === 0) {
     return { help: true };
   }
-  if (
-    (args[0] === "--help" || args[0] === "-h") &&
-    args.length === 1
-  ) {
+  if (args[0] !== undefined && isHelpFlag(args[0]) && args.length === 1) {
     return { help: true };
   }
   if (args[0] === "--version" || args[0] === "-V") {
@@ -199,6 +229,13 @@ function parseArgs(argv: string[]): {
   }
 
   const command = args[0];
+  if (
+    command !== undefined &&
+    Object.hasOwn(COMMAND_USAGE, command) &&
+    args.slice(1).some(isHelpFlag)
+  ) {
+    return { help: false, commandHelp: command };
+  }
   if (
     command === "providers" ||
     command === "validate" ||
@@ -226,7 +263,7 @@ function parseArgs(argv: string[]): {
     return { help: false, command };
   }
 
-  if (args.includes("--help") || args.includes("-h")) {
+  if (args.some(isHelpFlag)) {
     return { help: true };
   }
 
@@ -298,7 +335,7 @@ function parseArgs(argv: string[]): {
 export function parseRunStageArgs(argv: string[]): {
   runId: string;
   stageId: string;
-  mode?: "run" | "resume" | "feedback_resume" | "new_session";
+  mode?: "run" | "resume" | "feedback_resume" | "new_session" | "timeout_resume";
   resumeAnswer?: unknown;
   attempt?: number;
   sessionFilePath?: string;
@@ -307,7 +344,7 @@ export function parseRunStageArgs(argv: string[]): {
 } {
   let runId: string | undefined;
   let stageId: string | undefined;
-  let mode: "run" | "resume" | "feedback_resume" | "new_session" | undefined;
+  let mode: "run" | "resume" | "feedback_resume" | "new_session" | "timeout_resume" | undefined;
   let resumeAnswer: unknown;
   let attempt: number | undefined;
   let sessionFilePath: string | undefined;
@@ -315,6 +352,10 @@ export function parseRunStageArgs(argv: string[]): {
   let operatorAgentDir: string | undefined;
   let skipGates = false;
   for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--stageflow-home") {
+      i += 1;
+      continue;
+    }
     if (argv[i] === "--run-id") {
       runId = argv[++i];
     } else if (argv[i] === "--stage-id") {
@@ -325,10 +366,11 @@ export function parseRunStageArgs(argv: string[]): {
         raw !== "run" &&
         raw !== "resume" &&
         raw !== "feedback_resume" &&
-        raw !== "new_session"
+        raw !== "new_session" &&
+        raw !== "timeout_resume"
       ) {
         throw new Error(
-          "--mode must be run, resume, feedback_resume, or new_session",
+          "--mode must be run, resume, feedback_resume, new_session, or timeout_resume",
         );
       }
       mode = raw;
@@ -415,7 +457,7 @@ async function handleInternalRunStage(argv: string[]): Promise<number> {
   return exitForOutcome(outcome);
 }
 
-function openBrowser(url: string): void {
+function defaultOpenBrowser(url: string): void {
   const platform = process.platform;
   let child;
   if (platform === "darwin") {
@@ -429,6 +471,16 @@ function openBrowser(url: string): void {
   child.unref();
 }
 
+let openBrowserImpl: (url: string) => void = defaultOpenBrowser;
+
+export function setOpenBrowserForTests(fn: ((url: string) => void) | undefined): void {
+  openBrowserImpl = fn ?? defaultOpenBrowser;
+}
+
+function openBrowser(url: string): void {
+  openBrowserImpl(url);
+}
+
 function isNoOpenEnabled(
   flag: boolean | undefined,
   env: NodeJS.ProcessEnv = process.env,
@@ -440,8 +492,24 @@ function isNoOpenEnabled(
   return normalized !== "0" && normalized !== "false";
 }
 
-async function main(argv: string[]): Promise<number> {
+function pinStageWorkerHomeFromArgv(argv: string[]): void {
+  const args = argv.slice(2);
+  if (args[0] !== "internal" || args[1] !== "run-stage") return;
+  process.env[SF_STAGE_WORKER] = "1";
+  const fromEnv = process.env.SF_WORKER_STAGEFLOW_HOME;
+  const flag = args.indexOf("--stageflow-home");
+  const fromArg = flag >= 0 ? args[flag + 1] : undefined;
+  const value = fromEnv !== undefined && fromEnv.length > 0 ? fromEnv : fromArg;
+  if (value !== undefined && value.length > 0) {
+    pinStageflowHome(value, { exportEnv: false });
+  }
+  delete process.env.SF_WORKER_STAGEFLOW_HOME;
+  delete process.env.STAGEFLOW_HOME;
+}
+
+export async function main(argv: string[]): Promise<number> {
   try {
+    pinStageWorkerHomeFromArgv(argv);
     installProxyDispatcher(process.env, {
       log: (msg) => cliLogger.info("proxy.dispatcher", msg),
     });
@@ -451,11 +519,12 @@ async function main(argv: string[]): Promise<number> {
         `${warning.name} points to missing path: ${warning.path}`,
       );
     }
-    const parsed = parseArgs(argv);
-    if (parsed.help) {
-      console.log(USAGE);
-      return argv.slice(2).length === 0 ? 1 : 0;
+    const help = resolveCliHelp(argv);
+    if (help) {
+      console.log(help.text);
+      return help.exitCode;
     }
+    const parsed = parseArgs(argv);
     if (parsed.version) {
       if (parsed.versionJson) {
         console.log(
@@ -605,7 +674,15 @@ async function main(argv: string[]): Promise<number> {
 
     if (parsed.command === "ui") {
       const listenHost = resolveListenHost({ flag: parsed.host });
-      const tokens = loadControlTokens();
+      const already = await printIfHostAlreadyRunning({
+        port: parsed.port,
+        host: parsed.host,
+        command: "ui",
+        noOpen: parsed.noOpen,
+      });
+      if (already !== null) return already;
+      const ensuredToken = ensureHostControlToken();
+      const tokens = loadControlTokens(process.env, ensuredToken.token);
       assertBindAllowed(listenHost, tokens);
       const mcpStateless = resolveMcpStateless({
         mcpStateless: parsed.mcpStateless,
@@ -619,6 +696,8 @@ async function main(argv: string[]): Promise<number> {
         mcpStateless,
         controlTokens: tokens,
       });
+      const tokenSaved = commitHostControlTokenOrWarn(ensuredToken);
+      retireGeneratedControlToken(ensuredToken);
       if (host.store) {
         try {
           await host.store.ensureProject(ctx.projectRoot);
@@ -628,8 +707,9 @@ async function main(argv: string[]): Promise<number> {
       }
       console.log(`Operator console: ${host.url}`);
       console.log(`MCP endpoint: ${host.mcpUrl}`);
+      if (tokenSaved) printGeneratedControlToken(ensuredToken);
       if (!isNoOpenEnabled(parsed.noOpen)) {
-        openBrowser(host.url);
+        openBrowser(consoleOpenUrl(host.url, mintConsoleLoginCode()));
       }
       const outcome = await host.shutdown.whenDrained();
       return outcome.exitCode;
@@ -640,7 +720,14 @@ async function main(argv: string[]): Promise<number> {
         throw new Error("--no-open is only valid with sf ui");
       }
       const listenHost = resolveListenHost({ flag: parsed.host });
-      const tokens = loadControlTokens();
+      const already = await printIfHostAlreadyRunning({
+        port: parsed.port,
+        host: parsed.host,
+        command: "mcp",
+      });
+      if (already !== null) return already;
+      const ensuredToken = ensureHostControlToken();
+      const tokens = loadControlTokens(process.env, ensuredToken.token);
       assertBindAllowed(listenHost, tokens);
       const mcpStateless = resolveMcpStateless({
         mcpStateless: parsed.mcpStateless,
@@ -654,7 +741,10 @@ async function main(argv: string[]): Promise<number> {
         mcpStateless,
         controlTokens: tokens,
       });
+      const tokenSaved = commitHostControlTokenOrWarn(ensuredToken);
+      retireGeneratedControlToken(ensuredToken);
       console.log(`MCP endpoint: ${host.mcpUrl}`);
+      if (tokenSaved) printGeneratedControlToken(ensuredToken);
       const outcome = await host.shutdown.whenDrained();
       return outcome.exitCode;
     }
@@ -679,6 +769,116 @@ async function main(argv: string[]): Promise<number> {
     }
     console.error(err instanceof Error ? err.message : String(err));
     return 1;
+  }
+}
+
+function probeUrl(listenHost: string, port: number): string {
+  const host =
+    listenHost === "0.0.0.0" || listenHost === "::" ? "127.0.0.1" : listenHost;
+  const hostname = host.includes(":") ? `[${host}]` : host;
+  return `http://${hostname}:${port}`;
+}
+
+async function printIfHostAlreadyRunning(options: {
+  port: number | undefined;
+  host?: string;
+  command: "ui" | "mcp";
+  noOpen?: boolean;
+}): Promise<number | null> {
+  const bound = options.port ?? DEFAULT_PORT;
+  const listenHost = resolveListenHost({ flag: options.host });
+  const base = probeUrl(listenHost, bound);
+  const probed = await probeStageflowHost(base, { expectedHomeId: () => readStageflowHomeId() });
+  if (probed === "foreign") {
+    console.error(`Port ${bound} is in use by another program. Use --port.`);
+    return 1;
+  }
+  if (probed === "old_stageflow") {
+    console.error(oldHostRunningMessage(bound));
+    return 1;
+  }
+  if (probed === "other_home") {
+    console.error(otherHostHomeMessage(bound));
+    return 1;
+  }
+  if (probed !== "up" && probed !== "starting") return null;
+  console.log(`Stageflow is already running at ${base}`);
+  console.log(`Operator console: ${base}`);
+  const source = activeControlTokenSource();
+  console.log(
+    source.tokenFile !== null
+      ? `Control token file: ${source.tokenFile}`
+      : "Control token: set by the operator in STAGEFLOW_CONTROL_TOKEN",
+  );
+  if (options.command === "ui" && !isNoOpenEnabled(options.noOpen)) {
+    openBrowser(consoleOpenUrl(base, await mintConsoleLoginCodeOverHttp(base)));
+  }
+  return 0;
+}
+
+async function mintConsoleLoginCodeOverHttp(base: string): Promise<string | undefined> {
+  const token = resolveClientBearerToken("POST");
+  if (token === undefined) return undefined;
+  try {
+    const res = await fetch(`${base}/api/console-login/mint`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return undefined;
+    const body = (await res.json()) as { code?: unknown };
+    return typeof body.code === "string" && body.code.length > 0 ? body.code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function revealControlToken(): boolean {
+  return process.env[SF_SERVICE_CHILD] !== "1";
+}
+
+export function consoleOpenUrl(baseUrl: string, code: string | undefined): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return baseUrl;
+  }
+  const host = parsed.hostname;
+  if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1" && host !== "[::1]") {
+    return baseUrl;
+  }
+  if (code === undefined || code.length === 0) return baseUrl;
+  parsed.hash = `code=${encodeURIComponent(code)}`;
+  return parsed.toString();
+}
+
+/** Save a minted token. On failure the Host keeps running with it in memory; returns false so the caller skips the normal lines. */
+function commitHostControlTokenOrWarn(ensured: EnsuredHostControlToken): boolean {
+  try {
+    commitHostControlToken(ensured);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code ?? "unknown";
+    if (ensured.token) process.env.STAGEFLOW_CONTROL_TOKEN = ensured.token;
+    if (revealControlToken() && ensured.token) {
+      console.error(
+        `Could not save the control token to ${ensured.filePath} (${code}). This Host keeps running with the token below; it changes on the next start.`,
+      );
+      console.log(`Control token: ${ensured.token}`);
+    } else {
+      console.error(
+        `Could not save the control token to ${ensured.filePath} (${code}). Other sf commands cannot authenticate to this Host. Fix the file and restart it.`,
+      );
+    }
+    return false;
+  }
+}
+
+function printGeneratedControlToken(ensured: EnsuredHostControlToken): void {
+  for (const line of generatedControlTokenLines(ensured, {
+    revealToken: revealControlToken(),
+  })) {
+    console.log(line);
   }
 }
 

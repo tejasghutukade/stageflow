@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  assertSafeSkillName,
   installProjectSkill,
   type InstallProjectSkillResult,
+  type SkillDoctorDescriptor,
 } from "../cli/skillsCommand.js";
 import { runGit } from "../git/exec.js";
 
@@ -16,6 +18,7 @@ export type InstallSkillParseError = {
 
 export type ParsedInstallSkillRequest = {
   command: string;
+  runDoctor?: boolean;
 };
 
 export type ParsedSkillsAddCommand = {
@@ -31,6 +34,7 @@ export type InstallSkillFromCommandResult =
       skill_name: string;
       dest_path: string;
       project_root: string;
+      doctor?: SkillDoctorDescriptor;
     }
   | { ok: false; error: string; doctorFailed?: boolean; status?: 400 | 422 };
 
@@ -113,7 +117,12 @@ export function parseInstallSkillBody(
     return parsed;
   }
 
-  return { command: body.command.trim() };
+  const runDoctor = body.run_doctor === true;
+
+  return {
+    command: body.command.trim(),
+    ...(runDoctor ? { runDoctor: true } : {}),
+  };
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -158,6 +167,19 @@ export async function locateSkillDirectory(
     candidates.push({ name, root: key });
   };
 
+  if (skillName !== undefined) {
+    assertSafeSkillName(skillName);
+    const namedPaths = [
+      path.join(checkoutRoot, skillName, "SKILL.md"),
+      path.join(checkoutRoot, "skills", skillName, "SKILL.md"),
+    ];
+    for (const skillMd of namedPaths) {
+      if (await pathExists(skillMd)) {
+        return { name: skillName, root: path.dirname(skillMd) };
+      }
+    }
+  }
+
   const rootSkillMd = path.join(checkoutRoot, "SKILL.md");
   if (await pathExists(rootSkillMd)) {
     const name =
@@ -201,23 +223,15 @@ export async function locateSkillDirectory(
   }
 
   if (skillName !== undefined) {
-    const namedPaths = [
-      path.join(checkoutRoot, skillName, "SKILL.md"),
-      path.join(checkoutRoot, "skills", skillName, "SKILL.md"),
-    ];
-    for (const skillMd of namedPaths) {
-      if (await pathExists(skillMd)) {
-        return { name: skillName, root: path.dirname(skillMd) };
-      }
-    }
     const match = candidates.find((candidate) => candidate.name === skillName);
     if (match !== undefined) {
-      return match;
+      return { name: skillName, root: match.root };
     }
     throw new Error(`skill "${skillName}" not found in source`);
   }
 
   if (candidates.length === 1) {
+    assertSafeSkillName(candidates[0]!.name);
     return candidates[0]!;
   }
   if (candidates.length === 0) {
@@ -265,6 +279,7 @@ function resolveFileSource(source: string): string {
 export async function installSkillFromCommand(input: {
   projectRoot: string;
   command: string;
+  runDoctor?: boolean;
   cloneRepo?: SkillCloneFn;
 }): Promise<InstallSkillFromCommandResult> {
   const parsed = parseSkillsAddCommand(input.command);
@@ -311,9 +326,12 @@ export async function installSkillFromCommand(input: {
       projectRoot: input.projectRoot,
       fromPath: located.root,
       skillName: located.name,
+      runDoctor: input.runDoctor,
+      doctorPolicy: input.runDoctor ? "prompt" : "defer",
       io: {
         log: () => undefined,
         error: () => undefined,
+        stdinIsTTY: false,
       },
     });
 
@@ -330,6 +348,7 @@ export async function installSkillFromCommand(input: {
       skill_name: result.skillName,
       dest_path: result.destPath,
       project_root: input.projectRoot,
+      ...(result.doctor !== undefined ? { doctor: result.doctor } : {}),
     };
   } catch (err) {
     return {

@@ -89,6 +89,8 @@ import type { OperatorAgentHost } from "../operatorAgent/types.js";
 import { defaultLoadJudgePrices } from "../evals/engine/promptfoo/judgeServices.js";
 import { createAgentHostContext, type AgentHostContext } from "../agents/hostContext.js";
 import type { ConversationBackend } from "../agents/sessions.js";
+import { bindHostPort, type BoundHostPort } from "./createHttpHost.js";
+import { acquireHostLock, installHostLockExitHook } from "./hostLock.js";
 
 export const DEFAULT_GC_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -112,6 +114,11 @@ export type StageflowHostOptions = {
   emailTriggerQueue?: ConstructorParameters<typeof EmailTriggers>[0]["queue"];
   agentConversationBackend?: ConversationBackend;
   consumerAuthorization?: import("../identity/authorization.js").ConsumerAuthorization;
+  /**
+   * Bind this address before reconciling or otherwise mutating run data.
+   * Omit for in-process bootstrap that does not listen.
+   */
+  listen?: { host: string; port: number };
 };
 
 export type StageflowHostBootstrap = {
@@ -159,6 +166,8 @@ export type StageflowHostBootstrap = {
   consumerIdentity?: ConsumerIdentityRuntime;
   /** Filled when the operator console host is created, so internal-agent evals can open a gated session. */
   operatorHostSlot?: { current?: OperatorAgentHost };
+  /** Listen socket claimed before run-data mutation. The HTTP host adopts it. */
+  boundPort?: BoundHostPort;
   email?: ReturnType<typeof emailHostFor> & { triggers: EmailTriggers; stop: () => Promise<void> };
   /** Filesystem classification for `$STAGEFLOW_HOME` (Slot 8). */
   storeFilesystem?: StoreFilesystemClassification;
@@ -278,6 +287,30 @@ export async function bootstrapStageflowHost(
   });
 
   const bootLog = rootLogger.child({ component: "bootstrap" });
+
+  // One Host per data directory, whatever port or address it binds: take the lock before a restore, a migration
+  // or run reconciliation can touch the store. Then own the port. If another Host already has it, listen throws
+  // EADDRINUSE and this process exits without changing that Host's runs.
+  const hostLock = options.store ? undefined : await acquireHostLock(ctx.globalHome);
+  if (hostLock !== undefined) installHostLockExitHook();
+  let boundPort: BoundHostPort | undefined;
+  try {
+    boundPort = options.listen
+      ? await bindHostPort(options.listen.host, options.listen.port)
+      : undefined;
+  } catch (err) {
+    hostLock?.release();
+    throw err;
+  }
+  if (hostLock !== undefined) {
+    const address = boundPort?.server.address();
+    if (options.listen && address && typeof address !== "string") {
+      const host = options.listen.host === "0.0.0.0" || options.listen.host === "::" ? "127.0.0.1" : options.listen.host;
+      hostLock.setUrl(`http://${host.includes(":") ? `[${host}]` : host}:${address.port}`);
+    }
+    boundPort?.server.once("close", () => hostLock.release());
+  }
+
   let serveBlocked: { code: string; reason: string } | undefined;
   let restoreOutcome: BootRestoreOutcome = { status: "none" };
   if (!options.store) {
@@ -333,9 +366,15 @@ export async function bootstrapStageflowHost(
       serveBlocked,
       ...(hostConfig !== undefined ? { hostConfig } : {}),
       ...(providerBoot !== undefined ? { providerBoot } : {}),
+      ...(boundPort !== undefined ? { boundPort } : {}),
     };
   }
 
+  let stopGcInterval: () => void = () => {};
+  let stopScheduleSource: () => void = () => {};
+  let stopGithubPollSource: () => void = () => {};
+  let stopEmailSource: () => void = () => {};
+  try {
   let rawStore: RunStore;
   let sqliteConnection: Database.Database | undefined;
   const storeRootDir = options.store
@@ -485,7 +524,7 @@ export async function bootstrapStageflowHost(
   };
   await warnDurableRootDiskIfNeeded(ctx.globalHome, { env });
   const gcInterval = startPeriodicRunGc(manager, gcIntervalMsFromEnv(env));
-  const stopGcInterval = () => {
+  stopGcInterval = () => {
     if (gcInterval !== undefined) clearInterval(gcInterval);
   };
 
@@ -531,7 +570,7 @@ export async function bootstrapStageflowHost(
     );
   }
   await scheduleSource.start(onTriggerFire);
-  const stopScheduleSource = () => {
+  stopScheduleSource = () => {
     void scheduleSource.stop();
   };
 
@@ -544,7 +583,7 @@ export async function bootstrapStageflowHost(
     logError: (message) => bootLog.error("trigger.github_poll_source_failed", message),
   });
   await githubPollSource.start(onTriggerFire);
-  const stopGithubPollSource = () => {
+  stopGithubPollSource = () => {
     void githubPollSource.stop();
   };
 
@@ -566,12 +605,6 @@ export async function bootstrapStageflowHost(
     throw error;
   }
   const channels = startChannelService(cwd);
-  const stopEmailSource = () => {
-    void agentHost?.stop();
-    void emailSource.stop();
-    void stopAccountEmail();
-    void channels.stop();
-  };
 
   // Resolve the connected-provider list and the default model once at boot so sync callers see the catalog's answer.
   void getModelCatalog(cwd)
@@ -610,6 +643,12 @@ export async function bootstrapStageflowHost(
           },
         })
       : undefined;
+  stopEmailSource = () => {
+    void agentHost?.stop();
+    void emailSource.stop();
+    void stopAccountEmail();
+    void channels.stop();
+  };
   if (agentHost) void evalRunManager.sweepAgentSessions(recoveredEvalRuns);
   const mcpStateless = resolveMcpStateless({
     mcpStateless: options.mcpStateless,
@@ -692,5 +731,15 @@ export async function bootstrapStageflowHost(
     ...(agentHost ? { agentHost } : {}),
     ...(consumerIdentity ? { consumerIdentity } : {}),
     operatorHostSlot,
+    ...(boundPort !== undefined ? { boundPort } : {}),
   };
+  } catch (err) {
+    stopGcInterval();
+    stopScheduleSource();
+    stopGithubPollSource();
+    stopEmailSource();
+    boundPort?.server.close(() => undefined);
+    hostLock?.release();
+    throw err;
+  }
 }

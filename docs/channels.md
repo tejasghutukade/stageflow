@@ -1,5 +1,7 @@
 # Communication channels
 
+Experimental. Slack, Telegram, WhatsApp, iMessage, and AgentMail sending and replies work; the shape may still change.
+
 Channels let a stage send a message over an external service. You define a **connection** once (in the console or in `connections.yaml`), then a stage lists it under [`channels:`](yaml-catalog.md#stage-channels) with the recipient pinned. The agent gets one tool, `send_message`, and cannot pick a different recipient.
 
 > **Status: send path built.** Sending works for AgentMail, Slack, Telegram, iMessage and WhatsApp. For **stages**, channels are send-only: a stage never receives messages. A project [agent](agents.md#channels-inbound) can also *receive* on AgentMail, iMessage, Slack and Telegram connections and answer on the same one; WhatsApp is send-only for everyone. The `send_message` tool is available on the Pi backend only; a stage with `channels:` on the Claude backend fails at start instead of running without it.

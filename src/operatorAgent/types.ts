@@ -1,5 +1,5 @@
 import type { TSchema } from "typebox";
-import type { DraftPackage } from "../config/draftPackage.js";
+import type { DraftFileHashes, DraftPackage } from "../config/draftPackage.js";
 import type { ValidationResult } from "../config/validateCatalog.js";
 import type {
   AcceptProposalResult,
@@ -150,6 +150,8 @@ export type WorkshopDraftContext = {
     directory: string;
     pipelineFilename?: string;
   };
+  /** Content hashes from the last catalog load or save (overwrite conflict checks). */
+  fileHashes?: DraftFileHashes;
   /** Catalog write root for the save tool (usually the operator project). */
   projectRoot?: string;
   /** Workshop chat session that owns this host context. */

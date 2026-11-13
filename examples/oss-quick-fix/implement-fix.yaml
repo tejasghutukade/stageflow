@@ -28,7 +28,7 @@ system_prompt: |
      investigation.md you deviated from and why.
   5. Call emit_stage_envelope exactly once. changed_files must match
      git diff --name-only exactly — no more, no fewer.
-model: openrouter/minimax/minimax-m3:free
+model: anthropic/claude-sonnet-5-5
 timeout_ms: 7200000
 io:
   input:

@@ -5,6 +5,68 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.57.0] - 2026-11-12
+
+### Upgrade notes
+
+- **Stop a running Host before you upgrade.** A 0.57 CLI reports an older Host on the port ("An older Stageflow Host is running on port 3847") and does not use it. `sf restore` refuses while anything answers on the port.
+- **Store migration 019** adds `agent_sessions.rolled_from_session_id`. After it runs, 0.56.x and earlier refuse the store (`store_schema_too_new`).
+- **`/livez` returns `service`, `version` and `home_id`.** `home_id` is a random id kept in `$STAGEFLOW_HOME/host-id`.
+- **Control token file.** A normal `sf ui` or `sf mcp` start writes `$STAGEFLOW_HOME/control-token`. The CLI reads it when `STAGEFLOW_CONTROL_TOKEN` is unset. Export it for curl and MCP (`export STAGEFLOW_CONTROL_TOKEN="$(tr -d '\n' < ~/.stageflow/control-token)"` or `STAGEFLOW_CONTROL_TOKEN_FILE`). A second start on the same port reuses the file and does not replace it. Setting `STAGEFLOW_CONTROL_TOKEN`, `STAGEFLOW_CONTROL_TOKEN_FILE`, or a named `STAGEFLOW_CONTROL_TOKEN_<NAME>` deletes a leftover generated file so the CLI stops sending a token the Host no longer uses. `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` is the only supported way to omit bearer headers.
+- **Editor save when the file changed on disk** offers overwrite, reload, or copy — it does not silently merge.
+- **Every `/api/*` and `/mcp` request, including `GET /api/health`, now needs `Authorization: Bearer <token>`.** `/livez`, `/readyz`, `/api/auth-hint` and `/api/console-login` stay open. The token is in `$STAGEFLOW_HOME/control-token` (`~/.stageflow/control-token`; Docker: `docker exec <container> cat /data/control-token`) unless you set one.
+- **A browser `Origin` must match the `Host` header, including the port.** Public web chat checks its own allow-list, `STAGEFLOW_PUBLIC_CHAT_ORIGINS`, and refuses others with 403 `web_chat.forbidden_origin`.
+- **`pi_home` is no longer a credential source.** `~/.pi/agent/auth.json` is not read. Reconnect with `sf providers login <provider>` or set `STAGEFLOW_PROVIDER_<NAME>_API_KEY`. The setting is rewritten to `sf_owned` once.
+- **A fresh install lists six examples** instead of the larger catalog.
+- **`sf init` default Anthropic model** is `anthropic/claude-sonnet-5-5` when Anthropic is the only configured provider.
+
+### Security
+
+- **A local Host has a control token.** The first start writes `$STAGEFLOW_HOME/control-token` (mode 0600) and prints `Control token: …`, including in Docker logs. Later starts reuse that file and print only the path. If the logs don't show it, run `docker exec <container> cat /data/control-token`. A second `sf ui` on a port that already has this Host opens the console signed in. The console link carries a one-time code that expires in 60 seconds; the page exchanges it for the token. A stage does not receive the control token. Its cache, temporary and working directories are inside the data directory (`~/.stageflow` by default, `/data` in Docker), and an unsandboxed stage runs as your user, so it can find and read the token file. Use the stage container sandbox (`STAGEFLOW_STAGE_CONTAINER_IMAGE`) when a stage runs untrusted code. `/livez` and `/readyz` stay open, as do `/api/auth-hint` (the token file path, loopback callers only) and `/api/console-login` (the one-time code exchange, loopback callers only). Set `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` only when you mean to start with no token.
+- **An `Origin` must match the `Host` header, including the port.** A page on another localhost port can no longer call the API.
+- **A2A `run_stage` is off unless that caller sets `allow_run_stage`.** Invoking a published pipeline is unchanged.
+- **Stage activity is redacted before it is stored.** `redaction-secrets.json` is removed after the worker loads it.
+- **The recommended Docker commands no longer set `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND`.** The token is printed on first start. Later starts reuse it; `docker exec <container> cat /data/control-token` reads the file. Mounting `/var/run/docker.sock` is root on the host.
+
+- **A control token file named by any operator token variable is never retired.** That covers named `_FILE` keys and symlinked spellings. A generated file is renamed to `control-token.retired`.
+
+### Changed
+
+- **Unfinished features are marked experimental.** Agents and web chat, channels, A2A, identity, browser attach / container hosts / live view, the Claude and Cursor backends, email rules, and Jev failure sorting still work. The console shows **Exp** on Agents, Agent sessions, Connections, Identity, and A2A; the README lists every experimental feature, and the console Agents, Connections and A2A pages say so at the top.
+- **Example stages use Claude Sonnet 5.5 or Haiku 4.5.** Haiku 5.5 is not in the pinned Pi catalog. The github-release pipeline still uses Cursor.
+- **A fresh install lists six examples:** hello-world, plan-review, conditional-fork, generic-fan-in, feedback-loop, and evals. The Docker image now ships the whole `examples/` folder, as npm does, so it lists them too.
+- **`pi_home` is no longer a credential source.** Only `sf_owned`.
+- **`sf <command> --help` prints that command.** `sf --help` stays the short index.
+- **npm audit fixes** for zod, source-map-js, and the mailparser chain. Four high and fifteen moderate advisories remain where the fix is a breaking upgrade of Pi or the MCP adapter.
+
+### Fixed
+
+- **Draft validation no longer writes outside its temp folder.** The validate API, MCP and Workshop handle `../` stage paths and a pipeline id with a path in it.
+- **Cancelling during a process-mode timeout resume leaves the run cancelled.**
+- **Skill installs skip symbolic links.**
+- **A new stage file under a symlinked folder that points outside the project is refused.**
+- **`include:` fragments are validated also when the pipeline has `uses:` stages.**
+- **A task loaded from another folder is saved back there.**
+- **Unknown `/api/*` paths answer a JSON 404.**
+- **A rolled-over channel session keeps the conversation.** Its first turn starts from the previous session's last six messages, and the console session page links to the session it continues.
+- **"Run doctor" in the console runs the installed script** instead of reinstalling the skill. Doctor scripts get an empty temporary `HOME`.
+- **A CLI 401 names the token source it used** (variable, file path or data directory), never the token.
+- **The CLI never creates `host-id`** when it probes for a Host.
+- **Package saves keep file modes and write through symlinked stage files.**
+- **The editor's leave guard restores the URL after a cancelled link click, Back or Forward.** A closed Workshop conflict dialog no longer lets the next save overwrite.
+- **A booting Host reports its data directory,** so `sf ui` and autostart never mistake another directory's Host for theirs.
+- **The console editor keeps comments and unknown keys,** and refuses a save when the file changed on disk. Workshop and the stage editor (Catalog → Stages) use the same write. A save changes only the edited lines: comment spacing, flow maps, folded blocks, anchors and CRLF line endings stay as they were, and comments stay with their stage when stages are reordered, inserted or renamed.
+- **Start queues a run when agent slots are full,** until the queue itself is full.
+- **One Host per data directory.** A Host takes `$STAGEFLOW_HOME/host.lock` (pid and URL) before it touches run data, so a second Host on another port or address is refused with "Another Stageflow Host is using this data directory (pid …, http://…)" instead of reconciling the first Host's runs. A lock left by a crashed Host is replaced. A pending restore is applied only after the lock and the port bind, and `sf restore` refuses while a Host holds the lock.
+- **Skill install rejects a name that would delete outside the skills folder.**
+- **After an operator answer, the stage keeps its secrets and home.** Abandoning a stage stops that stage only. The run keeps its slot, checkout and scheduling halt while other stages run, records the abandon as the failure reason, and is not marked failed by the abandoned worker's exit or stripped of the others' browsers. Nothing new is scheduled and the run ends `failed`; `sf runs cancel` now stops stages still running on a failed run.
+- **OpenAI models can run stages.** Every tool's parameters are an object at the root. `emit_stage_envelope`, `working_state`, `ask_operator` and three operator tools were unions, which OpenAI rejects ("got type None").
+- **A stage resumed after an answer no longer drops the run's tracking** when it ends while sibling stages still run.
+- **A channel thread rolls onto a new session when it reaches its turn or time limit.** Its cost limit counts the thread's spend over the last 24 hours, across rollovers, so a rollover does not reset it. A refusal names the cost limit when that is the one reached.
+- **An eval whose graders all error fails,** instead of scoring as a pass.
+- **`name.stage.yaml` matches `id: name`.**
+- **Documented `STAGEFLOW_*` variables no longer stop the Host.**
+- **`install.sh` checks `better-sqlite3` from the global install.**
 ## [0.56.0] - 2026-11-10
 
 ### Added

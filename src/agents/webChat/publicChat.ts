@@ -40,6 +40,7 @@ const FRIENDLY: Record<string, { status: number; message: string }> = {
   "web_chat.busy": { status: 409, message: "Still working on your last message." },
   "web_chat.limit_reached": { status: 409, message: "This conversation has reached its limit. Start a new one." },
   "web_chat.invalid": { status: 400, message: "That request wasn't understood." },
+  "web_chat.forbidden_origin": { status: 403, message: "This chat can't be used from this site." },
   "web_chat.failed": { status: 500, message: "Something went wrong. Please try again." },
 };
 
@@ -307,7 +308,7 @@ export class PublicWebChat {
       const url = new URL(origin);
       same = ["https:", "http:"].includes(url.protocol) && url.origin === origin && url.host === req.headers.host;
     } catch { same = false; }
-    if (!same && !(this.options.allowedOrigins ?? []).includes(origin)) throw new WebChatError("web_chat.invalid");
+    if (!same && !(this.options.allowedOrigins ?? []).includes(origin)) throw new WebChatError("web_chat.forbidden_origin");
   }
 
   private async resolve(slug: string): Promise<Resolved> {

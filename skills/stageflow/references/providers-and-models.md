@@ -32,7 +32,7 @@ sf providers source get
 
 `detect` prints `authConfigured`, `credentialSource` (or `credentialSource=(unset)`), `provisional`, and `bindingSource`, tab-separated. Until the first successful login, the source is often unset and the binding is provisional. That is not a failure.
 
-`sf providers source set` accepts only `sf_owned`. Anything else exits 1 with `source set requires sf_owned`. A legacy `pi_home` value in settings is read back as `sf_owned`. Do not tell the user to set `pi_home`.
+`sf providers source set` accepts only `sf_owned`. Anything else exits 1 with `source set requires sf_owned`. A `pi_home` value in settings is ignored. Do not tell the user to set `pi_home`.
 
 ```bash
 sf providers source set sf_owned

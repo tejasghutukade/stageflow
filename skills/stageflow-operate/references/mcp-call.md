@@ -10,7 +10,13 @@ Default `--base-url` is `http://127.0.0.1:3847`. `--args` defaults to `{}`.
 
 ## Auth
 
-When `STAGEFLOW_CONTROL_TOKEN` or `STAGEFLOW_CONTROL_TOKEN_FILE` is set, the script sends `Authorization: Bearer <token>` on every `/mcp` request (initialize, tools/call, session DELETE). A non-loopback Host requires a drive token unless `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` (the shipped local Compose file sets that). When a token is set, put the same env in the harness before calling. Loopback with no token stays unauthenticated. `--probe` calls `GET /livez` and does not send a bearer. `/livez` and `/readyz` stay open when tokens are configured; `GET /api/health` needs the read scope.
+The script sends `Authorization: Bearer <token>` on every `/mcp` request when it can load a drive token from `STAGEFLOW_CONTROL_TOKEN`, `STAGEFLOW_CONTROL_TOKEN_FILE`, or — when both are unset — `$STAGEFLOW_HOME/control-token` (same path the CLI reads). Export it for other tools:
+
+```bash
+export STAGEFLOW_CONTROL_TOKEN="$(tr -d '\n' < "${STAGEFLOW_HOME:-$HOME/.stageflow}/control-token")"
+```
+
+A Host start with no operator token writes that file and prints `Control token: <token>` once. Omit the bearer only when the Host started with `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`; the shipped Compose file does not set it. `--probe` calls `GET /livez` and does not send a bearer. `/livez` and `/readyz` stay open when tokens are configured; `GET /api/health` needs the read scope.
 
 ## Session
 

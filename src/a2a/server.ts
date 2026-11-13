@@ -158,7 +158,7 @@ function mapApplicationError(err: unknown): never {
   throw err;
 }
 
-function realHandler(card: AgentCard, invocations: A2aInvocations, publicUrl: string): A2ARequestHandler {
+function realHandler(card: AgentCard, invocations: A2aInvocations, publicUrl: string, registry: PublicationRegistry): A2ARequestHandler {
   const unsupportedStream = async function* (): AsyncGenerator<never> {
     throw new UnsupportedOperationError("Streaming is not enabled");
   };
@@ -171,7 +171,10 @@ function realHandler(card: AgentCard, invocations: A2aInvocations, publicUrl: st
     async sendMessage(params, context) {
       if (!params.message) throw new RequestMalformedError({ message: "A message is required" });
       try {
-        const task = await invocations.send({ id: context.user!.userName }, params.message);
+        const task = await invocations.send(
+          { id: context.user!.userName, allow_run_stage: registry.allowsRunStage(context.user!.userName) },
+          params.message,
+        );
         return toWireTask(publicUrl, task);
       } catch (err) {
         return mapApplicationError(err);
@@ -463,7 +466,7 @@ export async function createA2aHost(
       try {
         const body = await readBody(req);
         const context = new ServerCallContext({ user: { isAuthenticated: true, userName: caller }, requestedVersion: "1.0" });
-        const result = await new JsonRpcTransportHandler(realHandler(card, service, current.publicUrl)).handle(body, context);
+        const result = await new JsonRpcTransportHandler(realHandler(card, service, current.publicUrl, current)).handle(body, context);
         respond(res, 200, result);
       } catch (error) {
         if (!res.destroyed) respond(res, error instanceof Error && error.message === "body_too_large" ? 413 : 400, { error: "Invalid request body" });

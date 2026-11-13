@@ -470,6 +470,14 @@ function SessionView({ agent, sessionId }: { agent: AgentDetail; sessionId: stri
               {session ? (
                 <span className={`${MONO} text-[11px] leading-normal text-[var(--sf-text-3)] ${NOWRAP}`}>gen_ai.conversation.id {session.id}</span>
               ) : null}
+              {session?.rolledFromSessionId ? (
+                <a
+                  className={`text-[12px] leading-normal text-[var(--sf-text-2)] underline ${NOWRAP}`}
+                  href={`#${agentSessionPath(session.agentId, session.rolledFromSessionId)}`}
+                >
+                  Continues an earlier session
+                </a>
+              ) : null}
               <span className={`${MONO} text-[11px] leading-normal text-[var(--sf-text-3)] ${NOWRAP}`}>
                 gen_ai.agent.name {agentId} · config v{session?.revision ?? agent.agent.revision}
               </span>

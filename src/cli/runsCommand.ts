@@ -57,7 +57,10 @@ export const RUNS_USAGE = `Usage:
   sf runs cancel --run <runId> --reason <text> [--json]
   sf runs delete --run <runId> [--force] [--json]
   sf runs gc [--dry-run] [--json]
-  sf runs rerun --run <runId> [--pinned] [--json]`;
+  sf runs rerun --run <runId> [--pinned] [--json]
+
+abandon stops one running stage and marks it failed. Other running stages keep going, nothing new is
+scheduled, and the run ends failed. cancel stops the rest, also on a failed run with stages still running.`;
 
 export type RunsCommandIo = {
   log: (line: string) => void;

@@ -86,7 +86,7 @@ function screenProps(overrides: Partial<A2aScreenProps>): A2aScreenProps {
   return {
     screen: "ready",
     status: enabledStatus,
-    callers: [{ id: "acme", tokenSource: "store" }],
+    callers: [{ id: "acme", tokenSource: "store", allowRunStage: false }],
     publications: [publication],
     tab: "callers",
     busy: false,
@@ -100,6 +100,7 @@ function screenProps(overrides: Partial<A2aScreenProps>): A2aScreenProps {
     onDisable: noop,
     onReload: noop,
     onAddCaller: noop,
+    onAllowRunStage: noop,
     onRevokeCaller: noop,
     onPublicationSaved: noop,
     onRemovePublication: noop,
@@ -135,7 +136,7 @@ describe("A2A screen state", () => {
     expect(a2aScreen({ loading: false, loadError: null, status: off, callers: [] })).toBe("off");
     expect(a2aScreen({ loading: false, loadError: null, status: { ...enabledStatus, state: "configuration_error" }, callers: [] })).toBe("configuration_error");
     expect(a2aScreen({ loading: false, loadError: null, status: enabledStatus, callers: [] })).toBe("no_callers");
-    expect(a2aScreen({ loading: false, loadError: null, status: enabledStatus, callers: [{ id: "acme", tokenSource: "store" }] })).toBe("ready");
+    expect(a2aScreen({ loading: false, loadError: null, status: enabledStatus, callers: [{ id: "acme", tokenSource: "store", allowRunStage: false }] })).toBe("ready");
   });
 
   it("starts as loading before the first status arrives", () => {
@@ -267,11 +268,12 @@ describe("caller tokens", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ id: "acme", token: TOKEN, token_source: "store" }, 201))
-      .mockResolvedValueOnce(jsonResponse({ callers: [{ id: "acme", token_source: "store", token: TOKEN }] }));
+      .mockResolvedValueOnce(jsonResponse({ callers: [{ id: "acme", token_source: "store", allow_run_stage: false, token: TOKEN }] }));
     vi.stubGlobal("fetch", fetchMock);
     expect(await a2aApi.createCaller("acme")).toEqual({ id: "acme", token: TOKEN });
     const listed = await a2aApi.callers();
-    expect(listed).toEqual([{ id: "acme", tokenSource: "store" }]);
+    expect(listed).toEqual([{ id: "acme", tokenSource: "store", allowRunStage: false }]);
+    expect(projectA2aCaller({ id: "acme", allow_run_stage: true }).allowRunStage).toBe(true);
     expect(JSON.stringify(listed)).not.toContain(TOKEN);
     expect(JSON.stringify(projectA2aCaller({ id: "acme", token: TOKEN }))).not.toContain(TOKEN);
   });
@@ -354,6 +356,22 @@ describe("A2A API client", () => {
     expect(JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)).toEqual({ description: "d", allowed_callers: ["acme"] });
     expect(await a2aApi.revokeCaller("acme")).toEqual({ removedFrom: ["p"] });
     expect(fetchMock.mock.calls[1]![1]).toMatchObject({ method: "DELETE" });
+  });
+
+  it("creates and updates allow_run_stage on callers", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ id: "acme", token: TOKEN, token_source: "store" }, 201))
+      .mockResolvedValueOnce(jsonResponse({ id: "beta", token: TOKEN, token_source: "store" }, 201))
+      .mockResolvedValueOnce(jsonResponse({ id: "acme", token_source: "store", allow_run_stage: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    await a2aApi.createCaller("acme");
+    expect(JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)).toEqual({ id: "acme" });
+    await a2aApi.createCaller("beta", true);
+    expect(JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)).toEqual({ id: "beta", allow_run_stage: true });
+    await a2aApi.updateCaller("acme", true);
+    expect(fetchMock.mock.calls[2]![0]).toBe("/api/a2a/callers/acme");
+    expect(JSON.parse((fetchMock.mock.calls[2]![1] as RequestInit).body as string)).toEqual({ allow_run_stage: true });
   });
 
   it("raises the Host's code, and http_<status> when there is none", async () => {

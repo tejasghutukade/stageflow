@@ -9,31 +9,29 @@ Docker is the recommended way to run Stageflow: pull the published image and ope
 
 ## Docker (recommended)
 
-The image is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.39` is the current minor tag (`0.39.0` is that exact release). Each release is also tagged `x.y.z` and `x.y`.
+The image is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.57` is the current minor tag (`0.57.0` is that exact release). Each release is also tagged `x.y.z` and `x.y`.
 
 ```bash
 docker run --rm --name stageflow \
-  -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.39 \
+  ghcr.io/tejasghutukade/stageflow:0.57 \
   sf ui
 ```
 
 Open [http://127.0.0.1:3847](http://127.0.0.1:3847). Go to **Settings → Providers** and connect a model, then **New pipeline** on the Pipelines page. Pipelines you save in the console live on the `stageflow-data` volume, under `/data`.
 
-The process inside the container binds `0.0.0.0`, which is what Docker port publish needs. The `-p` address keeps the port on this machine, and `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` lets it start without a bearer. Do not publish the port on `0.0.0.0` with that flag set. Pass `sf ui` because the image command is `sf mcp`.
+The published port stays on `127.0.0.1`. The process inside the container still binds `0.0.0.0`, which is what Docker port publish needs. The container logs print `Control token: <token>` on first start. Later starts reuse it and print the file path. Copy that line into the console when it asks. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`. Do not publish the port on `0.0.0.0`. Pass `sf ui` because the image command is `sf mcp`.
 
 To browse a project that is already on the machine, mount it and register that path:
 
 ```bash
 docker run --rm --name stageflow \
-  -e STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1 \
   -e STAGEFLOW_ENSURE_PROJECT_ROOTS=/project \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
   -v "$PWD":/project \
-  ghcr.io/tejasghutukade/stageflow:0.39 \
+  ghcr.io/tejasghutukade/stageflow:0.57 \
   sf ui
 ```
 
@@ -92,8 +90,15 @@ catalog:
 id: hello
 stages:
   - id: hello
+    model: "CHANGE_ME/<provider-model>"
     system_prompt: Say hello and emit a success envelope.
-    model: CHANGE_ME/<provider-model>
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 ```
 
 `sf init` fills `model` from the single configured provider when one is logged in (for example `openrouter/auto` or `anthropic/claude-sonnet-4-5`). With none or more than one configured provider, it writes the loud placeholder `CHANGE_ME/<provider-model>` — replace it before running.
@@ -132,7 +137,7 @@ sf providers list
 sf providers login anthropic --type api_key --api-key-env ANTHROPIC_API_KEY
 ```
 
-See [Providers](providers.md) for `pi_home` vs `sf_owned` credential storage.
+See [Providers](providers.md) for `sf_owned` credential storage.
 
 ## 4. Run the pipeline
 

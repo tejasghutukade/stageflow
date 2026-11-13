@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { KNOWN_STAGEFLOW_ENV_KEYS } from "../src/config/hostConfig.js";
+import { isKnownStageflowEnvKey, KNOWN_STAGEFLOW_ENV_KEYS } from "../src/config/hostConfig.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const read = (file: string) => readFileSync(path.join(root, file), "utf8");
@@ -41,6 +41,30 @@ function anchorsOf(file: string): Set<string> {
   return anchors;
 }
 
+/** Names the env page documents: concrete `STAGEFLOW_*` keys, `_FILE` / `_PER_PROJECT` suffixes, and prefix families ending in `_`. `_EMAIL` beside `*_NAME` is the email variable. */
+function stageflowNamesInEnvDoc(doc: string): string[] {
+  const names = new Set<string>();
+  let previous: string | undefined;
+  for (const match of doc.matchAll(/`([^`]+)`/g)) {
+    const token = match[1]!;
+    if (/^_[A-Z0-9_]+$/.test(token)) {
+      if (previous === undefined) continue;
+      const expanded =
+        token === "_EMAIL" && previous.endsWith("_NAME")
+          ? `${previous.slice(0, -"_NAME".length)}_EMAIL`
+          : `${previous}${token}`;
+      names.add(expanded);
+      continue;
+    }
+    for (const found of token.matchAll(/(?:^|[^A-Za-z0-9_])(STAGEFLOW_[A-Z0-9_]+)/g)) {
+      const name = found[1]!;
+      names.add(name);
+      previous = name;
+    }
+  }
+  return [...names];
+}
+
 const DOC_FILES = [
   ...markdownFiles("docs", [/^docs\/(plans|research|tickets|specs|adr)\//]),
   "README.md",
@@ -74,15 +98,25 @@ describe("docs", () => {
   it("documents every Host env key the code accepts", () => {
     const doc = read("docs/environment-variables.md");
     const dynamic = (key: string) => key.endsWith("_") || key.includes("*");
-    // The page may write a family once: `NAME`, `_FILE` or `NAME`, `_SUFFIX`.
+    // The page may write a family once: `NAME`, `_FILE` or `NAME`, `_SUFFIX`. `_EMAIL` beside `*_NAME` is that email variable.
     const documented = (key: string) => {
       if (doc.includes(key)) return true;
       if (key.endsWith("_FILE")) return doc.includes(`${key.slice(0, -5)}\``) && doc.includes("`_FILE`");
+      if (key.endsWith("_EMAIL")) {
+        return doc.includes(`${key.slice(0, -"_EMAIL".length)}_NAME\``) && doc.includes("`_EMAIL`");
+      }
       const suffix = /_PER_PROJECT$/.exec(key)?.[0];
       return suffix !== undefined && doc.includes(`\`${suffix}\``);
     };
     const missing = [...KNOWN_STAGEFLOW_ENV_KEYS].filter((key) => !dynamic(key) && !documented(key));
     expect(missing).toEqual([]);
+  });
+
+  it("accepts every concrete STAGEFLOW_* name the env page documents", () => {
+    const names = stageflowNamesInEnvDoc(read("docs/environment-variables.md"));
+    const rejected = names.filter((name) => !isKnownStageflowEnvKey(name));
+    expect(names.length).toBeGreaterThan(40);
+    expect(rejected).toEqual([]);
   });
 
   it("documents every agent and project-MCP route", () => {
@@ -110,5 +144,66 @@ describe("docs", () => {
       ...mcpRoutes.filter((route) => !inDoc(mcpDoc, route)),
     ];
     expect(missing).toEqual([]);
+  });
+
+  it("pins published image tags and the security support row to package.json", () => {
+    const version = (JSON.parse(read("package.json")) as { version: string }).version;
+    const parsed = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+    expect(parsed, version).not.toBeNull();
+    const minor = `${parsed![1]}.${parsed![2]}`;
+    const allowed = new Set([minor, version]);
+    const files = ["README.md", ...markdownFiles("docs"), ...markdownFiles("skills")];
+    const problems: string[] = [];
+    for (const file of files) {
+      read(file).split("\n").forEach((line, index) => {
+        for (const match of line.matchAll(/ghcr\.io\/tejasghutukade\/stageflow:([^\s`'"]+)/g)) {
+          const tag = match[1]!.replace(/[.,);]+$/, "");
+          if (tag === "local" || /^[xyz](?:\.[xyz])+$/.test(tag)) continue;
+          if (!allowed.has(tag)) problems.push(`${file}:${index + 1} ${tag}`);
+        }
+      });
+    }
+    expect(problems).toEqual([]);
+
+    const supported = [...read("SECURITY.md").matchAll(/\|\s*([^|]+?)\s*\|\s*(Yes|No)\s*\|/g)].map((row) => ({
+      version: row[1]!.trim(),
+      supported: row[2]!,
+    }));
+    expect(supported).toEqual([
+      { version: `${minor}.x`, supported: "Yes" },
+      { version: `< ${minor}`, supported: "No" },
+    ]);
+  });
+
+  it("follows a logs Control token line with docker exec within 3 lines", () => {
+    const files = [
+      ...DOC_FILES,
+      ...markdownFiles("skills"),
+      "docker-compose.yml",
+    ];
+    const problems: string[] = [];
+    for (const file of files) {
+      const lines = read(file).split("\n");
+      lines.forEach((line, index) => {
+        if (!/logs.*`Control token/.test(line)) return;
+        const window = lines.slice(index, index + 4).join("\n");
+        if (!window.includes("docker exec")) {
+          problems.push(`${file}:${index + 1}`);
+        }
+      });
+    }
+    expect(problems).toEqual([]);
+  });
+
+  it("never claims a stage is kept from the data directory path", () => {
+    const files = ["README.md", "SECURITY.md", "CHANGELOG.md", ...markdownFiles("docs"), ...markdownFiles("skills")];
+    const problems = files.filter((file) => /data directory path/.test(read(file)));
+    expect(problems).toEqual([]);
+  });
+
+  it("install.sh names the package directory when better-sqlite3 fails", () => {
+    const sh = read("install.sh");
+    expect(sh).toMatch(/package directory:/);
+    expect(sh).toMatch(/package_dir_from_sf/);
   });
 });

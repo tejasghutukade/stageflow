@@ -25,7 +25,12 @@ export type StageWorkerInput = {
   runId: string;
   stageId: string;
   rootDir: string;
-  mode?: "run" | "resume" | "feedback_resume" | "new_session";
+  mode?:
+    | "run"
+    | "resume"
+    | "feedback_resume"
+    | "new_session"
+    | "timeout_resume";
   resumeAnswer?: unknown;
   attempt?: number;
   sessionFilePath?: string;

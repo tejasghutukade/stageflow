@@ -5,7 +5,7 @@ stages:
     route:
       - on: [succeeded]
     system_prompt: Draft.
-    model: cursor/auto
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:

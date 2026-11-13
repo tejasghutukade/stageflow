@@ -39,9 +39,9 @@ The well-known port is 3847 (`DEFAULT_PORT`). Override it with `--port` on `sf u
 
 `STAGEFLOW_BIND` and `--host` take an IP literal (`127.0.0.1`, `0.0.0.0`, `::`, or another address). A hostname, a URL, or `host:port` is rejected. Binding `0.0.0.0` or `::` advertises `127.0.0.1` or `[::1]` in the printed URL. The process is still reachable on the other interfaces.
 
-A non-loopback bind refuses to start unless a drive token is set, or `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`. The refusal's `reason` on autostart is `bind_refused`. Use the allow flag only when the published port stays on this machine (the shipped compose file publishes `127.0.0.1:3847` and sets the flag because the process inside the container must bind `0.0.0.0`).
+If `STAGEFLOW_CONTROL_TOKEN` and `_FILE` are unset, `sf ui` and `sf mcp` write `$STAGEFLOW_HOME/control-token` (mode 0600) and print `Control token: <token>` on first start. Later starts reuse it and print the file path. A non-loopback bind then has that token. `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` is an explicit opt-in to start with no token. The shipped compose file publishes `127.0.0.1:3847` and does not set the flag. The process inside the container binds `0.0.0.0`. The container logs print `Control token: <token>` on first start. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`.
 
-Every request also passes a Host and Origin allow-list. Loopback (`localhost`, `127.0.0.1`, `::1`) is always allowed. Add other names with `STAGEFLOW_ALLOWED_HOSTS` as a comma-separated list (`console.example.com` or `console.example.com:3847`). `*` is rejected. A browser on another host needs its origin listed or the console calls fail before auth.
+Every request also passes a Host allow-list. Loopback (`localhost`, `127.0.0.1`, `::1`) is always allowed as the Host. An `Origin` header must match that Host header's host and port. A localhost page on another port is rejected. Requests with no Origin stay allowed. Add other names with `STAGEFLOW_ALLOWED_HOSTS` as a comma-separated list (`console.example.com` or `console.example.com:3847`). `*` is rejected.
 
 The probe and the CLI do not use `STAGEFLOW_BIND`. They use `STAGEFLOW_SERVICE_PORT` and `127.0.0.1`.
 
@@ -57,7 +57,15 @@ Set a token when the Host is reachable beyond this machine. Generate it with `op
 | `STAGEFLOW_READ_TOKEN_FILE` | read | Same, from a file |
 | `STAGEFLOW_CONTROL_TOKEN_<NAME>` | drive, attributed | Named caller. The CLI does not send these. MCP and HTTP do, and the run is stamped with that caller id. |
 
-The CLI sends `Authorization: Bearer <token>`. It prefers the drive token. For GET and HEAD only, it uses the read token when no drive token is set. With a loopback bind and no tokens configured, no bearer is required.
+The CLI sends `Authorization: Bearer <token>`. It prefers the drive token. When `STAGEFLOW_CONTROL_TOKEN` is unset, it reads `$STAGEFLOW_HOME/control-token`. For GET and HEAD only, it uses the read token when no drive token is set. A Host with no token and no allow-flag opt-in generates one, so API calls need that bearer. `/livez` and `/readyz` stay open.
+
+Export the same file for curl, MCP `headers`, and harness scripts:
+
+```bash
+export STAGEFLOW_CONTROL_TOKEN="$(tr -d '\n' < "${STAGEFLOW_HOME:-$HOME/.stageflow}/control-token")"
+# or
+export STAGEFLOW_CONTROL_TOKEN_FILE="${STAGEFLOW_HOME:-$HOME/.stageflow}/control-token"
+```
 
 When any token is configured, a request without a matching bearer is rejected. `/mcp` always requires drive scope. Mutating `/api/*` requires drive. `GET` and `HEAD` under `/api/*` require read (a drive token also satisfies read).
 
@@ -86,9 +94,9 @@ The probe prints `bearer` when `STAGEFLOW_CONTROL_TOKEN` or `STAGEFLOW_CONTROL_T
 
 Do this when the user needs tools the CLI does not have (connections, memories, live inspection, agent and eval authoring), or the Host is in a container or on another machine. The URL is `http://127.0.0.1:3847/mcp` on this machine. From another machine, use the Host's reachable URL and a drive token. Add the Host's public name to `STAGEFLOW_ALLOWED_HOSTS`.
 
-Omit the Authorization header when no token is configured. When a token is configured, the header is `Authorization: Bearer <token>`. Prefer an environment substitution over a literal token in a file that will be committed.
+Omit the `Authorization` header only when the Host started with `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`. A normal start writes `$STAGEFLOW_HOME/control-token`; set `Authorization: Bearer <token>` from that file. Prefer an environment substitution over a literal token in a file that will be committed.
 
-There is no MCP OAuth on this Host. A client that starts an OAuth login against `/mcp` will fail. Send the bearer, or run without tokens on loopback.
+There is no MCP OAuth on this Host. A client that starts an OAuth login against `/mcp` will fail. Send the bearer. A Host always has a control token (generated into `$STAGEFLOW_HOME/control-token` on first start unless the operator sets one).
 
 ### Cursor
 
@@ -107,7 +115,7 @@ Project file `.cursor/mcp.json`, or user file `~/.cursor/mcp.json`. A remote ser
 }
 ```
 
-Drop `headers` when the Host has no token. Restart Cursor or reload MCP after saving. The tools are present when `get_started` answers.
+Drop `headers` only when the Host runs with `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`. Restart Cursor or reload MCP after saving. The tools are present when `get_started` answers.
 
 ### Claude Code
 
@@ -139,7 +147,7 @@ url = "http://127.0.0.1:3847/mcp"
 bearer_token_env_var = "STAGEFLOW_CONTROL_TOKEN"
 ```
 
-Omit `bearer_token_env_var` when the Host has no token. Codex's default `auth` is `oauth`, which it tries after bearer tokens. This Host does not implement that login. If Codex opens an OAuth flow, set the bearer variable (or run loopback with no tokens) instead of completing OAuth.
+Omit `bearer_token_env_var` only when the Host runs with `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`. Codex's default `auth` is `oauth`, which it tries after bearer tokens. This Host does not implement that login. If Codex opens an OAuth flow, set the bearer variable instead of completing OAuth. The token is in `$STAGEFLOW_HOME/control-token` unless the operator set one.
 
 ### OpenCode
 
@@ -160,7 +168,7 @@ Omit `bearer_token_env_var` when the Host has no token. Codex's default `auth` i
 }
 ```
 
-Drop `headers` and `oauth` when no token is configured. The default request timeout is 30 seconds, which is shorter than a long `wait_run`. Raise `timeout` on this entry if a wait dies at 30 seconds, or pass a shorter `timeout_ms` to the tool.
+Drop `headers` and `oauth` only when the Host runs with `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`. The default request timeout is 30 seconds, which is shorter than a long `wait_run`. Raise `timeout` on this entry if a wait dies at 30 seconds, or pass a shorter `timeout_ms` to the tool.
 
 ### After it connects
 

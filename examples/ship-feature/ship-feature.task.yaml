@@ -7,9 +7,9 @@ goal: >
   (non-negative integers, checked at compile time). Also add a nullable:
   true keyword usable on any node type, compiling to a union of that type
   with null. Ship the change as an operator-approved pull request opened
-  against tejasghutukade/stageflow.
+  against <owner>/stageflow.
 context: |
-  This repository is Stageflow itself (tejasghutukade/stageflow). The
+  This repository is Stageflow itself (<owner>/stageflow). The
   checkout for this run is a dedicated git worktree already on branch
   demo/richer-payload-schema-constraints, tracking origin/main, in a clean
   state with npm install already run.
@@ -43,8 +43,8 @@ context: |
   tracker" section at the bottom — follow those instructions exactly (flip
   [ ] to [x], add links to the fixture/test/doc/example) rather than only
   deleting the checkbox text. Do not touch any other backlog item in that
-  file. This tracker file is gitignored (a local-only planning artifact, like
-  docs/plans/ and docs/ideation/) — editing it on disk is still worthwhile
+  file. This tracker file is gitignored (a local-only planning artifact) —
+  editing it on disk is still worthwhile
   for the operator's own tracking, but it will never appear in `git diff` or
   `git status`, so never list it in changed_files/fixed_files (those must
   match tracked, committable changes) and never expect it to show up in the
@@ -55,7 +55,7 @@ context: |
   typecheck, npx vitest run tests/envelope.payloadSchema.test.ts, and npm
   test for the full suite.
 
-  Ship target: open the pull request against tejasghutukade/stageflow, base
+  Ship target: open the pull request against <owner>/stageflow, base
   branch main, from the checkout's current branch
   (demo/richer-payload-schema-constraints) — push to origin on that same
   repository, not a fork.
@@ -75,4 +75,4 @@ constraints: |
   this file already rejects invalid minItems/minimum/maximum.
   Source and test edits belong in the checkout working tree and must never
   be replaced by a Stageflow artifact or report describing the change.
-checkout: /Users/tejasghutukade/Projects/stageflow-demo-worktree
+checkout: /path/to/checkout

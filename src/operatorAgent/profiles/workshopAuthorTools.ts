@@ -8,6 +8,7 @@ import {
 } from "../../config/catalogRelativePath.js";
 import {
   validateDraftPackage,
+  type DraftFileHashes,
   type DraftPackage,
 } from "../../config/draftPackage.js";
 import { defaultWorkshopPackageDirectory } from "../../config/ensureCatalogScanRoot.js";
@@ -187,6 +188,28 @@ function resolveProjectRoot(
   // Never trust LLM tool args for the write root — only host-bound context
   // (or the profile/host default passed into createSaveTool).
   return readWorkshopContext(ctx).projectRoot ?? defaultProjectRoot ?? null;
+}
+
+function isDraftFileHashes(value: unknown): value is DraftFileHashes {
+  if (value === null || typeof value !== "object" || !("files" in value)) {
+    return false;
+  }
+  const files = (value as DraftFileHashes).files;
+  return (
+    files !== null &&
+    typeof files === "object" &&
+    !Array.isArray(files) &&
+    Object.values(files).every((hash) => typeof hash === "string" && hash.length > 0)
+  );
+}
+
+function baseHashesFromArgs(
+  ctx: OperatorAgentToolContext,
+  args: Record<string, unknown>,
+): DraftFileHashes | undefined {
+  const raw = args.baseHashes ?? args.base_hashes ?? args.fileHashes ?? args.file_hashes;
+  if (isDraftFileHashes(raw)) return raw;
+  return readWorkshopContext(ctx).fileHashes;
 }
 
 type SaveWriteTarget = {
@@ -744,16 +767,19 @@ export function createWorkshopBuildTools(): OperatorAgentTool[] {
     name: "focus_build",
     description:
       "Move this chat onto a build by id, or onto an unbound disk pipeline by projectRoot and relativePath. Mid-turn, the mutation pin moves with the focus so studio and draft tools stay on the same build. A failed open returns the error, creates nothing, and leaves the pointer unchanged.",
-    parameters: Type.Union([
-      Type.Object({ id: Type.String({ minLength: 1 }) }, closed),
-      Type.Object(
-        {
-          projectRoot: Type.String({ minLength: 1 }),
-          relativePath: Type.String({ minLength: 1 }),
-        },
-        closed,
-      ),
-    ]),
+    // One object at the root (OpenAI needs `type: "object"`); the handler takes id, or projectRoot with relativePath.
+    parameters: Type.Object(
+      {
+        id: Type.Optional(Type.String({ minLength: 1, description: "A build id." })),
+        projectRoot: Type.Optional(
+          Type.String({ minLength: 1, description: "With relativePath, for an unbound disk pipeline." }),
+        ),
+        relativePath: Type.Optional(
+          Type.String({ minLength: 1, description: "With projectRoot, for an unbound disk pipeline." }),
+        ),
+      },
+      closed,
+    ),
     async handler(args, ctx): Promise<OperatorAgentToolResult> {
       const live = liveWorkshopBinding(ctx);
       if (!live) {
@@ -1049,6 +1075,12 @@ export function createSaveTool(
           Type.Union([Type.Literal("auto"), Type.Literal("create"), Type.Literal("overwrite")]),
         ),
         allowInvalid: Type.Optional(Type.Boolean()),
+        baseHashes: Type.Optional(
+          Type.Object({ files: Type.Record(Type.String(), Type.String()) }),
+        ),
+        file_hashes: Type.Optional(
+          Type.Object({ files: Type.Record(Type.String(), Type.String()) }),
+        ),
       },
       closed,
     ),
@@ -1086,6 +1118,7 @@ export function createSaveTool(
           ? modeRaw
           : "auto";
 
+      const baseHashes = baseHashesFromArgs(ctx, args);
       const input = {
         directory: destination.directory,
         draft,
@@ -1093,6 +1126,7 @@ export function createSaveTool(
           ? { pipelineFilename: destination.pipelineFilename }
           : {}),
         ...(allowInvalid ? { allowInvalid: true } : {}),
+        ...(baseHashes !== undefined ? { baseHashes } : {}),
       };
 
       const published = await publishDraftPackage(fsRoot, input, mode, {
@@ -1112,6 +1146,7 @@ export function createSaveTool(
               : {}),
           },
           projectRoot: fsRoot,
+          ...(result.fileHashes ? { fileHashes: result.fileHashes } : {}),
         });
         recordPinnedWorkshopSave(ctx.getContext(), {
           directory: destination.directory,
@@ -1139,7 +1174,10 @@ export function createSaveTool(
                   : { task_path: null }),
               },
             }
-          : result,
+          : {
+              ...result,
+              ...(result.fileHashes ? { fileHashes: result.fileHashes } : {}),
+            },
         ...(result.ok ? {} : { error: result.error }),
       };
     },

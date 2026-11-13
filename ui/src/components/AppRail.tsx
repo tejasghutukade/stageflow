@@ -4,6 +4,7 @@ export type RailItem = {
   id: string;
   label: string;
   glyph: string;
+  experimental?: boolean;
 };
 
 export type AppRailProps = {
@@ -20,11 +21,11 @@ const defaultItems: RailItem[] = [
   { id: "workshop", label: "Workshop", glyph: "✎" },
   { id: "tasks", label: "Tasks", glyph: "▦" },
   { id: "triggers", label: "Triggers", glyph: "⚡" },
-  { id: "connections", label: "Connections", glyph: "↔" },
-  { id: "identity", label: "Identity", glyph: "⬡" },
-  { id: "a2a", label: "A2A", glyph: "⇄" },
+  { id: "connections", label: "Connections", glyph: "↔", experimental: true },
+  { id: "identity", label: "Identity", glyph: "⬡", experimental: true },
+  { id: "a2a", label: "A2A", glyph: "⇄", experimental: true },
   { id: "memories", label: "Memories", glyph: "☰" },
-  { id: "agents", label: "Agents", glyph: "◈" },
+  { id: "agents", label: "Agents", glyph: "◈", experimental: true },
   { id: "skills", label: "Skills", glyph: "✦" },
   { id: "extensions", label: "Extensions", glyph: "◇" },
   { id: "settings", label: "Settings", glyph: "⚙" },
@@ -81,6 +82,12 @@ export function AppRail({
         >
           <span className="rail__glyph" aria-hidden="true">{item.glyph}</span>
           <span className="rail__label">{item.label}</span>
+          {item.experimental ? (
+            <span className="rail__count" title="Experimental">
+              <span className="sr-only">experimental</span>
+              <span aria-hidden="true">Exp</span>
+            </span>
+          ) : null}
           {item.id === "today" && waitingCount != null && waitingCount > 0 && (
             <span className="rail__count">{waitingCount}</span>
           )}

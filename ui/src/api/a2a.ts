@@ -15,7 +15,7 @@ export type A2aStatus = {
   lastReload: { ok: boolean; at: string; error: { code: string; message: string } | null } | null;
 };
 
-export type A2aCaller = { id: string; tokenSource: "store" | "env" };
+export type A2aCaller = { id: string; tokenSource: "store" | "env"; allowRunStage: boolean };
 
 export type A2aPublication = {
   id: string;
@@ -100,7 +100,11 @@ export function projectA2aStatus(value: unknown): A2aStatus {
 
 export function projectA2aCaller(value: unknown): A2aCaller {
   const raw = asRecord(value);
-  return { id: text(raw.id), tokenSource: raw.token_source === "env" ? "env" : "store" };
+  return {
+    id: text(raw.id),
+    tokenSource: raw.token_source === "env" ? "env" : "store",
+    allowRunStage: raw.allow_run_stage === true,
+  };
 }
 
 export function projectA2aPublication(value: unknown): A2aPublication {
@@ -182,10 +186,12 @@ export const a2aApi = {
     return Array.isArray(list) ? list.map(projectA2aCaller) : [];
   },
   /** The only place a caller's token is read. The caller keeps it in memory until the operator dismisses it. */
-  createCaller: async (id: string): Promise<{ id: string; token: string }> => {
-    const raw = asRecord(await request("/api/a2a/callers", "POST", { id }));
+  createCaller: async (id: string, allowRunStage = false): Promise<{ id: string; token: string }> => {
+    const raw = asRecord(await request("/api/a2a/callers", "POST", allowRunStage ? { id, allow_run_stage: true } : { id }));
     return { id: text(raw.id), token: text(raw.token) };
   },
+  updateCaller: async (id: string, allowRunStage: boolean): Promise<A2aCaller> =>
+    projectA2aCaller(await request(`/api/a2a/callers/${enc(id)}`, "PATCH", { allow_run_stage: allowRunStage })),
   revokeCaller: async (id: string): Promise<{ removedFrom: string[] }> => {
     const raw = asRecord(await request(`/api/a2a/callers/${enc(id)}`, "DELETE"));
     return { removedFrom: stringList(raw.removed_from) };

@@ -68,13 +68,13 @@ Three groups. Mutating commands appear in more than one group. `sf browser login
 
 ## Tokens
 
-Loopback with no token needs no `Authorization` header.
+A Host start with no `STAGEFLOW_CONTROL_TOKEN` or `_FILE` writes `$STAGEFLOW_HOME/control-token` and requires that bearer. `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` is an explicit opt-in to start with no token.
 
-When tokens are set: `GET /api/backup` is drive, not read. Other `/api/` GET and HEAD are read. POST, PUT, PATCH, DELETE, and `/mcp` are drive. Webhook, agent-inbound, and `/api/public/chat/` take no control token. `/livez` and `/readyz` take none.
+When a token is loaded: `GET /api/backup` is drive, not read. Other `/api/` GET and HEAD are read. POST, PUT, PATCH, DELETE, and `/mcp` are drive. Webhook, agent-inbound, and `/api/public/chat/` take no control token. `/livez` and `/readyz` take none.
 
-The CLI sends the drive token when `STAGEFLOW_CONTROL_TOKEN` or `STAGEFLOW_CONTROL_TOKEN_FILE` is set. For `GET` and `HEAD` only, it falls back to `STAGEFLOW_READ_TOKEN` when no drive token is set. Named tokens `STAGEFLOW_CONTROL_TOKEN_<NAME>` are for callers, not for the CLI. A token is at least 32 characters. Never print it.
+The CLI sends the drive token when `STAGEFLOW_CONTROL_TOKEN` or `STAGEFLOW_CONTROL_TOKEN_FILE` is set, and otherwise reads `$STAGEFLOW_HOME/control-token`. For `GET` and `HEAD` only, it falls back to `STAGEFLOW_READ_TOKEN` when no drive token is set. Named tokens `STAGEFLOW_CONTROL_TOKEN_<NAME>` are for callers, not for the CLI. A token is at least 32 characters. The Host prints `Control token:` once at start. Do not print it again.
 
-`/mcp` is Streamable HTTP only. There is no stdio MCP server. Sessions are stateful unless the Host was started with `--mcp-stateless` or `STAGEFLOW_MCP_STATELESS=1`. A non-loopback bind refuses to start without a drive token, unless `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`.
+`/mcp` is Streamable HTTP only. There is no stdio MCP server. Sessions are stateful unless the Host was started with `--mcp-stateless` or `STAGEFLOW_MCP_STATELESS=1`. A non-loopback bind refuses to start without a drive token, unless `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`. The spawned Host generates a token before that check when neither the token nor the opt-in is set.
 
 ## A remote Host
 

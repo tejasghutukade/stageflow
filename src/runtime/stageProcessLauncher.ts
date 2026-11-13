@@ -10,6 +10,7 @@ import {
 import { isCursorModelRef, readCursorApiKey } from "../agent/cursorProvider.js";
 import { BROWSER_ENV_PREFIX } from "../browser/browserHost.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
+import { globalStageflowHome } from "../project/globalHome.js";
 import { PI_HOME_AUTH_PATH_ENV, sfOwnedAuthPath } from "./credentialBinding.js";
 import { redactString } from "../logging/redact.js";
 import { getNamedSecrets } from "../logging/namedSecrets.js";
@@ -47,7 +48,12 @@ export type StageLaunchInput = {
   stageId: string;
   rootDir: string;
   workspaceDir?: string;
-  mode?: "run" | "resume" | "feedback_resume" | "new_session";
+  mode?:
+    | "run"
+    | "resume"
+    | "feedback_resume"
+    | "new_session"
+    | "timeout_resume";
   resumeAnswer?: unknown;
   attempt?: number;
   sessionFilePath?: string;
@@ -328,6 +334,17 @@ export class StageProcessLauncher {
     }
   }
 
+  async cancelStage(
+    runId: string,
+    stageId: string,
+    killAfterMs = 5000,
+  ): Promise<void> {
+    const children = [...this.active.values()].filter(
+      (entry) => entry.runId === runId && entry.stageId === stageId,
+    );
+    await this.terminateChildren(children, killAfterMs);
+  }
+
   async cancelRun(runId: string, killAfterMs = 5000): Promise<void> {
     this.cancelledRuns.add(runId);
     const remaining: WaitQueueEntry[] = [];
@@ -348,6 +365,16 @@ export class StageProcessLauncher {
       this.cancelledRuns.delete(runId);
       return;
     }
+
+    await this.terminateChildren(children, killAfterMs);
+    this.cancelledRuns.delete(runId);
+  }
+
+  private async terminateChildren(
+    children: TrackedChild[],
+    killAfterMs: number,
+  ): Promise<void> {
+    if (children.length === 0) return;
 
     for (const entry of children) {
       entry.hostInitiatedKill = true;
@@ -385,7 +412,6 @@ export class StageProcessLauncher {
           }),
       ),
     );
-    this.cancelledRuns.delete(runId);
   }
 
   private async waitForCapacity(runId: string): Promise<boolean> {
@@ -495,6 +521,7 @@ export class StageProcessLauncher {
     const childEnv: Record<string, string> = {
       ...withBrowser,
       [PI_HOME_AUTH_PATH_ENV]: sfOwnedAuthPath(),
+      SF_WORKER_STAGEFLOW_HOME: globalStageflowHome(),
     };
     const cursorApiKey = readCursorApiKey(hostEnv);
     if (

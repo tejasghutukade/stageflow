@@ -41,14 +41,59 @@ install_package() {
   fi
 }
 
+package_dir_from_sf() {
+  need_cmd sf
+  node - "$(
+    command -v sf
+  )" "${STAGEFLOW_PACKAGE}" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+
+const sfBin = process.argv[1];
+const pkgName = process.argv[2];
+let resolved = sfBin;
+try {
+  resolved = fs.realpathSync(sfBin);
+} catch {
+  resolved = sfBin;
+}
+let dir = path.dirname(resolved);
+if (path.basename(dir) === "dist") {
+  dir = path.dirname(dir);
+}
+const pkgJson = path.join(dir, "package.json");
+if (fs.existsSync(pkgJson)) {
+  const parsed = JSON.parse(fs.readFileSync(pkgJson, "utf8"));
+  if (parsed.name === pkgName) {
+    console.log(dir);
+    process.exit(0);
+  }
+}
+const globalRoot = path.dirname(path.dirname(resolved));
+const fallback = path.join(globalRoot, pkgName);
+if (fs.existsSync(path.join(fallback, "package.json"))) {
+  console.log(fallback);
+  process.exit(0);
+}
+process.exit(1);
+NODE
+}
+
 verify_install() {
   need_cmd sf
   echo ""
   echo "Installed: $(sf --version 2>/dev/null || echo stageflow)"
-  if node -e "require('better-sqlite3')" >/dev/null 2>&1; then
+  local global_root pkg_dir
+  global_root="$(npm root -g 2>/dev/null || true)"
+  if ! pkg_dir="$(package_dir_from_sf 2>/dev/null)"; then
+    pkg_dir="${global_root}/${STAGEFLOW_PACKAGE}"
+  fi
+  if NODE_PATH="${pkg_dir}/node_modules:${global_root}" \
+    node -e "require('better-sqlite3')" >/dev/null 2>&1; then
     echo "better-sqlite3: ok"
   else
-    err "better-sqlite3 did not load. If install used --ignore-scripts, retry without it."
+    err "better-sqlite3 did not load (package directory: ${pkg_dir})."
+    err "If install used --ignore-scripts, retry without it."
     err "On Linux/macOS, prebuilds cover common platforms; rebuild may need python3 and build tools."
     exit 1
   fi

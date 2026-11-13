@@ -61,7 +61,7 @@ Run `node <this skill's folder>/scripts/detect-host.mjs`. It requests `GET /live
 - `down http://127.0.0.1:3847` exit 1: nothing, a non-200, non-JSON, or a hang.
 - exit 2: bad arguments.
 
-`bearer` is appended when `STAGEFLOW_CONTROL_TOKEN` or `STAGEFLOW_CONTROL_TOKEN_FILE` is set in your environment, as a reminder that `/mcp` and `/api/*` need `Authorization: Bearer <token>`. The probe never sends the token. `--base-url <url>` checks a Host elsewhere.
+`bearer` is appended when `STAGEFLOW_CONTROL_TOKEN`, `STAGEFLOW_CONTROL_TOKEN_FILE`, or `$STAGEFLOW_HOME/control-token` is available, as a reminder that `/mcp` and `/api/*` need `Authorization: Bearer <token>` (omit only when the Host opted in with `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`). The probe never sends the token. `--base-url <url>` checks a Host elsewhere.
 
 `/livez` and `/readyz` never need a bearer. `/api/health` does when a token is set, which is why the probe does not use it. The result is advisory: the probe says whether a Host is there, not whether your MCP client is connected to it.
 

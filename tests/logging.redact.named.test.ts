@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -11,6 +11,18 @@ import {
 } from "../src/logging/namedSecrets.js";
 import { redactString, stripUrlUserinfo } from "../src/logging/redact.js";
 import { redactSecrets } from "../src/agent/streamLogRedact.js";
+
+describe("GitHub token prefixes", () => {
+  it("replaces each prefix in a log line and leaves a short lookalike", () => {
+    const tail = "Ab12_cd34EF567890abcd";
+    for (const prefix of ["ghp", "gho", "ghu", "ghs", "ghr"]) {
+      const token = `${prefix}_${tail}`;
+      expect(redactString(`log line ${token} end`)).toBe("log line [redacted] end");
+    }
+    const lookalike = `gho_${"a".repeat(19)}`;
+    expect(redactString(`log line ${lookalike} end`)).toBe(`log line ${lookalike} end`);
+  });
+});
 
 describe("value-based redaction", () => {
   it("redacts exact, base64, and URL-encoded forms with named marker", () => {
@@ -54,6 +66,9 @@ describe("value-based redaction", () => {
       loadNamedSecretsFromAttemptDir(attemptDir);
       expect(getNamedSecrets()).toEqual([{ name: "WORKER_TOKEN", value }]);
       expect(redactSecrets(`leak ${value}`)).toContain("[redacted:WORKER_TOKEN]");
+      await expect(
+        readFile(path.join(attemptDir, REDACTION_SECRETS_FILENAME), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       clearNamedSecretsForTests();
       await rm(attemptDir, { recursive: true, force: true });

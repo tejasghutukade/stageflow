@@ -1,10 +1,19 @@
 import type {
+  CatalogRootKind,
+  DraftFileHashes,
   DraftPackagePayload,
   DraftValidationResult,
   PipelineListing,
   ValidationFinding,
 } from "../../api";
+import { parseHash, pipelinePath } from "../../routes";
 import { locateFindingField } from "../workshop/inspector/stageFields";
+import {
+  catalogSaveBindingFromRelativePath,
+  draftOriginFromResponse,
+  type DraftOrigin,
+} from "../workshop/workshopPageModel";
+import { pipelineYamlDocument, serializeYamlDocument } from "./draftYaml";
 
 export const EDITOR_TAB_IDS = ["editor", "runs", "history"] as const;
 
@@ -45,6 +54,33 @@ export function isDraftDirty(
 ): boolean {
   if (!draft || !baseline) return false;
   return stableStringify(draft) !== stableStringify(baseline);
+}
+
+export function shouldBlockEditorLeave(
+  dirty: boolean,
+  current: {
+    mode: "pipeline" | "stage";
+    pipelineId: string;
+    stagePath?: string;
+    projectRoot?: string;
+  },
+  nextHash: string,
+): boolean {
+  if (!dirty) return false;
+  const route = parseHash(nextHash);
+  const root = current.projectRoot ?? "";
+  if (current.mode === "stage") {
+    return !(
+      route.name === "stage" &&
+      route.path === current.stagePath &&
+      (route.projectRoot ?? "") === root
+    );
+  }
+  return !(
+    route.name === "pipeline" &&
+    route.pipelineId === current.pipelineId &&
+    (route.projectRoot ?? "") === root
+  );
 }
 
 export function warningPillLabel(count: number): string {
@@ -189,6 +225,138 @@ export function lastValidatedFooter(elapsedMs: number | null): string {
       ? "—"
       : `${Math.max(0, Math.round(elapsedMs))}ms`;
   return `Last validated · sf validate --strict · ${timing}`;
+}
+
+export const FILE_CHANGED_TITLE =
+  "The file changed on disk since you opened it";
+
+export type EditorLeaveCancel = "forward" | "back" | "replace";
+
+/** The `history.state` key the editor stamps on entries so a cancelled Back or Forward knows its direction. */
+export const EDITOR_HISTORY_POS_KEY = "sfEditorPos";
+
+/**
+ * How to undo a navigation the user cancelled. A new history entry (a link click, `location.hash =`) is replaced
+ * with the editor's URL. Moving between existing entries is undone by moving the other way: an entry stamped with a
+ * later position than the editor's was reached with Forward, so go back; anything else (an earlier or unstamped
+ * entry) was reached with Back, so go forward.
+ */
+export function editorLeaveCancelAction(input: {
+  historyGrew: boolean;
+  targetPos: number | undefined;
+  editorPos: number;
+}): EditorLeaveCancel {
+  if (input.historyGrew) return "replace";
+  if (input.targetPos !== undefined && input.targetPos > input.editorPos) return "back";
+  return "forward";
+}
+
+export function historyPos(state: unknown): number | undefined {
+  if (state === null || typeof state !== "object") return undefined;
+  const value = (state as Record<string, unknown>)[EDITOR_HISTORY_POS_KEY];
+  return typeof value === "number" ? value : undefined;
+}
+
+export function beforeUnloadReturnValue(
+  unsaved: boolean,
+): string | undefined {
+  if (!unsaved) return undefined;
+  return "";
+}
+
+export type DraftPackageWriteSuccess = {
+  pipeline: { id: string; path: string; project_root?: string };
+  pipelinePath: string;
+  fileHashes?: DraftFileHashes;
+  project_root?: string;
+  root_kind?: CatalogRootKind;
+  read_only?: boolean;
+};
+
+export type AfterEditorPackageWrite = {
+  writtenDraft: DraftPackagePayload;
+  destination: { directory: string; pipelineFilename: string } | null;
+  fileHashes: DraftFileHashes | null;
+  origin: DraftOrigin | null;
+  routePath: string | null;
+  openPipelinePath: string;
+};
+
+export function afterEditorPackageWrite(input: {
+  writtenDraft: DraftPackagePayload;
+  result: DraftPackageWriteSuccess;
+  readOnlyCopy: boolean;
+  currentPipelineId: string;
+  currentProjectRoot?: string;
+}): AfterEditorPackageWrite {
+  const binding = catalogSaveBindingFromRelativePath(
+    input.result.pipelinePath,
+    input.result.pipeline.id,
+  );
+  const projectRoot =
+    input.result.project_root ??
+    input.result.pipeline.project_root ??
+    undefined;
+  const origin =
+    draftOriginFromResponse(input.result) ??
+    (projectRoot
+      ? {
+          project_root: projectRoot,
+          kind: input.result.root_kind ?? (input.readOnlyCopy ? "workspace" : "registered"),
+          readOnly: input.result.read_only === true,
+        }
+      : null);
+  const routeHash = pipelinePath(input.result.pipeline.id, {
+    ...(projectRoot ? { project_root: projectRoot } : {}),
+  });
+  const routeChanged =
+    input.readOnlyCopy &&
+    (input.result.pipeline.id !== input.currentPipelineId ||
+      (projectRoot ?? "") !== (input.currentProjectRoot ?? ""));
+  return {
+    writtenDraft: input.writtenDraft,
+    destination: binding?.saveDestination ?? null,
+    fileHashes: input.result.fileHashes ?? null,
+    origin,
+    routePath: routeChanged ? routeHash : null,
+    openPipelinePath: input.result.pipeline.path,
+  };
+}
+
+export type DraftPackageSaveError = {
+  ok: false;
+  status: number;
+  error: string;
+  code?: string;
+  fileHashes?: DraftFileHashes;
+};
+
+export function isDraftFileChangedError(
+  result: DraftPackageSaveError,
+): boolean {
+  return result.status === 409 && result.code === "FILE_CHANGED";
+}
+
+export function isDraftIdCollisionError(result: DraftPackageSaveError): boolean {
+  return result.status === 409 && result.code !== "FILE_CHANGED";
+}
+
+export function draftPackageClipboardText(
+  draft: DraftPackagePayload,
+  pipelineRelPath: string,
+): string {
+  const sections: string[] = [
+    `# ${pipelineRelPath}\n${serializeYamlDocument(pipelineYamlDocument(draft.pipeline))}`,
+  ];
+  for (const stage of draft.stages ?? []) {
+    sections.push(`# ${stage.path}\n${serializeYamlDocument(stage.body)}`);
+  }
+  if (draft.task) {
+    sections.push(
+      `# ${draft.task.filename}\n${serializeYamlDocument(draft.task.body)}`,
+    );
+  }
+  return `${sections.join("\n\n")}`.trimEnd();
 }
 
 const EDITOR_HISTORY_MONTHS = [

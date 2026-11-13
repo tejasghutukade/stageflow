@@ -5,7 +5,7 @@ stages:
     route:
       - to: middle
     system_prompt: Implement.
-    model: cursor/auto
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -17,7 +17,7 @@ stages:
     route:
       - to: review
     system_prompt: Middle.
-    model: cursor/auto
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -41,7 +41,7 @@ stages:
         on_max_replays: wait_for_human
         replay_session: new_session
     system_prompt: Review.
-    model: cursor/auto
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:

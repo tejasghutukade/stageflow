@@ -11,7 +11,7 @@ stages:
     system_prompt: |
       Kick off write and draw in one sentence.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: cursor/auto
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -30,7 +30,7 @@ stages:
     system_prompt: |
       Write the first half in one sentence.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"ready": true}.
-    model: cursor/auto
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -53,7 +53,7 @@ stages:
     system_prompt: |
       Draw the second half in one sentence.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"complete": true}.
-    model: cursor/auto
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:
@@ -70,7 +70,7 @@ stages:
     system_prompt: |
       Combine both parents' work into one summary sentence.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
-    model: cursor/auto
+    model: anthropic/claude-haiku-4-5
     io:
       input:
         schema:

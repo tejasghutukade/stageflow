@@ -4,7 +4,7 @@ system_prompt: |
   List the sections you will produce and any open questions.
   Emit a success envelope with a clear summary when done.
   On a feedback replay, read Feedback Loop Context and revise the plan to address the send-back.
-model: omniroute/auto
+model: anthropic/claude-sonnet-5-5
 io:
   input:
     schema:

@@ -29,7 +29,7 @@ describe("resolveInitDefaultModel", () => {
   it("uses provider family default when exactly one configured", () => {
     expect(resolveInitDefaultModel(["openrouter"])).toBe("openrouter/auto");
     expect(resolveInitDefaultModel(["anthropic"])).toBe(
-      "anthropic/claude-sonnet-4-5",
+      "anthropic/claude-sonnet-5-5",
     );
   });
 

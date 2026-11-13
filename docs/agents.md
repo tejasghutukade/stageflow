@@ -1,5 +1,7 @@
 # Agents
 
+Experimental. Agents, web chat, and the Claude and Cursor backends work; their shape may still change.
+
 Project-owned agents live under `agents/<id>.agent.yaml`. An agent is a configured assistant: instructions, a model, the tools it may use, who may talk to it, and how it is recorded. They are separate from the stage `agent:` field (Pi vs Claude backend selection).
 
 | Page | What it covers |
@@ -82,7 +84,7 @@ Slack, Telegram and AgentMail connections accept an optional `inboundSecret` and
 | Telegram | `secret_token` from `setWebhook` | `x-telegram-bot-api-secret-token` |
 | AgentMail | Webhook secret | `x-agentmail-signature` (HMAC-SHA256 of the body) |
 
-The route needs no console token; the signature is the credential. A message starts or continues the session for its thread, the agent's reply goes back to the sender on the same connection once per turn, and a redelivered event is ignored. A webhook reply goes into the conversation: Slack in the channel, Telegram to the chat, AgentMail as a reply to the message. Messages for a connection no enabled agent is bound to are dropped.
+The route needs no console token; the signature is the credential. A message starts or continues the session for its thread, the agent's reply goes back to the sender on the same connection once per turn, and a redelivered event is ignored. A channel thread rolls onto a new session when it reaches its turn or time limit. Its cost limit counts the thread's spend over the last 24 hours, across rollovers, so a rollover does not reset it. Once that 24-hour spend is under the limit again, the thread continues on a new session. While a thread is past its cost limit it stays on the same session, and the sender is told the cost limit was reached. A webhook reply goes into the conversation: Slack in the channel, Telegram to the chat, AgentMail as a reply to the message. Messages for a connection no enabled agent is bound to are dropped.
 
 ## Schedules
 

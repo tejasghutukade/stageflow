@@ -58,6 +58,24 @@ describe("spillToolOutput", () => {
     expect(await readFile(second.absolutePath, "utf8")).toBe("second");
   });
 
+  it("does not write a GitHub token that was in the tool output", async () => {
+    const runWorkspaceDir = await mkdtemp(path.join(tmpdir(), "sf-spill-"));
+    const token = "ghs_Ab12_cd34EF567890abcd";
+    const spilled = await spillToolOutput({
+      runWorkspaceDir,
+      stageId: "enrich",
+      attempt: 2,
+      toolCallId: "call_secret",
+      toolName: "bash",
+      text: `remote: ${token}\n`,
+    });
+
+    const written = await readFile(spilled.absolutePath, "utf8");
+    expect(written).not.toContain(token);
+    expect(written).toContain("[redacted]");
+    expect(spilled.body).not.toContain(token);
+  });
+
   it("refuses to write through a symlink that leaves the artifacts dir", async () => {
     const runWorkspaceDir = await mkdtemp(path.join(tmpdir(), "sf-spill-"));
     const outside = await mkdtemp(path.join(tmpdir(), "sf-spill-outside-"));

@@ -25,6 +25,7 @@ import { CURRENT_SCHEMA_VERSION } from "./sqlite/migrations/index.js";
 import { StoreSchemaError } from "./sqlite/storeSchemaError.js";
 import { assertStoreQuickCheck } from "./sqlite/applyStorePragmas.js";
 import { verifyDbSnapshot } from "./backup.js";
+import { acquireHostLock, HostLockError, type HostLock } from "../server/hostLock.js";
 import {
   probeGlobalServiceDetailed,
   type ServiceProbeResult,
@@ -249,9 +250,10 @@ export async function assertHostDownForRestore(options?: {
 }): Promise<void> {
   const probe = options?.probe ?? probeGlobalServiceDetailed;
   const result = await probe();
-  if (result === "up") {
+  // Only "nothing is listening" is safe. An older Host, another data directory, or a Host still booting all count as live.
+  if (result !== "unreachable") {
     throw new RestoreError(
-      "restore_host_live: Host is up (GET /livez). Stop it before restore.",
+      `restore_host_live: something answers on the Host port (${result}). Stop the Host before restore.`,
       "restore_host_live",
     );
   }
@@ -332,8 +334,21 @@ export async function applyRestoreArchive(options: {
 }): Promise<ApplyRestoreResult> {
   const homeDir = options.homeDir ?? globalStageflowHome();
   await assertHostDownForRestore({ probe: options.probe });
+  // A Host on another port still holds the data directory's lock: refuse, and hold it ourselves while we restore.
+  let hostLock: HostLock;
+  try {
+    hostLock = await acquireHostLock(homeDir);
+  } catch (err) {
+    if (err instanceof HostLockError) {
+      throw new RestoreError(`restore_host_live: ${err.message}`, "restore_host_live");
+    }
+    throw err;
+  }
 
-  const verified = await extractVerifiedArchive(options.archivePath);
+  const verified = await extractVerifiedArchive(options.archivePath).catch((err: unknown) => {
+    hostLock.release();
+    throw err;
+  });
   try {
     if (
       verified.manifest?.stageflow_version &&
@@ -397,6 +412,7 @@ export async function applyRestoreArchive(options: {
       pre_restore_stamp: stamp,
     };
   } finally {
+    hostLock.release();
     await rm(verified.stagingDir, { recursive: true, force: true });
   }
 }

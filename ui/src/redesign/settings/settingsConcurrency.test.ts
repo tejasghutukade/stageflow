@@ -9,6 +9,7 @@ function health(partial: Partial<CapacityHealth>): CapacityHealth {
     activeCount: 0,
     maxConcurrent: 4,
     slotsAvailable: 2,
+    queuedCount: 0,
     ...partial,
   };
 }

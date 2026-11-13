@@ -28,14 +28,16 @@ A global `sf` on `PATH` may be older than this repo. From the Stageflow repo, `n
 
 Base URL: `http://127.0.0.1:${STAGEFLOW_SERVICE_PORT:-3847}`.
 
-If `STAGEFLOW_CONTROL_TOKEN` is set, every `/api` call needs `Authorization: Bearer` with that token. GET needs scope `read`. POST, PUT, PATCH, and DELETE need `drive`. With no token configured, a loopback Host accepts the call without one. Do not print the token. `sf agents` attaches it itself. These paths do not use the token: `POST /api/agent-inbound/<id>`, and `/api/public/chat/…`.
+A Host always has a control token (generated into `$STAGEFLOW_HOME/control-token` on first start unless the operator sets one). Every `/api` call needs `Authorization: Bearer` with that token. GET needs scope `read`. POST, PUT, PATCH, and DELETE need `drive`. Do not print the token. `sf agents` attaches it itself. These paths do not use the token: `POST /api/agent-inbound/<id>`, and `/api/public/chat/…`.
 
 Non-GET calls to `/api/memories`, `/api/connections`, and `/api/identity/setup` also need `Origin` set to the same host, for example `Origin: http://127.0.0.1:3847`. Other `/api/identity/…` writes, agent routes, and project MCP routes do not.
 
 The CLI adds `?project_root=` for you. A raw REST call to an agent route uses the Host's own project unless you pass `project_root`. An unknown root is `unknown_project_root`. Register once, then retry:
 
 ```bash
+export STAGEFLOW_CONTROL_TOKEN="$(cat ~/.stageflow/control-token)"
 curl -s -X POST "http://127.0.0.1:${STAGEFLOW_SERVICE_PORT:-3847}/api/projects" \
+  -H "Authorization: Bearer $STAGEFLOW_CONTROL_TOKEN" \
   -H 'Content-Type: application/json' \
   -d "{\"project_root\":\"$(pwd)\"}"
 ```

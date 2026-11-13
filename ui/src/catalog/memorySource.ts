@@ -7,6 +7,7 @@ const DEFAULT_HEALTH: CapacityHealth = {
   activeCount: 0,
   maxConcurrent: 1,
   slotsAvailable: 1,
+  queuedCount: 0,
 };
 
 export type MemoryCatalogSource = CatalogSource & {

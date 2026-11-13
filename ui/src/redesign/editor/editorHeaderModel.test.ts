@@ -4,6 +4,8 @@ import type {
   DraftValidationResult,
 } from "../../api";
 import {
+  editorHeaderNotice,
+  editorIncludeNotice,
   editorReadOnlyNotice,
   editorSaveLabel,
   headerPills,
@@ -133,6 +135,20 @@ describe("editorReadOnlyNotice", () => {
   it("shows a workspace copy hint for read-only origins", () => {
     expect(editorReadOnlyNotice(true)).toContain("Workspace");
     expect(editorReadOnlyNotice(false)).toBeNull();
+  });
+});
+
+describe("editorIncludeNotice", () => {
+  it("mentions include when present and stays silent otherwise", () => {
+    expect(editorIncludeNotice(true)).toMatch(/include/i);
+    expect(editorIncludeNotice(false)).toBeNull();
+  });
+});
+
+describe("editorHeaderNotice", () => {
+  it("combines read-only and include notices", () => {
+    expect(editorHeaderNotice({ readOnly: true, hasInclude: true })).toMatch(/include/i);
+    expect(editorHeaderNotice({ readOnly: false, hasInclude: false })).toBeNull();
   });
 });
 

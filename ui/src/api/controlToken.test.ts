@@ -40,6 +40,121 @@ describe("controlToken storage", () => {
   });
 });
 
+describe("control token fragment", () => {
+  it("exchanges #code=, removes the fragment, and stores the token", async () => {
+    const token = "t".repeat(32);
+    const replaceState = vi.fn();
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ token }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("window", {
+      location: {
+        hash: "#code=abc123",
+        pathname: "/",
+        search: "",
+      },
+      history: { state: null, replaceState },
+    });
+    vi.resetModules();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        store.set(k, v);
+      },
+      removeItem: (k: string) => {
+        store.delete(k);
+      },
+      clear: () => store.clear(),
+    });
+    const { getControlToken } = await import("./controlToken");
+    await vi.waitFor(() => expect(getControlToken()).toBe(token));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/console-login",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(replaceState).toHaveBeenCalled();
+    const next = String(replaceState.mock.calls[0]?.[2]);
+    expect(next).toBe("/");
+    expect(next).not.toContain("code=");
+    expect(next).not.toContain(token);
+  });
+
+  it("keeps a stored token when the code exchange is rejected", async () => {
+    const good = "g".repeat(32);
+    store.set("stageflow.controlToken", good);
+    const replaceState = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("{}", { status: 401 })),
+    );
+    vi.stubGlobal("window", {
+      location: { hash: "#code=junk", pathname: "/", search: "" },
+      history: { state: null, replaceState },
+    });
+    vi.resetModules();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        store.set(k, v);
+      },
+      removeItem: (k: string) => {
+        store.delete(k);
+      },
+      clear: () => store.clear(),
+    });
+    const { getControlToken, controlTokenReady } = await import("./controlToken");
+    await controlTokenReady;
+    expect(replaceState).toHaveBeenCalled();
+    expect(getControlToken()).toBe(good);
+  });
+
+  it("is ready only after a slow exchange, and a 401 that raced it does not keep the gate open", async () => {
+    const token = "s".repeat(32);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        await gate;
+        return new Response(JSON.stringify({ token }), { status: 200 });
+      }),
+    );
+    vi.stubGlobal("window", {
+      location: { hash: "#code=slow", pathname: "/", search: "" },
+      history: { state: null, replaceState: vi.fn() },
+      dispatchEvent: vi.fn(),
+    });
+    vi.resetModules();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        store.set(k, v);
+      },
+      removeItem: (k: string) => {
+        store.delete(k);
+      },
+      clear: () => store.clear(),
+    });
+    const mod = await import("./controlToken");
+    let ready = false;
+    void mod.controlTokenReady.then(() => {
+      ready = true;
+    });
+    mod.notifyControlTokenRequired();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(ready).toBe(false);
+    expect(mod.getControlToken()).toBe("");
+    release();
+    await mod.controlTokenReady;
+    expect(ready).toBe(true);
+    expect(mod.getControlToken()).toBe(token);
+    expect(mod.wasControlTokenRequired()).toBe(false);
+  });
+});
+
 describe("api Authorization attachment", () => {
   it("includes Authorization from localStorage on api()", async () => {
     const { setControlToken } = await import("./controlToken");

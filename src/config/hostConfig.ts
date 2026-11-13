@@ -35,6 +35,7 @@ export const KNOWN_STAGEFLOW_ENV_KEYS = new Set<string>([
   "STAGEFLOW_READ_TOKEN_FILE",
   "STAGEFLOW_ALLOW_UNKNOWN_CONFIG",
   "STAGEFLOW_EVALS_KEEP_WORKDIR",
+  "STAGEFLOW_EVALS_SMOKE",
   "STAGEFLOW_SHOW_INTERNAL_AGENTS",
   "STAGEFLOW_MAX_CONCURRENT_RUNS",
   "STAGEFLOW_MAX_CONCURRENT_RUNS_PER_PROJECT",
@@ -47,6 +48,7 @@ export const KNOWN_STAGEFLOW_ENV_KEYS = new Set<string>([
   "STAGEFLOW_ACTIVITY_TEXT_LIMIT",
   "STAGEFLOW_ACTIVITY_VERBOSE",
   "STAGEFLOW_CURSOR_EXTENSION",
+  "STAGEFLOW_AGENT_AUTH_PATH",
   "STAGEFLOW_NO_OPEN",
   "STAGEFLOW_OPERATOR_CWD",
   "STAGEFLOW_OPERATOR_AGENT_DIR",
@@ -61,7 +63,14 @@ export const KNOWN_STAGEFLOW_ENV_KEYS = new Set<string>([
   "STAGEFLOW_BARE_CACHE_TTL_MS",
   "STAGEFLOW_SLIM_ARTIFACT_MAX_BYTES",
   "STAGEFLOW_SQLITE_BUSY_TIMEOUT_MS",
+  "STAGEFLOW_SQLITE_SYNCHRONOUS",
+  "STAGEFLOW_SQLITE_WAL_AUTOCHECKPOINT",
+  "STAGEFLOW_ALLOW_NETWORK_STORE",
   "STAGEFLOW_RUN_BRANCH_TEMPLATE",
+  "STAGEFLOW_GIT_AUTHOR_NAME",
+  "STAGEFLOW_GIT_AUTHOR_EMAIL",
+  "STAGEFLOW_GIT_COMMITTER_NAME",
+  "STAGEFLOW_GIT_COMMITTER_EMAIL",
   "STAGEFLOW_AUTO_RESUME_INTERRUPTED",
   "STAGEFLOW_MAX_AUTO_RESUMES",
   "STAGEFLOW_RETRY_ROOT_WAIT_TIMEOUT_MS",
@@ -83,6 +92,8 @@ export const KNOWN_STAGEFLOW_ENV_KEYS = new Set<string>([
   "STAGEFLOW_TOOLCHAIN_MANIFEST",
   "STAGEFLOW_SECRET_REGISTRY",
   "STAGEFLOW_BUILD_SHA",
+  "STAGEFLOW_IMAGE_DIGEST",
+  "STAGEFLOW_IN_DOCKER",
   "STAGEFLOW_TRIGGER_TICK_INTERVAL_MS",
   "STAGEFLOW_AGENT_SCHEDULE_TICK_INTERVAL_MS",
   "STAGEFLOW_AGENT_SESSION_IDLE_MINUTES",
@@ -90,8 +101,17 @@ export const KNOWN_STAGEFLOW_ENV_KEYS = new Set<string>([
   "STAGEFLOW_AGENT_CHANNEL_LISTENERS",
   "STAGEFLOW_AGENTS_ALLOW_CURSOR_NATIVE_TOOLS",
   "STAGEFLOW_PUBLIC_CHAT_ORIGINS",
+  "STAGEFLOW_WORKSPACE_ID",
+  "STAGEFLOW_IDENTITY_ALLOW_LOOPBACK",
   "STAGEFLOW_MCP_ENV_ALLOW",
   "STAGEFLOW_GITHUB_POLL_INTERVAL_MS",
+  "STAGEFLOW_CHECKOUT",
+  "STAGEFLOW_RUN_WORKSPACE",
+  "STAGEFLOW_REPOSITORY",
+  "STAGEFLOW_REF",
+  "STAGEFLOW_BASE_SHA",
+  "STAGEFLOW_RUN_BRANCH",
+  "STAGEFLOW_STAGE_ARTIFACTS_DIR",
 ]);
 
 const KNOWN_ENV_PREFIXES = [
@@ -207,7 +227,7 @@ export function browserHostForOwner(
 const DEFAULT_MAX_CONCURRENT = 3;
 const DEFAULT_MAX_QUEUED = 32;
 
-function isKnownStageflowEnvKey(key: string): boolean {
+export function isKnownStageflowEnvKey(key: string): boolean {
   if (KNOWN_STAGEFLOW_ENV_KEYS.has(key)) return true;
   return KNOWN_ENV_PREFIXES.some((prefix) => key.startsWith(prefix));
 }
@@ -844,7 +864,9 @@ export function redactHostConfig(config: HostConfig): HostConfigPublicEcho {
     allowUnknownConfig: config.allowUnknownConfig,
     callers: { ...config.callers },
     secrets: {
-      controlToken: config.controlToken ? "set" : "unset",
+      // A token minted on first start is saved after the config loads; the file variable is set by then.
+      controlToken:
+        config.controlToken || process.env.STAGEFLOW_CONTROL_TOKEN_FILE?.trim() ? "set" : "unset",
       readToken: config.readToken ? "set" : "unset",
     },
   };

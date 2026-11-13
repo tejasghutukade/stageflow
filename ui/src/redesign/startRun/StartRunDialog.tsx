@@ -97,11 +97,13 @@ export function StartRunDialog({
   const slotsLabel =
     slotsMax > 0
       ? `${slotsInUse} of ${slotsMax} agent slots in use${
-          form.slotsFull
-            ? " — no slots left"
-            : slotsInUse === slotsMax - 1
-              ? " — this run takes the last one"
-              : ""
+          form.queueFull
+            ? " — queue full"
+            : form.queueLabel
+              ? ` — ${form.queueLabel}`
+              : slotsInUse === slotsMax - 1
+                ? " — this run takes the last one"
+                : ""
         }`
       : null;
 

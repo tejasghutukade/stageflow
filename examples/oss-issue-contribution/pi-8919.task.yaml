@@ -3,12 +3,12 @@ goal: >
   Deliver a verified minimal local fix for Pi issue #8919, fullscreen mode
   reserving a blank line for a zero-row custom footer, applied as source and
   test edits in the checkout working tree, plus an operator-approved pull
-  request opened against tejasghutukade/pi rather than earendil-works/pi.
+  request opened against <your-github-username>/pi rather than earendil-works/pi.
 context: |
   Issue: https://github.com/earendil-works/pi/issues/8919
   Title: Fullscreen mode reserves a blank line for zero-row custom footers (footer minSize should be 0)
   Upstream repo: https://github.com/earendil-works/pi
-  Fork (PR target after the run): https://github.com/tejasghutukade/pi
+  Fork (PR target after the run): https://github.com/<your-github-username>/pi
   State: OPEN, unassigned at the time this task was written, though another
   contributor has since commented intending to fix it. Pi's CONTRIBUTING.md
   auto-closes issues/PRs from unproven contributors and requires a
@@ -56,8 +56,8 @@ constraints: |
   except oss-approve-contribution, which may do so only after the operator
   has explicitly accepted the contribution package through its
   artifact_backed gate.
-  Do not target earendil-works/pi. The PR base is always tejasghutukade/pi
-  (gh pr create --repo tejasghutukade/pi).
+  Do not target earendil-works/pi. The PR base is always <your-github-username>/pi
+  (gh pr create --repo <your-github-username>/pi).
   Do not edit CHANGELOG.md.
   Before opening the local PR, the checkout must pass `npm run check` and
   `./test.sh` (or the package-scoped equivalent for packages/coding-agent) —
@@ -72,4 +72,4 @@ constraints: |
   be replaced by a Stageflow artifact or report describing the change.
   In the explainer stages only (oss-explain-issue, oss-explain-fix), the
   explainer HTML belongs in Stageflow artifacts, never in the checkout.
-checkout: /Users/tejasghutukade/Projects/pi
+checkout: /path/to/pi

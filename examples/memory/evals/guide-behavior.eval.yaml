@@ -12,7 +12,7 @@ defaults:
   pass_threshold: 1
   max_cost_usd: 8
   concurrency: 1
-  model: cursor/auto
+  model: anthropic/claude-sonnet-5-5
 conversation:
   mode: script
   max_turns: 4

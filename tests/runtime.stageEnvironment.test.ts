@@ -37,7 +37,7 @@ describe("buildStageEnvironment", () => {
     expect(passthroughActive).toBe(false);
     expect(warnings).toEqual([]);
     expect(env.PATH).toBe("/usr/bin:/bin");
-    expect(env.STAGEFLOW_HOME).toBe("/tmp/sf-home");
+    expect(env.STAGEFLOW_HOME).toBeUndefined();
     expect(env.STAGEFLOW_CURSOR_EXTENSION).toBe(
       "/tmp/pi-cursor-sdk/dist/index.js",
     );
@@ -143,6 +143,21 @@ describe("buildStageEnvironment", () => {
     const a = envNameSet(buildStageEnvironment(input).env);
     const b = envNameSet(buildStageEnvironment(input).env);
     expect([...a].sort()).toEqual([...b].sort());
+  });
+
+  it("passthrough and allow cannot put the data directory back", () => {
+    const { env } = buildStageEnvironment({
+      hostEnv: {
+        ...baseHost,
+        STAGEFLOW_STAGE_ENV_PASSTHROUGH: "all",
+        STAGEFLOW_STAGE_ENV_ALLOW: "STAGEFLOW_HOME",
+        STAGEFLOW_CREDENTIAL_HOME: "/tmp/sf-creds",
+        SF_WORKER_STAGEFLOW_HOME: "/tmp/sf-home",
+      },
+    });
+    expect(env.STAGEFLOW_HOME).toBeUndefined();
+    expect(env.STAGEFLOW_CREDENTIAL_HOME).toBeUndefined();
+    expect(env.SF_WORKER_STAGEFLOW_HOME).toBeUndefined();
   });
 });
 

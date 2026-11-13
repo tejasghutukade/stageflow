@@ -38,26 +38,24 @@ function workingStateKindSchema() {
   );
 }
 
+/**
+ * One object at the root, because OpenAI rejects a tool whose parameters are not `type: "object"`.
+ * `execute` checks the fields each operation needs.
+ */
 function workingStateParameters() {
-  return Type.Union([
-    Type.Object(
-      {
-        operation: Type.Literal("set"),
-        key: Type.String({ maxLength: WORKING_STATE_MAX_KEY }),
-        kind: workingStateKindSchema(),
-        value: Type.String({ maxLength: WORKING_STATE_MAX_VALUE }),
-      },
-      closed,
-    ),
-    Type.Object(
-      {
-        operation: Type.Literal("delete"),
-        key: Type.String({ maxLength: WORKING_STATE_MAX_KEY }),
-      },
-      closed,
-    ),
-    Type.Object({ operation: Type.Literal("list") }, closed),
-  ]);
+  return Type.Object(
+    {
+      operation: Type.Union([Type.Literal("set"), Type.Literal("delete"), Type.Literal("list")]),
+      key: Type.Optional(
+        Type.String({ maxLength: WORKING_STATE_MAX_KEY, description: "Required for set and delete." }),
+      ),
+      kind: Type.Optional({ ...workingStateKindSchema(), description: "Required for set." }),
+      value: Type.Optional(
+        Type.String({ maxLength: WORKING_STATE_MAX_VALUE, description: "Required for set." }),
+      ),
+    },
+    closed,
+  );
 }
 
 function result(text: string, isError = false): ToolResult {

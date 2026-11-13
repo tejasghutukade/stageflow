@@ -6,7 +6,7 @@ stages:
     entry: true
     route:
       - to: check-neighbors
-    model: openrouter/nvidia/nemotron-3.5-lightning:free
+    model: anthropic/claude-haiku-4-5
     system_prompt: |
       The task input has "focus", "decision", "query", and "neighbors". "neighbors" is a list of keys that must not change.
       Do these steps in order, then stop:
@@ -68,7 +68,7 @@ stages:
               type: string
           additionalProperties: false
   - id: check-neighbors
-    model: openrouter/nvidia/nemotron-3.5-lightning:free
+    model: anthropic/claude-haiku-4-5
     system_prompt: |
       The input has "cover", "focus", "decision", "neighbors", and "after".
       "neighbors" is lines of "key<tab>body" from before the update.

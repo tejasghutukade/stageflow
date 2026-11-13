@@ -1,6 +1,8 @@
 # A2A server
 
-Stageflow can expose explicitly published pipelines as [A2A](https://a2a-protocol.org/v1.0.0/specification/) capabilities that other agents invoke over JSON-RPC. This is the inbound direction only: a caller supplies input to an existing pipeline, and Stageflow creates a run and tracks it as an A2A task. See `docs/plans/2026-09-15-a2a-server-plan.md` for the full design; this page is the operator-facing reference.
+Experimental. Publishing a pipeline and invoking it works. `run_stage` stays off until that caller sets `allow_run_stage`. The shape may still change.
+
+Stageflow can expose explicitly published pipelines as [A2A](https://a2a-protocol.org/v1.0.0/specification/) capabilities that other agents invoke over JSON-RPC. This is the inbound direction only: a caller supplies input to an existing pipeline, and Stageflow creates a run and tracks it as an A2A task. This page is the operator-facing reference.
 
 ## Status
 
@@ -30,7 +32,9 @@ These commands talk to the running Host (and start one when none is running). `-
 
 ```bash
 sf a2a enable [--public-url https://agents.example.com]   # create the config; no callers or publications yet
-sf a2a caller create procurement-assistant                # prints the token once
+sf a2a caller create procurement-assistant                # prints the token once; stays off run_stage unless you pass --allow-run-stage
+sf a2a caller create procurement-assistant --allow-run-stage
+sf a2a caller update procurement-assistant --allow-run-stage | --no-allow-run-stage
 sf a2a publication create supplier.publication.yaml       # body below; --json for the API response
 sf a2a publication edit supplier_assessment edit.yaml     # only the fields you give change
 sf a2a publication remove supplier_assessment
@@ -63,7 +67,9 @@ sf a2a list [--config ./a2a.yaml]
 
 `callers` and `publications` may be empty, and a publication may have no `allowed_callers`; such a publication is served to nobody.
 
-The console does the same from the **A2A** screen; see [Console: A2A](console-a2a.md).
+The console does the same from the **A2A** screen — including the **Allow run_stage** checkbox when you add a caller and the per-row toggle on the Callers tab; see [Console: A2A](console-a2a.md).
+
+An opted-in caller (`allow_run_stage: true`) has **shell on the Host** (the same capability as the MCP `run_stage` tool) and may read **any run's envelopes** on that Host, not only runs it started. Default is off. No agent can set the flag for itself — only an operator through the console, the management API, or `sf a2a caller create` / `update`.
 
 ### Management API
 
@@ -75,8 +81,9 @@ All routes are under `/api/a2a` on the Host. They use the same control tokens as
 | `POST /api/a2a/enable` | `{ public_url? }` | `200` status. Creates the file if there is none; otherwise loads it. `400 a2a_public_url_required` when no public URL is given or set; `409 a2a_config_invalid` when the file is not a valid YAML mapping |
 | `POST /api/a2a/disable` | | `200` status (`state: "disabled"`, `configPath` kept). Writes `enabled: false` to the file and keeps callers, publications and stored token digests; the A2A endpoints answer `404` as when disabled. `409 a2a_not_enabled` when there is no file; `409 a2a_config_invalid` when the file is not a valid YAML mapping. Calling it when already off is a no-op |
 | `POST /api/a2a/reload` | | `200` status; `409 a2a_reload_failed` (the old configuration stays in use); `409 a2a_not_enabled` when there is no file |
-| `GET /api/a2a/callers` | | `{ callers: [{ id, token_source: "store" \| "env" }] }` |
-| `POST /api/a2a/callers` | `{ id }` | `201 { id, token, token_source: "store" }` (the only time the token appears). `409 a2a_not_enabled`, `a2a_caller_exists`, `a2a_caller_id_retained` |
+| `GET /api/a2a/callers` | | `{ callers: [{ id, token_source: "store" \| "env", allow_run_stage }] }` |
+| `POST /api/a2a/callers` | `{ id, allow_run_stage? }` | `201 { id, token, token_source: "store", allow_run_stage }` (the only time the token appears). `allow_run_stage` defaults to false. `409 a2a_not_enabled`, `a2a_caller_exists`, `a2a_caller_id_retained` |
+| `PATCH /api/a2a/callers/:id` | `{ allow_run_stage }` | `{ id, token_source, allow_run_stage }`; `404 a2a_caller_not_found` |
 | `DELETE /api/a2a/callers/:id` | | `{ revoked: true, removed_from: [publicationId] }`; `404 a2a_caller_not_found` |
 | `GET /api/a2a/publications` | | `{ publications: [Publication] }` |
 | `GET /api/a2a/publications/:id` | | `Publication` plus `contract: { revision, inputSchema, outputSchema, artifacts }`; `404 a2a_publication_not_found` |
@@ -125,7 +132,7 @@ publications:
 - Only listed publications are served — nothing is auto-published from the catalog.
 - `results.stage` must be a single, non-cloned terminal stage. Its declared artifacts must have a matching `artifact_declared` pre-emit check in the pipeline.
 - `caller_answerable_stages` may only name stages whose only gate kind is `free_text`. Mixed or `confirm`/`multi_question`/`artifact_backed` gates stay operator-only — split a stage before exposing it if it mixes clarification with approval.
-- A caller has exactly one of `token_env` (the named environment variable, read when the configuration is loaded, at least 32 characters) or `token_store` (a credential store entry holding the SHA-256 digest of a Host-generated token). A token never appears in YAML, and tokens must be unique per caller.
+- A caller has exactly one of `token_env` (the named environment variable, read when the configuration is loaded, at least 32 characters) or `token_store` (a credential store entry holding the SHA-256 digest of a Host-generated token). A token never appears in YAML, and tokens must be unique per caller. `allow_run_stage` defaults to false. Set it to true to let that caller use `run_stage`. `invoke` does not read this field.
 - Every publication is pinned to a digest of its resolved pipeline body, referenced stage files, and input schema. A later edit that changes that digest fails new invocations with a drift error instead of silently running a changed recipe — republish (run `sf a2a reload`, or save the publication through the API) to pick it up.
 
 ## Request contract
@@ -168,9 +175,9 @@ Answering a caller-answerable clarification question is another `SendMessage`, a
 
 `CancelTask` always resolves with the SDK's `TaskNotCancelableError` (`-32002`) — Stageflow does not claim to stop an in-flight run. Retry with a new message under the same context for a fresh attempt.
 
-## `run_stage`: wildcard-access standalone stage/pipeline calls
+## `run_stage`: standalone stage and pipeline calls
 
-Everything above this section is the explicit-publication model: nothing is reachable unless an operator wrote it into `a2a.yaml`'s `publications` list and named the caller in `allowed_callers`. `run_stage` is a second, deliberately different operation that bypasses that model entirely. Any caller with a valid bearer token for the host (any caller in `a2a.yaml`'s `callers` list, regardless of what — if anything — is published to them) can run **any** catalog or inline stage or pipeline through it, exactly the same wildcard-access default the standalone `run_stage` MCP tool and CLI give a local harness. This is a deliberate, temporary trade-off for proving out standalone stage execution, not a hardened access-control surface — do not expose a host with real callers over an untrusted network expecting `run_stage` to be gated the way `invoke` is. A resend of a `run_stage` message under a fresh `messageId` but identical content lands on the same task/run rather than starting a duplicate, the same at-most-once guarantee `invoke` gives (see [Limits and retention](#limits-and-retention) below).
+Everything above this section is the explicit-publication model: nothing is reachable unless an operator wrote it into `a2a.yaml`'s `publications` list and named the caller in `allowed_callers`. `run_stage` does not use that list. It stays off until that caller has `allow_run_stage: true`, the same idea as ticking a caller before anything is exposed. The field defaults to false. Set it from the console, `PATCH /api/a2a/callers/:id`, or `sf a2a caller update`. A caller without it, or with it false, is rejected: `run_stage is off for this caller. Set allow_run_stage to enable it.` A caller who is opted in can run any catalog or inline stage or pipeline, whether or not a pipeline is published to them, with shell on the Host and read access to any run's envelopes on that Host. A resend of a `run_stage` message under a fresh `messageId` but identical content lands on the same task/run rather than starting a duplicate, the same at-most-once guarantee `invoke` gives (see [Limits and retention](#limits-and-retention) below).
 
 The message carries one structured data part, mirroring the MCP tool's call shape:
 

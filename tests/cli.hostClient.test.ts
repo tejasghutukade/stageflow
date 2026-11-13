@@ -1,5 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   httpDeleteRun,
   httpRequestJson,
@@ -10,6 +13,16 @@ import {
 
 const DRIVE = "d".repeat(32);
 const READ = "r".repeat(32);
+const previousHome = process.env.STAGEFLOW_HOME;
+const previousCredentialHome = process.env.STAGEFLOW_CREDENTIAL_HOME;
+process.env.STAGEFLOW_HOME = mkdtempSync(path.join(tmpdir(), "sf-host-client-"));
+
+afterAll(() => {
+  if (previousHome === undefined) delete process.env.STAGEFLOW_HOME;
+  else process.env.STAGEFLOW_HOME = previousHome;
+  if (previousCredentialHome === undefined) delete process.env.STAGEFLOW_CREDENTIAL_HOME;
+  else process.env.STAGEFLOW_CREDENTIAL_HOME = previousCredentialHome;
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();

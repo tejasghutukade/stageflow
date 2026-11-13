@@ -3,7 +3,6 @@ import {
   fetchProviderAuth,
   fetchProviders,
   fetchProvidersDetect,
-  postCredentialSource,
   postProviderApiKey,
   postProviderLogout,
   type CredentialSource,
@@ -27,7 +26,6 @@ import {
   reduceProviderActions,
   type ProviderActionsEvent,
 } from "./providerActionsModel";
-import type { IconType } from "react-icons";
 import {
   LuCheck,
   LuChevronDown,
@@ -90,13 +88,9 @@ export function SettingsProvidersPanel({
   const [statuses, setStatuses] = useState<StatusMap>(
     () => settingsProvidersCache?.statuses ?? {},
   );
-  const [credentialSource, setCredentialSource] = useState<
-    CredentialSource | undefined
-  >(() => settingsProvidersCache?.credentialSource);
   const [loading, setLoading] = useState(() => settingsProvidersCache == null);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sourceSaving, setSourceSaving] = useState(false);
   const [connectId, setConnectId] = useState<string | null>(null);
   const [oauthId, setOauthId] = useState<string | null>(null);
   const [apiKeyDraft, setApiKeyDraft] = useState("");
@@ -152,7 +146,6 @@ export function SettingsProvidersPanel({
         fetchProvidersDetect(),
       ]);
       setProviders(listed.providers);
-      setCredentialSource(detect.credentialSource);
       const next: StatusMap = {};
       await Promise.all(
         listed.providers.map(async (provider) => {
@@ -211,20 +204,6 @@ export function SettingsProvidersPanel({
       otherSearchRef.current?.focus();
     }
   }, [otherExpanded]);
-
-  async function onSourceChange(value: CredentialSource) {
-    setSourceSaving(true);
-    setError(null);
-    try {
-      const result = await postCredentialSource(value);
-      setCredentialSource(result.credentialSource);
-      await refresh("background");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSourceSaving(false);
-    }
-  }
 
   async function onConnectSubmit(providerId: string) {
     const key = apiKeyDraft.trim();
@@ -289,29 +268,6 @@ export function SettingsProvidersPanel({
           <Keycap className="text-[var(--sf-text-3)]">T</Keycap>
         </button>
       </header>
-
-      <section className="flex w-full flex-col gap-2.5">
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] font-medium uppercase tracking-[0.88px] text-[var(--sf-text-3)]">
-            Credential source
-          </span>
-          <span className="font-['Geist_Mono',monospace] text-xs text-[var(--sf-text-3)]">
-            providers.credential_source
-          </span>
-        </div>
-        <div className="grid grid-cols-1 gap-3">
-          <CredentialCard
-            selected={credentialSource === "sf_owned" || credentialSource === undefined}
-            disabled={showSkeleton || sourceSaving}
-            tag="sf_owned"
-            icon={LuKey}
-            title="Stageflow-owned credentials"
-            description="Separate logins only Stageflow uses."
-            path="~/.stageflow/agent/auth.json (overridable)"
-            onSelect={() => void onSourceChange("sf_owned")}
-          />
-        </div>
-      </section>
 
       {error ? (
         <p className="font-sans text-[13px] text-[var(--sf-fail)]">{error}</p>
@@ -468,64 +424,6 @@ export function SettingsProvidersPanel({
         </div>
       </section>
     </div>
-  );
-}
-
-function CredentialCard({
-  selected,
-  disabled,
-  tag,
-  icon: Icon,
-  title,
-  description,
-  path,
-  onSelect,
-}: {
-  selected: boolean;
-  disabled?: boolean;
-  tag: string;
-  icon: IconType;
-  title: string;
-  description: string;
-  path: string;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onSelect}
-      className={`flex gap-3 rounded-[10px] border p-3.5 text-left disabled:opacity-60${
-        selected
-          ? " border-[#ffffff47] bg-[var(--sf-active)] shadow-[0px_0px_0px_3px_rgba(255,255,255,0.04)]"
-          : " border-[#ffffff12] bg-[var(--sf-panel)]"
-      }`}
-    >
-      <span
-        className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border${
-          selected ? " border-[var(--sf-text-1)]" : " border-[#ffffff33]"
-        }`}
-      >
-        {selected ? <span className="size-2 rounded-full bg-[var(--sf-text-1)]" /> : null}
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col gap-1.5">
-        <span className="flex flex-wrap items-center gap-2">
-          <Icon className="size-3.5 text-[var(--sf-text-3)]" aria-hidden="true" />
-          <span
-            className={`font-sans text-sm font-medium${selected ? " text-[var(--sf-text-1)]" : " text-[var(--sf-text-2)]"}`}
-          >
-            {title}
-          </span>
-          <Keycap className="text-[var(--sf-text-3)]">{tag}</Keycap>
-        </span>
-        <span className="font-sans text-xs leading-[1.45] text-[var(--sf-text-3)]">
-          {description}
-        </span>
-        <span className="font-['Geist_Mono',monospace] text-xs text-[var(--sf-text-3)]">
-          {path}
-        </span>
-      </span>
-    </button>
   );
 }
 

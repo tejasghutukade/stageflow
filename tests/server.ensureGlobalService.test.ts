@@ -1,13 +1,16 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   ensureGlobalService,
+  probeStageflowHost,
   hostBaseUrl,
   isNoAutostartEnabled,
+  otherHostHomeMessage,
+  SF_SERVICE_CHILD,
   STAGEFLOW_NO_AUTOSTART,
   type ServiceProbeResult,
 } from "../src/server/ensureGlobalService.js";
@@ -78,6 +81,40 @@ describe("ensureGlobalService", () => {
     if (!result.ok) {
       expect(result.reason).toBe("port_occupied");
       expect(result.message).toContain(String(DEFAULT_PORT));
+    }
+    expect(spawnCalls).toBe(0);
+  });
+
+  it("reports another data directory when home_id differs", async () => {
+    let spawnCalls = 0;
+    const result = await ensureGlobalService({
+      probeHost: async () => "other_home",
+      spawnFn: (() => {
+        spawnCalls += 1;
+        throw new Error("should not spawn");
+      }) as unknown as typeof spawn,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("port_occupied");
+      expect(result.message).toBe(otherHostHomeMessage(DEFAULT_PORT));
+    }
+    expect(spawnCalls).toBe(0);
+  });
+
+  it("names an older Stageflow Host instead of calling it a foreign process", async () => {
+    let spawnCalls = 0;
+    const result = await ensureGlobalService({
+      probeHost: async () => "old_stageflow",
+      spawnFn: (() => {
+        spawnCalls += 1;
+        throw new Error("should not spawn");
+      }) as unknown as typeof spawn,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("old_host_running");
+      expect(result.message).toContain("older Stageflow Host");
     }
     expect(spawnCalls).toBe(0);
   });
@@ -154,11 +191,10 @@ describe("ensureGlobalService", () => {
         String(DEFAULT_PORT),
       ]);
 
-      const logContent = await readFile(
-        path.join(globalStageflowHome(), "service.log"),
-        "utf8",
-      ).catch(() => "");
+      const logPath = path.join(globalStageflowHome(), "service.log");
+      const logContent = await readFile(logPath, "utf8").catch(() => "");
       expect(logContent).toBe("");
+      expect((await stat(logPath)).mode & 0o777).toBe(0o600);
     });
   });
 
@@ -197,27 +233,139 @@ describe("ensureGlobalService", () => {
     });
   });
 
-  it("fails with bind_refused before spawn when STAGEFLOW_BIND is non-loopback without a drive token", async () => {
+  it("spawns a non-loopback host with no token so the child can generate one", async () => {
     await withIsolatedHome(async () => {
+      const probeResults: ServiceProbeResult[] = ["unreachable", "up"];
+      let probeIndex = 0;
       let spawnCalls = 0;
       const result = await ensureGlobalService({
         cliEntry,
-        probeHost: async () => "unreachable",
+        probeHost: async () =>
+          probeResults[Math.min(probeIndex++, probeResults.length - 1)]!,
         spawnFn: (() => {
           spawnCalls += 1;
-          throw new Error("should not spawn");
+          return { unref: () => undefined } as unknown as ReturnType<typeof spawn>;
         }) as unknown as typeof spawn,
+        pollIntervalMs: 1,
+        timeoutMs: 1000,
         env: { STAGEFLOW_BIND: "0.0.0.0" },
       });
 
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.reason).toBe("bind_refused");
-        expect(result.message).toMatch(/Refusing to start/);
-        expect(result.message).toContain("0.0.0.0");
-      }
+      expect(result).toEqual({ ok: true, alreadyRunning: false });
+      expect(spawnCalls).toBe(1);
+    });
+  });
+
+  it("spawns the service child with SF_SERVICE_CHILD=1", async () => {
+    await withIsolatedHome(async () => {
+      const probeResults: ServiceProbeResult[] = ["unreachable", "up"];
+      let probeIndex = 0;
+      let childEnv: NodeJS.ProcessEnv | undefined;
+      const result = await ensureGlobalService({
+        cliEntry,
+        probeHost: async () =>
+          probeResults[Math.min(probeIndex++, probeResults.length - 1)]!,
+        spawnFn: ((_command, _args, options) => {
+          childEnv = options?.env;
+          return { unref: () => undefined } as unknown as ReturnType<typeof spawn>;
+        }) as unknown as typeof spawn,
+        pollIntervalMs: 1,
+        timeoutMs: 1000,
+        env: { STAGEFLOW_BIND: "127.0.0.1" },
+      });
+      expect(result).toEqual({ ok: true, alreadyRunning: false });
+      expect(childEnv?.[SF_SERVICE_CHILD]).toBe("1");
+    });
+  });
+
+  it("waits for a starting Host instead of spawning another", async () => {
+    await withIsolatedHome(async () => {
+      const probeResults: ServiceProbeResult[] = ["starting", "starting", "up"];
+      let probeIndex = 0;
+      let spawnCalls = 0;
+      const result = await ensureGlobalService({
+        cliEntry,
+        probeHost: async () =>
+          probeResults[Math.min(probeIndex++, probeResults.length - 1)]!,
+        spawnFn: (() => {
+          spawnCalls += 1;
+          return { unref: () => undefined } as unknown as ReturnType<typeof spawn>;
+        }) as unknown as typeof spawn,
+        pollIntervalMs: 1,
+        timeoutMs: 1000,
+        env: { STAGEFLOW_BIND: "127.0.0.1" },
+      });
+      expect(result).toEqual({ ok: true, alreadyRunning: true });
       expect(spawnCalls).toBe(0);
     });
+  });
+
+  it("reports another data directory when a starting Host turns out to use one", async () => {
+    await withIsolatedHome(async () => {
+      const probeResults: ServiceProbeResult[] = ["starting", "other_home"];
+      let probeIndex = 0;
+      const result = await ensureGlobalService({
+        cliEntry,
+        probeHost: async () => probeResults[Math.min(probeIndex++, probeResults.length - 1)]!,
+        spawnFn: (() => {
+          throw new Error("should not spawn");
+        }) as unknown as typeof spawn,
+        pollIntervalMs: 1,
+        timeoutMs: 1000,
+        env: { STAGEFLOW_BIND: "127.0.0.1" },
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toBe("port_occupied");
+        expect(result.message).toContain("different data directory");
+      }
+    });
+  });
+
+  it("never creates host-id from the CLI side, and treats a Host as another directory when none exists here", async () => {
+    const { mkdtempSync, existsSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const pathMod = await import("node:path");
+    const { readStageflowHomeId } = await import("../src/diagnostics/checks.js");
+    const home = mkdtempSync(pathMod.join(tmpdir(), "sf-cli-home-"));
+    try {
+      expect(readStageflowHomeId(home)).toBeUndefined();
+      expect(existsSync(pathMod.join(home, "host-id"))).toBe(false);
+      const http = await import("node:http");
+      const server = http.createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, status: "live", service: "stageflow", home_id: "abcdef0123456789" }));
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+      const port = (server.address() as { port: number }).port;
+      try {
+        expect(
+          await probeStageflowHost(`http://127.0.0.1:${port}`, { expectedHomeId: () => readStageflowHomeId(home) }),
+        ).toBe("other_home");
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+      expect(existsSync(pathMod.join(home, "host-id"))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("probes a booting Host from another data directory as other_home", async () => {
+    const http = await import("node:http");
+    for (const [homeId, expected] of [["other-home-id", "other_home"], ["mine", "starting"]] as const) {
+      const server = http.createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, status: "starting", service: "stageflow", home_id: homeId }));
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+      const port = (server.address() as { port: number }).port;
+      try {
+        expect(await probeStageflowHost(`http://127.0.0.1:${port}`, { expectedHomeId: "mine" })).toBe(expected);
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    }
   });
 
   it("still spawns when STAGEFLOW_BIND is non-loopback and drive token is set", async () => {
