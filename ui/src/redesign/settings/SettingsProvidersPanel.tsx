@@ -63,16 +63,20 @@ export type SettingsProvidersPanelProps = {
   onProvidersSummary?: (connected: number, total: number) => void;
 };
 
-function isPrimaryAccount(
-  providerId: string,
-  status: ProviderAuthStatus | undefined,
-  oauthId: string | null,
-  connectId: string | null,
-): boolean {
-  if (status?.configured === true) return true;
-  if (oauthId === providerId) return true;
-  if (connectId === providerId) return true;
-  return false;
+export function partitionSettingsProviders<T extends { id: string }>(
+  providers: readonly T[],
+  isConnected: (provider: T) => boolean,
+): { primary: T[]; other: T[] } {
+  const primary: T[] = [];
+  const other: T[] = [];
+  for (const provider of providers) {
+    if (isConnected(provider)) primary.push(provider);
+    else other.push(provider);
+  }
+  const byId = (a: T, b: T) => a.id.localeCompare(b.id);
+  primary.sort(byId);
+  other.sort(byId);
+  return { primary, other };
 }
 
 export function SettingsProvidersPanel({
@@ -100,29 +104,14 @@ export function SettingsProvidersPanel({
   const [otherExpanded, setOtherExpanded] = useState(false);
   const [otherSearch, setOtherSearch] = useState("");
 
-  const { primaryProviders, otherProviders } = useMemo(() => {
-    const primary: ProviderSummary[] = [];
-    const other: ProviderSummary[] = [];
-    for (const provider of providers) {
-      if (
-        isPrimaryAccount(
-          provider.id,
-          statuses[provider.id],
-          oauthId,
-          connectId,
-        )
-      ) {
-        primary.push(provider);
-      } else {
-        other.push(provider);
-      }
-    }
-    const byId = (a: ProviderSummary, b: ProviderSummary) =>
-      a.id.localeCompare(b.id);
-    primary.sort(byId);
-    other.sort(byId);
-    return { primaryProviders: primary, otherProviders: other };
-  }, [providers, statuses, oauthId, connectId]);
+  const { primary: primaryProviders, other: otherProviders } = useMemo(
+    () =>
+      partitionSettingsProviders(
+        providers,
+        (provider) => statuses[provider.id]?.configured === true,
+      ),
+    [providers, statuses],
+  );
 
   const filteredOtherProviders = useMemo(() => {
     const q = otherSearch.trim().toLowerCase();

@@ -1,6 +1,6 @@
 # Setup
 
-Detail for the checklist in `SKILL.md`. Run the steps in order. Skip a step only when its check already passes. Confirm a flag with `sf <command> --help` before you rely on it. This file was checked against Stageflow 0.57.0. In this release `npm run dev -- --version` prints `0.59.0` (`npm view stageflow version` is the same once it is published).
+Detail for the checklist in `SKILL.md`. Run the steps in order. Skip a step only when its check already passes. Confirm a flag with `sf <command> --help` before you rely on it. This file was checked against Stageflow 0.57.0. In this release `npm run dev -- --version` prints `0.59.1` (`npm view stageflow version` is the same once it is published).
 
 ## Contents
 
