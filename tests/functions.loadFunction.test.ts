@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  attachmentIssuesFromFiles,
   functionCatalogConflictIssues,
   functionSourceHash,
   groupFunctionDefinitionFiles,
@@ -122,5 +126,23 @@ describe("function.js load and serialize", () => {
     expect(functionCatalogConflictIssues("other", [{ name: "a.function.yaml", functionId: "other", format: "yaml", family: "yaml" }, { name: "b.function.yml", functionId: "other", format: "yml", family: "yaml" }])[0]?.code).toBe(
       "function.id_conflict",
     );
+  });
+
+  it("propagates format_conflict from attachmentIssuesFromFiles for validate", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-fn-attach-"));
+    await mkdir(path.join(root, "functions"), { recursive: true });
+    const body = 'export default function execute() { return { passed: true }; }\n';
+    await writeFile(
+      path.join(root, "functions", "lane.function.yaml"),
+      ["id: lane", "name: Lane", "kind: verification", "source: |", "  export default function execute() { return { passed: true }; }", ""].join("\n"),
+    );
+    await writeFile(
+      path.join(root, "functions", "lane.function.js"),
+      `---\nid: lane\nname: Lane\nkind: verification\n---\n${body}`,
+    );
+    const issues = await attachmentIssuesFromFiles(root, [{ id: "lane", kind: "verification", grants: [] }]);
+    expect(issues).toEqual([
+      expect.objectContaining({ code: "function.format_conflict", path: "lane" }),
+    ]);
   });
 });

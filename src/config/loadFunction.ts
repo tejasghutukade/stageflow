@@ -829,7 +829,14 @@ export async function attachmentIssuesFromFiles(projectRoot: string, uses: reado
       continue;
     }
     if (!file.parsed.ok) {
-      issues.push(issue(use.id, "function.invalid", `Function "${use.id}" could not be parsed`));
+      const conflict = file.parsed.issues.filter(
+        (item) => item.code === "function.format_conflict" || item.code === "function.id_conflict",
+      );
+      if (conflict.length > 0) {
+        issues.push(...conflict.map((item) => issue(use.id, item.code, item.message)));
+      } else {
+        issues.push(issue(use.id, "function.invalid", `Function "${use.id}" could not be parsed`));
+      }
       continue;
     }
     const definition = file.parsed.value;
