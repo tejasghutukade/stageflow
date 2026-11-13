@@ -139,6 +139,8 @@ describe("function editor", () => {
           yaml: null,
           sourceHash: null,
           contractVersion: null,
+          path: "functions/score.function.yaml",
+          format: "yaml",
         },
       }),
     );
@@ -190,6 +192,8 @@ describe("function editor", () => {
           yaml: null,
           sourceHash: "abc",
           contractVersion: 1,
+          path: "functions/score.function.yaml",
+          format: "yaml",
         },
       }),
     );
@@ -221,6 +225,8 @@ describe("function editor", () => {
       yaml: null,
       sourceHash: "abc",
       contractVersion: 1,
+      path: "functions/score.function.yaml",
+      format: "yaml" as const,
     };
     const fetchMock = vi.fn(async (_url: string, init?: { method?: string }) => {
       if (init?.method === "PUT") return jsonResponse(409, { code: "function.conflict", message: "The function changed since it was loaded", current_revision: 4 });
@@ -339,6 +345,8 @@ describe("function editor polish", () => {
     yaml: null,
     sourceHash: "abc",
     contractVersion: 1,
+    path: "functions/score.function.yaml",
+    format: "yaml" as const,
   };
 
   it("offers a kind picker and a create action for a new function, preselecting the requested kind", () => {
@@ -600,6 +608,8 @@ describe("function access editor", () => {
     yaml: null,
     sourceHash: "abc",
     contractVersion: 1,
+    path: "functions/score.function.yaml",
+    format: "yaml" as const,
   };
   const readApi: FunctionCapability = {
     id: "api_1",
