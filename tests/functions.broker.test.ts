@@ -1131,6 +1131,70 @@ export default async function execute(context) {
     expect(writes).toEqual([]);
   });
 
+  it("denies function definition workspace writes through the container checkout", async () => {
+    const root = await makeRoot();
+    const writes: string[] = [];
+    const containerFiles = {
+      async realPath(containerPath: string) {
+        return containerPath;
+      },
+      async stat(containerPath: string) {
+        if (containerPath === "/workspace/checkout" || containerPath === "/workspace/checkout/functions") {
+          return { file: false, directory: true, device: false, size: 64 };
+        }
+        return undefined;
+      },
+      async readFile() {
+        throw new Error("unexpected container read");
+      },
+      async writeFile(containerPath: string) {
+        writes.push(containerPath);
+      },
+      async list() {
+        throw new Error("unexpected container list");
+      },
+    };
+    const broker = new FunctionBroker({
+      env: {},
+      stageflowHome: path.join(root, "home"),
+      containerFiles,
+    });
+    const result = await broker.invoke({
+      invocationId: "container-deny-function-write",
+      kind: "tool",
+      source: `
+        export default async function execute(context) {
+          const attempt = async (filePath, content) => {
+            try {
+              await context.files.write("workspace", filePath, content);
+              return { ok: true };
+            } catch (error) {
+              return { ok: false, code: error.code, message: error.message };
+            }
+          };
+          return {
+            definition: await attempt("functions/x.function.yaml", "guest"),
+            notes: await attempt("notes.txt", "ok"),
+          };
+        }
+      `,
+      context: {},
+      containerName: "stage-container",
+      roots: { artifacts: path.join(root, "artifacts"), workspace: "/workspace/checkout" },
+      projectRoot: "/workspace/checkout",
+      grants: { files: [{ root: "workspace", path: ".", access: "write" }] },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        definition: { ok: false, code: "permission_denied", message: "file access denied" },
+        notes: { ok: true },
+      },
+    });
+    expect(writes.some((target) => target.includes("x.function.yaml"))).toBe(false);
+    expect(writes.some((target) => target.endsWith("/notes.txt"))).toBe(true);
+  });
+
   it("uses the container checkout for workspace writes before desk sync", async () => {
     const root = await makeRoot();
     const writes: string[] = [];
@@ -1316,6 +1380,115 @@ export default async function execute(context) {
     expect(await readFile(path.join(root, "readme.txt"), "utf8")).toBe("allowed");
   });
 
+  it("denies workspace writes that create or replace function definitions", async () => {
+    const root = await makeRoot();
+    const functions = path.join(root, "functions");
+    const nested = path.join(functions, "team");
+    await mkdir(nested, { recursive: true });
+    const existing = path.join(functions, "score.function.yaml");
+    await writeFile(existing, "previous-score");
+    const linkParent = path.join(root, "linked");
+    await mkdir(linkParent, { recursive: true });
+    await symlink(functions, path.join(linkParent, "functions"));
+    const broker = brokerFor(root, {});
+    const source = `
+      export default async function execute(context) {
+        const attempt = async (filePath, content) => {
+          try {
+            await context.files.write("workspace", filePath, content);
+            return { ok: true };
+          } catch (error) {
+            return { ok: false, code: error.code, message: error.message };
+          }
+        };
+        return {
+          yaml: await attempt("functions/score.function.yaml", "replaced"),
+          yml: await attempt("functions/score.function.yml", "replaced"),
+          js: await attempt("functions/score.function.js", "replaced"),
+          created: await attempt("functions/created.function.js", "replaced"),
+          nested: await attempt("functions/team/inner.function.js", "replaced"),
+          linked: await attempt("linked/functions/score.function.yaml", "replaced"),
+          upper: await attempt("functions/score.FUNCTION.YAML", "replaced"),
+          notes: await attempt("functions/notes.txt", "allowed"),
+          readme: await attempt("readme.txt", "allowed"),
+        };
+      }
+    `;
+    const denied = { ok: false, code: "permission_denied", message: "file access denied" };
+    const result = await broker.invoke({
+      invocationId: "deny-function-writes",
+      kind: "tool",
+      source,
+      context: {},
+      roots: { workspace: root, artifacts: path.join(root, "artifacts") },
+      projectRoot: root,
+      grants: { files: [{ root: "workspace", path: ".", access: "write" }] },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        yaml: denied,
+        yml: denied,
+        js: denied,
+        created: denied,
+        nested: denied,
+        linked: denied,
+        upper: denied,
+        notes: { ok: true },
+        readme: { ok: true },
+      },
+    });
+    expect(await readFile(existing, "utf8")).toBe("previous-score");
+    await expect(readFile(path.join(functions, "score.function.yml"), "utf8")).rejects.toThrow();
+    await expect(readFile(path.join(functions, "score.function.js"), "utf8")).rejects.toThrow();
+    await expect(readFile(path.join(functions, "created.function.js"), "utf8")).rejects.toThrow();
+    await expect(readFile(path.join(nested, "inner.function.js"), "utf8")).rejects.toThrow();
+    expect(await readFile(path.join(functions, "notes.txt"), "utf8")).toBe("allowed");
+    expect(await readFile(path.join(root, "readme.txt"), "utf8")).toBe("allowed");
+  });
+
+  it("denies function definition writes through context.workspace.write", async () => {
+    const root = await makeRoot();
+    const functions = path.join(root, "functions");
+    await mkdir(functions, { recursive: true });
+    const existing = path.join(functions, "score.function.yaml");
+    await writeFile(existing, "previous-score");
+    const broker = brokerFor(root, {});
+    const result = await broker.invoke({
+      invocationId: "deny-workspace-helper-function-write",
+      kind: "tool",
+      source: `
+        export default async function execute(context) {
+          const attempt = async (filePath, content) => {
+            try {
+              await context.workspace.write(filePath, content);
+              return { ok: true };
+            } catch (error) {
+              return { ok: false, code: error.code, message: error.message };
+            }
+          };
+          return {
+            definition: await attempt("functions/score.function.yaml", "replaced"),
+            readme: await attempt("readme.txt", "allowed"),
+          };
+        }
+      `,
+      context: {},
+      roots: { workspace: root, artifacts: path.join(root, "artifacts") },
+      projectRoot: root,
+      grants: { files: [{ root: "workspace", path: ".", access: "write" }] },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        definition: { ok: false, code: "permission_denied", message: "file access denied" },
+        readme: { ok: true },
+      },
+    });
+    expect(await readFile(existing, "utf8")).toBe("previous-score");
+    expect(await readFile(path.join(root, "readme.txt"), "utf8")).toBe("allowed");
+  });
+
   it("still allows artifact writes under the run workspace", async () => {
     const root = await makeRoot();
     const artifacts = path.join(root, "artifacts");
@@ -1333,6 +1506,25 @@ export default async function execute(context) {
     });
     expect(result).toMatchObject({ ok: true, value: { wrote: true } });
     expect(await readFile(path.join(artifacts, "lead.agent.yaml"), "utf8")).toBe("guest");
+  });
+
+  it("still allows artifact writes of function definition names", async () => {
+    const root = await makeRoot();
+    const artifacts = path.join(root, "artifacts");
+    await mkdir(artifacts, { recursive: true });
+    const broker = brokerFor(root, {});
+    const result = await broker.invoke({
+      invocationId: "artifacts-function-shaped-write",
+      kind: "tool",
+      source:
+        "export default async function execute(context){ await context.files.write('artifacts', 'score.function.yaml', 'guest'); return { wrote: true }; }",
+      context: {},
+      roots: { workspace: root, artifacts },
+      projectRoot: root,
+      grants: { files: [{ root: "artifacts", path: ".", access: "write" }] },
+    });
+    expect(result).toMatchObject({ ok: true, value: { wrote: true } });
+    expect(await readFile(path.join(artifacts, "score.function.yaml"), "utf8")).toBe("guest");
   });
 });
 

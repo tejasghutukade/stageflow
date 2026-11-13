@@ -136,7 +136,7 @@ A function revision requesting additional permissions cannot silently acquire th
 
 For R16, computation, selected environment values, file inspection, and explicitly authorized API read operations are supported. A tool may additionally receive named API action permissions or narrowly scoped output-file writes. Initial file operations are `exists`, `stat`, `readText`, and `readJson`, plus explicit tool-only output writes; arbitrary filesystem deletion and shell access are excluded. Existing command verifications remain a separate mechanism and cannot be invoked as a sandbox escape through a function.
 
-For R17, logical roots include the current attempt's artifacts and explicitly granted workspace paths; standalone agents use explicitly granted project resources. A path argument never grants access. Reject absolute host paths, traversal, symlink escapes, special devices, and protected credential/configuration stores. Use race-resistant access rather than checking a path once and later opening a different target. A stage executing in a container must inspect that container's actual permitted files, not a stale or broader Host directory. Prior-stage artifacts are available only through the stage's existing grants. Reads are not assumed to be stable across repeated invocations; useful evidence can include a file digest without storing its content.
+For R17, logical roots include the current attempt's artifacts and explicitly granted workspace paths; standalone agents use explicitly granted project resources. A path argument never grants access. Reject absolute host paths, traversal, symlink escapes, special devices, and protected credential/configuration stores. A workspace write also cannot create or replace agent definition files under `agents/` or function definition files under `functions/` (R47). Use race-resistant access rather than checking a path once and later opening a different target. A stage executing in a container must inspect that container's actual permitted files, not a stale or broader Host directory. Prior-stage artifacts are available only through the stage's existing grants. Reads are not assumed to be stable across repeated invocations; useful evidence can include a file digest without storing its content.
 
 For R18, values are copied into `context.env` by alias; there is no `process.env` enumeration and no implicit `.env` file access. Required values missing from either the configured environment source or secret store produce a binding error before user execution. Optional values are absent rather than guessed. Do not expose infrastructure control tokens or provider credentials merely because the Host possesses them.
 
@@ -229,12 +229,15 @@ For R42–R43, loader changes must extend Author YAML (`verify` and pipeline-own
 - R44. A function may declare its access as the first statement of its source, `export const access = <object literal>;`. The Host reads that literal when the definition is parsed and derives the capability and binding lists from it. Only whitespace and comments may precede the statement. Any other `export const access` or `export let`/`export var access` is invalid. The literal is parsed, never evaluated.
 - R45. When that declaration is valid, it is the source of truth. The stored file omits `capabilities` and `bindings`. A submitted definition that also carries those fields must omit them or match the derived lists; a mismatch is rejected. The parsed definition, grants, preflight, attachments, and history still expose the derived capability and binding arrays. A function with no declaration keeps explicit `capabilities` and `bindings`.
 - R46. Guest code may call `context.artifacts` and `context.workspace` (`exists`, `stat`, `readText`, `readJson`, `list`, `write`) with the root already chosen, and `context.files.list(root, path)`. These are wrappers over the same host file operations and the same grants. `list` is a read of one directory, at most 1000 immediate children, with sensitive entries and escaping symlinks omitted. `write` and API `action` stay tool-only.
+- R47. Guest writes to the workspace root can never create or replace agent definition files (`agents/**/*.agent.yaml`) or function definition files (`functions/**/*.function.{yaml,yml,js}`). A function must not be able to widen another function's access or an agent's authority. The artifacts root is unaffected. Pipeline, task, and stage catalog files are intentionally not covered in this release: their directories come from the stageflow manifest, and a suffix-only rule would block legitimate edits in an ordinary code repository. A follow-up needs a manifest-aware rule.
 
 R44 accepts only an object literal: objects, arrays, strings (single or double quotes, simple escapes, no templates), `true`/`false`/`null`, numbers, comments, and trailing commas. Spread, computed keys, calls, other identifiers, getters, and functions are rejected with a line and column. Keys are `artifacts` and `workspace` (`"none"`, `"read"`, or `"write"`, default `"none"`), optional `files` (path-scoped `{ root, path, access }`), `env` (names, with a trailing `?` for optional), and `network` (an `https` origin string, or an object with origin, effect, methods, path, and credential). `write` and network `effect: "action"` are tool-only. Derived capability ids are deterministic: `artifacts`, `workspace`, `env_` plus the lowercased alias, `api_` plus a slug of the origin host (and `_port` when the port is not the default), and `file_` plus the root and a slug of the path. A collision appends `_2`, `_3`, in declaration order.
 
 R45 does not change how a grant is checked. Attachments still name capability ids. A save that changes the derived capabilities still requires those attachments to be granted again. Sandboxed code cannot widen the declaration or replace `context.artifacts`, `context.workspace`, `context.files`, `context.http`, `context.env`, `context.log`, or `context.signal`.
 
 R46's `list` names a directory relative to the root (`""` or `"."` is the root). The grant's prefix must cover that directory: a grant for `reports/summary.md` does not allow listing `reports`. The result is `{ name, type: "file" | "directory", size }`, immediate children only, sorted by name. More than 1000 entries fails. A missing directory is not found. A non-directory is `not_a_directory`. A denied path uses the same permission denial as other file reads and does not reveal whether the path exists. Sensitive names, devices, sockets, and symlinks whose target leaves the root or is sensitive are omitted, not reported as errors. The same rules apply when the stage root is a container.
+
+R47 applies only to the `workspace` root. The Host resolves the parent directory and the target, including a symlinked parent, and matches the file name case-insensitively at any depth under `agents/` or `functions/`. The refusal is the same permission denial as any other forbidden file, whether or not the target already exists. A non-definition file in those directories, such as `functions/notes.txt` or a README under `agents/`, stays writable. Reads are unchanged.
 
 ### Key Flows
 
@@ -381,6 +384,7 @@ The same tool works in a stage or standalone agent without an envelope or extern
 | AE31 | List a granted directory, a file-scoped parent, a sensitive name, an escaping symlink, a non-directory, and a directory with more than 1000 entries | Sorted children, the same permission denial, omitted entries, `not_a_directory`, and `list_limit` | R17, R46 |
 | AE32 | Load a function file that has no `access` declaration | Explicit capabilities and bindings parse and serialize as they did before the declaration existed | R42, R45 |
 | AE33 | Call `context.artifacts` and `context.workspace` with and without the matching grant | Granted reads, lists, and tool writes succeed; a missing grant is the same denial; a caller-supplied `artifacts` or `workspace` value is ignored | R15–R17, R46 |
+| AE34 | A tool with workspace write creates or replaces `agents/**/*.agent.yaml` or `functions/**/*.function.{yaml,yml,js}`, including a new name, a nested path, a symlinked parent, and an upper-case extension | The workspace write is permission denied and the files are unchanged; a non-definition file and the same names under the artifacts root still succeed | R17, R47 |
 
 The test suite must use fake brokers, temporary scoped filesystems, deterministic clocks where needed, fake agent runners, and local HTTP fixtures. No test calls a real model or external API. Include adversarial and failure-injection cases for resource cleanup, write/revision consistency, secret redaction, permission escalation, and restart boundaries. Keep representative YAML under `tests/fixtures/` and runnable examples in `examples/` aligned with the final authoring schema.
 
@@ -388,7 +392,7 @@ Repository checks required during implementation are `npm test`, `npm run ui:tes
 
 ### Scope Boundaries
 
-In scope is the complete vertical feature described by R1–R46, including controlled file inspection, directory listing, authenticated API operations, and access declared in source. Strict mathematical purity is not a requirement.
+In scope is the complete vertical feature described by R1–R47, including controlled file inspection, directory listing, authenticated API operations, and access declared in source. Strict mathematical purity is not a requirement.
 
 Excluded from this release are arbitrary npm dependencies, unrestricted Node or shell execution, user-chosen host filesystem roots, private-network API access, raw secret retrieval by JavaScript, a function marketplace, cross-project function sharing, custom function-to-function imports, and a publishing/release-management workflow beyond immutable revisions. Shell execution, recursive directory walks, and file deletion stay out. `list` returns one directory's immediate children and does not walk, delete, or follow a symlink out of the root.
 
@@ -619,7 +623,7 @@ U1 proves the killable runtime. U2 adds the broker on that runtime. U3 adds the 
 
 **Goal:** Guest code can read and call only the resources named on that invocation, and denied paths or private hosts never receive a request.
 
-**Requirements:** R15–R20. KTD1, KTD2.
+**Requirements:** R15–R20, R47. KTD1, KTD2.
 
 **Dependencies:** U1.
 
@@ -641,6 +645,7 @@ U1 proves the killable runtime. U2 adds the broker on that runtime. U3 adds the 
 **Test scenarios:**
 - Covers AE14. A granted artifact `report.json` and a bound `MIN_SCORE` succeed. Other files and other env names are absent.
 - Covers AE15. An absolute path, `../`, a symlink out of the root, a device path, and a credential file are denied, including when the stage root is a container mount.
+- Covers AE34. A workspace write cannot create or replace an agent definition (`agents/**/*.agent.yaml`) or a function definition (`functions/**/*.function.{yaml,yml,js}`), including a file that does not exist yet, a nested path, a symlinked parent, an upper-case extension, and the container checkout. A non-definition file and the artifacts root still succeed.
 - Covers AE16. Guest attempts to reach `process`, a shell, or a raw network API find none of those objects.
 - Covers AE17. A permitted host that redirects or re-resolves to a loopback, private, link-local, or metadata address is denied, and the credential is not sent. Run this case with the global proxy dispatcher installed so the loopback proxy exception cannot hide a bypass.
 - Covers AE18. A missing required binding fails before guest code runs. An optional binding is absent. A forever-denied secret stays denied. A provider token such as `GITHUB_TOKEN` is not copied into `context.env`.
@@ -649,7 +654,7 @@ U1 proves the killable runtime. U2 adds the broker on that runtime. U3 adds the 
 - A killed output write leaves the previous file or no file, and the result code is an uncertain outcome.
 - Covers AE20. Cancel while a granted file read or HTTP call is in flight aborts that host operation and does not deliver the bytes.
 
-**Verification:** Broker tests use a temp directory and the local HTTP fixture. No test contacts the public network.
+**Verification:** Broker tests use a temp directory and the local HTTP fixture. No test contacts the public network. Workspace writes of agent and function definition files are denied on the host path and the container path before any file is created.
 
 ### U3. Store functions and author them over HTTP and MCP
 

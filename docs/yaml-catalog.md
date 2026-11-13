@@ -1155,6 +1155,8 @@ A save or a hand-edited file that also includes `capabilities` or `bindings` mus
 
 `execute` can use `context.files` as before. It can also use `context.artifacts` and `context.workspace`. Each has `exists(path)`, `stat(path)`, `readText(path)`, `readJson(path)`, `list(path)`, and `write(path, content)`. `path` is relative to that root. `list()` and `list("")` and `list(".")` name the root. `context.files.list(root, path)` is the same read. `list` returns the immediate children, `{ name, type: "file" | "directory", size }`, sorted by name, at most 1000. A larger directory is `list_limit`. A file is `not_a_directory`. A missing directory is not found. A path the grant does not cover, including the parent of a file-scoped grant, is the same permission denial as any other file read. Sensitive names, devices, sockets, and symlinks that leave the root are left out of the list.
 
+A workspace write cannot create or replace an agent definition (`agents/**/*.agent.yaml`) or a function definition (`functions/**/*.function.yaml`, `.function.yml`, or `.function.js`) at any depth. The attempt artifacts root can still hold those names, and a non-definition file such as `functions/notes.txt` or a README under `agents/` stays writable.
+
 ### HTTP errors {#function-http-errors}
 
 For a granted API capability inside a running function, a request body over 1 MiB is `file_limit` before the request is sent. A response body over 1 MiB is `uncertain_outcome` because the remote may already have acted on the request.

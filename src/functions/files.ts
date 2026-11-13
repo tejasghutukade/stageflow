@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { lstat, open, readdir, realpath, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
+import { isFunctionDefinitionFile } from "../config/loadFunction.js";
 import { REDACTION_SECRETS_FILENAME } from "../logging/namedSecrets.js";
 import { execInSandboxContainer } from "../runtime/sandboxContainer.js";
 import {
@@ -227,7 +228,21 @@ async function hostCapability(
   }
 }
 
-async function denyAgentDefinitionWorkspaceWrite(
+const PROTECTED_CATALOG_WRITES: readonly {
+  directory: string;
+  matches: (relativePath: string) => boolean;
+}[] = [
+  {
+    directory: "agents",
+    matches: (relativePath) => relativePath.toLowerCase().endsWith(".agent.yaml"),
+  },
+  {
+    directory: "functions",
+    matches: isFunctionDefinitionFile,
+  },
+];
+
+async function denyCatalogDefinitionWorkspaceWrite(
   input: FileCapabilityInput,
   parentFallback: string,
   fileName: string,
@@ -240,7 +255,7 @@ async function denyAgentDefinitionWorkspaceWrite(
   } catch {
     parentResolved = parentFallback;
   }
-  if (await isForbiddenAgentDefinitionWrite(input.projectRoot, input.workspaceRoot, parentResolved, fileName)) {
+  if (await isForbiddenCatalogWrite(input.projectRoot, input.workspaceRoot, parentResolved, fileName)) {
     return FILE_DENIED;
   }
   return undefined;
@@ -254,7 +269,7 @@ async function writeHost(
 ): Promise<FileCapabilityResult> {
   if (typeof input.content !== "string") return FILE_DENIED;
   if (Buffer.byteLength(input.content, "utf8") > FUNCTION_IO_BYTES_MAX) return FILE_LIMIT;
-  const denied = await denyAgentDefinitionWorkspaceWrite(
+  const denied = await denyCatalogDefinitionWorkspaceWrite(
     input,
     path.dirname(target),
     path.basename(target),
@@ -359,7 +374,7 @@ async function writeContainer(
 ): Promise<FileCapabilityResult> {
   if (typeof input.content !== "string") return FILE_DENIED;
   if (Buffer.byteLength(input.content, "utf8") > FUNCTION_IO_BYTES_MAX) return FILE_LIMIT;
-  const denied = await denyAgentDefinitionWorkspaceWrite(
+  const denied = await denyCatalogDefinitionWorkspaceWrite(
     input,
     path.posix.dirname(target),
     path.posix.basename(target),
@@ -680,7 +695,7 @@ function rootUsesContainerOps(rootPath: string): boolean {
   return normalized === "/workspace" || normalized.startsWith("/workspace/");
 }
 
-async function isForbiddenAgentDefinitionWrite(
+async function isForbiddenCatalogWrite(
   projectRoot: string | undefined,
   workspaceRoot: string | undefined,
   parentDir: string,
@@ -688,19 +703,22 @@ async function isForbiddenAgentDefinitionWrite(
 ): Promise<boolean> {
   const catalogRoot = workspaceRoot ?? projectRoot;
   if (!catalogRoot) return false;
-  let agentsDir = path.join(path.resolve(catalogRoot), "agents");
-  try {
-    agentsDir = await realpath(agentsDir);
-  } catch {}
   let target = path.resolve(parentDir, fileName);
   try {
     target = await realpath(target);
   } catch {
     target = path.resolve(parentDir, fileName);
   }
-  const relative = path.relative(agentsDir, target);
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return false;
-  return relative.toLowerCase().endsWith(".agent.yaml");
+  for (const location of PROTECTED_CATALOG_WRITES) {
+    let directory = path.join(path.resolve(catalogRoot), location.directory);
+    try {
+      directory = await realpath(directory);
+    } catch {}
+    const relative = path.relative(directory, target);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) continue;
+    if (location.matches(relative)) return true;
+  }
+  return false;
 }
 
 async function canonical(filePath: string): Promise<string> {
