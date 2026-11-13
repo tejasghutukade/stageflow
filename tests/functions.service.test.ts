@@ -7,6 +7,7 @@ import { runValidateCommand } from "../src/cli/validateCommand.js";
 import { createDraftPackage } from "../src/config/draftPackage.js";
 import { loadPipelineOutcome } from "../src/config/loadPipeline.js";
 import {
+  functionSourceHash,
   parseFunctionDefinition,
   parseFunctionJs,
   parseFunctionYaml,
@@ -792,5 +793,27 @@ describe("function catalog", () => {
     expect(cross.definition).toBeNull();
 
     await expect(service.create(project, verification("js_only"), ACTOR)).rejects.toMatchObject({ code: "function.exists" });
+  });
+
+  it("keeps body-only sourceHash across yaml and js authoring and blocks pin on format conflict", async () => {
+    const { project, service } = await open();
+    const yamlCreated = await service.create(project, verification("hash_pair"), ACTOR, { format: "yaml" });
+    const expectedHash = yamlCreated.sourceHash;
+    expect(expectedHash).toBe(functionSourceHash(SOURCE));
+    await service.delete(project, "hash_pair");
+    const jsCreated = await service.create(project, verification("hash_pair"), ACTOR);
+    expect(jsCreated.sourceHash).toBe(expectedHash);
+    expect(jsCreated.path).toBe("functions/hash_pair.function.js");
+
+    await service.create(project, verification("pin_block", { bindings: [], capabilities: [] }), ACTOR, { format: "yaml" });
+    const pinBlock = parseFunctionDefinition(verification("pin_block", { bindings: [], capabilities: [] }));
+    expect(pinBlock.ok).toBe(true);
+    if (!pinBlock.ok) return;
+    await writeFile(path.join(project, "functions", "pin_block.function.js"), serializeFunctionJsFile(pinBlock.value));
+    await expect(service.pinRun(project, "run-cross", ["pin_block"])).rejects.toMatchObject({
+      code: "function.invalid",
+      issues: [expect.objectContaining({ code: "function.format_conflict" })],
+    });
+    expect((await service.get(project, "pin_block")).definition).toBeNull();
   });
 });
