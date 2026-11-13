@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { accessSync } from "node:fs";
 import { access, cp, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import { parse as parseYaml, stringify as stringifyYaml, YAMLParseError } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { canonicalJson, sha256Hex } from "../evals/canonical.js";
 import {
   accessCapabilityAnchors,
@@ -536,6 +536,10 @@ export function functionDefinitionSuffixes(): readonly string[] {
   return [".function.yaml", ".function.yml", ".function.js"];
 }
 
+function functionDefinitionCandidates(directory: string, functionId: string): string[] {
+  return functionDefinitionSuffixes().map((suffix) => path.join(directory, `${functionId}${suffix}`));
+}
+
 export function isFunctionDefinitionFile(filePath: string): boolean {
   return functionOnDiskFormatFromFileName(filePath) !== undefined;
 }
@@ -648,7 +652,7 @@ export function parseFunctionYaml(text: string): FunctionParseResult {
         {
           path: "",
           code: "function.invalid_yaml",
-          message: error instanceof YAMLParseError ? "Function YAML could not be parsed" : "Function YAML could not be parsed",
+          message: "Function YAML could not be parsed",
           ...position,
         },
       ],
@@ -660,8 +664,7 @@ export function parseFunctionYaml(text: string): FunctionParseResult {
 export function resolveFunctionDefinitionPathsSync(projectRoot: string, functionId: string): string[] {
   const directory = path.join(projectRoot, "functions");
   const paths: string[] = [];
-  for (const suffix of functionDefinitionSuffixes()) {
-    const candidate = path.join(directory, `${functionId}${suffix}`);
+  for (const candidate of functionDefinitionCandidates(directory, functionId)) {
     try {
       accessSync(candidate);
       paths.push(candidate);
@@ -678,8 +681,7 @@ export async function resolveFunctionDefinitionPaths(
 ): Promise<string[]> {
   const directory = path.join(projectRoot, "functions");
   const paths: string[] = [];
-  for (const suffix of functionDefinitionSuffixes()) {
-    const candidate = path.join(directory, `${functionId}${suffix}`);
+  for (const candidate of functionDefinitionCandidates(directory, functionId)) {
     try {
       await access(candidate);
       paths.push(candidate);
@@ -697,11 +699,7 @@ export async function readFunctionFile(
   const paths = await resolveFunctionDefinitionPaths(projectRoot, functionId);
   if (paths.length === 0) return { missing: true };
   if (paths.length > 1) {
-    const entries = paths.map((filePath) => {
-      const name = path.basename(filePath);
-      const format = functionOnDiskFormatFromFileName(name)!;
-      return { name, functionId, format, family: functionOnDiskFormatFamily(format) };
-    });
+    const entries = listFunctionDefinitionFileEntries(paths.map((filePath) => path.basename(filePath)));
     return {
       missing: false,
       text: "",

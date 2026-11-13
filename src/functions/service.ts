@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -16,6 +15,7 @@ import {
   parseFunctionDefinition,
   parseFunctionFile,
   resolveFunctionDefinitionPaths,
+  resolveFunctionDefinitionPathsSync,
   sameFunctionDefinition,
   serializeFunctionDefinitionForFormat,
   type FunctionDefinition,
@@ -278,16 +278,16 @@ export class FunctionService {
     functionId: string,
     revisionText: string | undefined,
   ): { relative: string; format: FunctionOnDiskFormat } | undefined {
-    for (const suffix of functionDefinitionSuffixes()) {
-      const relative = path.posix.join("functions", `${functionId}${suffix}`);
-      const absolute = path.join(projectRoot, "functions", `${functionId}${suffix}`);
-      if (!existsSync(absolute)) continue;
-      const format = functionOnDiskFormatFromFileName(`${functionId}${suffix}`);
-      if (format) return { relative, format };
+    const paths = resolveFunctionDefinitionPathsSync(projectRoot, functionId);
+    if (paths.length === 1) {
+      const name = path.basename(paths[0]!);
+      const format = functionOnDiskFormatFromFileName(name);
+      if (format) return { relative: path.posix.join("functions", name), format };
     }
     if (revisionText !== undefined) {
       const format = detectOnDiskFormatFromRevisionText(revisionText);
-      return { relative: path.posix.join("functions", `${functionId}${format === "js" ? ".function.js" : ".function.yaml"}`), format };
+      const suffix = format === "js" ? ".function.js" : ".function.yaml";
+      return { relative: path.posix.join("functions", `${functionId}${suffix}`), format };
     }
     return undefined;
   }
@@ -352,7 +352,7 @@ export class FunctionService {
     options: { format?: FunctionOnDiskFormat } = {},
   ): Promise<FunctionDetail> {
     const definition = this.parseOrThrow(raw);
-    const createFormat = options.format === "yml" || options.format === "yaml" ? options.format : options.format === "js" ? "js" : "js";
+    const createFormat = options.format === "yaml" || options.format === "yml" ? options.format : "js";
     await this.exclusive(projectRoot, async () => {
       await this.sync(projectRoot);
       const row = this.store.getDefinition(agentProjectKey(projectRoot), definition.id);
