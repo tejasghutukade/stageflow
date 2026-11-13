@@ -5,6 +5,36 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.58.0] - 2026-11-13
+
+### Upgrade notes
+
+- **Store migrations 020–022** add the function tables (definitions, revisions and pins, invocation history) and a stored route on stage executions. After they run, 0.57.x and earlier refuse the store (`store_schema_too_new`). Run `sf backup` first if you might roll back.
+- **Eval config snapshots are version 2.** A run whose target attaches functions also records the function revisions it pinned. Fingerprints of targets without functions do not change, so existing comparisons still line up.
+- **A project can now have a `functions/` folder.** The catalog file writer refuses function files (`use_function_api`). Write them from the Functions page, the HTTP API, or the MCP function tools.
+
+### Added
+
+- **Reusable JavaScript functions.** A function is a project file, `functions/<id>.function.yaml`, `.yml`, or `.js`, of kind `verification`, `routing`, or `tool`. Each call runs in a fresh QuickJS process the Host can kill (5 seconds by default, 30 at most; source up to 64 KiB). A stage attaches a verification as a `verify` check (`type: function`) and tools under `tools.functions`; the pipeline entry that owns `route` names a routing function; an agent attaches tools under `tools.functions`. Every save is an immutable revision, and a run keeps the revision it pinned. See [Functions](docs/yaml-catalog.md#functions) and the runnable examples [function-verify](examples/function-verify/README.md) and [function-tool](examples/function-tool/README.md).
+- **A function only gets what it is granted.** It has no files, environment, or network of its own. It declares what it needs as the first statement of its source (`export const access = { artifacts, workspace, files, env, network }`) or with explicit `capabilities` and `bindings`. The Host derives and enforces the access, and each stage or agent that attaches the function must grant every capability (`sf validate` reports `function.under_granted`). API calls go through the Host: public https only, and a stored credential is added by the Host so the code never sees the secret. See [Access declaration](docs/yaml-catalog.md#function-access).
+- **`context.artifacts` and `context.workspace`.** Each has `exists`, `stat`, `readText`, `readJson`, `list`, and `write`, relative to that root. `list` returns the immediate children, sorted, up to 1000 entries, and leaves out sensitive paths and symlinks that escape the root. `write` is tool-only.
+- **A Functions page in the console** under Build. A directory with kind and problem markers; an editor with a source editor, an Access section that follows the `access` block in the code, a test panel that uses mock files, environment, and API responses unless you turn on real resources for that one run, and run history. Attaching a function to a stage or agent shows what it wants and asks you to allow it once. If the function's access changes later, the attachment shows "Access changed" and offers Review.
+- **HTTP and MCP.** `/api/functions` lists, reads, creates, saves, duplicates, deletes, tests, and reads revisions and invocations. The MCP tools are `list_functions`, `get_function`, `list_function_revisions`, `get_function_revision`, `create_function`, `save_function`, `duplicate_function`, `test_function`, and `delete_function`, and they accept `project_root`.
+- **`sf validate` checks functions.** It reports a missing function, a function of the wrong kind, an attachment that grants too little or more than the function asked for, and a function defined twice or under the wrong id.
+
+### Security
+
+- **A function's authority is its grant, not its code.** The code cannot widen its own access or the reserved `context` keys. `context.env` never receives provider tokens, GitHub tokens, or the control token.
+- **API calls refuse private destinations.** Loopback, private, link-local, and cloud-metadata addresses are denied, including after a redirect or a second DNS answer, and a credential is never forwarded to a new host.
+- **A tool with workspace write cannot create or replace agent or function definition files** (`agents/**/*.agent.yaml`, `functions/**/*.function.{yaml,yml,js}`), so one tool cannot widen another function's or an agent's authority. Pipeline and task files are not covered yet.
+- **Agents and evals cannot test a function against real resources.**
+
+### Known limits
+
+- Stages on the Claude and Cursor backends cannot call function tools, because the model would see a prefixed name instead of the tool's name. A stage that attaches one fails preflight with that reason.
+- A function test that supplies mock files fails with `permission_denied` when `TMPDIR` is inside `$STAGEFLOW_HOME`, as in the shipped Compose file. The console test panel does not send mock files yet, so set `TMPDIR` outside the data directory when you test file access through the API.
+- Not verified against a real sandbox container: `list` in a stage that runs in a container. It is covered with a fake container filesystem.
+
 ## [0.57.0] - 2026-11-12
 
 ### Upgrade notes
