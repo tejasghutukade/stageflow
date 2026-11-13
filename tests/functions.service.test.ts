@@ -814,6 +814,17 @@ describe("function catalog", () => {
       code: "function.invalid",
       issues: [expect.objectContaining({ code: "function.format_conflict" })],
     });
+    await expect(
+      service.save(
+        project,
+        "pin_block",
+        { baseRevision: 1, definition: verification("pin_block", { bindings: [], capabilities: [], description: "blocked" }) },
+        ACTOR,
+      ),
+    ).rejects.toMatchObject({
+      code: "function.invalid",
+      issues: [expect.objectContaining({ code: "function.format_conflict" })],
+    });
     expect((await service.get(project, "pin_block")).definition).toBeNull();
   });
 });

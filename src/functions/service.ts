@@ -285,8 +285,12 @@ export class FunctionService {
       if (format) return { relative: path.posix.join("functions", name), format };
     }
     if (revisionText !== undefined) {
-      const format = detectOnDiskFormatFromRevisionText(revisionText);
-      const suffix = format === "js" ? ".function.js" : ".function.yaml";
+      let format = detectOnDiskFormatFromRevisionText(revisionText);
+      if (format === "yaml" && paths.some((candidate) => candidate.endsWith(".function.yml"))) {
+        format = "yml";
+      }
+      const suffix =
+        format === "js" ? ".function.js" : format === "yml" ? ".function.yml" : ".function.yaml";
       return { relative: path.posix.join("functions", `${functionId}${suffix}`), format };
     }
     return undefined;
@@ -356,6 +360,9 @@ export class FunctionService {
     await this.exclusive(projectRoot, async () => {
       await this.sync(projectRoot);
       const row = this.store.getDefinition(agentProjectKey(projectRoot), definition.id);
+      if (row && !row.deleted && row.issues.length > 0) {
+        throw new FunctionError("function.invalid", `Function "${definition.id}" cannot be created`, { issues: row.issues });
+      }
       if ((await this.functionExistsOnDisk(projectRoot, definition.id)) || (row && !row.deleted)) {
         throw new FunctionError("function.exists", `A function with id "${definition.id}" already exists`);
       }
@@ -382,6 +389,9 @@ export class FunctionService {
       const projectKey = agentProjectKey(projectRoot);
       const row = this.store.getDefinition(projectKey, functionId);
       if (!row || row.deleted || row.currentRevision === 0) throw new FunctionError("function.not_found");
+      if (row.issues.length > 0) {
+        throw new FunctionError("function.invalid", `Function "${functionId}" cannot be saved`, { issues: row.issues });
+      }
       if (row.currentRevision !== input.baseRevision) {
         throw new FunctionError("function.conflict", "The function changed since it was loaded", { currentRevision: row.currentRevision });
       }
