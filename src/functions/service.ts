@@ -1,20 +1,27 @@
-import { access, mkdir, readdir, readFile, rm } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import {
   attachmentIssuesFromFiles,
+  detectOnDiskFormatFromRevisionText,
   findFunctionUsages,
   FUNCTION_CONTRACT_VERSION,
+  functionCatalogConflictIssues,
+  functionDefinitionSuffixes,
   functionFilePath,
+  functionOnDiskFormatFromFileName,
   functionSourceHash,
+  groupFunctionDefinitionFiles,
   hashText,
-  isFunctionDefinitionFile,
   parseFunctionDefinition,
-  parseFunctionYaml,
+  parseFunctionFile,
+  resolveFunctionDefinitionPaths,
+  resolveFunctionDefinitionPathsSync,
   sameFunctionDefinition,
-  serializeFunctionDefinition,
+  serializeFunctionDefinitionForFormat,
   type FunctionDefinition,
   type FunctionIssue,
   type FunctionKind,
+  type FunctionOnDiskFormat,
   type FunctionUsage,
   type FunctionUse,
 } from "../config/loadFunction.js";
@@ -102,6 +109,8 @@ export type FunctionDetail = {
   yaml: string | null;
   sourceHash: string | null;
   contractVersion: number | null;
+  path: string | null;
+  format: FunctionOnDiskFormat | null;
 };
 
 export class FunctionService {
@@ -142,16 +151,32 @@ export class FunctionService {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       names = [];
     }
-    const seen = new Set<string>();
-    for (const name of names.sort()) {
-      if (!isFunctionDefinitionFile(name) || !name.endsWith(".function.yaml")) continue;
-      const functionId = name.slice(0, -".function.yaml".length);
-      seen.add(functionId);
-      const text = await readFile(path.join(directory, name), "utf8");
+    const groups = groupFunctionDefinitionFiles(names);
+    const seen = new Set(groups.keys());
+    for (const [functionId, files] of [...groups.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+      if (files.length > 1) {
+        const conflictHash = hashText(
+          (
+            await Promise.all(
+              files
+                .map((file) => file.name)
+                .sort()
+                .map(async (name) => readFile(path.join(directory, name), "utf8")),
+            )
+          ).join("\0"),
+        );
+        const row = this.store.getDefinition(projectKey, functionId);
+        const issues = functionCatalogConflictIssues(functionId, files);
+        if (row && row.fileHash === conflictHash && !row.deleted && row.issues.length > 0) continue;
+        this.recordConflict(projectKey, functionId, conflictHash, issues, row);
+        continue;
+      }
+      const file = files[0]!;
+      const text = await readFile(path.join(directory, file.name), "utf8");
       const fileHash = hashText(text);
       const row = this.store.getDefinition(projectKey, functionId);
-      if (row && row.fileHash === fileHash && !row.deleted) continue;
-      this.applyFile(projectKey, functionId, text, fileHash, row);
+      if (row && row.fileHash === fileHash && !row.deleted && row.issues.length === 0) continue;
+      this.applyFile(projectKey, functionId, text, fileHash, row, file.name);
     }
     for (const row of this.store.listDefinitions(projectKey)) {
       if (!seen.has(row.functionId) && !row.deleted) {
@@ -160,15 +185,28 @@ export class FunctionService {
     }
   }
 
+  private recordConflict(
+    projectKey: string,
+    functionId: string,
+    fileHash: string,
+    issues: FunctionIssue[],
+    row: ReturnType<FunctionStore["getDefinition"]>,
+  ): void {
+    const now = this.iso();
+    if (!row) this.store.recordInvalid(projectKey, functionId, fileHash, issues, now);
+    else this.store.updateDefinitionState(projectKey, functionId, { fileHash, issues, deleted: false }, now);
+  }
+
   private applyFile(
     projectKey: string,
     functionId: string,
     text: string,
     fileHash: string,
     row: ReturnType<FunctionStore["getDefinition"]>,
+    fileName: string,
   ): void {
     const now = this.iso();
-    const parsed = parseFunctionYaml(text);
+    const parsed = parseFunctionFile(text, fileName);
     const issues = !parsed.ok
       ? parsed.issues
       : parsed.value.id !== functionId
@@ -216,6 +254,7 @@ export class FunctionService {
     const revision = row.currentRevision > 0 ? this.store.getRevision(projectKey, functionId, row.currentRevision) : undefined;
     const runnable = row.issues.length === 0 && revision !== undefined;
     const definition = runnable ? revision.definition : null;
+    const disk = this.onDiskLocation(projectRoot, functionId, revision?.yaml);
     return {
       id: functionId,
       name: definition?.name ?? revision?.definition.name ?? null,
@@ -229,7 +268,45 @@ export class FunctionService {
       yaml: runnable ? revision.yaml : null,
       sourceHash: runnable ? revision.sourceHash : null,
       contractVersion: runnable ? revision.contractVersion : null,
+      path: disk?.relative ?? null,
+      format: disk?.format ?? null,
     };
+  }
+
+  private onDiskLocation(
+    projectRoot: string,
+    functionId: string,
+    revisionText: string | undefined,
+  ): { relative: string; format: FunctionOnDiskFormat } | undefined {
+    const paths = resolveFunctionDefinitionPathsSync(projectRoot, functionId);
+    if (paths.length === 1) {
+      const name = path.basename(paths[0]!);
+      const format = functionOnDiskFormatFromFileName(name);
+      if (format) return { relative: path.posix.join("functions", name), format };
+    }
+    if (revisionText !== undefined) {
+      let format = detectOnDiskFormatFromRevisionText(revisionText);
+      if (format === "yaml" && paths.some((candidate) => candidate.endsWith(".function.yml"))) {
+        format = "yml";
+      }
+      const suffix =
+        format === "js" ? ".function.js" : format === "yml" ? ".function.yml" : ".function.yaml";
+      return { relative: path.posix.join("functions", `${functionId}${suffix}`), format };
+    }
+    return undefined;
+  }
+
+  private async resolveWriteFormat(projectRoot: string, functionId: string, requested?: FunctionOnDiskFormat): Promise<FunctionOnDiskFormat> {
+    if (requested) return requested;
+    const paths = await resolveFunctionDefinitionPaths(projectRoot, functionId);
+    if (paths.length === 1) {
+      const format = functionOnDiskFormatFromFileName(paths[0]!);
+      if (format) return format;
+    }
+    const row = this.store.getDefinition(agentProjectKey(projectRoot), functionId);
+    const revision = row && row.currentRevision > 0 ? this.store.getRevision(agentProjectKey(projectRoot), functionId, row.currentRevision) : undefined;
+    if (revision?.yaml) return detectOnDiskFormatFromRevisionText(revision.yaml);
+    return "js";
   }
 
   private async writeRevision(
@@ -237,21 +314,33 @@ export class FunctionService {
     definition: FunctionDefinition,
     actor: FunctionActor,
     summary: string | null,
+    format?: FunctionOnDiskFormat,
   ): Promise<void> {
-    const yaml = serializeFunctionDefinition(definition);
-    const target = functionFilePath(projectRoot, definition.id);
-    await writeFileAtomic(target, yaml);
+    const onDiskFormat = await this.resolveWriteFormat(projectRoot, definition.id, format);
+    const fileText = serializeFunctionDefinitionForFormat(definition, onDiskFormat);
+    const target = functionFilePath(projectRoot, definition.id, onDiskFormat);
+    await writeFileAtomic(target, fileText);
     this.store.appendRevision(agentProjectKey(projectRoot), {
       definition,
-      yaml,
+      yaml: fileText,
       sourceHash: functionSourceHash(definition.source),
       contractVersion: FUNCTION_CONTRACT_VERSION,
       source: actor.source,
       author: actor.author ?? null,
       summary,
-      fileHash: hashText(yaml),
+      fileHash: hashText(fileText),
       now: this.iso(),
     });
+  }
+
+  private async functionExistsOnDisk(projectRoot: string, functionId: string): Promise<boolean> {
+    return (await resolveFunctionDefinitionPaths(projectRoot, functionId)).length > 0;
+  }
+
+  private async removeFunctionFiles(projectRoot: string, functionId: string): Promise<void> {
+    for (const suffix of functionDefinitionSuffixes()) {
+      await rm(path.join(projectRoot, "functions", `${functionId}${suffix}`), { force: true });
+    }
   }
 
   private parseOrThrow(raw: unknown): FunctionDefinition {
@@ -260,21 +349,25 @@ export class FunctionService {
     return parsed.value;
   }
 
-  async create(projectRoot: string, raw: unknown, actor: FunctionActor): Promise<FunctionDetail> {
+  async create(
+    projectRoot: string,
+    raw: unknown,
+    actor: FunctionActor,
+    options: { format?: FunctionOnDiskFormat } = {},
+  ): Promise<FunctionDetail> {
     const definition = this.parseOrThrow(raw);
+    const createFormat = options.format === "yaml" || options.format === "yml" ? options.format : "js";
     await this.exclusive(projectRoot, async () => {
       await this.sync(projectRoot);
       const row = this.store.getDefinition(agentProjectKey(projectRoot), definition.id);
-      let onDisk = false;
-      try {
-        await access(functionFilePath(projectRoot, definition.id));
-        onDisk = true;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (row && !row.deleted && row.issues.length > 0) {
+        throw new FunctionError("function.invalid", `Function "${definition.id}" cannot be created`, { issues: row.issues });
       }
-      if (onDisk || (row && !row.deleted)) throw new FunctionError("function.exists", `A function with id "${definition.id}" already exists`);
+      if ((await this.functionExistsOnDisk(projectRoot, definition.id)) || (row && !row.deleted)) {
+        throw new FunctionError("function.exists", `A function with id "${definition.id}" already exists`);
+      }
       await mkdir(path.join(projectRoot, "functions"), { recursive: true });
-      await this.writeRevision(projectRoot, definition, actor, "Created");
+      await this.writeRevision(projectRoot, definition, actor, "Created", createFormat);
     });
     return this.get(projectRoot, definition.id);
   }
@@ -296,6 +389,9 @@ export class FunctionService {
       const projectKey = agentProjectKey(projectRoot);
       const row = this.store.getDefinition(projectKey, functionId);
       if (!row || row.deleted || row.currentRevision === 0) throw new FunctionError("function.not_found");
+      if (row.issues.length > 0) {
+        throw new FunctionError("function.invalid", `Function "${functionId}" cannot be saved`, { issues: row.issues });
+      }
       if (row.currentRevision !== input.baseRevision) {
         throw new FunctionError("function.conflict", "The function changed since it was loaded", { currentRevision: row.currentRevision });
       }
@@ -312,7 +408,12 @@ export class FunctionService {
     return this.get(projectRoot, functionId);
   }
 
-  async duplicate(projectRoot: string, functionId: string, input: { id: string }, actor: FunctionActor): Promise<FunctionDetail> {
+  async duplicate(
+    projectRoot: string,
+    functionId: string,
+    input: { id: string; format?: FunctionOnDiskFormat },
+    actor: FunctionActor,
+  ): Promise<FunctionDetail> {
     await this.exclusive(projectRoot, async () => {
       await this.sync(projectRoot);
       const current = this.detail(projectRoot, functionId);
@@ -321,9 +422,12 @@ export class FunctionService {
       }
       const definition = this.parseOrThrow({ ...current.definition, id: input.id });
       const row = this.store.getDefinition(agentProjectKey(projectRoot), definition.id);
-      if (row && !row.deleted) throw new FunctionError("function.exists", `A function with id "${definition.id}" already exists`);
+      if ((await this.functionExistsOnDisk(projectRoot, definition.id)) || (row && !row.deleted)) {
+        throw new FunctionError("function.exists", `A function with id "${definition.id}" already exists`);
+      }
       await mkdir(path.join(projectRoot, "functions"), { recursive: true });
-      await this.writeRevision(projectRoot, definition, actor, `Duplicated from ${functionId}`);
+      const format = input.format ?? current.format ?? undefined;
+      await this.writeRevision(projectRoot, definition, actor, `Duplicated from ${functionId}`, format);
     });
     return this.get(projectRoot, input.id);
   }
@@ -338,7 +442,7 @@ export class FunctionService {
       if (usages.usages.length > 0) {
         throw new FunctionError("function.in_use", "The function is still referenced", { usages: usages.usages });
       }
-      await rm(functionFilePath(projectRoot, functionId), { force: true });
+      await this.removeFunctionFiles(projectRoot, functionId);
       this.store.updateDefinitionState(agentProjectKey(projectRoot), functionId, { deleted: true, fileHash: null, issues: [] }, this.iso());
     });
     return { deleted: true };

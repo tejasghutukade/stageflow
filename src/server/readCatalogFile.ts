@@ -15,6 +15,7 @@ import { loadStageOutcome } from "../config/loadStage.js";
 import { loadStageflowManifestOutcome } from "../config/loadStageflowManifest.js";
 import { loadTaskOutcome } from "../config/loadTask.js";
 import { loadTriggerOutcome } from "../config/loadTrigger.js";
+import { isFunctionDefinitionFile } from "../config/loadFunction.js";
 import { STAGE_FILENAME_SUFFIXES } from "../config/stageFilenameStem.js";
 import {
   findingsFromLoadIssues,
@@ -198,8 +199,9 @@ export function catalogFileKind(relativePath: string, content: string): CatalogF
   if (base.endsWith(".pipeline.yaml") || base.endsWith(".pipeline.yml")) return "pipeline";
   if (base.endsWith(".task.yaml") || base.endsWith(".task.yml")) return "task";
   if (base.endsWith(".trigger.yaml") || base.endsWith(".trigger.yml")) return "trigger";
-  if (base.endsWith(".function.yaml") || base.endsWith(".function.yml")) return "function";
+  if (isFunctionDefinitionFile(base)) return "function";
   if (STAGE_FILENAME_SUFFIXES.some((suffix) => base.endsWith(suffix))) return "stage";
+  if ((base.endsWith(".js") || base.endsWith(".ts")) && !isFunctionDefinitionFile(base)) return "manifest";
   let raw: unknown;
   try {
     raw = parseYaml(content);
@@ -267,14 +269,14 @@ export async function writeCatalogFileForHttp(
     preserveFormatting?: boolean;
   },
 ): Promise<WriteCatalogFileResult> {
+  if (isFunctionDefinitionFile(path.basename(input.inputPath))) {
+    return writeFailure(400, "Function files are written through the functions API", "use_function_api");
+  }
   if (!isCatalogYamlExtension(input.inputPath)) {
     return writeFailure(400, "Only .yaml and .yml catalog files can be written", "unsupported_file_type");
   }
   if (isEvalCatalogFile(input.inputPath)) {
     return writeFailure(400, "Eval files are written through the evals API", "use_eval_api");
-  }
-  if (path.basename(input.inputPath).toLowerCase().endsWith(".function.yaml") || path.basename(input.inputPath).toLowerCase().endsWith(".function.yml")) {
-    return writeFailure(400, "Function files are written through the functions API", "use_function_api");
   }
   if (Buffer.byteLength(input.content, "utf8") > CATALOG_FILE_MAX_BYTES) {
     return writeFailure(413, `Catalog file exceeds ${CATALOG_FILE_MAX_BYTES} byte limit`, "catalog_file_too_large");

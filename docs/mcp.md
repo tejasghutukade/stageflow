@@ -220,7 +220,7 @@ See [Agents](agents.md). The REST, CLI and MCP surfaces side by side are in [Age
 
 ### Function tools {#function-tools}
 
-Project functions (`functions/<id>.function.yaml`) use the same service as `GET` and `POST /api/functions`. The id is `id` (`^[a-z][a-z0-9_]{0,63}$`). Revisions saved here are recorded as source `api`, author `mcp`. A source that starts with `export const access` derives `capabilities` and `bindings`; the file omits those fields, and a payload that repeats a different list is refused with `function.invalid` and `function.access_conflict` on each mismatched issue field. A source with no declaration still carries explicit `capabilities` and `bindings`. Attaching a function to a stage, pipeline, or agent still goes through `edit_stage`, `edit_pipeline`, and `save_agent`. `write_catalog_file` rejects a `*.function.yaml` file.
+Project functions live under `functions/` as `*.function.yaml`, `*.function.yml`, or `*.function.js` (YAML frontmatter plus ESM body). They use the same service as `GET` and `POST /api/functions`. The id is `id` (`^[a-z][a-z0-9_]{0,63}$`). Revisions saved here are recorded as source `api`, author `mcp`. `create_function` writes `functions/<id>.function.js` by default unless the caller requests YAML; `save_function` rewrites the on-disk path the function was loaded from. A source that starts with `export const access` derives `capabilities` and `bindings`; the file omits those fields, and a payload that repeats a different list is refused with `function.invalid` and `function.access_conflict` on each mismatched issue field. A source with no declaration still carries explicit `capabilities` and `bindings`. Attaching a function to a stage, pipeline, or agent still goes through `edit_stage`, `edit_pipeline`, and `save_agent`. `write_catalog_file` rejects marked function files (`*.function.yaml`, `*.function.yml`, `*.function.js`). Unmarked `*.js` / `*.ts` are never function definitions.
 
 Every tool takes an optional `project_root` where it reads or writes the catalog (omit it to use the Host default; see [Catalog roots](#catalog-roots-and-project_root)).
 
@@ -242,7 +242,7 @@ Every tool takes an optional `project_root` where it reads or writes the catalog
 
 `POST /api/functions/:id/test` and `test_function` treat a finished guest run that did not succeed as a success response whose body has `ok: false`. Stage- and agent-attached function tools still throw on that body.
 
-`sf validate` fails closed when an attachment names a missing function, attaches a function of the wrong kind, or leaves a declared capability without a matching grant (`function.missing`, `function.kind_mismatch`, `function.under_granted`, `function.grant_not_requested`, `function.invalid`, `function.routing_requires_route`, `function.routing_conflicts_with_if`). See [YAML catalog: Functions](yaml-catalog.md#functions).
+`sf validate` fails closed when an attachment names a missing function, attaches a function of the wrong kind, leaves a declared capability without a matching grant, or the catalog has duplicate ids (`function.missing`, `function.kind_mismatch`, `function.under_granted`, `function.grant_not_requested`, `function.invalid`, `function.format_conflict`, `function.id_conflict`, `function.routing_requires_route`, `function.routing_conflicts_with_if`). See [YAML catalog: Functions](yaml-catalog.md#functions).
 
 ### Eval tools {#eval-tools}
 

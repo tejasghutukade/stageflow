@@ -2,6 +2,8 @@ import { authorizationHeaders, notifyControlTokenRequired } from "./controlToken
 
 export type FunctionKind = "verification" | "routing" | "tool";
 
+export type FunctionOnDiskFormat = "yaml" | "yml" | "js";
+
 export type FunctionIssue = { path: string; code: string; message: string; line?: number; column?: number };
 
 export type FunctionFileCapability = {
@@ -76,6 +78,8 @@ export type FunctionDetail = {
   yaml: string | null;
   sourceHash: string | null;
   contractVersion: number | null;
+  path: string | null;
+  format: FunctionOnDiskFormat | null;
 };
 
 export type FunctionUsage = { kind: string; path: string };

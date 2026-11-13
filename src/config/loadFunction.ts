@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { accessSync } from "node:fs";
 import { access, cp, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import { parse as parseYaml, stringify as stringifyYaml, YAMLParseError } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { canonicalJson, sha256Hex } from "../evals/canonical.js";
 import {
   accessCapabilityAnchors,
@@ -460,14 +461,19 @@ export function functionSourceHash(source: string): string {
   return sha256Hex(source);
 }
 
-export function serializeFunctionDefinition(definition: FunctionDefinition): string {
+export type FunctionOnDiskFormat = "yaml" | "yml" | "js";
+
+const FUNCTION_DEFINITION_FILE = /^([a-z][a-z0-9_]{0,63})\.function\.(yaml|yml|js)$/i;
+const FUNCTION_JS_FRONTMATTER = /^---\n([\s\S]*?)\n---(?:\n|$)/;
+
+function functionMetadataRecord(definition: FunctionDefinition, includeSource: boolean): Record<string, unknown> {
   const body: Record<string, unknown> = {
     id: definition.id,
     name: definition.name,
   };
   if (definition.description) body.description = definition.description;
   body.kind = definition.kind;
-  body.source = definition.source;
+  if (includeSource) body.source = definition.source;
   if (definition.timeout_ms !== DEFAULT_FUNCTION_TIMEOUT_MS) body.timeout_ms = definition.timeout_ms;
   if (definition.kind === "tool") {
     body.tool_name = definition.tool_name;
@@ -480,16 +486,158 @@ export function serializeFunctionDefinition(definition: FunctionDefinition): str
     body.capabilities = definition.capabilities;
     body.bindings = definition.bindings;
   }
-  return stringifyYaml(body, { lineWidth: 0 });
+  return body;
 }
 
-export function functionFilePath(projectRoot: string, functionId: string): string {
-  return path.join(projectRoot, "functions", `${functionId}.function.yaml`);
+export function serializeFunctionDefinition(definition: FunctionDefinition): string {
+  return stringifyYaml(functionMetadataRecord(definition, true), { lineWidth: 0 });
+}
+
+export function serializeFunctionJsFile(definition: FunctionDefinition): string {
+  const frontmatter = stringifyYaml(functionMetadataRecord(definition, false), { lineWidth: 0 }).trimEnd();
+  return `---\n${frontmatter}\n---\n${definition.source}`;
+}
+
+export function serializeFunctionDefinitionForFormat(
+  definition: FunctionDefinition,
+  format: FunctionOnDiskFormat,
+): string {
+  return format === "js" ? serializeFunctionJsFile(definition) : serializeFunctionDefinition(definition);
+}
+
+export function functionOnDiskFormatFromFileName(fileName: string): FunctionOnDiskFormat | undefined {
+  const base = path.basename(fileName).toLowerCase();
+  if (base.endsWith(".function.js")) return "js";
+  if (base.endsWith(".function.yml")) return "yml";
+  if (base.endsWith(".function.yaml")) return "yaml";
+  return undefined;
+}
+
+export function functionOnDiskFormatFamily(format: FunctionOnDiskFormat): "yaml" | "js" {
+  return format === "js" ? "js" : "yaml";
+}
+
+export function functionIdFromDefinitionFileName(fileName: string): string | undefined {
+  const match = FUNCTION_DEFINITION_FILE.exec(path.basename(fileName));
+  return match?.[1];
+}
+
+export function functionFilePath(
+  projectRoot: string,
+  functionId: string,
+  format: FunctionOnDiskFormat = "yaml",
+): string {
+  const suffix =
+    format === "js" ? ".function.js" : format === "yml" ? ".function.yml" : ".function.yaml";
+  return path.join(projectRoot, "functions", `${functionId}${suffix}`);
+}
+
+export function functionDefinitionSuffixes(): readonly string[] {
+  return [".function.yaml", ".function.yml", ".function.js"];
+}
+
+function functionDefinitionCandidates(directory: string, functionId: string): string[] {
+  return functionDefinitionSuffixes().map((suffix) => path.join(directory, `${functionId}${suffix}`));
 }
 
 export function isFunctionDefinitionFile(filePath: string): boolean {
-  const base = path.basename(filePath).toLowerCase();
-  return base.endsWith(".function.yaml") || base.endsWith(".function.yml");
+  return functionOnDiskFormatFromFileName(filePath) !== undefined;
+}
+
+export type FunctionDefinitionFileEntry = {
+  name: string;
+  functionId: string;
+  format: FunctionOnDiskFormat;
+  family: "yaml" | "js";
+};
+
+export function listFunctionDefinitionFileEntries(fileNames: readonly string[]): FunctionDefinitionFileEntry[] {
+  const entries: FunctionDefinitionFileEntry[] = [];
+  for (const name of fileNames) {
+    const format = functionOnDiskFormatFromFileName(name);
+    const functionId = functionIdFromDefinitionFileName(name);
+    if (format === undefined || functionId === undefined) continue;
+    entries.push({ name, functionId, format, family: functionOnDiskFormatFamily(format) });
+  }
+  return entries;
+}
+
+export function functionCatalogConflictIssues(
+  functionId: string,
+  files: readonly FunctionDefinitionFileEntry[],
+): FunctionIssue[] {
+  const families = new Set(files.map((file) => file.family));
+  if (families.size > 1) {
+    return [
+      issue(
+        functionId,
+        "function.format_conflict",
+        `More than one function definition format claims "${functionId}"`,
+      ),
+    ];
+  }
+  const paths = files.map((file) => file.name).sort().join(", ");
+  return [
+    issue(
+      functionId,
+      "function.id_conflict",
+      `More than one function definition file claims "${functionId}" (${paths})`,
+    ),
+  ];
+}
+
+export function groupFunctionDefinitionFiles(
+  fileNames: readonly string[],
+): Map<string, FunctionDefinitionFileEntry[]> {
+  const groups = new Map<string, FunctionDefinitionFileEntry[]>();
+  for (const entry of listFunctionDefinitionFileEntries(fileNames)) {
+    const rows = groups.get(entry.functionId) ?? [];
+    rows.push(entry);
+    groups.set(entry.functionId, rows);
+  }
+  return groups;
+}
+
+export function parseFunctionJs(text: string): FunctionParseResult {
+  const match = FUNCTION_JS_FRONTMATTER.exec(text);
+  if (!match) {
+    return {
+      ok: false,
+      issues: [issue("", "function.invalid", "A function.js file needs YAML frontmatter")],
+    };
+  }
+  let raw: unknown;
+  try {
+    raw = parseYaml(match[1]);
+  } catch (error) {
+    const position = yamlParsePosition(error);
+    return {
+      ok: false,
+      issues: [
+        {
+          path: "",
+          code: "function.invalid_yaml",
+          message: "Function frontmatter could not be parsed",
+          ...position,
+        },
+      ],
+    };
+  }
+  if (!isRecord(raw)) {
+    return { ok: false, issues: [issue("", "function.invalid_shape", "Function frontmatter must be an object")] };
+  }
+  const body = text.slice(match[0].length);
+  return parseFunctionDefinition({ ...raw, source: body });
+}
+
+export function parseFunctionFile(text: string, fileName: string): FunctionParseResult {
+  const format = functionOnDiskFormatFromFileName(fileName);
+  if (format === "js") return parseFunctionJs(text);
+  return parseFunctionYaml(text);
+}
+
+export function detectOnDiskFormatFromRevisionText(text: string): FunctionOnDiskFormat {
+  return FUNCTION_JS_FRONTMATTER.test(text) ? "js" : "yaml";
 }
 
 export function parseFunctionYaml(text: string): FunctionParseResult {
@@ -504,7 +652,7 @@ export function parseFunctionYaml(text: string): FunctionParseResult {
         {
           path: "",
           code: "function.invalid_yaml",
-          message: error instanceof YAMLParseError ? "Function YAML could not be parsed" : "Function YAML could not be parsed",
+          message: "Function YAML could not be parsed",
           ...position,
         },
       ],
@@ -513,13 +661,55 @@ export function parseFunctionYaml(text: string): FunctionParseResult {
   return parseFunctionDefinition(raw);
 }
 
+export function resolveFunctionDefinitionPathsSync(projectRoot: string, functionId: string): string[] {
+  const directory = path.join(projectRoot, "functions");
+  const paths: string[] = [];
+  for (const candidate of functionDefinitionCandidates(directory, functionId)) {
+    try {
+      accessSync(candidate);
+      paths.push(candidate);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  return paths;
+}
+
+export async function resolveFunctionDefinitionPaths(
+  projectRoot: string,
+  functionId: string,
+): Promise<string[]> {
+  const directory = path.join(projectRoot, "functions");
+  const paths: string[] = [];
+  for (const candidate of functionDefinitionCandidates(directory, functionId)) {
+    try {
+      await access(candidate);
+      paths.push(candidate);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  return paths;
+}
+
 export async function readFunctionFile(
   projectRoot: string,
   functionId: string,
 ): Promise<{ missing: true } | { missing: false; text: string; parsed: FunctionParseResult }> {
+  const paths = await resolveFunctionDefinitionPaths(projectRoot, functionId);
+  if (paths.length === 0) return { missing: true };
+  if (paths.length > 1) {
+    const entries = listFunctionDefinitionFileEntries(paths.map((filePath) => path.basename(filePath)));
+    return {
+      missing: false,
+      text: "",
+      parsed: { ok: false, issues: functionCatalogConflictIssues(functionId, entries) },
+    };
+  }
+  const filePath = paths[0]!;
   try {
-    const text = await readFile(functionFilePath(projectRoot, functionId), "utf8");
-    return { missing: false, text, parsed: parseFunctionYaml(text) };
+    const text = await readFile(filePath, "utf8");
+    return { missing: false, text, parsed: parseFunctionFile(text, filePath) };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { missing: true };
     throw error;

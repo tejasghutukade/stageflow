@@ -6,8 +6,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runValidateCommand } from "../src/cli/validateCommand.js";
 import { createDraftPackage } from "../src/config/draftPackage.js";
 import { loadPipelineOutcome } from "../src/config/loadPipeline.js";
-import { parseFunctionYaml, serializeFunctionDefinition } from "../src/config/loadFunction.js";
+import {
+  functionSourceHash,
+  parseFunctionDefinition,
+  parseFunctionJs,
+  parseFunctionYaml,
+  serializeFunctionDefinition,
+  serializeFunctionJsFile,
+} from "../src/config/loadFunction.js";
 import { catalogFileKind, writeCatalogFileForHttp } from "../src/server/readCatalogFile.js";
+import { readFunctionDefinitionSync } from "../src/functions/toolPolicy.js";
 import { AgentService } from "../src/agents/service.js";
 import { AgentStore } from "../src/agents/store.js";
 import { FunctionError, FunctionService } from "../src/functions/service.js";
@@ -120,7 +128,7 @@ describe("function catalog", () => {
     expect(created.definition?.timeout_ms).toBe(5000);
     expect(created.contractVersion).toBe(1);
     expect(created.sourceHash).toBe(createHash("sha256").update(SOURCE).digest("hex"));
-    const onDisk = await readFile(path.join(project, "functions", "score.function.yaml"), "utf8");
+    const onDisk = await readFile(path.join(project, "functions", "score.function.js"), "utf8");
     expect(onDisk).toContain("id: score");
 
     clock.now = new Date("2026-11-11T13:00:00.000Z");
@@ -546,6 +554,8 @@ describe("function catalog", () => {
   it("rejects catalog writes of function files", async () => {
     const { project } = await open();
     expect(catalogFileKind("functions/example.function.yaml", "id: example\n")).not.toBe("stage");
+    expect(catalogFileKind("functions/example.function.js", "---\nid: example\n---\n")).not.toBe("stage");
+    expect(catalogFileKind("functions/helper.js", "export default 1;\n")).not.toBe("stage");
     const rejected = await writeCatalogFileForHttp({
       projectRoot: project,
       inputPath: "functions/example.function.yaml",
@@ -555,6 +565,23 @@ describe("function catalog", () => {
     expect(rejected.ok).toBe(false);
     if (rejected.ok) return;
     expect(rejected.code).toBe("use_function_api");
+    const rejectedJs = await writeCatalogFileForHttp({
+      projectRoot: project,
+      inputPath: "functions/example.function.js",
+      content: "---\nid: example\n---\n",
+      create: true,
+    });
+    expect(rejectedJs.ok).toBe(false);
+    if (rejectedJs.ok) return;
+    expect(rejectedJs.code).toBe("use_function_api");
+  });
+
+  it("loads js-authored functions for sync policy reads", async () => {
+    const { project, service } = await open();
+    await service.create(project, verification("policy_js"), ACTOR);
+    const loaded = readFunctionDefinitionSync(project, "policy_js");
+    expect(loaded?.id).toBe("policy_js");
+    expect(loaded?.kind).toBe("verification");
   });
 
   it("parses the fixture function", async () => {
@@ -620,7 +647,7 @@ describe("function catalog", () => {
       { alias: "MIN_SCORE", required: true },
       { alias: "REGION", required: false },
     ]);
-    const onDisk = await readFile(path.join(project, "functions", "score.function.yaml"), "utf8");
+    const onDisk = await readFile(path.join(project, "functions", "score.function.js"), "utf8");
     expect(onDisk).not.toContain("capabilities:");
     expect(onDisk).not.toContain("bindings:");
     const fetched = await service.get(project, "score");
@@ -716,5 +743,88 @@ describe("function catalog", () => {
     const again = parseFunctionYaml(serialized);
     expect(again).toEqual(legacy);
     expect(serializeFunctionDefinition(legacy.value)).toBe(serialized);
+  });
+
+  it("defaults create to js, preserves format on save, and scans conflicts", async () => {
+    const { project, service } = await open();
+    const yamlCreated = await service.create(project, verification("yaml_only"), ACTOR, { format: "yaml" });
+    expect(yamlCreated.path).toBe("functions/yaml_only.function.yaml");
+    await service.save(
+      project,
+      "yaml_only",
+      { baseRevision: 1, definition: verification("yaml_only", { description: "Still yaml" }) },
+      ACTOR,
+    );
+    expect(await readFile(path.join(project, "functions", "yaml_only.function.yaml"), "utf8")).toContain("Still yaml");
+    await expect(readFile(path.join(project, "functions", "yaml_only.function.js"), "utf8")).rejects.toThrow();
+
+    const jsCreated = await service.create(project, verification("js_only"), ACTOR);
+    expect(jsCreated.path).toBe("functions/js_only.function.js");
+    const jsBody = await readFile(path.join(project, "functions", "js_only.function.js"), "utf8");
+    expect(parseFunctionJs(jsBody).ok).toBe(true);
+    await service.save(
+      project,
+      "js_only",
+      { baseRevision: 1, definition: verification("js_only", { description: "Still js" }) },
+      ACTOR,
+    );
+    const jsSaved = await readFile(path.join(project, "functions", "js_only.function.js"), "utf8");
+    expect(jsSaved).toContain("Still js");
+    expect(jsSaved.startsWith("---\n")).toBe(true);
+
+    await writeFile(path.join(project, "functions", "helper.js"), "export default 1;\n");
+    expect((await service.list(project)).map((row) => row.id).sort()).toEqual(["js_only", "yaml_only"]);
+
+    await writeFile(
+      path.join(project, "functions", "yaml_only.function.yml"),
+      await readFile(path.join(project, "functions", "yaml_only.function.yaml"), "utf8"),
+    );
+    const conflicted = await service.get(project, "yaml_only");
+    expect(conflicted.issues).toEqual([expect.objectContaining({ code: "function.id_conflict" })]);
+    expect(conflicted.definition).toBeNull();
+
+    const crossDefinition = parseFunctionDefinition(verification("cross"));
+    expect(crossDefinition.ok).toBe(true);
+    if (!crossDefinition.ok) return;
+    await writeFile(path.join(project, "functions", "cross.function.js"), serializeFunctionJsFile(crossDefinition.value));
+    await writeFile(path.join(project, "functions", "cross.function.yaml"), serializeFunctionDefinition(crossDefinition.value));
+    const cross = await service.get(project, "cross");
+    expect(cross.issues).toEqual([expect.objectContaining({ code: "function.format_conflict" })]);
+    expect(cross.definition).toBeNull();
+
+    await expect(service.create(project, verification("js_only"), ACTOR)).rejects.toMatchObject({ code: "function.exists" });
+  });
+
+  it("keeps body-only sourceHash across yaml and js authoring and blocks pin on format conflict", async () => {
+    const { project, service } = await open();
+    const yamlCreated = await service.create(project, verification("hash_pair"), ACTOR, { format: "yaml" });
+    const expectedHash = yamlCreated.sourceHash;
+    expect(expectedHash).toBe(functionSourceHash(SOURCE));
+    await service.delete(project, "hash_pair");
+    const jsCreated = await service.create(project, verification("hash_pair"), ACTOR);
+    expect(jsCreated.sourceHash).toBe(expectedHash);
+    expect(jsCreated.path).toBe("functions/hash_pair.function.js");
+
+    await service.create(project, verification("pin_block", { bindings: [], capabilities: [] }), ACTOR, { format: "yaml" });
+    const pinBlock = parseFunctionDefinition(verification("pin_block", { bindings: [], capabilities: [] }));
+    expect(pinBlock.ok).toBe(true);
+    if (!pinBlock.ok) return;
+    await writeFile(path.join(project, "functions", "pin_block.function.js"), serializeFunctionJsFile(pinBlock.value));
+    await expect(service.pinRun(project, "run-cross", ["pin_block"])).rejects.toMatchObject({
+      code: "function.invalid",
+      issues: [expect.objectContaining({ code: "function.format_conflict" })],
+    });
+    await expect(
+      service.save(
+        project,
+        "pin_block",
+        { baseRevision: 1, definition: verification("pin_block", { bindings: [], capabilities: [], description: "blocked" }) },
+        ACTOR,
+      ),
+    ).rejects.toMatchObject({
+      code: "function.invalid",
+      issues: [expect.objectContaining({ code: "function.format_conflict" })],
+    });
+    expect((await service.get(project, "pin_block")).definition).toBeNull();
   });
 });

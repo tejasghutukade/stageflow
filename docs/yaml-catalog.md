@@ -19,7 +19,7 @@ my-project/
     hello.pipeline.yaml       # inline or uses: stage entries
   tasks/
     hello.task.yaml
-  functions/                  # optional: <id>.function.yaml (see Functions)
+  functions/                  # optional: <id>.function.{yaml,yml,js} (see Functions)
   evals/                      # optional: *.eval.yaml (see Evals)
   datasets/                   # optional: *.dataset.jsonl|json|csv
   workshop/                   # Workshop Author saves (scan root; created on the first save)
@@ -42,7 +42,7 @@ Runnable examples live under [`examples/`](../examples/). This repo's manifest i
 | Eval | `*.eval.yaml` | `review-findings.eval.yaml` |
 | Dataset | `*.dataset.jsonl`, `*.dataset.json`, `*.dataset.csv` | `review-diffs.dataset.jsonl` |
 | Stage (external) | any `*.yaml` beside pipeline or under shared pool | `research.yaml`, `../stages/clarify.yaml` |
-| Function | `functions/<id>.function.yaml` | `functions/score_check.function.yaml` |
+| Function | `functions/<id>.function.yaml`, `functions/<id>.function.yml`, or `functions/<id>.function.js` | `functions/score_check.function.js` |
 
 CLI **`--pipeline` and `--task` require filesystem paths** — there is no bare-id fallback.
 
@@ -1097,9 +1097,11 @@ Required on the file (not on the `uses:` wrapper): `io.input.schema` and `io.out
 
 Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixtures/stages/plan-review.yaml).
 
-## Functions (`functions/<id>.function.yaml`) {#functions}
+## Functions (`functions/<id>.function.{yaml,yml,js}`) {#functions}
 
-A function is project-owned JavaScript. The file is `functions/<id>.function.yaml`. The `id` matches the file name (`functions/score_check.function.yaml` has `id: score_check`). The console, HTTP, and MCP share one write path. There is no `sf functions` writer in this release: edit the file, or use the function tools while `sf ui` or `sf mcp` is running.
+A function is project-owned JavaScript. Author it as `functions/<id>.function.yaml` or `functions/<id>.function.yml` with a multiline `source` field, or as `functions/<id>.function.js` with YAML frontmatter (`---` … `---`) for metadata and an ESM body that is the executable `source`. The `id` matches the file stem in every format (`functions/score_check.function.js` has `id: score_check` in frontmatter or in the YAML file). An unmarked `*.js` or `*.ts` under `functions/` is not a definition and never appears in the catalog. TypeScript authoring is out of scope. When both `score_check.function.yaml` and `score_check.function.js` exist, `sf validate` reports `function.format_conflict` and neither file is runnable until one is removed. When the same id appears twice in one format family (for example `.function.yaml` and `.function.yml`), the code is `function.id_conflict`. The console, HTTP, and MCP share one write path. New creates default to `*.function.js`; saving an existing function keeps its format. There is no `sf functions` writer in this release: edit the file, or use the function tools while `sf ui` or `sf mcp` is running. `write_catalog_file` refuses `*.function.yaml`, `*.function.yml`, and `*.function.js`.
+
+On `*.function.js`, frontmatter fields match the table below except `source`, which lives only in the body. Capabilities and bindings follow the same access-declaration rules as YAML-authored source. Issue line numbers for access and syntax refer to the executable body, not frontmatter lines.
 
 | Field | Required | Description |
 |-------|----------|-------------|
@@ -1107,7 +1109,7 @@ A function is project-owned JavaScript. The file is `functions/<id>.function.yam
 | `name` | yes | Operator-facing name, up to 120 characters |
 | `description` | no | Up to 500 characters |
 | `kind` | yes | `verification`, `routing`, or `tool`. Fixed after create |
-| `source` | yes | JavaScript module, at most 64 KiB. Must be `export default function execute(context)` or `export default async function execute(context)`. The module body is parsed and not executed during validation. It may start with an [`access` declaration](#function-access) |
+| `source` | yes (YAML files) | JavaScript module, at most 64 KiB. Must be `export default function execute(context)` or `export default async function execute(context)`. The module body is parsed and not executed during validation. It may start with an [`access` declaration](#function-access). On `*.function.js`, omit `source` from frontmatter; the file body after the closing `---` is the source |
 | `timeout_ms` | no | Integer from 1 to 30000. Omitted means 5000 |
 | `capabilities` | no | List of file, env, and API capabilities. Omitted means none. Omitted from the file when `source` declares `access`; the parsed definition still has the derived list |
 | `bindings` | no | Env aliases this function reads, each `{ alias, required? }`. `required` defaults to true. The alias must match an env capability. Omitted means none. Omitted from the file when `source` declares `access` |

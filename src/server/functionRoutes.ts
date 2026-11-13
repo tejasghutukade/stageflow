@@ -53,7 +53,12 @@ const routes: Array<{ method: string; pattern: RegExp; handle: (ctx: Ctx) => Pro
     pattern: /^\/api\/functions$/,
     handle: async (ctx) => {
       const body = await readBody(ctx.req);
-      ctx.json(ctx.res, 201, await ctx.service.create(ctx.projectRoot, body.definition, ACTOR));
+      const format = body.format === "yaml" || body.format === "yml" || body.format === "js" ? body.format : undefined;
+      ctx.json(
+        ctx.res,
+        201,
+        await ctx.service.create(ctx.projectRoot, body.definition, ACTOR, format ? { format } : {}),
+      );
     },
   },
   {
@@ -100,7 +105,17 @@ const routes: Array<{ method: string; pattern: RegExp; handle: (ctx: Ctx) => Pro
     pattern: /^\/api\/functions\/([^/]+)\/duplicate$/,
     handle: async (ctx) => {
       const body = await readBody(ctx.req);
-      ctx.json(ctx.res, 201, await ctx.service.duplicate(ctx.projectRoot, ctx.params[0]!, { id: requireText(body.id, "id") }, ACTOR));
+      const format = body.format === "yaml" || body.format === "yml" || body.format === "js" ? body.format : undefined;
+      ctx.json(
+        ctx.res,
+        201,
+        await ctx.service.duplicate(
+          ctx.projectRoot,
+          ctx.params[0]!,
+          { id: requireText(body.id, "id"), ...(format ? { format } : {}) },
+          ACTOR,
+        ),
+      );
     },
   },
   {

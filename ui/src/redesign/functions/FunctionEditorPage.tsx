@@ -28,6 +28,7 @@ import { FUNCTION_KINDS, KIND_META, KindPill, slugId } from "./functionKinds";
 import {
   applyInvocationResponse,
   followToolFields,
+  functionDiskPath,
   FUNCTION_TEMPLATES,
   nextFunctionGeneration,
   saveOrSurfaceConflict,
@@ -333,6 +334,23 @@ export function FunctionEditorPage({
   const blocking = localIssues.length > 0;
   const canSave = dirty && !busy && !blocking && !missingRequired && conflict === null;
   const revision = detail?.revision;
+  const diskPath = useMemo(
+    () =>
+      functionDiskPath({
+        id: detail?.id ?? draft.id,
+        path: detail?.path,
+        format: detail?.format,
+        draftId: draft.id,
+        isNew,
+      }),
+    [detail, draft.id, isNew],
+  );
+  const copyDiskPath = useCallback(() => {
+    void navigator.clipboard.writeText(diskPath).then(
+      () => showToast("Copied path"),
+      () => showToast("Could not copy path"),
+    );
+  }, [diskPath]);
 
   const sections: SectionId[] = useMemo(
     () => ["details", "source", "contract", ...(draft.kind === "tool" ? (["tool"] as SectionId[]) : []), "test", ...(isNew ? [] : (["history"] as SectionId[]))],
@@ -486,7 +504,7 @@ export function FunctionEditorPage({
         }
         description={
           isNew
-            ? "A new function is saved to the project as functions/<id>.function.yaml."
+            ? "A new function is saved to the project as functions/<id>.function.js."
             : "Saving creates a new revision. Runs and sessions already in flight keep the revision they started on."
         }
         actions={
@@ -542,7 +560,7 @@ export function FunctionEditorPage({
                     </>
                   ) : (
                     <>
-                      <span className="text-xs leading-[1.33333] text-[var(--sf-text-1)]">Remove functions/{detail?.id}.function.yaml? History stays readable.</span>
+                      <span className="text-xs leading-[1.33333] text-[var(--sf-text-1)]">Remove {diskPath}? History stays readable.</span>
                       <div className="flex gap-2">
                         <button type="button" onClick={() => void remove()} className="text-xs font-medium text-[var(--sf-fail)]">
                           Delete
@@ -832,7 +850,22 @@ export function FunctionEditorPage({
       </div>
 
       <PageFooter
-        left={isNew ? "functions/<id>.function.yaml · not saved yet" : `functions/${detail?.id}.function.yaml · revision ${revision} saved`}
+        left={
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate">
+              {isNew ? `${diskPath} · not saved yet` : `${diskPath} · revision ${revision} saved`}
+            </span>
+            <button
+              type="button"
+              onClick={copyDiskPath}
+              className="shrink-0 text-[var(--sf-text-3)] hover:text-[var(--sf-text-1)]"
+              aria-label="Copy path"
+              title="Copy path"
+            >
+              <LuCopy aria-hidden className="size-3" />
+            </button>
+          </span>
+        }
         right="⌘S to save"
       />
 

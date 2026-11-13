@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import * as childProcess from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { connect as netConnect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -386,6 +386,32 @@ describe("function invoke", () => {
     const outcomes = await Promise.all(running.concat(waiting));
     expect(outcomes.every((result) => result.ok)).toBe(true);
     expect(started).toBe(20);
+  });
+
+  it("guest-tests a js-authored verification function synced from disk", async () => {
+    const { project, service, call } = await open();
+    await mkdir(path.join(project, "functions"), { recursive: true });
+    const jsText = await readFile(path.join(process.cwd(), "functions/score_check.function.js"), "utf8");
+    await writeFile(path.join(project, "functions", "score_check.function.js"), jsText);
+    const synced = await service.get(project, "score_check");
+    expect(synced.definition?.kind).toBe("verification");
+    expect(synced.sourceHash).toBe(functionSourceHash(synced.definition!.source));
+
+    const tested = await call("POST", "/api/functions/score_check/test", {
+      mocks: {
+        files: [{ root: "artifacts", path: "report.json", text: '{"score":9}' }],
+        env: { MIN_SCORE: "7" },
+      },
+    });
+    expect(tested.status).toBe(200);
+    expect(tested.body).toMatchObject({
+      ok: true,
+      kind: "test",
+      status: "succeeded",
+      revision: 1,
+      sourceHash: synced.sourceHash,
+      value: { passed: true, message: "Score accepted" },
+    });
   });
 });
 
