@@ -14,6 +14,7 @@ import {
   serializeFunctionJsFile,
 } from "../src/config/loadFunction.js";
 import { catalogFileKind, writeCatalogFileForHttp } from "../src/server/readCatalogFile.js";
+import { readFunctionDefinitionSync } from "../src/functions/toolPolicy.js";
 import { AgentService } from "../src/agents/service.js";
 import { AgentStore } from "../src/agents/store.js";
 import { FunctionError, FunctionService } from "../src/functions/service.js";
@@ -552,6 +553,8 @@ describe("function catalog", () => {
   it("rejects catalog writes of function files", async () => {
     const { project } = await open();
     expect(catalogFileKind("functions/example.function.yaml", "id: example\n")).not.toBe("stage");
+    expect(catalogFileKind("functions/example.function.js", "---\nid: example\n---\n")).not.toBe("stage");
+    expect(catalogFileKind("functions/helper.js", "export default 1;\n")).not.toBe("stage");
     const rejected = await writeCatalogFileForHttp({
       projectRoot: project,
       inputPath: "functions/example.function.yaml",
@@ -561,6 +564,23 @@ describe("function catalog", () => {
     expect(rejected.ok).toBe(false);
     if (rejected.ok) return;
     expect(rejected.code).toBe("use_function_api");
+    const rejectedJs = await writeCatalogFileForHttp({
+      projectRoot: project,
+      inputPath: "functions/example.function.js",
+      content: "---\nid: example\n---\n",
+      create: true,
+    });
+    expect(rejectedJs.ok).toBe(false);
+    if (rejectedJs.ok) return;
+    expect(rejectedJs.code).toBe("use_function_api");
+  });
+
+  it("loads js-authored functions for sync policy reads", async () => {
+    const { project, service } = await open();
+    await service.create(project, verification("policy_js"), ACTOR);
+    const loaded = readFunctionDefinitionSync(project, "policy_js");
+    expect(loaded?.id).toBe("policy_js");
+    expect(loaded?.kind).toBe("verification");
   });
 
   it("parses the fixture function", async () => {

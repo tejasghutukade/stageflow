@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
 import type { AgentDefinition } from "../config/loadAgent.js";
+import path from "node:path";
 import {
-  functionFilePath,
-  parseFunctionYaml,
+  parseFunctionFile,
+  resolveFunctionDefinitionPathsSync,
   type FunctionDefinition,
   type FunctionGrant,
 } from "../config/loadFunction.js";
@@ -66,8 +67,11 @@ export function classifyEffectivePolicy(policy: EffectiveFunctionPolicy): {
 }
 
 export function readFunctionDefinitionSync(projectRoot: string, functionId: string): FunctionDefinition | undefined {
+  const paths = resolveFunctionDefinitionPathsSync(projectRoot, functionId);
+  if (paths.length !== 1) return undefined;
   try {
-    const parsed = parseFunctionYaml(readFileSync(functionFilePath(projectRoot, functionId), "utf8"));
+    const filePath = paths[0]!;
+    const parsed = parseFunctionFile(readFileSync(filePath, "utf8"), path.basename(filePath));
     if (!parsed.ok || parsed.value.id !== functionId) return undefined;
     return parsed.value;
   } catch {

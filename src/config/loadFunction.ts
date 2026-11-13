@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { accessSync } from "node:fs";
 import { access, cp, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml, YAMLParseError } from "yaml";
@@ -654,6 +655,21 @@ export function parseFunctionYaml(text: string): FunctionParseResult {
     };
   }
   return parseFunctionDefinition(raw);
+}
+
+export function resolveFunctionDefinitionPathsSync(projectRoot: string, functionId: string): string[] {
+  const directory = path.join(projectRoot, "functions");
+  const paths: string[] = [];
+  for (const suffix of functionDefinitionSuffixes()) {
+    const candidate = path.join(directory, `${functionId}${suffix}`);
+    try {
+      accessSync(candidate);
+      paths.push(candidate);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  return paths;
 }
 
 export async function resolveFunctionDefinitionPaths(
