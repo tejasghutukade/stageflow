@@ -9,13 +9,13 @@ Docker is the recommended way to run Stageflow: pull the published image and ope
 
 ## Docker (recommended)
 
-The image is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.58` is the current minor tag (`0.58.0` is that exact release). Each release is also tagged `x.y.z` and `x.y`.
+The image is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.59` is the current minor tag (`0.59.0` is that exact release). Each release is also tagged `x.y.z` and `x.y`.
 
 ```bash
 docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.58 \
+  ghcr.io/tejasghutukade/stageflow:0.59 \
   sf ui
 ```
 
@@ -31,7 +31,7 @@ docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
   -v "$PWD":/project \
-  ghcr.io/tejasghutukade/stageflow:0.58 \
+  ghcr.io/tejasghutukade/stageflow:0.59 \
   sf ui
 ```
 
