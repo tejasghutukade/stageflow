@@ -190,7 +190,7 @@ There is **no** mandatory `boot` catalog root from Host cwd. Cold Host with an e
 
 ## Tools
 
-### Tool list shape (MCP clients)
+### Tool list shape (MCP clients) {#tool-list-shape}
 
 `tools/list` annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) come from `TOOL_META.risk` (`read` / `write` / `destructive` / `external`). External tools (for example `test_connection`, `probe_project_mcp`) set `openWorldHint: true` and are not read-only.
 
