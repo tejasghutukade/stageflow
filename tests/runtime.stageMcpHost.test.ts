@@ -15,7 +15,11 @@ import {
 } from "../src/config/hostLoginMcp.js";
 import { saveHostMcpServer } from "../src/config/mcpHostCatalog.js";
 import * as mcpOAuth from "../src/config/mcpOAuth.js";
-import { OAUTH_FILE_KEY_ENV } from "../src/config/mcpOAuth.js";
+import { OAUTH_FILE_KEY_ENV, useHostMcpGrantEnv } from "../src/config/mcpOAuth.js";
+import { handleProjectMcpRoutes } from "../src/server/projectMcpRoutes.js";
+import { updateMcpOAuthTokensForUrl } from "pi-mcp-adapter/oauth";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
 import { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.js";
@@ -47,10 +51,12 @@ let home: string;
 let root: string;
 let prevHome: string | undefined;
 let prevFileKey: string | undefined;
+let prevAgentDir: string | undefined;
 
 beforeEach(async () => {
   prevHome = process.env.STAGEFLOW_HOME;
   prevFileKey = process.env[OAUTH_FILE_KEY_ENV];
+  prevAgentDir = process.env.PI_CODING_AGENT_DIR;
   home = await mkdtemp(path.join(tmpdir(), "sf-stage-mcp-home-"));
   root = await mkdtemp(path.join(tmpdir(), "sf-stage-mcp-root-"));
   process.env.STAGEFLOW_HOME = home;
@@ -84,6 +90,8 @@ afterEach(() => {
   else process.env.STAGEFLOW_HOME = prevHome;
   if (prevFileKey === undefined) delete process.env[OAUTH_FILE_KEY_ENV];
   else process.env[OAUTH_FILE_KEY_ENV] = prevFileKey;
+  if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
   resetGlobalStageflowHomeForTests();
   resetFrozenHostLoginServersForTests();
   setStageMcpUpstreamForTests(undefined);
@@ -563,4 +571,350 @@ function stageInput(
 function sessionToolNames(): string[] {
   const options = piSdkMocks.createAgentSession.mock.calls.at(-1)?.[0] as { tools?: string[] } | undefined;
   return options?.tools ?? [];
+}
+
+const VALID_KEY = Buffer.alloc(32, 4).toString("base64");
+
+function useGrantDir(): void {
+  process.env[OAUTH_FILE_KEY_ENV] = VALID_KEY;
+  process.env.PI_CODING_AGENT_DIR = path.join(home, "agent");
+  useHostMcpGrantEnv();
+}
+
+async function storeGrant(name: string, url: string, access = ACCESS, refresh = REFRESH): Promise<void> {
+  useGrantDir();
+  await updateMcpOAuthTokensForUrl(name, url, {
+    accessToken: access,
+    refreshToken: refresh,
+    expiresAt: Math.floor(Date.now() / 1000) + 3600,
+  }, { credentialStore: "encrypted-file" });
+}
+
+describe("stage MCP grant", () => {
+  it("ends needs_auth before the model when no grant is stored and does not list tools", async () => {
+    useGrantDir();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    freezeHostLoginServers(hostLoginAttemptKey({ runId: "run-none", stageId: "inventory", attempt: 1 }), [
+      { name: "wonder", url: "https://wonder.example/mcp" },
+    ]);
+    const runWs = await mkdtemp(path.join(tmpdir(), "sf-stage-mcp-none-"));
+    const result = await new PiAgentAdapter().runStage(stageInput(runWs, "run-none", {
+      mcp: ["wonder"],
+      mcp_tools: { wonder: ["get_artboards"] },
+    }));
+    expect(result).toEqual({ ok: false, reason: "needs_auth" });
+    expect(piSdkMocks.createAgentSession).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it("removes an access token from a stubbed success body and leaves the rest of the text", async () => {
+    await storeGrant("wonder", "https://wonder.example/mcp");
+    freezeHostLoginServers(hostLoginAttemptKey({ runId: "run-strip", stageId: "inventory", attempt: 1 }), [
+      { name: "wonder", url: "https://wonder.example/mcp" },
+    ]);
+    setStageMcpUpstreamForTests({
+      async list() {
+        return { ok: true, tools: [{ name: "get_artboards" }] };
+      },
+      async call() {
+        return { ok: true, text: `keep ${ACCESS} and ${REFRESH} plus ${VALID_KEY} tail` };
+      },
+    });
+    const view = await callStageMcpTool({
+      runId: "run-strip",
+      stageId: "inventory",
+      attempt: 1,
+      stage: { mcp: ["wonder"] },
+      server: "wonder",
+      tool: "get_artboards",
+      arguments: {},
+    });
+    expect(view).toEqual({ ok: true, text: "keep  and  plus  tail" });
+  });
+
+  it("fails the attempt before the model when a named tool is absent from the list", async () => {
+    setStageMcpUpstreamForTests({
+      async list() {
+        piSdkMocks.order.push("list");
+        return { ok: true, tools: [{ name: "delete_artboard", description: "Delete an artboard" }] };
+      },
+      async call() {
+        return { ok: true, text: "boards" };
+      },
+    });
+    freezeHostLoginServers(hostLoginAttemptKey({ runId: "run-missing", stageId: "inventory", attempt: 1 }), [
+      { name: "wonder", url: "https://wonder.example/mcp" },
+    ]);
+    const runWs = await mkdtemp(path.join(tmpdir(), "sf-stage-mcp-missing-"));
+    const result = await new PiAgentAdapter().runStage(stageInput(runWs, "run-missing", {
+      mcp: ["wonder"],
+      mcp_tools: { wonder: ["get_artboards"] },
+    }));
+    expect(result).toEqual({ ok: false, reason: "mcp_tool_missing" });
+    expect(piSdkMocks.order).toContain("list");
+    expect(piSdkMocks.createAgentSession).not.toHaveBeenCalled();
+  });
+
+  it("lists again for a resume worker and the worker messages contain no token", async () => {
+    const seen = await withGrantServer(async (url, hits) => {
+      await storeGrant("wonder", url);
+      saveHostMcpServer("wonder", { url }, home);
+      hits.mode = "describe";
+      freezeHostLoginServers(hostLoginAttemptKey({ runId: "run-token-resume", stageId: "inventory", attempt: 1 }), [
+        { name: "wonder", url },
+      ]);
+      const child = fakeChild();
+      const launched = launchRequest(
+        child,
+        { type: "mcp.list", requestId: "req-token-list" },
+        { mcp: ["wonder"] },
+        "checkout",
+        "run-token-resume",
+      );
+      await vi.waitFor(() => expect(launched.sent).toHaveLength(1));
+      const first = JSON.stringify(launched.sent[0]);
+      expect(first).toContain("boards");
+      expect(first).toContain("stay");
+      expect(first).not.toContain(ACCESS);
+      expect(first).not.toContain(REFRESH);
+      expect(first).not.toContain(VALID_KEY);
+      child.emit("message", { type: "succeeded" });
+      await launched.pending;
+      const resumeChild = fakeChild();
+      const again = launchRequest(
+        resumeChild,
+        { type: "mcp.list", requestId: "req-token-resume" },
+        { mcp: ["wonder"] },
+        "checkout",
+        "run-token-resume-2",
+      );
+      await vi.waitFor(() => expect(again.sent).toHaveLength(1));
+      const second = JSON.stringify(again.sent[0]);
+      expect(second).not.toContain(ACCESS);
+      expect(second).not.toContain(REFRESH);
+      expect(second).not.toContain(VALID_KEY);
+      expect(hits.listPosts).toBe(2);
+      resumeChild.emit("message", { type: "succeeded" });
+      await again.pending;
+      return hits;
+    });
+    expect(seen.tokenPosts).toBe(0);
+  });
+
+  it("makes the next call needs_auth after the console server is deleted and does not refresh", async () => {
+    await withGrantServer(async (url, hits) => {
+      await storeGrant("wonder", url);
+      saveHostMcpServer("wonder", { url }, home);
+      freezeHostLoginServers(hostLoginAttemptKey({ runId: "run-delete", stageId: "inventory", attempt: 1 }), [
+        { name: "wonder", url },
+      ]);
+      const listed = await listStageMcpTools({
+        runId: "run-delete",
+        stageId: "inventory",
+        attempt: 1,
+        stage: { mcp: ["wonder"] },
+      });
+      expect(listed.ok).toBe(true);
+      let status = 0;
+      await handleProjectMcpRoutes(
+        { method: "DELETE", url: "/api/project-mcp/wonder" } as IncomingMessage,
+        {} as ServerResponse,
+        {
+          projectRoot: root,
+          readJsonBody: async () => ({}),
+          json: (_res, code) => { status = code; },
+        },
+      );
+      expect(status).toBe(200);
+      const called = await callStageMcpTool({
+        runId: "run-delete",
+        stageId: "inventory",
+        attempt: 1,
+        stage: { mcp: ["wonder"] },
+        server: "wonder",
+        tool: "get_artboards",
+        arguments: {},
+      });
+      expect(called).toMatchObject({ ok: false, code: "needs_auth" });
+      expect(hits.tokenPosts).toBe(0);
+      expect(hits.authorizeHits).toBe(0);
+    });
+  });
+
+  it("keeps insufficient_scope distinct and does not refresh", async () => {
+    await withGrantServer(async (url, hits) => {
+      await storeGrant("wonder", url);
+      hits.mode = "insufficient_scope";
+      freezeHostLoginServers(hostLoginAttemptKey({ runId: "run-scope", stageId: "inventory", attempt: 1 }), [
+        { name: "wonder", url },
+      ]);
+      const listed = await listStageMcpTools({
+        runId: "run-scope",
+        stageId: "inventory",
+        attempt: 1,
+        stage: { mcp: ["wonder"] },
+      });
+      expect(listed).toMatchObject({ ok: false, code: "insufficient_scope" });
+      expect(hits.tokenPosts).toBe(0);
+      expect(hits.authorizeHits).toBe(0);
+    });
+  });
+
+  it("reports a plain 403 and a DNS failure as connect_failed without starting sign-in", async () => {
+    await withGrantServer(async (url, hits) => {
+      await storeGrant("wonder", url);
+      hits.mode = "forbidden";
+      freezeHostLoginServers(hostLoginAttemptKey({ runId: "run-403", stageId: "inventory", attempt: 1 }), [
+        { name: "wonder", url },
+      ]);
+      const forbidden = await listStageMcpTools({
+        runId: "run-403",
+        stageId: "inventory",
+        attempt: 1,
+        stage: { mcp: ["wonder"] },
+      });
+      expect(forbidden).toMatchObject({ ok: false, code: "connect_failed" });
+      expect(hits.tokenPosts).toBe(0);
+      expect(hits.authorizeHits).toBe(0);
+    });
+
+    useGrantDir();
+    await storeGrant("wonder", "http://dns.invalid/mcp");
+    const realFetch = globalThis.fetch;
+    const hits = { tokenPosts: 0, authorizeHits: 0 };
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const target = input instanceof Request ? input.url : String(input);
+      if (target.includes("/token")) hits.tokenPosts += 1;
+      if (target.includes("/authorize")) hits.authorizeHits += 1;
+      throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" }) });
+    }) as typeof fetch;
+    try {
+      freezeHostLoginServers(hostLoginAttemptKey({ runId: "run-dns", stageId: "inventory", attempt: 1 }), [
+        { name: "wonder", url: "http://dns.invalid/mcp" },
+      ]);
+      const failed = await listStageMcpTools({
+        runId: "run-dns",
+        stageId: "inventory",
+        attempt: 1,
+        stage: { mcp: ["wonder"] },
+      });
+      expect(failed).toMatchObject({ ok: false, code: "connect_failed" });
+      expect(hits.tokenPosts).toBe(0);
+      expect(hits.authorizeHits).toBe(0);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it("does not fail the attempt when a refresh during the list succeeds", async () => {
+    await withGrantServer(async (url, hits) => {
+      hits.mode = "refresh-list";
+      await storeGrant("wonder", url, "at-old", "rt-old");
+      freezeHostLoginServers(hostLoginAttemptKey({ runId: "run-refresh-ok", stageId: "inventory", attempt: 1 }), [
+        { name: "wonder", url },
+      ]);
+      const runWs = await mkdtemp(path.join(tmpdir(), "sf-stage-mcp-refresh-"));
+      const result = await new PiAgentAdapter().runStage(stageInput(runWs, "run-refresh-ok", { mcp: ["wonder"] }));
+      expect(piSdkMocks.createAgentSession).toHaveBeenCalled();
+      expect(result.ok === false ? result.reason : "").not.toBe("needs_auth");
+      expect(sessionToolNames()).toContain("wonder_get_artboards");
+    });
+  });
+});
+
+type GrantHits = {
+  mode: "ok" | "describe" | "insufficient_scope" | "forbidden" | "refresh-list";
+  listPosts: number;
+  tokenPosts: number;
+  authorizeHits: number;
+};
+
+async function withGrantServer<T>(run: (url: string, hits: GrantHits) => Promise<T>): Promise<T> {
+  const hits: GrantHits = { mode: "ok", listPosts: 0, tokenPosts: 0, authorizeHits: 0 };
+  const server: Server = createServer((req, res) => {
+    const origin = `http://${req.headers.host}`;
+    const url = new URL(req.url ?? "/", origin);
+    const json = (status: number, body: unknown, headers: Record<string, string> = {}) => {
+      res.writeHead(status, { "content-type": "application/json", ...headers });
+      res.end(JSON.stringify(body));
+    };
+    if (url.pathname === "/authorize") {
+      hits.authorizeHits += 1;
+      return json(404, {});
+    }
+    if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
+      return json(200, { resource: `${origin}/mcp`, authorization_servers: [origin] });
+    }
+    if (url.pathname.startsWith("/.well-known/oauth-authorization-server") || url.pathname.startsWith("/.well-known/openid-configuration")) {
+      return json(200, {
+        issuer: origin,
+        authorization_endpoint: `${origin}/authorize`,
+        token_endpoint: `${origin}/token`,
+        registration_endpoint: `${origin}/register`,
+        response_types_supported: ["code"],
+        grant_types_supported: ["authorization_code", "refresh_token"],
+        code_challenge_methods_supported: ["S256"],
+        token_endpoint_auth_methods_supported: ["none"],
+      });
+    }
+    if (url.pathname === "/register" && req.method === "POST") {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as Record<string, unknown>;
+        json(201, { ...body, client_id: "fake-client", token_endpoint_auth_method: "none" });
+      });
+      return;
+    }
+    if (url.pathname === "/token" && req.method === "POST") {
+      hits.tokenPosts += 1;
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => json(200, { access_token: "at-new", refresh_token: "rt-new", token_type: "Bearer", expires_in: 3600 }));
+      return;
+    }
+    if (req.method === "GET") {
+      res.writeHead(405);
+      return res.end();
+    }
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      const msg = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+      if (msg.method === "tools/list") hits.listPosts += 1;
+      if (msg.id === undefined) {
+        res.writeHead(202);
+        return res.end();
+      }
+      if (hits.mode === "insufficient_scope" && msg.method === "tools/list") {
+        return json(403, { error: "insufficient_scope" }, {
+          "www-authenticate": 'Bearer error="insufficient_scope", scope="boards.write"',
+        });
+      }
+      if (hits.mode === "forbidden" && msg.method === "tools/list") {
+        return json(403, { error: "forbidden" });
+      }
+      const bearer = req.headers.authorization;
+      if (hits.mode === "refresh-list" && msg.method === "tools/list" && bearer !== "Bearer at-new") {
+        return json(401, { error: "invalid_token" }, {
+          "www-authenticate": 'Bearer error="invalid_token"',
+        });
+      }
+      const description = hits.mode === "describe" ? `boards ${ACCESS} ${REFRESH} ${VALID_KEY} stay` : "Get artboards";
+      const result = msg.method === "initialize"
+        ? { protocolVersion: msg.params?.protocolVersion ?? "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "fake", version: "1" } }
+        : msg.method === "tools/list"
+          ? { tools: [{ name: "get_artboards", description, inputSchema: { type: "object", properties: {} } }] }
+          : {};
+      json(200, { jsonrpc: "2.0", id: msg.id, result });
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address() as AddressInfo;
+  try {
+    return await run(`http://127.0.0.1:${address.port}/mcp`, hits);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 }
