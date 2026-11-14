@@ -16,7 +16,7 @@ export function registerProjectMcpTools(
     "list_project_mcp",
     {
       description:
-        "List git-root .mcp.json servers as names and transport only (same as GET /api/project-mcp). Inspect is not attach; it does not interpolate, spawn, or change stage MCP.",
+        "List git-root .mcp.json servers as names and transport only. Inspect is not attach; it does not interpolate, spawn, or change stage MCP.",
       inputSchema: z.object({}),
     },
     async () => textResult(await listProjectMcpCatalog(root)),
@@ -26,7 +26,7 @@ export function registerProjectMcpTools(
     "probe_project_mcp",
     {
       description:
-        "Probe one named git-root .mcp.json server with connect-and-exit (same as POST /api/project-mcp/:name/probe). Inspect is not attach; YAML mcp: still allowlists what a stage receives.",
+        "Probe one named git-root .mcp.json server with connect-and-exit. Inspect is not attach; YAML mcp: still allowlists what a stage receives.",
       inputSchema: z.object({
         name: z.string(),
       }),

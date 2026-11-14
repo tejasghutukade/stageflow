@@ -97,7 +97,7 @@ export function registerCatalogWriteTools(server: McpServer, deps: CatalogWriteD
     "create_task_file",
     {
       description:
-        "Create a standalone catalog task file (POST /api/tasks). The task is not attached to a pipeline; use create_task to add one beside a pipeline package.",
+        "Create a standalone catalog task file. The task is not attached to a pipeline; use create_task to add one beside a pipeline package.",
       inputSchema: z.object({
         project_root: projectRootField,
         directory: z.string().describe("Directory relative to the project root, e.g. tasks"),
@@ -123,7 +123,7 @@ export function registerCatalogWriteTools(server: McpServer, deps: CatalogWriteD
     "update_task_file",
     {
       description:
-        "Update a standalone catalog task by id (PUT /api/tasks/:id). goal is required. Pass null or an empty string for context, constraints, checkout, repository, or ref to remove that field.",
+        "Update a standalone catalog task by id. goal is required. Pass null or an empty string for context, constraints, checkout, repository, or ref to remove that field.",
       inputSchema: z.object({
         project_root: projectRootField,
         id: z.string().describe("Task id"),
@@ -154,7 +154,7 @@ export function registerCatalogWriteTools(server: McpServer, deps: CatalogWriteD
     "import_task_file",
     {
       description:
-        "Import a GitHub issue as a standalone catalog task file (POST /api/tasks/import). The issue title becomes the goal and the task id.",
+        "Import a GitHub issue as a standalone catalog task file. The issue title becomes the goal and the task id.",
       inputSchema: z.object({
         project_root: projectRootField,
         repo: z.string().describe("GitHub owner/repo"),
@@ -179,7 +179,7 @@ export function registerCatalogWriteTools(server: McpServer, deps: CatalogWriteD
     "create_stage_file",
     {
       description:
-        "Create an orphan stage YAML file that is not wired into a pipeline (POST /api/stages). Use create_stage to add a stage to a pipeline package.",
+        "Create an orphan stage YAML file that is not wired into a pipeline. Use create_stage to add a stage to a pipeline package.",
       inputSchema: z.object({
         project_root: projectRootField,
         pipeline_directory: z.string().describe("Directory relative to the project root"),
@@ -207,7 +207,7 @@ export function registerCatalogWriteTools(server: McpServer, deps: CatalogWriteD
     "write_catalog_file",
     {
       description:
-        "Overwrite an existing stage catalog file (PUT /api/catalog/file). The file must already exist and remain valid stage YAML; an invalid write is restored.",
+        "Overwrite an existing stage catalog file. The file must already exist and remain valid stage YAML; an invalid write is restored.",
       inputSchema: z.object({
         project_root: projectRootField,
         path: z.string().describe("Catalog-relative .yaml or .yml path"),
@@ -256,7 +256,7 @@ export function registerCatalogWriteTools(server: McpServer, deps: CatalogWriteD
     "validate_catalog_draft",
     {
       description:
-        "Validate an in-memory pipeline draft package (POST /api/drafts/validate). Nothing is written. Pass the package as draft, or as top-level pipeline, stages, and task.",
+        "Validate an in-memory pipeline draft package. Nothing is written. Pass the package as draft, or as top-level pipeline, stages, and task.",
       inputSchema: z.union([
         z.object({
           project_root: projectRootField,
@@ -275,7 +275,6 @@ export function registerCatalogWriteTools(server: McpServer, deps: CatalogWriteD
           task: draftTaskSchema.optional(),
         }),
       ]),
-      annotations: { readOnlyHint: true },
     },
     async (body) => {
       const parsed = parseDraftPackageBody(body);

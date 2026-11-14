@@ -65,9 +65,8 @@ export function registerConnectionTools(server: McpServer, deps: McpToolDeps): v
     "list_connections",
     {
       description:
-        "List host connections, same as GET /api/connections. Read-only. Each secret field is \"env\" or \"store\", never the secret value.",
+        "List host connections. Read-only. Each secret field is \"env\" or \"store\", never the secret value.",
       inputSchema: z.object({}),
-      annotations: { readOnlyHint: true },
     },
     async () => run((service) => service.list()),
   );
@@ -76,7 +75,7 @@ export function registerConnectionTools(server: McpServer, deps: McpToolDeps): v
     "create_connection",
     {
       description:
-        "Create a host connection, same as POST /api/connections. Returns { id, health }. Secret values are stored and are not in the result.",
+        "Create a host connection. Returns { id, health }. Secret values are stored and are not in the result.",
       inputSchema: createSchema,
     },
     async (input) => run((service) => service.create(jsonBody(input))),
@@ -86,7 +85,7 @@ export function registerConnectionTools(server: McpServer, deps: McpToolDeps): v
     "update_connection",
     {
       description:
-        "Update one connection, same as PATCH /api/connections/:id. Changes enabled, displayName, config, or replaces secrets. Returns { health } when the connection stays enabled, otherwise {}. Secret values are not in the result.",
+        "Update one connection. Changes enabled, displayName, config, or replaces secrets. Returns { health } when the connection stays enabled, otherwise {}. Secret values are not in the result.",
       inputSchema: updateSchema,
     },
     async ({ id, ...patch }) => run((service) => service.update(id, jsonBody(patch))),
@@ -96,7 +95,7 @@ export function registerConnectionTools(server: McpServer, deps: McpToolDeps): v
     "remove_connection",
     {
       description:
-        "Remove one connection and its stored secrets, same as DELETE /api/connections/:id. Returns { removed: true }.",
+        "Remove one connection and its stored secrets. Returns { removed: true }.",
       inputSchema: z.object({
         id: z.string().describe("Connection id."),
       }).strict(),
@@ -111,9 +110,8 @@ export function registerConnectionTools(server: McpServer, deps: McpToolDeps): v
     "test_connection",
     {
       description:
-        "Check connection values without saving them, same as POST /api/connections/test. Does not write the connection or its secrets. Returns the health check.",
+        "Check connection values without saving them. Does not write the connection or its secrets. Returns the health check.",
       inputSchema: createSchema,
-      annotations: { readOnlyHint: true },
     },
     async (input) => run((service) => service.test(jsonBody(input))),
   );
@@ -122,9 +120,8 @@ export function registerConnectionTools(server: McpServer, deps: McpToolDeps): v
     "validate_connection_target",
     {
       description:
-        "Check a pinned recipient for a saved connection, same as POST /api/connections/:id/validate-target. No network and no secret read. Returns { ok: true } or { ok: false, issues }.",
+        "Check a pinned recipient for a saved connection. No network and no secret read. Returns { ok: true } or { ok: false, issues }.",
       inputSchema: validateSchema,
-      annotations: { readOnlyHint: true },
     },
     async ({ id, ...target }) => run((service) => service.validateTarget(id, jsonBody(target))),
   );

@@ -453,7 +453,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "list_evals",
-    "List the evals (*.eval.yaml) in a project with target (a stage, or an agent with its revision), dataset size, last-run headline and trend. Read-only, free. Same items as GET /api/evals.",
+    "List the evals (*.eval.yaml) in a project with target (a stage, or an agent with its revision), dataset size, last-run headline and trend. Read-only, free.",
     z.object({ project_root: projectRootField }),
     async ({ project_root }) => {
       manager();
@@ -469,7 +469,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "get_eval",
-    "Get one eval: parsed definition, raw YAML, file hash, validation findings, run count and last run; for an agent eval also the live agent (model, revision, tools with risk, ask-first list). Read-only, free. Same as GET /api/evals/:id. Fails EVAL_NOT_FOUND for an unknown id.",
+    "Get one eval: parsed definition, raw YAML, file hash, validation findings, run count and last run; for an agent eval also the live agent (model, revision, tools with risk, ask-first list). Read-only, free. Fails EVAL_NOT_FOUND for an unknown id.",
     z.object({ eval_id: z.string(), project_root: projectRootField }),
     async ({ eval_id, project_root }) => {
       manager();
@@ -480,7 +480,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "validate_eval",
-    "Validate an eval without running it: pass eval_id for a file in the catalog, or yaml for unsaved text (exactly one). Optional path is the file location used to resolve relative paths (required only to check an unsaved eval against a specific path). Optional dataset_cases stand in for the dataset file, the same as POST /api/evals/validate. Checks schema, target, dataset and graders and returns { findings }. Read-only, free, calls no model; writes no files.",
+    "Validate an eval without running it: pass eval_id for a file in the catalog, or yaml for unsaved text (exactly one). Optional path is the file location used to resolve relative paths (required only to check an unsaved eval against a specific path). Optional dataset_cases stand in for the dataset file. Checks schema, target, dataset and graders and returns { findings }. Read-only, free, calls no model; writes no files.",
     validateEvalSchema,
     async (input) => {
       const { eval_id, yaml, path: evalPath, dataset_cases, project_root } = input as typeof input & {
@@ -597,7 +597,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "get_eval_run",
-    "Get one eval run: status, progress, stats, cost, config snapshot and per-grader summary. Read-only, free. Same as GET /api/eval-runs/:id. Fails EVAL_RUN_NOT_FOUND for an unknown id.",
+    "Get one eval run: status, progress, stats, cost, config snapshot and per-grader summary. Read-only, free. Fails EVAL_RUN_NOT_FOUND for an unknown id.",
     z.object({ eval_run_id: z.string() }),
     async ({ eval_run_id }) => {
       manager();
@@ -607,7 +607,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "list_eval_runs",
-    "List eval runs, newest first, as headlines (status, pass rate, cost). Filter by eval_id or status. Read-only, free. Same items as GET /api/eval-runs.",
+    "List eval runs, newest first, as headlines (status, pass rate, cost). Filter by eval_id or status. Read-only, free.",
     z.object({
       eval_id: z.string().optional(),
       status: z.enum(EVAL_RUN_STATUSES).optional(),
@@ -626,7 +626,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "get_eval_results",
-    "List the result rows (one per case) of an eval run with pass state, score and failing graders. Filter by status or grader; page with cursor. Read-only, free. Same as GET /api/eval-runs/:id/results.",
+    "List the result rows (one per case) of an eval run with pass state, score and failing graders. Filter by status or grader; page with cursor. Read-only, free.",
     z.object({
       eval_run_id: z.string(),
       status: z.string().optional().describe("Result row status filter, for example failed or passed"),
@@ -648,7 +648,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "get_eval_result",
-    "Get one case of an eval run in full: the case input and expected value plus every repeat's stage output (for an agent eval, the conversation subject: messages, tool calls with policy outcomes, usage), grades, cost and review. Read-only, free. Same as GET /api/eval-runs/:id/results/:case_id.",
+    "Get one case of an eval run in full: the case input and expected value plus every repeat's stage output (for an agent eval, the conversation subject: messages, tool calls with policy outcomes, usage), grades, cost and review. Read-only, free.",
     z.object({ eval_run_id: z.string(), case_id: z.string() }),
     async ({ eval_run_id, case_id }) => {
       manager();
@@ -665,7 +665,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "sort_eval_failures",
-    "Sort the failed and errored results of a finished eval run into suggested buckets (agent_wrong, grader_wrong, case_wrong, unclear) and failure types, each with a confidence. This sends each failed result's case, output and grader reasons to an external classifier: TypeSafe Jev (about $0.04 per million input tokens; needs a TypeSafe key) or the run's judge model (a model call per result, real cost). It is manual only and never runs on its own. Nothing is tagged: suggestions are reviewed and accepted by the author in the console or API. Eval sessions of the run stay hidden. classifier auto uses jev when a key exists, else judge, else fails EVAL_CLASSIFIER_UNAVAILABLE. By default results that already have a suggestion are skipped (only_unsorted). Fails EVAL_RUN_ACTIVE while the run is running. Same as POST /api/eval-runs/:id/failures/sort.",
+    "Sort the failed and errored results of a finished eval run into suggested buckets (agent_wrong, grader_wrong, case_wrong, unclear) and failure types, each with a confidence. This sends each failed result's case, output and grader reasons to an external classifier: TypeSafe Jev (about $0.04 per million input tokens; needs a TypeSafe key) or the run's judge model (a model call per result, real cost). It is manual only and never runs on its own. Nothing is tagged: suggestions are reviewed and accepted by the author in the console or API. Eval sessions of the run stay hidden. classifier auto uses jev when a key exists, else judge, else fails EVAL_CLASSIFIER_UNAVAILABLE. By default results that already have a suggestion are skipped (only_unsorted). Fails EVAL_RUN_ACTIVE while the run is running.",
     z.object({
       eval_run_id: z.string(),
       classifier: z.enum(["auto", "jev", "judge"]).optional().describe("Default auto"),
@@ -692,7 +692,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "get_eval_failure_suggestions",
-    "List the suggested buckets and failure types for an eval run's failed results, with a summary (counts by bucket, by failure type, by status, low confidence). Read-only, free, calls no model. Filter by status (pending, accepted, dismissed). Same as GET /api/eval-runs/:id/failures/suggestions.",
+    "List the suggested buckets and failure types for an eval run's failed results, with a summary (counts by bucket, by failure type, by status, low confidence). Read-only, free, calls no model. Filter by status (pending, accepted, dismissed).",
     z.object({ eval_run_id: z.string(), status: z.enum(SUGGESTION_STATUSES).optional() }),
     async ({ eval_run_id, status }) => {
       manager();
@@ -702,7 +702,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "get_eval_failure_sort_status",
-    "Report which failure classifiers can run for an eval run: jev (needs a TypeSafe key; reports only the names of the sources that hold one, never the key) and judge (the run's judge model), and which one auto would use. Read-only, free. Same as GET /api/eval-runs/:id/failures/status.",
+    "Report which failure classifiers can run for an eval run: jev (needs a TypeSafe key; reports only the names of the sources that hold one, never the key) and judge (the run's judge model), and which one auto would use. Read-only, free.",
     z.object({ eval_run_id: z.string() }),
     async ({ eval_run_id }) => {
       manager();
@@ -712,7 +712,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "list_grader_calibrations",
-    "List how well a rubric or goal_reached grader's judge agreed with the author's own Pass/Fail labels, newest first: number of labels, agreement, Cohen's kappa, pass and fail recall, confusion counts, warnings and the results where the judge disagreed. Read-only, free, calls no model. Labels are set by the author in the console or API; this does not create them. Same as GET /api/evals/:id/graders/:grader/calibrations.",
+    "List how well a rubric or goal_reached grader's judge agreed with the author's own Pass/Fail labels, newest first: number of labels, agreement, Cohen's kappa, pass and fail recall, confusion counts, warnings and the results where the judge disagreed. Read-only, free, calls no model. Labels are set by the author in the console or API; this does not create them.",
     z.object({
       eval_id: z.string(),
       grader_id: z.string(),
@@ -729,7 +729,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "calibrate_eval_grader",
-    "Check a rubric or goal_reached grader's judge against the author's own Pass/Fail labels: re-judges the stored outputs of every result labeled for that grader (no stage or agent runs) and returns the number of labels, agreement, Cohen's kappa, pass and fail recall, confusion counts and the results where the judge disagreed. This calls the judge model once per label (three times with stability true) and may cost real money, bounded by max_cost_usd (default 1). It sends the labeled outputs to the judge model's provider. split dev or held_out measures a fixed 70/30 split of the labels. Fails EVAL_CALIBRATION_NO_LABELS when nothing is labeled and EVAL_RUN_ACTIVE while a run or try is active. Same as POST /api/evals/:id/graders/:grader/calibrate.",
+    "Check a rubric or goal_reached grader's judge against the author's own Pass/Fail labels: re-judges the stored outputs of every result labeled for that grader (no stage or agent runs) and returns the number of labels, agreement, Cohen's kappa, pass and fail recall, confusion counts and the results where the judge disagreed. This calls the judge model once per label (three times with stability true) and may cost real money, bounded by max_cost_usd (default 1). It sends the labeled outputs to the judge model's provider. split dev or held_out measures a fixed 70/30 split of the labels. Fails EVAL_CALIBRATION_NO_LABELS when nothing is labeled and EVAL_RUN_ACTIVE while a run or try is active.",
     z.object({
       eval_id: z.string(),
       grader_id: z.string(),
@@ -762,7 +762,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "cancel_eval_run",
-    "Cancel an eval run in progress and return its detail once it has stopped (waits up to 5 seconds). Stops spending; completed results are kept. A run that already finished is returned unchanged. Same as POST /api/eval-runs/:id/cancel.",
+    "Cancel an eval run in progress and return its detail once it has stopped (waits up to 5 seconds). Stops spending; completed results are kept. A run that already finished is returned unchanged.",
     z.object({ eval_run_id: z.string() }),
     async ({ eval_run_id }) => {
       const evalRunManager = manager();
@@ -776,7 +776,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "compare_eval_runs",
-    "Compare two eval runs of the same eval: per-grader and per-case differences, regressions and improvements, cost delta. a is the baseline, b the candidate. Read-only, free. Same as GET /api/eval-compare. Fails 400 when the runs are not comparable.",
+    "Compare two eval runs of the same eval: per-grader and per-case differences, regressions and improvements, cost delta. a is the baseline, b the candidate. Read-only, free. Fails 400 when the runs are not comparable.",
     z.object({ a: z.string(), b: z.string() }),
     async ({ a, b }) => {
       manager();
@@ -791,7 +791,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "create_eval",
-    "Create an eval file from a definition object. Validates the full plan first (target, dataset, graders) and writes only when that passes. Same as POST /api/evals. Fails EVAL_EXISTS when the id is already in the catalog, EVAL_INVALID with findings when the definition is not runnable. Does not call a model.",
+    "Create an eval file from a definition object. Validates the full plan first (target, dataset, graders) and writes only when that passes. Fails EVAL_EXISTS when the id is already in the catalog, EVAL_INVALID with findings when the definition is not runnable. Does not call a model.",
     z.object({
       definition: z.record(z.string(), z.unknown()).describe("Eval definition object, the same shape as an eval file"),
       directory: z.string().optional().describe("Catalog directory to write into, relative to the project"),
@@ -823,7 +823,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "update_eval",
-    "Replace an eval file. Pass exactly one of definition (merged into the current file) or yaml (the full file text), plus base_hash from get_eval. Refuses with FILE_CHANGED and current_hash when the file moved, and EVAL_INVALID with findings when the result is not runnable. Same as PUT /api/evals/:id. Does not call a model.",
+    "Replace an eval file. Pass exactly one of definition (merged into the current file) or yaml (the full file text), plus base_hash from get_eval. Refuses with FILE_CHANGED and current_hash when the file moved, and EVAL_INVALID with findings when the result is not runnable. Does not call a model.",
     updateEvalSchema,
     async (input) => {
       const { eval_id, base_hash, definition, yaml, project_root } = input as typeof input & {
@@ -894,7 +894,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "create_dataset",
-    "Create a dataset, or append or replace cases in one. Pass name and cases for a new file. source sample copies the packaged sample cases (they must match target). source runs copies recorded stage inputs (run_ids, append only when updating). source sessions copies finished agent sessions (session_ids and target.agent_id, append only when updating; needs the agent service). To update an existing file pass dataset_id, mode append or replace, and base_hash. Same as POST /api/datasets. Does not call a model.",
+    "Create a dataset, or append or replace cases in one. Pass name and cases for a new file. source sample copies the packaged sample cases (they must match target). source runs copies recorded stage inputs (run_ids, append only when updating). source sessions copies finished agent sessions (session_ids and target.agent_id, append only when updating; needs the agent service). To update an existing file pass dataset_id, mode append or replace, and base_hash. Does not call a model.",
     createDatasetSchema,
     async (raw) => {
       const input = raw as {
@@ -978,7 +978,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "update_dataset_cases",
-    "Apply add, update, delete, and set_tags operations to a .dataset.jsonl file. base_hash must be the current file hash. The whole list is one write: a bad op changes nothing. Same as PATCH /api/datasets/:id/cases. Fails DATASET_READ_ONLY for json or csv (convert_dataset first). Does not call a model.",
+    "Apply add, update, delete, and set_tags operations to a .dataset.jsonl file. base_hash must be the current file hash. The whole list is one write: a bad op changes nothing. Fails DATASET_READ_ONLY for json or csv (convert_dataset first). Does not call a model.",
     z.object({
       dataset_id: z.string(),
       base_hash: z.string().min(1),
@@ -999,7 +999,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "convert_dataset",
-    "Copy a .dataset.json or .dataset.csv file to an editable .dataset.jsonl sibling and return that file. The original is left in place. base_hash is the current source hash. Same as POST /api/datasets/:id/convert. Does not call a model.",
+    "Copy a .dataset.json or .dataset.csv file to an editable .dataset.jsonl sibling and return that file. The original is left in place. base_hash is the current source hash. Does not call a model.",
     z.object({
       dataset_id: z.string(),
       base_hash: z.string(),
@@ -1016,7 +1016,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "install_eval_sample",
-    "Install the packaged sample eval into the project. kind stage (default) writes the critique sample pipeline, dataset, and eval. kind agent writes the support sample and creates its agent; without the agent service it fails SAMPLE_AGENTS_UNAVAILABLE. Same as POST /api/evals/sample. Fails SAMPLE_EXISTS when that sample is already installed. Does not call a model.",
+    "Install the packaged sample eval into the project. kind stage (default) writes the critique sample pipeline, dataset, and eval. kind agent writes the support sample and creates its agent; without the agent service it fails SAMPLE_AGENTS_UNAVAILABLE. Fails SAMPLE_EXISTS when that sample is already installed. Does not call a model.",
     z.object({
       kind: z.enum(["stage", "agent"]).optional().describe('Default "stage"'),
       project_root: projectRootField,
@@ -1041,7 +1041,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "try_eval_case",
-    "Run one case of an eval and return its grade. Pass exactly one of eval_id or definition, and exactly one of case_id or case. dataset_cases stand in for the dataset file. This calls the target model once and may cost real money, bounded by the eval's max_cost_usd; graders that need a judge call the judge too. Agent tools stay read-only unless the eval file sets conversation.tools real and allow_real_tools is true. Nothing is saved as an eval run, and no eval session is returned. Same as POST /api/evals/try.",
+    "Run one case of an eval and return its grade. Pass exactly one of eval_id or definition, and exactly one of case_id or case. dataset_cases stand in for the dataset file. This calls the target model once and may cost real money, bounded by the eval's max_cost_usd; graders that need a judge call the judge too. Agent tools stay read-only unless the eval file sets conversation.tools real and allow_real_tools is true. Nothing is saved as an eval run, and no eval session is returned.",
     tryEvalCaseSchema,
     async (input) => {
       const { eval_id, definition, case_id, case: caseInput, dataset_cases, allow_real_tools, project_root } =
@@ -1085,7 +1085,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "get_eval_run_export",
-    "Export one eval run. what results (default) is the run detail plus every result row. what config is the config snapshot written when the run started. Read-only, free. Same body as GET /api/eval-runs/:id/export. Grader failures are codes.",
+    "Export one eval run. what results (default) is the run detail plus every result row. what config is the config snapshot written when the run started. Read-only, free. Grader failures are codes.",
     z.object({
       eval_run_id: z.string(),
       what: z.enum(["results", "config"]).optional().describe('Default "results"'),
@@ -1099,7 +1099,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "put_eval_review",
-    "Set the review label, note, or failure-type tags on one repeat of an eval result. Tags are stored only on results that failed; tagging a passed result fails EVAL_TAGS_ON_PASSED_RESULT. Same as PUT /api/eval-runs/:id/results/:case_id/:repeat/review. Does not call a model.",
+    "Set the review label, note, or failure-type tags on one repeat of an eval result. Tags are stored only on results that failed; tagging a passed result fails EVAL_TAGS_ON_PASSED_RESULT. Does not call a model.",
     z.object({
       eval_run_id: z.string(),
       case_id: z.string(),
@@ -1142,7 +1142,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "accept_eval_failure_suggestions",
-    "Accept pending failure suggestions for an eval run and write their failure types as tags. Pass ids to accept those rows, or min_confidence and bucket to accept every pending suggestion that matches (unclear is never included). Tags land only on failed results. Same as POST /api/eval-runs/:id/failures/suggestions/accept. Does not call a model.",
+    "Accept pending failure suggestions for an eval run and write their failure types as tags. Pass ids to accept those rows, or min_confidence and bucket to accept every pending suggestion that matches (unclear is never included). Tags land only on failed results. Does not call a model.",
     z.object({
       eval_run_id: z.string(),
       ids: z.array(z.string()).optional().describe("Suggestion ids to accept; omit to accept by confidence and bucket"),
@@ -1168,7 +1168,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "dismiss_eval_failure_suggestions",
-    "Dismiss failure suggestions so they are not tagged. ids are required. Same as POST /api/eval-runs/:id/failures/suggestions/dismiss. Does not call a model.",
+    "Dismiss failure suggestions so they are not tagged. ids are required. Does not call a model.",
     z.object({
       eval_run_id: z.string(),
       ids: z.array(z.string()).describe("Suggestion ids to dismiss"),
@@ -1184,7 +1184,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "delete_eval_run",
-    "Delete a finished eval run, its results, and the stage runs it recorded. A queued or running run fails EVAL_RUN_ACTIVE; cancel it first. Agent eval sessions for the run are deleted with it and are not listed anywhere else. Same as DELETE /api/eval-runs/:id.",
+    "Delete a finished eval run, its results, and the stage runs it recorded. A queued or running run fails EVAL_RUN_ACTIVE; cancel it first. Agent eval sessions for the run are deleted with it and are not listed anywhere else.",
     z.object({ eval_run_id: z.string() }),
     async ({ eval_run_id }) => {
       manager();

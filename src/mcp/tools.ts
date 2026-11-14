@@ -18,10 +18,12 @@ import { registerCatalogWriteTools } from "./catalogWriteTools.js";
 import { registerConnectionTools } from "./connectionTools.js";
 import { registerGetStartedTool } from "./getStartedTool.js";
 import { registerMemoryHostTools } from "./memoryHostTools.js";
+import { withToolDefaults } from "./defineTool.js";
 
 export type { McpToolDeps };
 
-export function registerMcpTools(server: McpServer, deps: McpToolDeps): void {
+export function registerMcpTools(rawServer: McpServer, deps: McpToolDeps): void {
+  const server = withToolDefaults(rawServer);
   const { store } = deps;
 
   registerGetStartedTool(server, deps);

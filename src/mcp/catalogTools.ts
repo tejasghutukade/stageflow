@@ -337,7 +337,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "list_models",
     {
       description:
-        "List model ids from the providers connected on this host, plus ids pipelines use (same source as GET /api/models). Returns models, providers (grouped), the default model and unlisted ids. Optional project_root filter narrows the pipeline-used ids.",
+        "List model ids from the providers connected on this host, plus ids pipelines use. Returns models, providers (grouped), the default model and unlisted ids. Optional project_root filter narrows the pipeline-used ids.",
       inputSchema: z.object({
         project_root: z.string().optional(),
       }),
@@ -537,7 +537,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "start_run",
     {
       description:
-        "Start a pipeline run. Accepted params: pipeline (catalog-relative path or inline { id, stages: [...] } — stages are YAML stage bodies, no uses: refs), task_path XOR task (inline task may include repository/ref or checkout; repository XOR checkout with code task.binding_conflict), project_root, checkout (catalog-relative; prefer this name; absolute → absolute_path_not_allowed), checkout_override (alias of checkout), skip_gates, git_sha, ci_pr_url, ci_job_url, skills (name → { relativePath: utf-8 contents }; requires SKILL.md; materialised under runs/<runId>/skills/, never the worktree). REST POST /api/runs accepts path pipelines only (no inline pipeline). Returns { runId } or { runId, queued: true, queuePosition }. Errors: busy_capacity, busy_checkout, insufficient_disk, start.token_rejected, skills_*, inline_pipeline_too_large, catalog path-contract codes.",
+        "Start a pipeline run. Accepted params: pipeline (catalog-relative path or inline { id, stages: [...] } — stages are YAML stage bodies, no uses: refs), task_path XOR task (inline task may include repository/ref or checkout; repository XOR checkout with code task.binding_conflict), project_root, checkout (catalog-relative; prefer this name; absolute → absolute_path_not_allowed), checkout_override (alias of checkout), skip_gates, git_sha, ci_pr_url, ci_job_url, skills (name → { relativePath: utf-8 contents }; requires SKILL.md; materialised under runs/<runId>/skills/, never the worktree). Returns { runId } or { runId, queued: true, queuePosition }. Errors: busy_capacity, busy_checkout, insufficient_disk, start.token_rejected, skills_*, inline_pipeline_too_large, catalog path-contract codes.",
       inputSchema: startRunSchema,
     },
     async (args) => {

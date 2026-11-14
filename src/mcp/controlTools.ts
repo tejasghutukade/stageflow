@@ -110,7 +110,7 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
     "answer_gate",
     {
       description:
-        "Deliver an AskOperatorAnswer for a stage in waiting_for_input (same semantics as POST /api/runs/:id/stages/:stageId/answer). Pass answer as { promptId, kind, ... } matching the pending prompt.",
+        "Deliver an AskOperatorAnswer for a stage in waiting_for_input. Pass answer as { promptId, kind, ... } matching the pending prompt.",
       inputSchema: z.object({
         runId: z.string(),
         stageId: z.string(),
@@ -165,7 +165,7 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
     "decide_feedback_loop",
     {
       description:
-        "Resolve a feedback-loop wait_for_human decision (extend, continue, or abandon). Same semantics as POST /api/runs/:id/stages/:stageId/feedback-decision.",
+        "Resolve a feedback-loop wait_for_human decision (extend, continue, or abandon).",
       inputSchema: z.object({
         runId: z.string(),
         stageId: z.string(),

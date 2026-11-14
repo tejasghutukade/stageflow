@@ -131,7 +131,7 @@ export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void
     "list_triggers",
     {
       description:
-        "List catalog-declared triggers (same source as GET /api/triggers): manual/schedule/event kind, enabled, and store-recorded last_fired_at/last_run_id/next_run_at when present.",
+        "List catalog-declared triggers: manual/schedule/event kind, enabled, and store-recorded last_fired_at/last_run_id/next_run_at when present.",
       inputSchema: z.object({}),
     },
     async () => {
@@ -150,7 +150,7 @@ export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void
     "get_trigger",
     {
       description:
-        "Look up one catalog trigger by id (same source as GET /api/triggers/:id).",
+        "Look up one catalog trigger by id.",
       inputSchema: z.object({
         id: z.string(),
         project_root: z
@@ -179,7 +179,7 @@ export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void
     "fire_trigger",
     {
       description:
-        "Fire a catalog trigger by id: resolves its pipeline/task refs and starts a run through the same RunManager.startRun path as start_run (same as POST /api/triggers/:id/fire). Returns { runId } or { runId, queued: true, queuePosition }. Fails not_found (404) for an unknown id, or 409 when the trigger is disabled.",
+        "Fire a catalog trigger by id: resolves its pipeline/task refs and starts a run through the same RunManager.startRun path as start_run. Returns { runId } or { runId, queued: true, queuePosition }. Fails not_found (404) for an unknown id, or 409 when the trigger is disabled.",
       inputSchema: z.object({
         id: z.string(),
         project_root: z
@@ -242,7 +242,7 @@ export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void
     "create_trigger",
     {
       description:
-        "Create a new *.trigger.yaml in the catalog (same validation/write path as POST /api/triggers): validates id format/uniqueness, pipeline/task refs, and kind-specific shape (schedule.cron parses via croner; event.source is required), writes the file, and re-loads it to confirm it round-trips. Returns the created trigger.",
+        "Create a new *.trigger.yaml in the catalog: validates id format/uniqueness, pipeline/task refs, and kind-specific shape (schedule.cron parses via croner; event.source is required), writes the file, and re-loads it to confirm it round-trips. Returns the created trigger.",
       inputSchema: createTriggerSchema,
     },
     async ({ project_root, ...body }) => {
@@ -296,7 +296,7 @@ export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void
   server.registerTool(
     "update_trigger",
     {
-      description: "Replace a trigger's definition (pipeline, task, kind, schedule or event, enabled). Same validation and write path as PUT /api/triggers/:id; the id cannot change.",
+      description: "Replace a trigger's definition (pipeline, task, kind, schedule or event, enabled). The id cannot change.",
       inputSchema: updateTriggerSchema,
     },
     async ({ id, project_root, ...body }) => {
@@ -311,7 +311,7 @@ export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void
   server.registerTool(
     "set_trigger_enabled",
     {
-      description: "Enable or disable a trigger. Same write path as PATCH /api/triggers/:id.",
+      description: "Enable or disable a trigger.",
       inputSchema: z.object({ id: z.string(), enabled: z.boolean(), project_root: z.string().optional() }),
     },
     async ({ id, enabled, project_root }) => {

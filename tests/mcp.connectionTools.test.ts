@@ -11,6 +11,7 @@ import { connectionsFilePath } from "../src/channels/registry.js";
 import { startChannelService, type ChannelService } from "../src/channels/service.js";
 import type { McpToolDeps } from "../src/mcp/deps.js";
 import { registerConnectionTools } from "../src/mcp/connectionTools.js";
+import { withToolDefaults } from "../src/mcp/defineTool.js";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import { fakeChannelProvider } from "./fixtures/fakeChannelProvider.js";
 import { bindStageflowHomeForTests } from "./helpers/workspaceTestHarness.js";
@@ -47,7 +48,7 @@ function recordConnectionTools(deps: McpToolDeps): RecordedTool[] {
     registerResource() {},
     registerPrompt() {},
   };
-  registerConnectionTools(recorder as unknown as McpServer, deps);
+  registerConnectionTools(withToolDefaults(recorder as unknown as McpServer), deps);
   return tools;
 }
 
@@ -115,11 +116,11 @@ describe("connection MCP tools", () => {
     expect(schemaKeys(byName.test_connection!.inputSchema)).toEqual(["config", "credential", "displayName", "id", "provider", "secrets"]);
     expect(schemaKeys(byName.validate_connection_target!.inputSchema)).toEqual(["cc", "id", "template", "to"]);
     expect(byName.list_connections!.readOnlyHint).toBe(true);
-    expect(byName.test_connection!.readOnlyHint).toBe(true);
+    expect(byName.test_connection!.readOnlyHint).toBe(false);
     expect(byName.validate_connection_target!.readOnlyHint).toBe(true);
-    expect(byName.create_connection!.readOnlyHint).toBeUndefined();
-    expect(byName.update_connection!.readOnlyHint).toBeUndefined();
-    expect(byName.remove_connection!.readOnlyHint).toBeUndefined();
+    expect(byName.create_connection!.readOnlyHint).toBe(false);
+    expect(byName.update_connection!.readOnlyHint).toBe(false);
+    expect(byName.remove_connection!.readOnlyHint).toBe(false);
   });
 
   it("returns CHANNELS_UNAVAILABLE without echoing arguments when the service is missing", async () => {
