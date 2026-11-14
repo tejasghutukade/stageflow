@@ -97,6 +97,10 @@ import {
   stageTimeoutReason,
 } from "./stageTimeout.js";
 import { StageMcpError } from "../config/resolveStageMcpServers.js";
+import {
+  hostLoginAttemptKey,
+  readFrozenHostLoginServers,
+} from "../config/hostLoginMcp.js";
 import { addModelUsage, emptyStageUsage, type StageUsage } from "../types/usage.js";
 import { inProcessBrowserEnv, sandboxBrowserEnv } from "../runtime/sandboxContainer.js";
 
@@ -124,7 +128,19 @@ function resolveClaudeModel(stageModel: string): Preflight {
   return { ok: true, model };
 }
 
+export const OAUTH_BACKEND_UNSUPPORTED = "oauth_backend_unsupported";
+
 async function preflight(input: StageRunInput): Promise<Preflight> {
+  const hostLogin = readFrozenHostLoginServers(
+    hostLoginAttemptKey({
+      runId: input.runId,
+      stageId: runtimeStageId(input),
+      attempt: input.roots.attempt,
+    }),
+  );
+  if (hostLogin.length > 0) {
+    return { ok: false, reason: OAUTH_BACKEND_UNSUPPORTED };
+  }
   const attachments = input.stage.tools?.functions ?? [];
   if (attachments.length > 0) {
     const projectRoot = functionCatalogRoot(input);

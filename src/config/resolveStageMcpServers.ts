@@ -7,6 +7,7 @@ import {
   readHostMcpServers,
   readMcpSecrets,
 } from "./mcpHostCatalog.js";
+import type { FrozenHostLoginServer } from "./hostLoginMcp.js";
 import { assertSafeMcpUrl, McpUrlPolicyError } from "./mcpRedaction.js";
 
 export type StageMcpErrorCode =
@@ -478,7 +479,7 @@ function envForScope(
   return { ...allowed, ...secrets };
 }
 
-export async function resolveStageMcpServers(options: {
+export type ResolveStageMcpOptions = {
   projectRoot: string;
   allowlist?: readonly string[];
   /** Stage env for the project-only and stage scopes; agent/probe/validate do not read it as a secret source. */
@@ -494,11 +495,36 @@ export async function resolveStageMcpServers(options: {
   workspaceSourced?: boolean;
   /** Merge console-saved servers and fill `${VAR}` by the scope's rules. Omit for project-only. */
   scope?: McpResolveScope;
-}): Promise<ResolvedMcpServers> {
+};
+
+export async function resolveStageMcpServers(
+  options: ResolveStageMcpOptions,
+): Promise<ResolvedMcpServers> {
+  return (await resolveStageMcpServersDetailed(options)).servers;
+}
+
+export type StageMcpResolution = {
+  servers: ResolvedMcpServers;
+  origins: Record<string, McpServerOrigin>;
+};
+
+export type { FrozenHostLoginServer } from "./hostLoginMcp.js";
+
+export type HostLoginPartitionOptions = {
+  bindingKind?: "repository" | "checkout" | "none";
+  workspaceSourced?: boolean;
+};
+
+function scopeForResolve(options: ResolveStageMcpOptions): McpResolveScope | undefined {
+  if (options.workspaceSourced === true || options.bindingKind === "repository") return undefined;
+  return options.scope;
+}
+
+export async function resolveStageMcpServersDetailed(
+  options: ResolveStageMcpOptions,
+): Promise<StageMcpResolution> {
   const allowlist = options.allowlist ?? [];
-  if (allowlist.length === 0) {
-    return {};
-  }
+  if (allowlist.length === 0) return { servers: {}, origins: {} };
   if (options.workspaceSourced === true) {
     const { decideWorkspaceConfigTrust } = await import("./configOrigin.js");
     const decision = decideWorkspaceConfigTrust({
@@ -514,19 +540,65 @@ export async function resolveStageMcpServers(options: {
       );
     }
   }
-  // Workspace-sourced catalogs never see console servers or secrets.
-  const scope = options.workspaceSourced === true ? undefined : options.scope;
+  const scope = scopeForResolve(options);
   const catalog = await loadMcpCatalog(options.projectRoot, scope ? { scope } : {});
   assertMcpAllowlistKnown(catalog.servers, allowlist);
   const env: NodeJS.ProcessEnv = scope
     ? envForScope(scope, options.env, options.hostEnv ?? process.env)
     : options.env;
-  const resolved: ResolvedMcpServers = {};
+  const servers: ResolvedMcpServers = {};
+  const origins: Record<string, McpServerOrigin> = {};
   for (const name of allowlist) {
     const entry = catalog.servers[name]!;
+    origins[name] = catalog.origins[name] ?? "project";
     assertEntryShape(name, entry);
-    resolved[name] = interpolateServer(entry, env, name, options.projectRoot, options.stageId);
-    if (scope?.kind !== "validate") assertResolvedUrlSafe(name, resolved[name]!);
+    servers[name] = interpolateServer(entry, env, name, options.projectRoot, options.stageId);
+    if (scope?.kind !== "validate") assertResolvedUrlSafe(name, servers[name]!);
   }
-  return resolved;
+  return { servers, origins };
+}
+
+function hasResolvedAuthorization(entry: ResolvedMcpServerConfig): boolean {
+  const headers = entry.headers;
+  if (headers === null || typeof headers !== "object" || Array.isArray(headers)) return false;
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === "authorization" && typeof value === "string" && value.trim() !== "") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isHttpMcpUrl(url: string): boolean {
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+export function partitionHostLogin(
+  resolution: StageMcpResolution,
+  options: HostLoginPartitionOptions = {},
+): { hostLogin: readonly FrozenHostLoginServer[]; worker: ResolvedMcpServers } {
+  const hostLogin: FrozenHostLoginServer[] = [];
+  const worker: ResolvedMcpServers = {};
+  const blocked =
+    options.workspaceSourced === true || options.bindingKind === "repository";
+  for (const [name, entry] of Object.entries(resolution.servers)) {
+    const url = typeof entry.url === "string" ? entry.url : undefined;
+    const hostLoginServer =
+      !blocked &&
+      resolution.origins[name] === "console" &&
+      url !== undefined &&
+      isHttpMcpUrl(url) &&
+      !hasResolvedAuthorization(entry);
+    if (hostLoginServer && url !== undefined) {
+      hostLogin.push(Object.freeze({ name, url }));
+    } else {
+      worker[name] = entry;
+    }
+  }
+  return { hostLogin: Object.freeze(hostLogin), worker };
 }

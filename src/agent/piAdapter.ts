@@ -45,6 +45,11 @@ import {
   SessionManager,
   type SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import {
+  hostLoginAttemptKey,
+  omitFrozenHostLogin,
+  readFrozenHostLoginServers,
+} from "../config/hostLoginMcp.js";
 import { StageMcpError } from "../config/resolveStageMcpServers.js";
 import {
   attachIsolatedMcp,
@@ -1380,7 +1385,19 @@ async function prepareStageSessionWiring(
         : undefined,
     );
     const settingsManager = createPiSettingsManager();
-    attached = await attachIsolatedMcp(input.resolvedMcpServers, {
+    const workerMcpServers = omitFrozenHostLogin(
+      input.resolvedMcpServers,
+      readFrozenHostLoginServers(
+        hostLoginAttemptKey({
+          runId: input.runId,
+          stageId: runtimeStageId(input),
+          attempt: roots.attempt,
+        }),
+      ),
+    );
+    const mcpSnapshot =
+      Object.keys(workerMcpServers).length > 0 ? workerMcpServers : undefined;
+    attached = await attachIsolatedMcp(mcpSnapshot, {
       lifecycle: "eager",
     });
     const failAfterAttach = (reason: string): StageRunResult => {
@@ -1452,21 +1469,21 @@ async function prepareStageSessionWiring(
     await loader.reload();
     if (
       attached.extensionFactories !== undefined &&
-      input.resolvedMcpServers !== undefined &&
+      mcpSnapshot !== undefined &&
       mcpToolMetadataMissing(loader)
     ) {
       // A cold adapter metadata cache registers only the `mcp` gateway at load,
       // and the session allowlist is fixed at load. Warm the cache, then reload
       // so the declared servers' direct tools exist when the allowlist is built.
       try {
-        await warmIsolatedMcpMetadata(input.resolvedMcpServers, { cwd: roots.cwd });
+        await warmIsolatedMcpMetadata(mcpSnapshot, { cwd: roots.cwd });
       } catch (err) {
         return failAfterAttach(err instanceof Error ? err.message : String(err));
       }
       await loader.reload();
       if (mcpToolMetadataMissing(loader)) {
         return failAfterAttach(
-          `MCP tool metadata unavailable for: ${Object.keys(input.resolvedMcpServers).join(", ")}`,
+          `MCP tool metadata unavailable for: ${Object.keys(mcpSnapshot).join(", ")}`,
         );
       }
     }

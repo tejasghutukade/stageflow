@@ -11,6 +11,12 @@ import {
   saveHostMcpServer,
   setMcpSecret,
 } from "../src/config/mcpHostCatalog.js";
+import {
+  freezeHostLoginServers,
+  hostLoginAttemptKey,
+  readFrozenHostLoginServers,
+  resetFrozenHostLoginServersForTests,
+} from "../src/config/hostLoginMcp.js";
 import { ensureOAuthFileKey, oauthKeyPath, OAUTH_FILE_KEY_ENV } from "../src/config/mcpOAuth.js";
 import {
   collectSecretValues,
@@ -20,7 +26,9 @@ import {
 } from "../src/config/mcpRedaction.js";
 import {
   loadMcpCatalog,
+  partitionHostLogin,
   resolveStageMcpServers,
+  resolveStageMcpServersDetailed,
 } from "../src/config/resolveStageMcpServers.js";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import { isForeverDeniedSecret } from "../src/runtime/stageEnvironment.js";
@@ -40,6 +48,7 @@ afterEach(() => {
   if (prevHome === undefined) delete process.env.STAGEFLOW_HOME;
   else process.env.STAGEFLOW_HOME = prevHome;
   resetGlobalStageflowHomeForTests();
+  resetFrozenHostLoginServersForTests();
 });
 
 const KEY_FILE_ENTRY = { url: "https://api.test/mcp", headers: { "X-Key": "${API_KEY}", "X-Other": "${OTHER}" } };
@@ -194,6 +203,117 @@ describe("redaction", () => {
       command: "x",
     });
     expect(def).toEqual({ url: "https://x.test", headers: { "X-Region": "eu" } });
+  });
+});
+
+describe("host login", () => {
+  it("a factory URL with no Authorization header is absent from the worker snapshot", async () => {
+    saveHostMcpServer("factory", { url: "https://factory.example/mcp" }, home);
+    const resolution = await resolveStageMcpServersDetailed({
+      projectRoot: root,
+      allowlist: ["factory"],
+      env: {},
+      scope: { kind: "stage", secrets: [] },
+      bindingKind: "checkout",
+    });
+    const split = partitionHostLogin(resolution, { bindingKind: "checkout" });
+    expect(split.worker).not.toHaveProperty("factory");
+    expect(split.hostLogin).toEqual([{ name: "factory", url: "https://factory.example/mcp" }]);
+    const frozen = freezeHostLoginServers(
+      hostLoginAttemptKey({ runId: "run", stageId: "review", attempt: 1 }),
+      split.hostLogin,
+    );
+    expect(Object.isFrozen(frozen)).toBe(true);
+    expect(() => {
+      (frozen as { name: string; url: string }[]).push({
+        name: "extra",
+        url: "https://extra.example/mcp",
+      });
+    }).toThrow(TypeError);
+    expect(readFrozenHostLoginServers(hostLoginAttemptKey({ runId: "run", stageId: "review", attempt: 1 }))).toEqual([
+      { name: "factory", url: "https://factory.example/mcp" },
+    ]);
+  });
+
+  it("a factory URL with a bearer secret stays in the worker snapshot", async () => {
+    const saved = saveHostMcpServer(
+      "factory",
+      { url: "https://factory.example/mcp", headers: { Authorization: "Bearer factory-token-value" } },
+      home,
+    );
+    const resolution = await resolveStageMcpServersDetailed({
+      projectRoot: root,
+      allowlist: ["factory"],
+      env: {},
+      scope: { kind: "stage", secrets: saved.secretsStored },
+    });
+    const split = partitionHostLogin(resolution, { bindingKind: "checkout" });
+    expect(split.hostLogin).toEqual([]);
+    expect(split.worker.factory).toMatchObject({
+      url: "https://factory.example/mcp",
+      headers: { Authorization: "Bearer factory-token-value" },
+    });
+  });
+
+  it("a stdio server stays in the worker snapshot", async () => {
+    saveHostMcpServer("local", { command: "npx", args: ["-y", "pkg"] }, home);
+    const resolution = await resolveStageMcpServersDetailed({
+      projectRoot: root,
+      allowlist: ["local"],
+      env: {},
+      scope: { kind: "stage", secrets: [] },
+    });
+    const split = partitionHostLogin(resolution, { bindingKind: "checkout" });
+    expect(split.hostLogin).toEqual([]);
+    expect(split.worker.local).toMatchObject({ command: "npx", args: ["-y", "pkg"] });
+  });
+
+  it("a repository binding whose console catalog already contains the named server does not merge that server and does not become host-login", async () => {
+    saveHostMcpServer("api", { url: "https://console.example/mcp" }, home);
+    await writeFile(
+      path.join(root, ".mcp.json"),
+      JSON.stringify({ mcpServers: { api: { command: "checkout-bin" } } }),
+    );
+    const resolution = await resolveStageMcpServersDetailed({
+      projectRoot: root,
+      allowlist: ["api"],
+      env: {},
+      scope: { kind: "stage", secrets: [] },
+      bindingKind: "repository",
+    });
+    expect(resolution.origins.api).toBe("project");
+    expect(resolution.servers.api).toMatchObject({ command: "checkout-bin" });
+    expect(resolution.servers.api).not.toHaveProperty("url");
+    expect(partitionHostLogin(resolution, { bindingKind: "repository" }).hostLogin).toEqual([]);
+    await expect(
+      resolveStageMcpServers({
+        projectRoot: await mkdtemp(path.join(tmpdir(), "sf-mcp-hard-empty-")),
+        allowlist: ["api"],
+        env: {},
+        scope: { kind: "stage", secrets: [] },
+        bindingKind: "repository",
+      }),
+    ).rejects.toMatchObject({ code: "missing_catalog" });
+  });
+
+  it("a workspace catalog copying the console name and URL is not host-login", async () => {
+    saveHostMcpServer("copied", { url: "https://console.example/mcp" }, home);
+    await writeFile(
+      path.join(root, ".mcp.json"),
+      JSON.stringify({ mcpServers: { copied: { url: "https://console.example/mcp" } } }),
+    );
+    const resolution = await resolveStageMcpServersDetailed({
+      projectRoot: root,
+      allowlist: ["copied"],
+      env: {},
+      scope: { kind: "stage", secrets: [] },
+      workspaceSourced: true,
+      bindingKind: "checkout",
+    });
+    const split = partitionHostLogin(resolution, { bindingKind: "checkout", workspaceSourced: true });
+    expect(resolution.origins.copied).toBe("project");
+    expect(split.hostLogin).toEqual([]);
+    expect(split.worker.copied).toMatchObject({ url: "https://console.example/mcp" });
   });
 });
 
