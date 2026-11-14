@@ -114,6 +114,7 @@ const STAGE_MCP_FAILURE_CODES = new Set([
   "insufficient_scope",
   "connect_failed",
   "oauth_backend_unsupported",
+  "mcp_tool_allowlist_unsupported",
 ]);
 
 function baseRunCompletionPayload(

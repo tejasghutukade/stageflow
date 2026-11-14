@@ -6,7 +6,7 @@ import path from "node:path";
 import type { OAuthClientProvider } from "@modelcontextprotocol/client";
 import { globalStageflowHome } from "../project/globalHome.js";
 import { assertServerName, readMcpSecrets } from "./mcpHostCatalog.js";
-import { assertSafeMcpUrl, collectSecretValues, McpUrlPolicyError, oauthDefinition, scrubText } from "./mcpRedaction.js";
+import { assertSafeMcpUrl, collectSecretValues, isBlockedMcpHost, McpUrlPolicyError, oauthDefinition, scrubText } from "./mcpRedaction.js";
 import {
   loadMcpCatalog,
   resolveStageMcpServers,
@@ -18,9 +18,8 @@ import {
  *
  * Tokens live in the adapter's encrypted-file store under the Host's Pi agent dir
  * (`$STAGEFLOW_HOME/agent/mcp-oauth-encrypted`) and are keyed by a Host-generated key, so it works
- * in a container with no OS keyring. The adapter refuses a symlinked store, and stage attempts run
- * with a sealed per-attempt agent dir, so signed-in servers are available to agents and Check, not
- * to pipeline stages.
+ * in a container with no OS keyring. The adapter refuses a symlinked store. A pipeline stage does
+ * not receive that store. The host calls a signed-in console server on the stage's behalf.
  */
 
 export const OAUTH_FILE_KEY_ENV = "PI_MCP_ADAPTER_OAUTH_FILE_KEY";
@@ -424,13 +423,21 @@ export async function discoverMcpAuthorization(
   serverUrl: string,
 ): Promise<{ issuer: string; tokenEndpoint: string } | undefined> {
   const resource = new URL(serverUrl);
+  const signal = AbortSignal.timeout(30_000);
   const prmUrl = new URL(`/.well-known/oauth-protected-resource${resource.pathname}`, resource.origin);
-  const prmRes = await fetch(prmUrl);
+  const prmRes = await fetch(prmUrl, { signal });
   if (!prmRes.ok) return undefined;
   const prm = (await prmRes.json()) as { authorization_servers?: unknown };
   const authorizationServer = Array.isArray(prm.authorization_servers) ? prm.authorization_servers[0] : undefined;
   if (typeof authorizationServer !== "string") return undefined;
-  const metaRes = await fetch(new URL("/.well-known/oauth-authorization-server", authorizationServer));
+  let authorizationServerUrl: URL;
+  try {
+    authorizationServerUrl = new URL(authorizationServer);
+  } catch {
+    return undefined;
+  }
+  if (isBlockedMcpHost(authorizationServerUrl.hostname)) return undefined;
+  const metaRes = await fetch(new URL("/.well-known/oauth-authorization-server", authorizationServerUrl), { signal });
   if (!metaRes.ok) return undefined;
   const meta = (await metaRes.json()) as { issuer?: unknown; token_endpoint?: unknown };
   if (typeof meta.issuer !== "string" || typeof meta.token_endpoint !== "string") return undefined;
@@ -442,29 +449,30 @@ export async function mcpGrantRefreshAllowed(
   url: string,
 ): Promise<"ok" | "needs_auth" | "connect_failed"> {
   const binding = readSignInBinding(name);
+  if (!binding) return "needs_auth";
   let discovered: { issuer: string; tokenEndpoint: string } | undefined;
   try {
     discovered = await discoverMcpAuthorization(url);
   } catch (err) {
-    if (isMcpConnectFailure(err)) return "connect_failed";
+    if (isMcpConnectFailure(err) || (err instanceof Error && err.name === "TimeoutError")) return "connect_failed";
     throw err;
   }
   if (!discovered) return "connect_failed";
-  if (!binding) return "ok";
   if (!issuersMatch(binding.issuer, discovered.issuer) || !endpointsMatch(binding.tokenEndpoint, discovered.tokenEndpoint)) {
     return "needs_auth";
   }
   return "ok";
 }
 
-async function rememberMcpGrantSignIn(name: string, url: string): Promise<void> {
-  await withMcpGrantLock(name, async () => {
-    if (!existsSync(grantCredentialsPath(name))) return;
+async function rememberMcpGrantSignIn(name: string, url: string): Promise<boolean> {
+  return withMcpGrantLock(name, async () => {
+    if (!existsSync(grantCredentialsPath(name))) return false;
     const discovered = await discoverMcpAuthorization(url);
-    if (!discovered) return;
+    if (!discovered) return false;
     const root = grantLockRoot(name);
     mkdirSync(root, { recursive: true, mode: 0o700 });
     writeFileSync(signInBindingPath(name), JSON.stringify(discovered), { mode: 0o600 });
+    return true;
   });
 }
 
@@ -626,7 +634,13 @@ export async function completeMcpOAuth(
     const flow = await loadFlow();
     const status = await flow.completeAuthFromInput(name, input, STORAGE);
     const entry = (await loadBundle()).getAuthEntry(name, STORAGE.authStorageOptions);
-    if (entry?.serverUrl) await rememberMcpGrantSignIn(name, entry.serverUrl);
+    if (entry?.serverUrl) {
+      const remembered = await rememberMcpGrantSignIn(name, entry.serverUrl);
+      if (!remembered) {
+        await revokeMcpOAuthGrant(name);
+        return "not_authenticated";
+      }
+    }
     return status;
   } catch (err) {
     return wrapFlowError(err);

@@ -21,7 +21,7 @@ Two sources, merged by name. A console-saved server wins when the name clashes.
 | The project | `<project root>/.mcp.json` | You, with the file tools. The project is the folder with `stageflow.yaml` |
 | The console | `$STAGEFLOW_HOME/mcp/.mcp.json` | Settings → Project MCP, or the REST routes below |
 
-`list_project_mcp` (MCP) and `GET /api/project-mcp` list both, with `origin: project` or `origin: console`. They return names and transport only. They do not connect. `probe_project_mcp` and `POST /api/project-mcp/<name>/probe` connect and exit; that is an external call, so confirm with the user first.
+`list_project_mcp` (MCP) and `GET /api/project-mcp` list both. Each row has `name`, `transport`, `origin` (`project` or `console`), `authStatus`, cached `tools`, and `usableByStages`. They do not connect and they do not return tokens or URLs. Read `usableByStages` and `authStatus` before you put a console server on a stage `mcp` list. `probe_project_mcp` and `POST /api/project-mcp/<name>/probe` connect and exit; that is an external call, so confirm with the user first.
 
 MCP tools on the Host act on the Host's own project (the directory `sf ui` or `sf mcp` was started in). A server saved from the console is host-level and is visible to agents in the projects that Host serves. A `.mcp.json` edit is the file in the project you have open.
 

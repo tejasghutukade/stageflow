@@ -257,7 +257,7 @@ Ten tools cover [evals](evals.md). They use the same service as the REST routes 
 | `list_evals` | `{ project_root? }` | `{ items }`: one per eval with target, dataset size, validity, status, last-run headline and trend |
 | `get_eval` | `{ eval_id, project_root? }` | Parsed definition, raw YAML, file hash, validation findings, run count and last run |
 | `validate_eval` | `{ eval_id?, yaml?, project_root? }` | `{ findings }`. Exactly one of `eval_id` (a file in the catalog) or `yaml` (unsaved text). Calls no model and writes no files |
-| `run_eval` | `{ eval_id, repeats?, judge?, model?, user_model?, allow_real_tools?, tools?, approvals?, max_cost_usd?, case_ids?, tags?, label?, wait?, timeout_ms?, project_root? }` | `{ eval_run_id }`, or with `wait: true` the finished run detail, or `{ eval_run_id, status: "timeout" }` |
+| `run_eval` | `{ eval_id, repeats?, judge?, model?, user_model?, allow_real_tools?, allow_host_login?, tools?, approvals?, max_cost_usd?, case_ids?, tags?, label?, wait?, timeout_ms?, project_root? }` | `{ eval_run_id }`, or with `wait: true` the finished run detail, or `{ eval_run_id, status: "timeout" }` |
 | `get_eval_run` | `{ eval_run_id }` | Status, progress, stats, cost, config snapshot and per-grader summary |
 | `list_eval_runs` | `{ eval_id?, status?, limit? }` | `{ items }`: run headlines (status, pass rate, cost), newest first |
 | `get_eval_results` | `{ eval_run_id, status?, grader?, limit?, cursor? }` | `{ items, next_cursor }`: one row per case with pass state, score and failing graders |

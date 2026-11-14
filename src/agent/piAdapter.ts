@@ -52,6 +52,7 @@ import {
 } from "../config/hostLoginMcp.js";
 import {
   STAGE_MCP_NATIVE_TOOLS_REASON,
+  filterStageWorkerMcpToolNames,
   stageMcpAllowlistRestricts,
   stageMcpSessionToolName,
 } from "../runtime/stageMcpHost.js";
@@ -1538,7 +1539,11 @@ async function prepareStageSessionWiring(
           `MCP adapter registered unrequested tool(s): ${mcpTools.unrequested.join(", ")}`,
         );
       }
-      tools.push(...mcpTools.names);
+      tools.push(...filterStageWorkerMcpToolNames(
+        input.stage,
+        Object.keys(mcpSnapshot ?? {}),
+        mcpTools.names,
+      ));
     }
     if (input.channels && input.stage.channels?.some(channel => channel.operations.includes("send"))) {
       const definition = createSendMessageTool(input.channels);

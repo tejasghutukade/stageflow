@@ -845,6 +845,26 @@ describe("ClaudeAgentAdapter — MCP connect-fail", () => {
       else process.env[OAUTH_FILE_KEY_ENV] = prevKey;
     }
   });
+
+  it("fails before the model when a named allowlist applies to a worker server", async () => {
+    queryImpl = emptyStream;
+    vi.mocked(query).mockClear();
+    const adapter = await newAdapter();
+    const result = await adapter.runStage({
+      ...baseInput(),
+      stage: {
+        ...baseInput().stage,
+        mcp: ["local"],
+        mcp_tools: { local: ["ping"] },
+      },
+      resolvedMcpServers: {
+        local: { command: "npx", args: ["-y", "pkg"] },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("mcp_tool_allowlist_unsupported");
+    expect(query).not.toHaveBeenCalled();
+  });
 });
 
 describe("ClaudeAgentAdapter — HITL (ask_operator)", () => {

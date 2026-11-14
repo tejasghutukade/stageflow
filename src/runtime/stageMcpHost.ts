@@ -265,11 +265,16 @@ function failureFrom(error: unknown): { ok: false; code: string; message: string
   return failed("connect_failed", "connect_failed");
 }
 
-async function requireStoredGrant(name: string): Promise<{ ok: false; code: string; message: string } | undefined> {
-  const status = await mcpStoredGrantStatus(name);
+export function refusalForStoredGrant(
+  status: "authenticated" | "expired" | "not_authenticated" | "unavailable",
+): { ok: false; code: string; message: string } | undefined {
   if (status === "unavailable") return failed("connect_failed", "connect_failed");
-  if (status !== "authenticated") return failed("needs_auth", "needs_auth");
+  if (status === "not_authenticated") return failed("needs_auth", "needs_auth");
   return undefined;
+}
+
+async function requireStoredGrant(name: string): Promise<{ ok: false; code: string; message: string } | undefined> {
+  return refusalForStoredGrant(await mcpStoredGrantStatus(name));
 }
 
 async function withHostClient<T>(
@@ -379,6 +384,30 @@ export function stageMcpAllowlistRestricts(stage: { mcp_tools?: StageMcpTools } 
   return Object.values(tools).some((names) => !wildcard(names));
 }
 
+export function filterStageWorkerMcpToolNames(
+  stage: { mcp?: readonly string[]; mcp_tools?: StageMcpTools } | undefined,
+  workerServers: readonly string[],
+  names: readonly string[],
+): string[] {
+  if (!stageMcpAllowlistRestricts(stage)) return [...names];
+  const allowed = new Set<string>();
+  for (const server of workerServers) {
+    if (!stage?.mcp?.includes(server)) continue;
+    const named = stage.mcp_tools?.[server];
+    if (named === undefined) continue;
+    if (wildcard(named)) {
+      const sample = stageMcpSessionToolName(server, "zzsentinel");
+      const head = sample.endsWith("_zzsentinel") ? sample.slice(0, -"_zzsentinel".length) : sample;
+      for (const name of names) {
+        if (name.startsWith(`${head}_`)) allowed.add(name);
+      }
+    } else {
+      for (const tool of named) allowed.add(stageMcpSessionToolName(server, tool));
+    }
+  }
+  return names.filter((name) => allowed.has(name));
+}
+
 export function stageMcpToolPermitted(
   stage: StageMcpAllowlistStage | undefined,
   server: string,
@@ -420,6 +449,17 @@ function stripText(text: string, secrets: readonly string[]): string {
   return out;
 }
 
+function stripValue(value: unknown, secrets: readonly string[]): unknown {
+  if (typeof value === "string") return stripText(value, secrets);
+  if (Array.isArray(value)) return value.map((item) => stripValue(item, secrets));
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) out[key] = stripValue(item, secrets);
+    return out;
+  }
+  return value;
+}
+
 function denied(): { ok: false; code: string; message: string } {
   return { ok: false, code: "permission_denied", message: "permission_denied" };
 }
@@ -446,22 +486,18 @@ export async function classifyParentHostLogin(input: {
   const names = input.stage?.mcp ?? [];
   if (names.length === 0) return [];
   const repository = input.bindingKind === "repository";
-  try {
-    const resolution = await resolveStageMcpServersDetailed({
-      projectRoot: input.factoryCwd ?? input.rootDir,
-      allowlist: [...names],
-      env: input.env ?? {},
-      bindingKind: repository ? "repository" : input.bindingKind === "checkout" ? "checkout" : "none",
-      ...(repository
-        ? {}
-        : { scope: { kind: "stage" as const, secrets: (input.stage?.secrets ?? []).map((secret) => secret.name) } }),
-    });
-    return partitionHostLogin(resolution, {
-      bindingKind: repository ? "repository" : input.bindingKind === "checkout" ? "checkout" : "none",
-    }).hostLogin;
-  } catch {
-    return [];
-  }
+  const resolution = await resolveStageMcpServersDetailed({
+    projectRoot: input.factoryCwd ?? input.rootDir,
+    allowlist: [...names],
+    env: input.env ?? {},
+    bindingKind: repository ? "repository" : input.bindingKind === "checkout" ? "checkout" : "none",
+    ...(repository
+      ? {}
+      : { scope: { kind: "stage" as const, secrets: (input.stage?.secrets ?? []).map((secret) => secret.name) } }),
+  });
+  return partitionHostLogin(resolution, {
+    bindingKind: repository ? "repository" : input.bindingKind === "checkout" ? "checkout" : "none",
+  }).hostLogin;
 }
 
 export async function serveStageMcpList(input: {
@@ -498,7 +534,9 @@ export async function serveStageMcpList(input: {
         server: server.name,
         name: stripText(tool.name, secrets),
         ...(description !== undefined ? { description } : {}),
-        ...(tool.inputSchema !== undefined ? { inputSchema: tool.inputSchema } : {}),
+        ...(tool.inputSchema !== undefined
+          ? { inputSchema: stripValue(tool.inputSchema, secrets) as Record<string, unknown> }
+          : {}),
       });
     }
   }

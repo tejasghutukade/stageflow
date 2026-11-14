@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   completeMcpOAuth,
+  mcpGrantRefreshAllowed,
   mcpOAuthStatus,
   oauthKeyPath,
   prepareMcpOAuth,
@@ -309,6 +310,10 @@ function listRemote() {
 }
 
 describe("stage grant refresh", () => {
+  it("does not refresh when the sign-in binding is missing", async () => {
+    await expect(mcpGrantRefreshAllowed("never-signed-in", "https://example.test/mcp")).resolves.toBe("needs_auth");
+  });
+
   it("refreshes once when a 401 arrives before expiresAt and retries the list", async () => {
     await signInRemote();
     const tokens = await readMcpGrantTokens("remote", `${base}/mcp`);

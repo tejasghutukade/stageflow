@@ -12,7 +12,7 @@ import {
   type StageMcpListView,
 } from "./stageMcpHost.js";
 
-const TIMEOUT_MS = 30_000;
+const TIMEOUT_MS = 90_000;
 
 export type StageMcpCallRequest = {
   runId?: string;
@@ -23,6 +23,7 @@ export type StageMcpCallRequest = {
   tool: string;
   arguments: unknown;
   signal?: AbortSignal;
+  timeoutMs?: number;
 };
 
 type McpHostTransport = {
@@ -47,6 +48,7 @@ function roundTrip(
   type: "mcp.call" | "mcp.list",
   input: unknown,
   transport: McpHostTransport,
+  timeoutMs = TIMEOUT_MS,
 ): Promise<StageMcpCallView | StageMcpListView> {
   return new Promise((resolve) => {
     if (transport.connected === false || typeof transport.send !== "function") {
@@ -71,7 +73,14 @@ function roundTrip(
       if (response?.type !== "mcp.response" || response.requestId !== requestId || response.result === undefined) return;
       finish(response.result);
     };
-    const timer = setTimeout(disconnected, TIMEOUT_MS);
+    const timer = setTimeout(() => {
+      try {
+        transport.send({ type: "mcp.cancel", requestId });
+      } catch {
+        // The parent abort is best-effort. The worker still stops waiting.
+      }
+      finish({ ok: false, code: "cancelled", message: "cancelled" });
+    }, timeoutMs);
     transport.on("message", receive);
     transport.once("disconnect", disconnected);
     const payload = input === undefined
@@ -116,7 +125,7 @@ export async function callStageMcpTool(
   transport?: McpHostTransport,
 ): Promise<StageMcpCallView> {
   const body = { server: input.server, tool: input.tool, arguments: input.arguments };
-  if (transport !== undefined) return roundTrip("mcp.call", body, transport) as Promise<StageMcpCallView>;
+  if (transport !== undefined) return roundTrip("mcp.call", body, transport, input.timeoutMs) as Promise<StageMcpCallView>;
   if (stageFunctionCallsUseHost()) return roundTrip("mcp.call", body, processTransport()) as Promise<StageMcpCallView>;
   const controller = new AbortController();
   if (input.signal?.aborted) controller.abort();

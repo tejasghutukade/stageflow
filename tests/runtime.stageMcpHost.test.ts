@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ChildProcess } from "node:child_process";
@@ -20,11 +21,14 @@ import { handleProjectMcpRoutes } from "../src/server/projectMcpRoutes.js";
 import { updateMcpOAuthTokensForUrl } from "pi-mcp-adapter/oauth";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
+import { globalStageflowHome, resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
 import { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.js";
 import {
   STAGE_MCP_NATIVE_TOOLS_REASON,
+  classifyParentHostLogin,
+  filterStageWorkerMcpToolNames,
+  refusalForStoredGrant,
   setStageMcpUpstreamForTests,
   type StageMcpUpstream,
 } from "../src/runtime/stageMcpHost.js";
@@ -343,7 +347,7 @@ describe("stage MCP host", () => {
     openStore.mockRestore();
   });
 
-  it("returns permission_denied for a console name on a repository-bound attempt and does not open the store", async () => {
+  it("does not open the store for a console name on a repository-bound attempt", async () => {
     saveHostMcpServer("console-wonder", { url: "https://console.example/mcp" }, home);
     const calls: string[] = [];
     setStageMcpUpstreamForTests(boardsUpstream(calls));
@@ -368,7 +372,7 @@ describe("stage MCP host", () => {
     expect(sent[0]).toMatchObject({
       type: "mcp.response",
       requestId: "req-repo",
-      result: { ok: false, code: "permission_denied" },
+      result: { ok: false, code: "connect_failed" },
     });
     expect(calls).toEqual([]);
     expect(openStore).not.toHaveBeenCalled();
@@ -588,6 +592,14 @@ async function storeGrant(name: string, url: string, access = ACCESS, refresh = 
     refreshToken: refresh,
     expiresAt: Math.floor(Date.now() / 1000) + 3600,
   }, { credentialStore: "encrypted-file" });
+  const origin = new URL(url).origin;
+  const account = `sha256-${createHash("sha256").update(name, "utf8").digest("hex")}`;
+  const lockRoot = path.join(globalStageflowHome(), "mcp-oauth-locks", account);
+  await mkdir(lockRoot, { recursive: true });
+  await writeFile(path.join(lockRoot, "signin.json"), JSON.stringify({
+    issuer: origin,
+    tokenEndpoint: `${origin}/token`,
+  }));
 }
 
 describe("stage MCP grant", () => {
@@ -918,3 +930,61 @@ async function withGrantServer<T>(run: (url: string, hits: GrantHits) => Promise
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 }
+
+describe("review fixes", () => {
+  it("keeps only named worker tools and every tool of a star server", () => {
+    const stage = {
+      mcp: ["echo", "files"],
+      mcp_tools: { echo: ["ping"], files: ["*"] },
+    };
+    const names = filterStageWorkerMcpToolNames(stage, ["echo", "files"], [
+      "echo_ping",
+      "echo_delete",
+      "files_read",
+      "other_ping",
+    ]);
+    expect(names).toEqual(["echo_ping", "files_read"]);
+  });
+
+  it("does not treat an expired grant as signed out", () => {
+    expect(refusalForStoredGrant("expired")).toBeUndefined();
+    expect(refusalForStoredGrant("authenticated")).toBeUndefined();
+    expect(refusalForStoredGrant("not_authenticated")?.code).toBe("needs_auth");
+    expect(refusalForStoredGrant("unavailable")?.code).toBe("connect_failed");
+  });
+
+  it("throws when the parent cannot resolve the catalog", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-classify-"));
+    await expect(classifyParentHostLogin({
+      stage: { mcp: ["missing"] },
+      rootDir: root,
+      factoryCwd: root,
+    })).rejects.toThrow();
+  });
+
+  it("cancels the parent call when the worker stops waiting", async () => {
+    const sent: unknown[] = [];
+    const transport = new EventEmitter() as EventEmitter & {
+      connected: boolean;
+      send: (message: unknown) => boolean;
+    };
+    transport.connected = true;
+    transport.send = (message: unknown) => {
+      sent.push(message);
+      return true;
+    };
+    const result = await callStageMcpTool({
+      stageId: "inventory",
+      stage: { mcp: ["wonder"] },
+      server: "wonder",
+      tool: "get_artboards",
+      arguments: {},
+      timeoutMs: 20,
+    }, transport);
+    expect(result).toMatchObject({ ok: false, code: "cancelled" });
+    expect(sent).toEqual([
+      expect.objectContaining({ type: "mcp.call" }),
+      expect.objectContaining({ type: "mcp.cancel" }),
+    ]);
+  });
+});
