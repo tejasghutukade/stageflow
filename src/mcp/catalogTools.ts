@@ -448,7 +448,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "preflight",
     {
       description:
-        "Check pipeline requires:/secrets:/mcp against the Host toolchain manifest and curated stage env before start_run. Accepts pipeline path or inline definition (same union as start_run). Returns { ok, checks } with status ok|missing_tool|tool_version_mismatch|unknown_version|secret_unavailable|unresolved_var. Does not create a Run. unknown_version is ok unless strict:true.",
+        "Check pipeline requires:/secrets:/mcp against the Host toolchain manifest and curated stage env before start_run. Accepts pipeline path or inline definition (same union as start_run). Returns { ok, checks } with status ok|missing_tool|tool_version_mismatch|unknown_version|secret_unavailable|unresolved_var|needs_auth|insufficient_scope|connect_failed. A host-login server is reported from its stored sign-in and is not connected or refreshed. Does not create a Run. unknown_version is ok unless strict:true.",
       inputSchema: z.object({
         pipeline: z
           .union([z.string(), inlinePipelineSchema])

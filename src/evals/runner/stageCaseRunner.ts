@@ -7,6 +7,7 @@ import { isWaitingProjection } from "../../runread/waitRun.js";
 import type { RunStore, StageSnapshot } from "../../runstore/port.js";
 import { PipelineValidationError } from "../../runtime/pipelineValidationError.js";
 import type { RunManager } from "../../runtime/runManager.js";
+import { classifyParentHostLogin } from "../../runtime/stageMcpHost.js";
 import type { InlinePipelineDefinition } from "../../types/pipeline.js";
 import type { StageUsage } from "../../types/usage.js";
 import { caseToTask } from "../caseTask.js";
@@ -100,6 +101,56 @@ async function readStageBody(plan: EvalPlan): Promise<StageBody> {
     throw new EngineError("Target stage could not be read");
   }
   return { body: { ...body, id: stageId }, stageId };
+}
+
+function mcpNames(mcp: unknown): string[] {
+  if (Array.isArray(mcp)) return mcp.filter((name): name is string => typeof name === "string");
+  if (mcp !== null && typeof mcp === "object") return Object.keys(mcp);
+  return [];
+}
+
+function omitNamed(value: unknown, skip: ReadonlySet<string>): unknown {
+  if (Array.isArray(value)) return value.filter((name) => typeof name !== "string" || !skip.has(name));
+  if (value !== null && typeof value === "object") {
+    const next: Record<string, unknown> = {};
+    for (const [name, entry] of Object.entries(value)) {
+      if (!skip.has(name)) next[name] = entry;
+    }
+    return next;
+  }
+  return value;
+}
+
+function secretDecls(secrets: unknown): { name: string }[] {
+  if (!Array.isArray(secrets)) return [];
+  const out: { name: string }[] = [];
+  for (const entry of secrets) {
+    if (typeof entry === "string" && entry !== "") out.push({ name: entry });
+    else if (entry !== null && typeof entry === "object" && typeof (entry as { name?: unknown }).name === "string") {
+      const name = (entry as { name: string }).name;
+      if (name !== "") out.push({ name });
+    }
+  }
+  return out;
+}
+
+async function omitUnconfirmedHostLogin(
+  plan: EvalPlan,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (plan.hostLoginConfirmed === true) return body;
+  const names = mcpNames(body.mcp);
+  if (names.length === 0) return body;
+  const hostLogin = await classifyParentHostLogin({
+    stage: { mcp: names, secrets: secretDecls(body.secrets) },
+    factoryCwd: plan.projectRoot,
+    rootDir: plan.projectRoot,
+  });
+  if (hostLogin.length === 0) return body;
+  const skip = new Set(hostLogin.map((server) => server.name));
+  const next: Record<string, unknown> = { ...body, mcp: omitNamed(body.mcp, skip) };
+  if (body.mcp_tools !== undefined) next.mcp_tools = omitNamed(body.mcp_tools, skip);
+  return next;
 }
 
 function sumTokens(usage: StageUsage | undefined): { tokensIn: number; tokensOut: number } {
@@ -272,7 +323,13 @@ export function createStageCaseRunner(deps: StageCaseRunnerDeps): StageCaseRunne
     } catch (err) {
       return failure("EVAL_ENGINE_ERROR", err instanceof Error ? err.message : "Target stage could not be read");
     }
-    const { body, stageId } = stageBody;
+    const { stageId } = stageBody;
+    let body = stageBody.body;
+    try {
+      body = await omitUnconfirmedHostLogin(plan, body);
+    } catch (err) {
+      return failure("EVAL_ENGINE_ERROR", err instanceof Error ? err.message : "Stage MCP servers could not be classified");
+    }
     const pipeline: InlinePipelineDefinition = {
       id: `standalone-${stageId}`,
       stages: [{ ...body, model: plan.modelOverride ?? plan.stageModel }],

@@ -75,7 +75,7 @@ A console secret **wins** over a Host environment variable of the same name.
 For remote (`url`) servers that use OAuth, choose **Sign in** on the server. Stageflow starts the server's own flow and shows the authorize address; approve it in a browser. The redirect lands on `localhost`, which a remote or containerised Host cannot receive, so **copy the full address from the browser's address bar and paste it back** into the dialog. Status is `authenticated`, `expired` or `not_authenticated`; **Sign out** removes the tokens.
 
 - Tokens are stored encrypted (AES-256-GCM) in `agent/mcp-oauth-encrypted`, keyed by `secrets/mcp-oauth.key` (generated on first use). `PI_MCP_ADAPTER_OAUTH_FILE_KEY` overrides the key. Back up the store and the key **together**.
-- Signed-in servers work for **agents and Check only**. Pipeline stages run with a sealed per-attempt agent directory and cannot use them; give a stage a bearer-token secret instead.
+- A stage may use a signed-in console server. The Host calls that server with the stored grant. Three limits remain. A workspace catalog (a repository binding, or a checkout whose `.mcp.json` is workspace-sourced) does not receive the console sign-in. A Claude stage fails before the model with `oauth_backend_unsupported` when a signed-in server remains. An eval calls a signed-in server only when that run records `allow_host_login` (`--allow-host-login` on `sf eval run`, or `allow_host_login: true` on `run_eval`, `try_eval_case`, and `POST /api/evals/:id/runs`). Stdio servers and HTTP servers with a resolved `Authorization` header still run when the flag is omitted. `allow_real_tools` is the separate consent for an agent eval to act on the project.
 
 ## Using servers
 
@@ -103,7 +103,7 @@ secrets: [LINEAR_TOKEN]   # a console secret, or a registered Host secret
 - `mcp:` is an allowlist of server names. Console servers merge in over the project `.mcp.json`; **a project `.mcp.json` is no longer required** when the listed servers exist in the console. If neither source defines a listed name, `sf validate` fails with `Unknown MCP server`.
 - `secrets: [NAME]` may now name a console secret. It fills `${NAME}` in the stage's MCP servers and is never exported to the stage's environment (a warning says so; `as: env` has no effect for it).
 - **Repository-bound stages** read `.mcp.json` from the checked-out repository, which is untrusted workspace content: they never see console servers or console secrets, and the workspace-config trust rules apply ([yaml-catalog — Stage MCP](yaml-catalog.md#stage-mcp)).
-- OAuth-signed-in servers are not available to stages (above).
+- A signed-in console server (HTTP, no resolved `Authorization` header) is available to a stage, with the limits in [OAuth sign-in](#oauth-sign-in): workspace catalogs, Claude (`oauth_backend_unsupported`), and the eval confirm `allow_host_login`.
 
 ## Security policy in one place
 
@@ -153,7 +153,7 @@ OAuth error codes map to HTTP as: `not_found` 404, `not_http` / `flow_failed` / 
 | Check says `connect_failed` | Server unreachable or command failed. For stdio the `command` must exist **inside the container** |
 | Save fails: "provider or cloud credential name" | Rename the variable, or allow-list it |
 | Save fails: "link-local or cloud-metadata address" | Blocked on purpose; use a normal host name |
-| Works in an agent, fails in a stage | The stage must list the server under `mcp:` and each console secret it needs under `secrets:`; signed-in (OAuth) servers are not available to stages; repository-bound stages never see console servers |
+| Works in an agent, fails in a stage | The stage must list the server under `mcp:` and each console secret it needs under `secrets:`. A signed-in console server needs a Host grant; a workspace catalog does not receive one; Claude fails with `oauth_backend_unsupported`; an eval needs `allow_host_login` on that run. Repository-bound stages never see console servers |
 | `sf validate`: `stage.unknown_secret` | The name is neither a console secret nor a registered Host secret ([Stage secrets](yaml-catalog.md#stage-secrets)) |
 | 409 `host_state_corrupt` | `mcp/.mcp.json`, `secrets/mcp-secrets.json` or the OAuth store is unreadable or the wrong shape. Fix or remove the named file; nothing was changed |
 | Server was saved but an agent warns `agent.mcp_server_unknown` | The name in the agent's `tools.mcp` differs from the saved name (names are case-sensitive) |

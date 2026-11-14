@@ -231,6 +231,8 @@ export type EvalPlan = {
   concurrency: number;
   maxCostUsd: number;
   modelOverride?: string;
+  /** Per-run consent to call a signed-in console MCP server. Absent means the run skips those servers. */
+  hostLoginConfirmed?: boolean;
   budget?: { latencyMs?: number; costUsd?: number };
   /** Agent plans only: the revision pinned at plan time and the conversation settings. */
   agent?: { definitionHash: string; definition: Record<string, unknown> };

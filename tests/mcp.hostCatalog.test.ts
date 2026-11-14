@@ -47,7 +47,7 @@ describe("host MCP catalog", () => {
     expect(await mcpCatalogExists(root)).toBe(false);
     const list = await listProjectMcpCatalog(root);
     expect(list.status).toBe("ok");
-    expect(list.servers).toEqual([{ name: "fs", transport: "stdio", origin: "console" }]);
+    expect(list.servers).toEqual([{ name: "fs", transport: "stdio", origin: "console", tools: [], usableByStages: false }]);
     expect((await stat(hostMcpCatalogPath(home))).mode & 0o777).toBe(0o600);
   });
 

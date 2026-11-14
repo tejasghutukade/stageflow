@@ -16,7 +16,7 @@ export function registerProjectMcpTools(
     "list_project_mcp",
     {
       description:
-        "List git-root .mcp.json servers as names and transport only. Inspect is not attach; it does not interpolate, spawn, or change stage MCP.",
+        "List git-root .mcp.json and console-saved servers: name, transport, origin, stored auth status, cached tool names, and usableByStages. Inspect is not attach; it does not interpolate, spawn, start sign-in, or return a token, header, URL, or authorization code.",
       inputSchema: z.object({}),
     },
     async () => textResult(await listProjectMcpCatalog(root)),

@@ -45,7 +45,7 @@ export const EVAL_USAGE = `Usage:
   sf eval list [--json]
   sf eval show <id|path> [--json]
   sf eval validate [<id|path>] [--json] [--strict]
-  sf eval run <id|path> [--repeats <n>] [--judge <model>] [--model <id>] [--user-model <model>] [--allow-real-tools] [--max-cost <usd>] [--case <id> ...] [--tag <tag> ...] [--label <text>] [--no-wait] [--json]
+  sf eval run <id|path> [--repeats <n>] [--judge <model>] [--model <id>] [--user-model <model>] [--allow-real-tools] [--allow-host-login] [--max-cost <usd>] [--case <id> ...] [--tag <tag> ...] [--label <text>] [--no-wait] [--json]
   sf eval runs [<evalId>] [--json]
   sf eval runs show <evalRunId> [--json]
   sf eval runs cancel <evalRunId>
@@ -59,7 +59,8 @@ export const EVAL_USAGE = `Usage:
   sf eval engine install
 
   Agent evals: --model overrides the agent's model, --user-model the model that plays the user. An eval whose
-  conversation.tools is real also needs --allow-real-tools.
+  conversation.tools is real also needs --allow-real-tools. A stage eval calls a signed-in console MCP server
+  only with --allow-host-login. allow_real_tools consents to an agent eval acting on the project.
 
   Every subcommand also accepts --project-root <id-or-path>.`;
 
@@ -105,6 +106,7 @@ const FLAGS: Record<string, Record<string, FlagSpec>> = {
     "--model": { value: true },
     "--user-model": { value: true },
     "--allow-real-tools": {},
+    "--allow-host-login": {},
     "--max-cost": { value: true },
     "--case": { value: true, repeat: true },
     "--tag": { value: true, repeat: true },
@@ -126,6 +128,7 @@ type Parsed = {
   strict: boolean;
   noWait: boolean;
   allowRealTools: boolean;
+  allowHostLogin: boolean;
   userModel?: string;
   projectRoot?: string;
   repeats?: number;
@@ -154,6 +157,7 @@ function parseArgs(command: string, rest: string[]): Parsed {
     strict: false,
     noWait: false,
     allowRealTools: false,
+    allowHostLogin: false,
     resort: false,
     stability: false,
     cases: [],
@@ -192,6 +196,9 @@ function parseArgs(command: string, rest: string[]): Parsed {
         break;
       case "--allow-real-tools":
         parsed.allowRealTools = true;
+        break;
+      case "--allow-host-login":
+        parsed.allowHostLogin = true;
         break;
       case "--user-model":
         parsed.userModel = value;
@@ -715,6 +722,7 @@ export async function runEvalCommand(
       ...(parsed.model !== undefined ? { model: parsed.model } : {}),
       ...(parsed.userModel !== undefined ? { user_model: parsed.userModel } : {}),
       ...(parsed.allowRealTools ? { allow_real_tools: true } : {}),
+      ...(parsed.allowHostLogin ? { allow_host_login: true } : {}),
       ...(parsed.maxCost !== undefined ? { max_cost_usd: parsed.maxCost } : {}),
       ...(parsed.cases.length > 0 ? { case_ids: parsed.cases } : {}),
       ...(parsed.tags.length > 0 ? { tags: parsed.tags } : {}),

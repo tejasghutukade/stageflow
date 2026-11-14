@@ -19,6 +19,7 @@ import {
   projectMcpDotColor,
   projectMcpSectionError,
   projectMcpStatusLabel,
+  projectMcpUsableByStagesLabel,
   type ProjectMcpOutcome,
   type ProjectMcpSession,
   type ProjectMcpSettingsState,
@@ -186,6 +187,7 @@ export function SettingsProjectMcpPanel({ api = projectMcpApi }: { api?: Project
             const last = index === state.servers.length - 1;
             const signedIn = isSignedIn(oauth[row.name]);
             const offerSignIn = canSignIn(row, oauth[row.name]);
+            const usable = projectMcpUsableByStagesLabel(row.usableByStages);
             return (
               <div key={row.name} className={last ? "" : "border-b border-b-[#ffffff12]"}>
               <div className="flex h-14 items-center gap-3 px-3.5">
@@ -195,6 +197,7 @@ export function SettingsProjectMcpPanel({ api = projectMcpApi }: { api?: Project
                   </span>
                   <span className="font-sans text-xs text-[var(--sf-text-3)]">
                     {row.transport} · {row.origin === "console" ? "added here" : ".mcp.json"}
+                    {usable ? ` · ${usable}` : ""}
                     {row.error ? ` · ${row.error}` : ""}
                   </span>
                 </span>

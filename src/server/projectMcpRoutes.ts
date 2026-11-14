@@ -22,6 +22,7 @@ import {
   mcpOAuthStatus,
   McpOAuthError,
   removeMcpOAuth,
+  revokeMcpOAuthGrant,
   startMcpOAuth,
 } from "../config/mcpOAuth.js";
 import {
@@ -270,7 +271,9 @@ async function handleRoutes(
   if (serverMatch && method === "DELETE") {
     const name = nameParam(serverMatch[1]);
     if (name === undefined) return true;
-    if (removeHostMcpServer(name)) {
+    if (Object.hasOwn(readHostMcpServers(), name)) {
+      await revokeMcpOAuthGrant(name);
+      removeHostMcpServer(name);
       json(res, 200, { name });
       return true;
     }

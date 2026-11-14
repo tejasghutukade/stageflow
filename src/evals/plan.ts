@@ -63,6 +63,8 @@ export type EvalOverrides = {
   approvals?: "deny" | "record_only";
   /** The per-run consent to `conversation.tools: real`; not part of the fingerprint. */
   allow_real_tools?: boolean;
+  /** The per-run consent to call a signed-in console MCP server; not part of the fingerprint. */
+  allow_host_login?: boolean;
 };
 
 export type BuildEvalPlanInput = {
@@ -521,6 +523,7 @@ export async function buildEvalPlan(input: BuildEvalPlanInput): Promise<BuildEva
     case_ids: overrides.case_ids ?? null,
     tags: overrides.tags ?? null,
     only_failed_from: overrides.only_failed_from ?? null,
+    ...(overrides.allow_host_login === true ? { allow_host_login: true as const } : {}),
   };
   const snapshot = buildSnapshot({
     evalId: loaded.id,
@@ -595,6 +598,7 @@ export async function buildEvalPlan(input: BuildEvalPlanInput): Promise<BuildEva
     concurrency,
     maxCostUsd,
     ...(modelOverride !== undefined ? { modelOverride } : {}),
+    ...(overrides.allow_host_login === true ? { hostLoginConfirmed: true } : {}),
     ...(file.budget !== undefined
       ? {
           budget: {
@@ -717,6 +721,7 @@ async function buildAgentResult(a: AgentResultInput): Promise<BuildEvalPlanResul
       user_model: overrides.user_model ?? null,
       tools: overrides.tools ?? null,
       approvals: overrides.approvals ?? null,
+      ...(overrides.allow_host_login === true ? { allow_host_login: true as const } : {}),
     },
     target: {
       agent_id: agentTarget.agentId,
@@ -809,6 +814,7 @@ async function buildAgentResult(a: AgentResultInput): Promise<BuildEvalPlanResul
     agent: { definitionHash: agentTarget.definitionHash, definition: plainDefinition },
     conversation,
     userModel,
+    ...(a.overrides.allow_host_login === true ? { hostLoginConfirmed: true } : {}),
   };
   return { ok: true, plan, snapshot, fingerprint, components, skippedCaseIds, findings: a.allFindings };
 }

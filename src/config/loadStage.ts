@@ -5,6 +5,7 @@ import type { CompletionContract } from "../types/completion.js";
 import {
   STAGE_GATE_KINDS,
   type StageConfig,
+  type StageMcpTools,
   type StageGateKind,
 } from "../types/stage.js";
 import { compilePayloadSchema, UnresolvedSchemaRefError } from "../envelope/payloadSchema.js";
@@ -97,70 +98,150 @@ function parseGateKinds(
   return loadSuccess(kinds);
 }
 
-export function parseStageMcp(
+function mcpIssue(label: string, message: string, stageId?: string): LoadOutcome<never> {
+  return loadFailure([
+    {
+      code: "stage.invalid_mcp",
+      message: `Invalid stage ${label}: ${message}`,
+      category: "stage",
+      stageId,
+    },
+  ]);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function takeServerName(
+  raw: string,
+  label: string,
+  stageId: string | undefined,
+  seen: Set<string>,
+): LoadOutcome<string> {
+  const name = raw.trim();
+  if (name === "") {
+    return mcpIssue(label, "mcp entries must be non-empty strings", stageId);
+  }
+  if (name === STAGEFLOW_MCP_SERVER_NAME) {
+    return mcpIssue(
+      label,
+      `mcp must not include reserved name "${STAGEFLOW_MCP_SERVER_NAME}"`,
+      stageId,
+    );
+  }
+  if (seen.has(name)) {
+    return mcpIssue(label, `mcp contains duplicate name "${name}"`, stageId);
+  }
+  seen.add(name);
+  return loadSuccess(name);
+}
+
+function parseToolList(
   raw: unknown,
+  server: string,
   label: string,
   stageId?: string,
-): LoadOutcome<string[] | undefined> {
-  if (raw === undefined) return loadSuccess(undefined);
+): LoadOutcome<"*" | string[]> {
   if (!Array.isArray(raw)) {
-    return loadFailure([
-      {
-        code: "stage.invalid_mcp",
-        message: `Invalid stage ${label}: mcp must be an array of server names`,
-        category: "stage",
-        stageId,
-      },
-    ]);
+    return mcpIssue(label, `mcp tool list for "${server}" must be an array of tool names`, stageId);
+  }
+  if (raw.length === 0) {
+    return mcpIssue(label, `mcp tool list for "${server}" must name at least one tool`, stageId);
   }
   const names: string[] = [];
   const seen = new Set<string>();
   for (const item of raw) {
     if (typeof item !== "string") {
-      return loadFailure([
-        {
-          code: "stage.invalid_mcp",
-          message: `Invalid stage ${label}: mcp entries must be strings`,
-          category: "stage",
-          stageId,
-        },
-      ]);
+      return mcpIssue(label, `mcp tool list for "${server}" entries must be strings`, stageId);
     }
     const name = item.trim();
     if (name === "") {
-      return loadFailure([
-        {
-          code: "stage.invalid_mcp",
-          message: `Invalid stage ${label}: mcp entries must be non-empty strings`,
-          category: "stage",
-          stageId,
-        },
-      ]);
-    }
-    if (name === STAGEFLOW_MCP_SERVER_NAME) {
-      return loadFailure([
-        {
-          code: "stage.invalid_mcp",
-          message: `Invalid stage ${label}: mcp must not include reserved name "${STAGEFLOW_MCP_SERVER_NAME}"`,
-          category: "stage",
-          stageId,
-        },
-      ]);
+      return mcpIssue(label, `mcp tool list for "${server}" entries must be non-empty strings`, stageId);
     }
     if (seen.has(name)) {
-      return loadFailure([
-        {
-          code: "stage.invalid_mcp",
-          message: `Invalid stage ${label}: mcp contains duplicate name "${name}"`,
-          category: "stage",
-          stageId,
-        },
-      ]);
+      return mcpIssue(
+        label,
+        `mcp tool list for "${server}" contains duplicate name "${name}"`,
+        stageId,
+      );
     }
     seen.add(name);
     names.push(name);
   }
+  if (names.includes("*") && names.length !== 1) {
+    return mcpIssue(
+      label,
+      `mcp tool list for "${server}" must be tool names or a single "*"`,
+      stageId,
+    );
+  }
+  if (names.length === 1 && names[0] === "*") return loadSuccess("*");
   return loadSuccess(names);
+}
+
+export type ParsedStageMcp = {
+  servers: string[];
+  tools?: StageMcpTools;
+};
+
+function parseStageMcpNames(
+  raw: unknown[],
+  label: string,
+  stageId?: string,
+): LoadOutcome<ParsedStageMcp> {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (typeof item !== "string") {
+      return mcpIssue(label, "mcp entries must be strings", stageId);
+    }
+    const name = takeServerName(item, label, stageId, seen);
+    if (!name.ok) return name;
+    names.push(name.value);
+  }
+  return loadSuccess({ servers: names });
+}
+
+function parseStageMcpMap(
+  raw: Record<string, unknown>,
+  label: string,
+  stageId?: string,
+): LoadOutcome<ParsedStageMcp> {
+  const servers: string[] = [];
+  const seen = new Set<string>();
+  const tools: Record<string, readonly string[]> = {};
+  let named = false;
+  for (const key of Object.keys(raw)) {
+    const server = takeServerName(key, label, stageId, seen);
+    if (!server.ok) return server;
+    const list = parseToolList(raw[key], server.value, label, stageId);
+    if (!list.ok) return list;
+    servers.push(server.value);
+    if (list.value === "*") {
+      tools[server.value] = ["*"];
+    } else {
+      named = true;
+      tools[server.value] = list.value;
+    }
+  }
+  if (!named) return loadSuccess({ servers });
+  return loadSuccess({ servers, tools });
+}
+
+export function parseStageMcp(
+  raw: unknown,
+  label: string,
+  stageId?: string,
+): LoadOutcome<ParsedStageMcp | undefined> {
+  if (raw === undefined) return loadSuccess(undefined);
+  if (Array.isArray(raw)) return parseStageMcpNames(raw, label, stageId);
+  if (isPlainObject(raw)) return parseStageMcpMap(raw, label, stageId);
+  return mcpIssue(
+    label,
+    "mcp must be a list of server names or a map of server names to tool names",
+    stageId,
+  );
 }
 
 function parseStageFields(
@@ -440,7 +521,8 @@ function parseStageFields(
   const mcpOutcome = parseStageMcp(raw.mcp, label, entryId);
   if (!mcpOutcome.ok) return mcpOutcome;
   if (mcpOutcome.value !== undefined) {
-    stage.mcp = mcpOutcome.value;
+    stage.mcp = mcpOutcome.value.servers;
+    if (mcpOutcome.value.tools !== undefined) stage.mcp_tools = mcpOutcome.value.tools;
   }
 
   if (raw.channels !== undefined) {

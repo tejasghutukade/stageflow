@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Host MCP `tools/list` annotations follow `TOOL_META.risk`.** Every tool gets `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` from its risk class (`read` / `write` / `destructive` / `external`), so `test_connection` is external/open-world, not hand-marked read-only. Listed input schemas omit `$schema`; tool descriptions no longer cite REST routes. See [Tool list shape](docs/mcp.md#tool-list-shape).
 
+## [0.61.0] - 2026-11-14
+
+### Added
+
+- **A pipeline stage can use a console MCP server you signed in to.** The Host calls that server. The stage worker does not receive the access token, the refresh token, or the OAuth file key. Settings shows whether a signed-in server is usable by stages. See [MCP servers — OAuth sign-in](docs/mcp-servers.md#oauth-sign-in).
+- **A stage can name the tools it may use.** `mcp: [server]` still means every tool of that server. A map names only those tools, and a list whose only entry is `"*"` means every tool of that server. See [YAML catalog — Stage MCP](docs/yaml-catalog.md#stage-mcp).
+
+### Changed
+
+- **A stage eval does not call a signed-in console server unless that run confirms it.** Pass `--allow-host-login` to `sf eval run`, or set `allow_host_login: true` on `run_eval`, `try_eval_case`, and `POST /api/evals/:id/runs`. This is separate from `allow_real_tools`. Stdio servers and HTTP servers that already have an API key still run without the flag.
+- **An expired sign-in is refreshed on the Host** when a stage uses the server. If that sign-in has no stored token endpoint, the stage gets `needs_auth` and the Host does not send the refresh token to a newly discovered endpoint.
+
+### Security
+
+- The console login is not given to a repository checkout or a workspace catalog. A Claude stage fails before the model with `oauth_backend_unsupported` when a signed-in server remains. A named tool list on a server the worker runs itself fails before the model with `mcp_tool_allowlist_unsupported`.
+
 ## [0.60.0] - 2026-11-13
 
 ### Changed

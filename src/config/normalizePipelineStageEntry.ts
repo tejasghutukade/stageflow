@@ -159,7 +159,8 @@ export function normalizePipelineStageEntries(
       `entry at index ${index} in ${declaringPath}`,
     );
     if (!mcpOutcome.ok) return mcpOutcome;
-    const mcp = mcpOutcome.value;
+    const mcp = mcpOutcome.value?.servers;
+    const mcpTools = mcpOutcome.value?.tools;
     const secretsOutcome = parseStageSecrets(
       raw.secrets,
       `entry at index ${index} in ${declaringPath}`,
@@ -460,7 +461,7 @@ export function normalizePipelineStageEntries(
       ...(routeFunction !== undefined ? { routeFunction } : {}),
       ...(entryFlag !== undefined ? { entry: entryFlag } : {}),
       ...(skill !== undefined ? { skill } : {}),
-      ...(mcp !== undefined ? { mcp } : {}),
+      ...(mcp !== undefined ? { mcp, mcp_tools: mcpTools } : {}),
       ...(secrets !== undefined ? { secrets } : {}),
       ...(requires !== undefined ? { requires } : {}),
       ...(browser !== undefined ? { browser } : {}),

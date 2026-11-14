@@ -16,8 +16,17 @@ export type ProjectMcpRow = {
   transport: "stdio" | "http";
   origin: "project" | "console";
   status: ProjectMcpRowStatus;
+  /** Copied from the list payload. Undefined when the server did not send it. */
+  usableByStages?: boolean;
   error?: string;
 };
+
+/** Label for the server-computed flag. Undefined means the payload did not include it. */
+export function projectMcpUsableByStagesLabel(usableByStages: boolean | undefined): string | null {
+  if (usableByStages === true) return "Usable by stages";
+  if (usableByStages === false) return "Not usable by stages";
+  return null;
+}
 
 /** One session owns the catalog, probe statuses, OAuth statuses, secrets and the in-progress sign-in/secret drafts. */
 export type ProjectMcpSettingsState = {
@@ -273,6 +282,7 @@ export function createProjectMcpSettingsSession(api: ProjectMcpApi = projectMcpA
           name: server.name,
           transport: server.transport,
           origin: server.origin,
+          usableByStages: server.usableByStages,
           status: "not-yet-probed",
         })),
         error: null,
@@ -314,6 +324,7 @@ export function createProjectMcpSettingsSession(api: ProjectMcpApi = projectMcpA
             name: server.name,
             transport: server.transport,
             origin: server.origin,
+            usableByStages: server.usableByStages,
             status: keep ? before.status : "not-yet-probed",
             ...(keep && before.error ? { error: before.error } : {}),
           };
@@ -388,8 +399,7 @@ export function createProjectMcpSettingsSession(api: ProjectMcpApi = projectMcpA
   const signedIn = async (name: string): Promise<ProjectMcpOutcome> => {
     if (state.signingIn !== name || !known(name)) return { ok: true, notice: null };
     set({ signingIn: null });
-    await refreshOauth([name]);
-    probeAffected([name]);
+    await refresh([name]);
     return { ok: true, notice: signedInNotice(name) };
   };
 
@@ -399,8 +409,7 @@ export function createProjectMcpSettingsSession(api: ProjectMcpApi = projectMcpA
     } catch (err) {
       return { ok: false, error: messageOf(err) };
     }
-    await refreshOauth([name]);
-    probeAffected([name]);
+    await refresh([name]);
     return { ok: true, notice: null };
   };
 

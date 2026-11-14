@@ -96,6 +96,8 @@ import type { ConversationBackend } from "../agents/sessions.js";
 import { bindHostPort, type BoundHostPort } from "./createHttpHost.js";
 import { acquireHostLock, installHostLockExitHook } from "./hostLock.js";
 
+process.env.PI_MCP_ADAPTER_DISABLE_AUTH_CACHE = "1";
+
 export const DEFAULT_GC_INTERVAL_MS = 60 * 60 * 1000;
 
 export type StageflowHostOptions = {
@@ -242,6 +244,7 @@ export function startPeriodicRunGc(
 export async function bootstrapStageflowHost(
   options: StageflowHostOptions,
 ): Promise<StageflowHostBootstrap> {
+  process.env.PI_MCP_ADAPTER_DISABLE_AUTH_CACHE = "1";
   const env = options.env ?? process.env;
   const invocationCwd = options.cwd ?? process.cwd();
   const ctx = await resolveStageflowContext(invocationCwd);
