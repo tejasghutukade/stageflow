@@ -144,6 +144,8 @@ export type TryOneInput = {
   case?: TryCaseInput;
   /** The per-run consent to `conversation.tools: real`. */
   allowRealTools?: boolean;
+  /** The per-run consent to call a signed-in console MCP server. */
+  allowHostLogin?: boolean;
 };
 
 export type TryGrade = {
@@ -984,6 +986,7 @@ export class EvalRunManager {
           repeats: 1,
           ...(input.caseId !== undefined ? { case_ids: [input.caseId] } : {}),
           ...(input.allowRealTools === true ? { allow_real_tools: true } : {}),
+          ...(input.allowHostLogin === true ? { allow_host_login: true } : {}),
         },
         evalRunId,
         engine: engineInfo,

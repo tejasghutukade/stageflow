@@ -615,6 +615,9 @@ async function handleTry(c: Ctx): Promise<void> {
   if (body.allow_real_tools !== undefined && typeof body.allow_real_tools !== "boolean") {
     throw bad(`"allow_real_tools" must be a boolean`);
   }
+  if (body.allow_host_login !== undefined && typeof body.allow_host_login !== "boolean") {
+    throw bad(`"allow_host_login" must be a boolean`);
+  }
   engineCheck(c);
   const tried = await c.evalRunManager.tryOne({
     projectRoot,
@@ -623,6 +626,7 @@ async function handleTry(c: Ctx): Promise<void> {
     ...(datasetCases !== undefined ? { datasetCases } : {}),
     ...(caseId !== undefined ? { caseId } : { case: tryCaseFrom(body.case) }),
     ...(body.allow_real_tools === true ? { allowRealTools: true } : {}),
+    ...(body.allow_host_login === true ? { allowHostLogin: true } : {}),
   });
   audit(c, "eval_try", "ok");
   c.json(c.res, 200, tryResultToWire(tried));
@@ -658,6 +662,10 @@ function startOverrides(body: Record<string, unknown>): EvalOverrides {
     if (typeof body.allow_real_tools !== "boolean") throw bad(`"allow_real_tools" must be a boolean`);
     if (body.allow_real_tools) overrides.allow_real_tools = true;
   }
+  if (body.allow_host_login !== undefined) {
+    if (typeof body.allow_host_login !== "boolean") throw bad(`"allow_host_login" must be a boolean`);
+    if (body.allow_host_login) overrides.allow_host_login = true;
+  }
   return overrides;
 }
 
@@ -678,6 +686,7 @@ function queryOverrides(url: URL): EvalOverrides {
     const value = url.searchParams.get(key);
     if (value !== null && value !== "") body[key] = value;
   }
+  if (url.searchParams.get("allow_host_login") === "true") body.allow_host_login = true;
   const caseIds = listParam(url, "case_ids");
   if (caseIds) body.case_ids = caseIds;
   const tags = listParam(url, "tags");

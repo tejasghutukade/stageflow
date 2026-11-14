@@ -242,6 +242,10 @@ Only **one eval run is active per Host**. A second start fails with `EVAL_RUN_AC
 
 A run needs the [engine](#the-engine) and a Host. `sf eval run` starts the shared global Host if nothing is listening.
 
+### Signed-in console MCP servers
+
+A stage eval skips a signed-in console MCP server (an HTTP server from the console catalog with no resolved `Authorization` header) unless that run records `allow_host_login`. Stdio servers and HTTP servers that resolve an `Authorization` header still run. Set the flag with `--allow-host-login` on `sf eval run`, or `allow_host_login: true` on `run_eval`, `try_eval_case`, and `POST /api/evals/:id/runs` (and on `POST /api/evals/try`). The stored run config records `overrides.allow_host_login: true`. The flag is per run. `allow_real_tools` is the separate consent that lets an agent eval act on the project.
+
 ### Cost control
 
 Every run has a cost limit (`max_cost_usd`, default 2) covering stage runs and judge calls. When spending reaches it, the run stops with status `budget_stopped`, the remaining results are marked `skipped_budget`, and the run does **not** pass. Completed results are kept and their statistics are still computed, labeled incomplete.

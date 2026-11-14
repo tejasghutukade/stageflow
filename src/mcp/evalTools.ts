@@ -217,6 +217,7 @@ const createDatasetSchema = z.union([
 const tryShared = {
   dataset_cases: datasetCasesField,
   allow_real_tools: z.boolean().optional().describe("Agent evals: consent to conversation.tools real; no effect on other policies"),
+  allow_host_login: z.boolean().optional().describe("Stage evals: consent to call a signed-in console MCP server on this try"),
   project_root: projectRootField,
 };
 
@@ -529,7 +530,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "run_eval",
-    "Run an eval: executes every case of the eval's dataset through its target (a stage, or an agent held as a conversation; repeats times each) and grades the results. This calls models and may cost real money (stage calls plus judge calls for rubric graders), bounded by max_cost_usd. Agent runs call the agent's model, a simulator model that plays the user (simulated cases) and the judge, and can cost much more than stage runs. Agent tools are read-only by default: write, shell and unlisted tools are stubbed and recorded, never executed. An eval with conversation.tools: real needs allow_real_tools true on top of allow_real_tools in the eval file, else it fails EVAL_REAL_TOOLS_NOT_CONFIRMED. Only one eval run is active per host; a second start fails EVAL_RUN_ACTIVE. With wait false (default) it returns { eval_run_id } immediately and the run continues in the background: poll get_eval_run. With wait true it blocks up to timeout_ms (default 600000, max 1800000) and returns the finished run detail, or { eval_run_id, status: \"timeout\" } if still running (the run keeps going; cancel_eval_run stops it). An invalid eval returns an error result with findings.",
+    "Run an eval: executes every case of the eval's dataset through its target (a stage, or an agent held as a conversation; repeats times each) and grades the results. This calls models and may cost real money (stage calls plus judge calls for rubric graders), bounded by max_cost_usd. Agent runs call the agent's model, a simulator model that plays the user (simulated cases) and the judge, and can cost much more than stage runs. Agent tools are read-only by default: write, shell and unlisted tools are stubbed and recorded, never executed. An eval with conversation.tools: real needs allow_real_tools true on top of allow_real_tools in the eval file, else it fails EVAL_REAL_TOOLS_NOT_CONFIRMED. A stage eval skips signed-in console MCP servers unless allow_host_login is true; stdio servers and HTTP servers with a resolved Authorization header still run. allow_host_login is the consent for that host path. allow_real_tools is the consent for an agent eval to act on the project. Only one eval run is active per host; a second start fails EVAL_RUN_ACTIVE. With wait false (default) it returns { eval_run_id } immediately and the run continues in the background: poll get_eval_run. With wait true it blocks up to timeout_ms (default 600000, max 1800000) and returns the finished run detail, or { eval_run_id, status: \"timeout\" } if still running (the run keeps going; cancel_eval_run stops it). An invalid eval returns an error result with findings.",
     z.object({
       eval_id: z.string(),
       repeats: z.number().int().min(EVAL_LIMITS.repeats.min).max(EVAL_LIMITS.repeats.max).optional().describe("Override executions per case"),
@@ -537,6 +538,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
       model: z.string().optional().describe("Override the stage or agent model"),
       user_model: z.string().optional().describe("Agent evals: override the model that plays the simulated user"),
       allow_real_tools: z.boolean().optional().describe("Agent evals: consent to conversation.tools real; no effect on other policies"),
+      allow_host_login: z.boolean().optional().describe("Stage evals: consent to call a signed-in console MCP server on this run"),
       tools: z.enum(["read_only", "mocked"]).optional().describe("Agent evals: run with a safer tool policy than the file (never riskier)"),
       approvals: z.enum(["deny", "record_only"]).optional().describe("Agent evals: run with a safer approval policy than the file (never riskier)"),
       max_cost_usd: z.number().positive().optional().describe("Override the cost cap in USD"),
@@ -556,6 +558,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
       if (input.tools !== undefined) overrides.tools = input.tools;
       if (input.approvals !== undefined) overrides.approvals = input.approvals;
       if (input.allow_real_tools === true) overrides.allow_real_tools = true;
+      if (input.allow_host_login === true) overrides.allow_host_login = true;
       if (input.repeats !== undefined) overrides.repeats = input.repeats;
       if (input.judge !== undefined) overrides.judge = input.judge;
       if (input.model !== undefined) overrides.model = input.model;
@@ -1043,15 +1046,16 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "try_eval_case",
-    "Run one case of an eval and return its grade. Pass exactly one of eval_id or definition, and exactly one of case_id or case. dataset_cases stand in for the dataset file. This calls the target model once and may cost real money, bounded by the eval's max_cost_usd; graders that need a judge call the judge too. Agent tools stay read-only unless the eval file sets conversation.tools real and allow_real_tools is true. Nothing is saved as an eval run, and no eval session is returned. Same as POST /api/evals/try.",
+    "Run one case of an eval and return its grade. Pass exactly one of eval_id or definition, and exactly one of case_id or case. dataset_cases stand in for the dataset file. This calls the target model once and may cost real money, bounded by the eval's max_cost_usd; graders that need a judge call the judge too. Agent tools stay read-only unless the eval file sets conversation.tools real and allow_real_tools is true. A stage try skips signed-in console MCP servers unless allow_host_login is true; stdio servers and HTTP servers with a resolved Authorization header still run. Nothing is saved as an eval run, and no eval session is returned. Same as POST /api/evals/try.",
     tryEvalCaseSchema,
     async (input) => {
-      const { eval_id, definition, case_id, case: caseInput, dataset_cases, allow_real_tools, project_root } =
+      const { eval_id, definition, case_id, case: caseInput, dataset_cases, allow_real_tools, allow_host_login, project_root } =
         input as typeof input & {
           eval_id?: string;
           definition?: Record<string, unknown>;
           case_id?: string;
           case?: Record<string, unknown>;
+          allow_host_login?: boolean;
         };
       const evalRunManager = manager();
       if ((eval_id === undefined) === (definition === undefined)) throw bad("Provide exactly one of eval_id or definition");
@@ -1079,6 +1083,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
         ...(datasetCases !== undefined ? { datasetCases } : {}),
         ...(case_id !== undefined ? { caseId: case_id } : { case: tryCaseFrom(caseInput) }),
         ...(allow_real_tools === true ? { allowRealTools: true } : {}),
+        ...(allow_host_login === true ? { allowHostLogin: true } : {}),
       });
       audit("eval_try", "ok");
       return tryResultToWire(tried);
