@@ -11,12 +11,9 @@ import { startUiServer } from "../src/server/http.js";
 import { TOOL_META } from "../src/toolkit/meta.js";
 import { FIXTURES_ROOT } from "./helpers/fixturePaths.js";
 
-// Measured 2026-11-14 after annotations, slim schemas and route-free descriptions: 99,925 bytes
-// (baseline before that work: 101,347). Lower this when the tool surface shrinks.
-const TOOLS_LIST_BUDGET_BYTES = 100_500;
+const TOOLS_LIST_MAX_BYTES = 100_500;
 
-// These tools still build their input from a zod union; the consolidation work replaces them.
-const ROOT_ANYOF_ALLOWLIST = new Set([
+const TOOLS_WITH_UNION_INPUT = new Set([
   "start_run",
   "run_stage",
   "create_dataset",
@@ -85,7 +82,7 @@ describe("MCP tools/list", () => {
   });
 
   it("stays within the byte budget", () => {
-    expect(Buffer.byteLength(payload)).toBeLessThanOrEqual(TOOLS_LIST_BUDGET_BYTES);
+    expect(Buffer.byteLength(payload)).toBeLessThanOrEqual(TOOLS_LIST_MAX_BYTES);
   });
 
   it("lists exactly the tools in the risk table", () => {
@@ -108,6 +105,6 @@ describe("MCP tools/list", () => {
 
   it("allows a root anyOf only on the known union tools", () => {
     const withRootAnyOf = tools.filter((tool) => "anyOf" in tool.inputSchema).map((tool) => tool.name);
-    expect(withRootAnyOf.filter((name) => !ROOT_ANYOF_ALLOWLIST.has(name))).toEqual([]);
+    expect(withRootAnyOf.filter((name) => !TOOLS_WITH_UNION_INPUT.has(name))).toEqual([]);
   });
 });

@@ -1,5 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/server";
-import type { ToolAnnotations } from "@modelcontextprotocol/server";
+import type { McpServer, ToolAnnotations } from "@modelcontextprotocol/server";
 import { TOOL_META, type ToolRisk } from "../toolkit/meta.js";
 
 const ANNOTATIONS: Record<ToolRisk, Required<Omit<ToolAnnotations, "title">>> = {
@@ -9,7 +8,6 @@ const ANNOTATIONS: Record<ToolRisk, Required<Omit<ToolAnnotations, "title">>> = 
   external: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
 };
 
-/** MCP annotations for a tool, derived only from its risk in TOOL_META. */
 export function toolAnnotations(name: string): ToolAnnotations {
   const meta = TOOL_META[name];
   if (!meta) throw new Error(`Tool metadata missing for: ${name}`);
@@ -29,10 +27,7 @@ function withoutSchemaKey(method: JsonSchemaMethod): JsonSchemaMethod {
   };
 }
 
-/**
- * Drop the `$schema` URL zod adds to every listed input schema. The schema
- * object stays a zod schema, so validation and the agent toolkit are unchanged.
- */
+// Overrides only this instance's JSON Schema hook, so zod validation and the agent toolkit still use the schema as written.
 function slimInputSchema<S>(schema: S): S {
   if (schema === undefined || schema === null || typeof schema !== "object") return schema;
   const holder = schema as unknown as { "~standard"?: StandardWithJson };
@@ -48,15 +43,10 @@ function slimInputSchema<S>(schema: S): S {
 
 type ToolConfig = { description?: string; inputSchema?: unknown; annotations?: ToolAnnotations } & Record<string, unknown>;
 
-/**
- * Wrap a server so every tool registration carries annotations from TOOL_META,
- * a listed input schema without `$schema`, and a description free of REST
- * route references (a model cannot call those routes).
- */
 export function withToolDefaults(server: McpServer): McpServer {
   const registerTool = (name: string, config: ToolConfig, handler: unknown) => {
     if (config.description?.includes("/api/")) {
-      throw new Error(`Tool ${name} description names a REST route; describe what the tool does instead`);
+      throw new Error(`Tool ${name} description names a REST route, which a model cannot call; describe what the tool does instead`);
     }
     return (server.registerTool as (n: string, c: ToolConfig, h: unknown) => unknown)(
       name,
