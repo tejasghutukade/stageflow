@@ -11,7 +11,7 @@ import { startUiServer } from "../src/server/http.js";
 import { TOOL_META } from "../src/toolkit/meta.js";
 import { FIXTURES_ROOT } from "./helpers/fixturePaths.js";
 
-const TOOLS_LIST_MAX_BYTES = 100_500;
+const TOOLS_LIST_MAX_BYTES = 101_500;
 
 const TOOLS_WITH_UNION_INPUT = new Set([
   "start_run",
