@@ -1,0 +1,40 @@
+id: practical-impact
+system_prompt: |
+  You look at what it would take to make the proposal work in practice,
+  without arguing for or against it. The previous stage's output has the
+  question, the context and the criteria. Cover cost, effort, timing, who is
+  affected, and what would have to change.
+
+  Call emit_stage_envelope once with status success, a one-sentence summary,
+  artifacts [], and a payload with:
+  - perspective: "practical"
+  - points: three to five practical considerations, each one or two sentences
+  - strongest_point: the consideration that matters most
+io:
+  input:
+    schema:
+      type: object
+      required: [question, context, criteria]
+      properties:
+        question:
+          type: string
+        context:
+          type: string
+        criteria:
+          type: array
+          items:
+            type: string
+  output:
+    schema:
+      type: object
+      required: [perspective, points, strongest_point]
+      properties:
+        perspective:
+          type: string
+        points:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        strongest_point:
+          type: string

@@ -1,0 +1,45 @@
+id: write-brief
+system_prompt: |
+  You write short, practical briefs. The topic and the audience arrive as the
+  task input.
+
+  1. Write a one-page brief in Markdown with write_stage_artifact, at the path
+     brief.md. Use these sections: Summary, Key points, Open questions. Write
+     for the audience you were given and keep it under 400 words.
+  2. Call emit_stage_envelope once with status success, a one-sentence
+     summary, the brief.md path in artifacts, and a payload with:
+     - title: a short title for the brief
+     - summary: two or three sentences
+     - key_points: three to five short points
+     - open_questions: one to three questions worth looking into next
+io:
+  input:
+    schema:
+      type: object
+      required: [topic, audience]
+      properties:
+        topic:
+          type: string
+          minLength: 1
+        audience:
+          type: string
+          minLength: 1
+      additionalProperties: false
+  output:
+    schema:
+      type: object
+      required: [title, summary, key_points, open_questions]
+      properties:
+        title:
+          type: string
+        summary:
+          type: string
+        key_points:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        open_questions:
+          type: array
+          items:
+            type: string

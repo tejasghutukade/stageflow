@@ -16,7 +16,9 @@ COPY ui ./ui
 COPY scripts ./scripts
 COPY skills ./skills
 COPY builtin-skills ./builtin-skills
-# The whole examples folder, as npm ships it: examples/stageflow.yaml seeds the six catalog examples.
+# Starters are copied into a new workspace once a provider is connected. From examples/ the image keeps
+# only the eval samples and the readiness triggers that docker-compose.yml registers.
+COPY starters ./starters
 COPY examples ./examples
 COPY README.md LICENSE ./
 RUN npm run build \
@@ -53,7 +55,8 @@ COPY --from=build --chown=stageflow:stageflow /src/dist ./dist
 COPY --from=build --chown=stageflow:stageflow /src/skills ./skills
 COPY --from=build --chown=stageflow:stageflow /src/builtin-skills ./builtin-skills
 COPY --from=build --chown=stageflow:stageflow /src/examples/triggers-readiness ./catalog/triggers-readiness
-COPY --from=build --chown=stageflow:stageflow /src/examples ./examples
+COPY --from=build --chown=stageflow:stageflow /src/examples/evals ./examples/evals
+COPY --from=build --chown=stageflow:stageflow /src/starters ./starters
 COPY --from=build --chown=stageflow:stageflow /src/README.md /src/LICENSE ./
 COPY --from=build /src/scripts/generate-toolchain-manifest.mjs ./scripts/generate-toolchain-manifest.mjs
 RUN node ./scripts/generate-toolchain-manifest.mjs /etc/stageflow/toolchain.json \

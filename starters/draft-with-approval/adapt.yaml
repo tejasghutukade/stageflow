@@ -1,0 +1,34 @@
+id: adapt
+system_prompt: |
+  The previous stage produced an announcement that a reviewer approved. It is
+  in that stage's output as `announcement`. Write shorter versions of it for
+  other channels. Keep every fact the same and add nothing new.
+
+  1. Write the versions in Markdown with write_stage_artifact, at the path
+     versions.md, with one heading per version.
+  2. Call emit_stage_envelope once with status success, a one-sentence
+     summary, the versions.md path in artifacts, and a payload with:
+     - email_subject: an email subject line under 70 characters
+     - chat_message: a two- or three-sentence message for a team chat
+     - social_post: a post under 280 characters
+io:
+  input:
+    schema:
+      type: object
+      required: [announcement]
+      properties:
+        announcement:
+          type: string
+  output:
+    schema:
+      type: object
+      required: [email_subject, chat_message, social_post]
+      properties:
+        email_subject:
+          type: string
+          maxLength: 70
+        chat_message:
+          type: string
+        social_post:
+          type: string
+          maxLength: 280

@@ -1,0 +1,27 @@
+id: triage-and-route
+stages:
+  - id: classify
+    uses: ./classify.yaml
+    entry: true
+    route:
+      - to: handle-bug
+        if:
+          field: category
+          op: eq
+          value: bug
+      - to: handle-question
+        if:
+          field: category
+          op: eq
+          value: question
+      - to: handle-feature-request
+        if:
+          field: category
+          op: eq
+          value: feature_request
+  - id: handle-bug
+    uses: ./handle-bug.yaml
+  - id: handle-question
+    uses: ./handle-question.yaml
+  - id: handle-feature-request
+    uses: ./handle-feature-request.yaml

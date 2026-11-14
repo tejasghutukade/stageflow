@@ -21,6 +21,7 @@ Every variable the Host and CLI read, in one place. Details live in the page eac
 | `STAGEFLOW_READ_TOKEN`, `_FILE` | Read-scoped bearer token |
 | `STAGEFLOW_SERVICE_PORT` | Port of the shared global service (tests only) |
 | `STAGEFLOW_NO_AUTOSTART` | Do not start the Host from CLI verbs (containers) |
+| `STAGEFLOW_NO_STARTERS` | `1`: never copy the [starter pipelines](quickstart.md#starter-pipelines) into a new workspace |
 | `STAGEFLOW_AUTOSTART_TIMEOUT_MS` | How long the CLI waits for an autostarted Host (default 10000) |
 | `STAGEFLOW_NO_OPEN` | Do not open a browser for `sf ui` |
 | `STAGEFLOW_REQUEST_TIMEOUT_MS` | HTTP request receive timeout (default 60000) |

@@ -1,0 +1,50 @@
+id: draft
+gate_kinds:
+  - artifact_backed
+verify:
+  - id: draft-approved
+    type: gate
+    kind: artifact_backed
+system_prompt: |
+  You write clear announcements and get them approved before you finish. The
+  subject, audience and key facts arrive as the task input.
+
+  1. Write the announcement in Markdown with write_stage_artifact, at the path
+     draft.md. Use every key fact, keep it under 250 words, and write for the
+     audience you were given. Do not invent facts.
+  2. Call ask_operator with kind artifact_backed and the draft.md path, asking
+     the reviewer to approve the draft or say what to change.
+  3. If the reviewer rejects it or asks for changes, revise draft.md and call
+     ask_operator again. Repeat until the reviewer approves.
+  4. Only after approval, call emit_stage_envelope once with status success, a
+     one-sentence summary, the draft.md path in artifacts, and a payload with:
+     - title: the announcement's title
+     - announcement: the full approved text, exactly as approved
+io:
+  input:
+    schema:
+      type: object
+      required: [subject, audience, key_facts]
+      properties:
+        subject:
+          type: string
+          minLength: 1
+        audience:
+          type: string
+          minLength: 1
+        key_facts:
+          type: array
+          minItems: 1
+          items:
+            type: string
+      additionalProperties: false
+  output:
+    schema:
+      type: object
+      required: [title, announcement]
+      properties:
+        title:
+          type: string
+        announcement:
+          type: string
+          minLength: 1

@@ -16,7 +16,6 @@ import type {
 } from "../agent/port.js";
 import {
   bindingKindForOrigin,
-  catalogOrSeededOrigin,
   decideWorkspaceConfigTrust,
   type ConfigOriginRecord,
 } from "../config/configOrigin.js";
@@ -35,7 +34,6 @@ import {
   type SkillOrigin,
 } from "../config/listSkills.js";
 import { loadHostConfig } from "../config/hostConfig.js";
-import { defaultSeededRoots } from "../config/seededCatalog.js";
 import { readFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { runSkillsDir } from "./runSkills.js";
@@ -158,10 +156,6 @@ function resolveTrustWorkspaceConfig(explicit?: string[]): string[] {
   } catch {
     return [];
   }
-}
-
-function seededRootPaths(): string[] {
-  return defaultSeededRoots().map((root) => root.path);
 }
 
 async function resolveStageSkillForRun(
@@ -316,7 +310,7 @@ async function resolveAttemptMcpServers(
     factoryCwd !== undefined &&
     (await mcpCatalogExists(factoryCwd, { scope: { kind: "validate" } }))
   ) {
-    return finish(factoryCwd, false, catalogOrSeededOrigin(factoryCwd, seededRootPaths()));
+    return finish(factoryCwd, false, "catalog");
   }
 
   const checkoutRoot = options.checkoutRoot;
@@ -327,7 +321,7 @@ async function resolveAttemptMcpServers(
   ) {
     const separateCheckout = factoryCwd === undefined || checkoutRoot !== factoryCwd;
     if (!separateCheckout) {
-      return finish(checkoutRoot, false, catalogOrSeededOrigin(checkoutRoot, seededRootPaths()));
+      return finish(checkoutRoot, false, "catalog");
     }
     return finish(checkoutRoot, true, "workspace");
   }
@@ -345,7 +339,7 @@ function verifyCommandOrigins(
   factoryCwd: string | undefined,
 ): ConfigOriginRecord[] {
   const completion = dag.nodes.find((node) => node.id === stageId)?.completion;
-  const origin = catalogOrSeededOrigin(factoryCwd, seededRootPaths());
+  const origin = "catalog" as const;
   const records: ConfigOriginRecord[] = [];
   for (const check of completion?.checks ?? []) {
     if (check.type !== "command") continue;
