@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.62.0] - 2026-11-14
+
+### Changed
+
+- **Host MCP `tools/list` annotations follow `TOOL_META.risk`.** Every tool gets `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` from its risk class (`read` / `write` / `destructive` / `external`), so `test_connection` is external/open-world, not hand-marked read-only. Listed input schemas omit `$schema`; tool descriptions no longer cite REST routes. See [Tool list shape](docs/mcp.md#tool-list-shape).
+
 ## [0.60.0] - 2026-11-13
 
 ### Changed
