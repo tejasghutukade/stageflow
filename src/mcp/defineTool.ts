@@ -27,9 +27,12 @@ function withoutSchemaKey(method: JsonSchemaMethod): JsonSchemaMethod {
   };
 }
 
+const slimmedSchemas = new WeakSet<object>();
+
 // Overrides only this instance's JSON Schema hook, so zod validation and the agent toolkit still use the schema as written.
 function slimInputSchema<S>(schema: S): S {
   if (schema === undefined || schema === null || typeof schema !== "object") return schema;
+  if (slimmedSchemas.has(schema as object)) return schema;
   const holder = schema as unknown as { "~standard"?: StandardWithJson };
   const standard = holder["~standard"];
   const json = standard?.jsonSchema;
@@ -38,6 +41,7 @@ function slimInputSchema<S>(schema: S): S {
     ...standard,
     jsonSchema: { input: withoutSchemaKey(json.input), output: withoutSchemaKey(json.output) },
   };
+  slimmedSchemas.add(schema as object);
   return schema;
 }
 

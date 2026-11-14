@@ -56,15 +56,45 @@ describe("withToolDefaults", () => {
     ).toThrow(/REST route/);
   });
 
-  it("lists the input schema without $schema but keeps its shape and validation", () => {
+  it("lists the input schema without $schema but keeps its shape and validation", async () => {
     const { server, calls } = capture();
     const schema = z.object({ runId: z.string() });
     server.registerTool("get_run", { description: "Poll a run.", inputSchema: schema }, async () => ({ content: [] }));
-    const listed = listedSchema(calls[0]!.config.inputSchema);
+    const registered = calls[0]!.config.inputSchema as {
+      "~standard": { validate: (v: unknown) => unknown; jsonSchema: { input: (p: { target: string }) => Record<string, unknown> } };
+      safeParse: (v: unknown) => { success: boolean };
+    };
+    const listed = listedSchema(registered);
     expect(listed).not.toHaveProperty("$schema");
     expect(listed).toMatchObject({ type: "object", properties: { runId: { type: "string" } } });
     expect(schema.safeParse({}).success).toBe(false);
     expect(schema.safeParse({ runId: "r1" }).success).toBe(true);
+    const reject = await registered["~standard"].validate({});
+    const accept = await registered["~standard"].validate({ runId: "r1" });
+    expect(reject).toMatchObject({ issues: expect.any(Array) });
+    expect(accept).toEqual({ value: { runId: "r1" } });
+  });
+
+  it("wraps the same schema only once across repeated registrations", async () => {
+    const { server, calls } = capture();
+    const schema = z.object({ runId: z.string() });
+    server.registerTool("get_run", { description: "Poll a run.", inputSchema: schema }, async () => ({ content: [] }));
+    server.registerTool("get_run", { description: "Poll a run.", inputSchema: schema }, async () => ({ content: [] }));
+    const first = calls[0]!.config.inputSchema as {
+      "~standard": { validate: (v: unknown) => unknown; jsonSchema: { input: (p: { target: string }) => Record<string, unknown> } };
+    };
+    const second = calls[1]!.config.inputSchema as {
+      "~standard": { validate: (v: unknown) => unknown; jsonSchema: { input: (p: { target: string }) => Record<string, unknown> } };
+    };
+    expect(second).toBe(first);
+    expect(second["~standard"].jsonSchema.input).toBe(first["~standard"].jsonSchema.input);
+    const listed = listedSchema(second);
+    expect(listed).not.toHaveProperty("$schema");
+    expect(listed).toMatchObject({ type: "object", properties: { runId: { type: "string" } } });
+    const reject = await second["~standard"].validate({});
+    const accept = await second["~standard"].validate({ runId: "r1" });
+    expect(reject).toMatchObject({ issues: expect.any(Array) });
+    expect(accept).toEqual({ value: { runId: "r1" } });
   });
 });
 

@@ -70,7 +70,7 @@ Omit `id` to let the Host choose one. Photon:
 
 `credential` may instead be the id of a credential that already exists. Success is `{ "id", "health" }`. `health` is `{ "state": "ok" | "failed", "checkedAt", "error"?: { "code", "retryable" } }`. The secret is not in the result.
 
-`test_connection` takes the same body as create, calls the provider, and writes nothing. The tool is annotated read-only. It still sends the secrets you pass and makes a live call. Confirm first. REST: `POST /api/connections/test`.
+`test_connection` takes the same body as create, calls the provider, and writes nothing. The tool is annotated external / open-world (not read-only). It still sends the secrets you pass and makes a live call. Confirm first. REST: `POST /api/connections/test`.
 
 ## Check
 

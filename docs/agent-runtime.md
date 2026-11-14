@@ -44,7 +44,7 @@ An agent can use any server defined in the project `.mcp.json` **or saved from t
 
 ### Stageflow tools
 
-An agent can be given Stageflow's own tools (the ones in [MCP tools](mcp.md#tools)), whole groups or one at a time. Each tool has a group and a risk (`read`, `write`, `destructive`, `external`).
+An agent can be given Stageflow's own tools (the ones in [MCP tools](mcp.md#tools)), whole groups or one at a time. Each tool has a group and a risk (`read`, `write`, `destructive`, `external`). Host MCP `tools/list` maps that same risk to wire annotations; see [Tool list shape](mcp.md#tool-list-shape).
 
 | Group | Tools | Notes |
 |-------|-------|-------|

@@ -29,6 +29,8 @@ SIGTERM and SIGINT drain in-flight work for `STAGEFLOW_SHUTDOWN_GRACE_MS` millis
 
 MCP is Streamable HTTP at `/mcp` only. There is no stdio server. Sessions are on by default. `--mcp-stateless` or `STAGEFLOW_MCP_STATELESS=1` turns them off for a client that cannot send session headers. Leave sessions on for Cursor, Claude Code, Codex, and OpenCode.
 
+`tools/list` carries safety annotations from tool risk and omits `/api/` from tool descriptions. HTTP parity for the same operations is in [docs/mcp.md](../../../docs/mcp.md), not in the wire text.
+
 Which CLI verbs start a Host, and the autostart error `reason` values, are in `control-surface.md`.
 
 ## Port and bind

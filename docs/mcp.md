@@ -121,7 +121,7 @@ Both use the same **global durable-root** run store (`$STAGEFLOW_HOME`, default 
 
 MCP tools browse pipelines/tasks under those catalog roots and persist runs in the global durable root — not the Host process boot cwd.
 
-Implementation: `src/mcp/tools.ts`, `src/mcp/resources.ts`, `src/mcp/server.ts`.
+Implementation: `src/mcp/server.ts`, `src/mcp/tools.ts`, `src/mcp/resources.ts`, and domain `*Tools.ts` modules. Every Host tool registers through `withToolDefaults` (`defineTool.ts`): annotations come from `TOOL_META` risk; `tools/list` input schemas omit `$schema`; descriptions must not name REST routes (registration throws if a description contains `/api/`). Run polling, artifacts, checkout, and tail helpers live in `src/runread/` (also used by HTTP, CLI, A2A, and evals).
 
 > **Breaking change (pipeline-owned catalog):** `list_pipelines` returns manifest filesystem path listings (objects with `path`, `id`, …), not bare pipeline ids. `start_run` requires a `pipeline` path and exactly one of `task_path` or inline `task`. Update MCP clients that passed ids like `"hello"`.
 
@@ -189,6 +189,12 @@ There is **no** mandatory `boot` catalog root from Host cwd. Cold Host with an e
 `STAGEFLOW_OPERATOR_CWD` (and the operator skills catalog) is the Host's skill-resolution checkout — set before the service first starts. It is **not** the same as catalog membership or MCP `project_root`. Pipelines and tasks list under **seeded ∪ registered** roots (`stageflow.yaml` at each root). Skills resolve under the operator cwd; listing and `start_run` paths resolve under the selected catalog `project_root`.
 
 ## Tools
+
+### Tool list shape (MCP clients)
+
+`tools/list` annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) come from `TOOL_META.risk` (`read` / `write` / `destructive` / `external`). External tools (for example `test_connection`, `probe_project_mcp`) set `openWorldHint: true` and are not read-only.
+
+Listed `inputSchema` values have no `$schema` key; `tools/call` validation is unchanged. Tool descriptions say what the tool does; they do not cite `/api/*`. REST and CLI parity stay on this page (and in [function-api](function-api.md) / [agent-api](agent-api.md)), not in the wire descriptions. Size and shape are guarded by `tests/mcp.toolsList.test.ts`.
 
 ### Agent tools {#agent-tools}
 
@@ -299,15 +305,19 @@ Edit pipelines and tasks straight on disk, with the Workshop's builders and vali
 
 ### `update_trigger`
 
-Replace a trigger's definition. Same validation and write path as `PUT /api/triggers/:id`; the id cannot change.
+Replace a trigger's definition in full; the id cannot change.
 
-**Input:** `{ id, project_root?, pipeline, task?, kind: "manual" | "schedule" | "event", schedule?: { cron, timezone? }, event?: { source, match?, config? }, enabled? }`. It is a full replacement, so omit `task` only for a dynamic-mode trigger. **Output:** the trigger, same shape as `list_triggers`. **Errors:** `{ "error", "status" }` with `isError: true` (the same statuses as `PUT /api/triggers/:id`).
+**REST:** `PUT /api/triggers/:id` (same validation and write path).
+
+**Input:** `{ id, project_root?, pipeline, task?, kind: "manual" | "schedule" | "event", schedule?: { cron, timezone? }, event?: { source, match?, config? }, enabled? }`. It is a full replacement, so omit `task` only for a dynamic-mode trigger. **Output:** the trigger, same shape as `list_triggers`. **Errors:** `{ "error", "status" }` with `isError: true` (the same statuses as the REST route).
 
 ### `set_trigger_enabled`
 
-Enable or disable a trigger. Same write path as `PATCH /api/triggers/:id`.
+Enable or disable a trigger.
 
-**Input:** `{ id, enabled, project_root? }`. **Output:** the trigger. **Errors:** `{ "error", "status" }`, the same statuses as `PATCH /api/triggers/:id`.
+**REST:** `PATCH /api/triggers/:id` (same write path).
+
+**Input:** `{ id, enabled, project_root? }`. **Output:** the trigger. **Errors:** `{ "error", "status" }`, the same statuses as the REST route.
 
 ### `get_started`
 
@@ -379,7 +389,9 @@ List manifest-declared task paths across every catalog root this Host knows (reg
 
 ### `list_models`
 
-List model ids from the providers connected on this host plus ids pipelines already use, from the same source as `GET /api/models` (see [Providers — Models](providers.md#models)). Optional `project_root` filter narrows the pipeline-used ids; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors`.
+List model ids from the providers connected on this host plus ids pipelines already use (see [Providers — Models](providers.md#models)). Optional `project_root` filter narrows the pipeline-used ids; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors`.
+
+**REST:** `GET /api/models` (same source).
 
 **Input:** `{ "project_root": "string (optional)" }`
 
@@ -416,7 +428,9 @@ List skills with `name`, `description`, and `origin` (`run` | `checkout` | `host
 
 ### `list_project_mcp`
 
-List the project `.mcp.json` servers and the servers saved from the console as names and coarse transport only (same helper as `GET /api/project-mcp`). List never interpolates, spawns, or returns env, headers, args, command, or URLs.
+List the project `.mcp.json` servers and the servers saved from the console as names and coarse transport only. List never interpolates, spawns, or returns env, headers, args, command, or URLs.
+
+**REST:** `GET /api/project-mcp` (same helper).
 
 **Input:** `{}`
 
@@ -461,7 +475,9 @@ These servers are saved in `$STAGEFLOW_HOME/mcp/.mcp.json` and merged over the p
 
 ### `probe_project_mcp`
 
-Probe one named server (from the project `.mcp.json` or saved from the console) with isolated connect-and-exit (same helper as `POST /api/project-mcp/:name/probe`). Aborting the MCP request maps to helper `cancelled`, not `wait_run` `aborted`. Probe does not attach servers to a stage.
+Probe one named server (from the project `.mcp.json` or saved from the console) with isolated connect-and-exit. Aborting the MCP request maps to helper `cancelled`, not `wait_run` `aborted`. Probe does not attach servers to a stage. Annotations mark this tool `external` (outbound connect), not read-only.
+
+**REST:** `POST /api/project-mcp/:name/probe` (same helper).
 
 **Input:** `{ "name": "github" }`
 
@@ -471,7 +487,9 @@ Probe one named server (from the project `.mcp.json` or saved from the console) 
 
 ### `list_triggers`
 
-List catalog-declared triggers (same source as `GET /api/triggers`): manifest fields plus store-recorded `last_fired_at` / `last_run_id` / `next_run_at` when a trigger has fired before.
+List catalog-declared triggers: manifest fields plus store-recorded `last_fired_at` / `last_run_id` / `next_run_at` when a trigger has fired before.
+
+**REST:** `GET /api/triggers` (same source).
 
 **Input:** `{}`
 
@@ -496,7 +514,9 @@ Returns `{ "error": "No Stageflow catalog found", "status": 404 }` when no catal
 
 ### `get_trigger`
 
-Look up one catalog trigger by id (same source as `GET /api/triggers/:id`).
+Look up one catalog trigger by id.
+
+**REST:** `GET /api/triggers/:id` (same source).
 
 **Input:** `{ "id": "manual-hello-world" }`
 
@@ -504,7 +524,9 @@ Look up one catalog trigger by id (same source as `GET /api/triggers/:id`).
 
 ### `fire_trigger`
 
-Fire a catalog trigger by id: resolves its `pipeline` ref (and, in catalog mode, its `task` ref) and starts a run through the same `RunManager.startRun` path as `start_run` (same as `POST /api/triggers/:id/fire`), then records the fire on the trigger's store row.
+Fire a catalog trigger by id: resolves its `pipeline` ref (and, in catalog mode, its `task` ref) and starts a run through the same `RunManager.startRun` path as `start_run`, then records the fire on the trigger's store row.
+
+**REST:** `POST /api/triggers/:id/fire`.
 
 **Input:** `{ "id": "manual-hello-world", "task"?: TaskFile }`. `task` is a structured inline task (`{ id, goal, context?, constraints?, checkout?, repository?, ref?, run_branch_template?, git_identity?, input? }`, matching `TaskFile`) — required to fire a dynamic-mode trigger (no catalog `task` on its `*.trigger.yaml`) and rejected for a catalog-mode trigger (`task` set).
 
@@ -523,7 +545,9 @@ Both come back as `{ "error": "…", "code": "trigger.task_override_not_allowed"
 
 ### `create_trigger`
 
-Create a new `*.trigger.yaml` in the catalog: same validation/write path as `POST /api/triggers` (`src/config/createTrigger.ts`), called in-process rather than over HTTP. Validates `id` format/uniqueness, that `pipeline` (and `task`, when supplied) resolve to real catalog ids, and kind-specific shape (`schedule.cron` must parse via `croner`; `event.source` is required), writes `<directory>/<id>.trigger.yaml`, then re-loads it to confirm it round-trips before returning.
+Create a new `*.trigger.yaml` in the catalog via `src/config/createTrigger.ts` (in-process). Validates `id` format/uniqueness, that `pipeline` (and `task`, when supplied) resolve to real catalog ids, and kind-specific shape (`schedule.cron` must parse via `croner`; `event.source` is required), writes `<directory>/<id>.trigger.yaml`, then re-loads it to confirm it round-trips before returning.
+
+**REST:** `POST /api/triggers` (same validation/write path).
 
 **Input:** `{ project_root?, directory, id, pipeline, task?, kind: "manual" | "schedule" | "event", schedule?: { cron, timezone? }, event?: { source, match?, config? }, enabled? }` (`enabled` defaults to `true`). `project_root` selects the catalog root to write into, same as `start_run`; required when multiple writable roots are configured. `event.config` is passed through opaquely — it's how an `event`-kind trigger carries adapter-specific settings (the GitHub poller's `repo`/`secretRef`, the webhook adapter's `secretRef`/`header`/`scheme`, the email adapter's `host`/`port`/`user`/`secretRef` — see [YAML catalog — Triggers](yaml-catalog.md#triggers-trigger-yaml)); this tool doesn't validate its contents beyond requiring an object.
 
@@ -579,7 +603,9 @@ Lightweight count and identity of waiting stages — no `pending_prompt`, `waiti
 
 ### `list_providers`
 
-List login-capable model providers with per-row auth readiness and a Pi-home detect summary (same helpers as HTTP `GET /api/providers`, `GET /api/providers/:id/auth`, and `GET /api/providers/detect`). Read-only: it does not log in, log out, or start OAuth.
+List login-capable model providers with per-row auth readiness and a Pi-home detect summary. Read-only: it does not log in, log out, or start OAuth.
+
+**REST:** `GET /api/providers`, `GET /api/providers/:id/auth`, and `GET /api/providers/detect` (same helpers).
 
 **Input:** `{}`
 
@@ -614,7 +640,9 @@ Env-only providers are omitted (same membership as `GET /api/providers`). An unc
 
 ### `answer_gate`
 
-Deliver an operator answer for a waiting stage (same semantics as `POST /api/runs/:id/stages/:stageId/answer`).
+Deliver an operator answer for a waiting stage.
+
+**REST:** `POST /api/runs/:id/stages/:stageId/answer` (same semantics).
 
 **Input:**
 
@@ -638,7 +666,9 @@ Deliver an operator answer for a waiting stage (same semantics as `POST /api/run
 
 ### `decide_feedback_loop` {#decide_feedback_loop}
 
-Resolve a feedback-loop `wait_for_human` decision (same semantics as `POST /api/runs/:runId/stages/:stageId/feedback-decision` and CLI `sf runs feedback-decide`).
+Resolve a feedback-loop `wait_for_human` decision.
+
+**REST:** `POST /api/runs/:runId/stages/:stageId/feedback-decision`. **CLI:** `sf runs feedback-decide`.
 
 **Input:**
 
@@ -898,7 +928,9 @@ Returns `404`-style error JSON when the run is not found.
 
 ### `export_run`
 
-Export a single run as the `projectRun` projection plus `run_manifest`. Works for running, cancelled, and terminal runs. Prefer this over CLI `sf export-run` when the Host is reachable. Same payload as `GET /api/runs/<id>/export` (read scope).
+Export a single run as the `projectRun` projection plus `run_manifest`. Works for running, cancelled, and terminal runs. Prefer this over CLI `sf export-run` when the Host is reachable.
+
+**REST:** `GET /api/runs/<id>/export` (read scope; same payload).
 
 **Input:** `{ "runId": "…" }`
 
@@ -1107,7 +1139,9 @@ Stage objects also include optional `clone_cap` and `clone_mode` on a Clone Chai
 
 ### `retry_stage`
 
-Retry a **failed** stage (same as HTTP `POST .../retry`).
+Retry a **failed** stage.
+
+**REST:** `POST .../retry`.
 
 **Input:** `{ "runId", "stageId" }`
 
@@ -1117,7 +1151,9 @@ Waiting stages are not retryable (`409`, often `code: "hitl_not_retriable"`) —
 
 ### `resume_stage`
 
-Resume an **interrupted** stage or a stage that **timed out**, continuing the same attempt/session (same as HTTP `POST .../resume`). Does not start a new attempt — use `retry_stage` to start over.
+Resume an **interrupted** stage or a stage that **timed out**, continuing the same attempt/session. Does not start a new attempt — use `retry_stage` to start over.
+
+**REST:** `POST .../resume`.
 
 **Input:** `{ "runId", "stageId" }`
 
@@ -1241,7 +1277,7 @@ There is no MCP `exec`, web terminal, or shell tool — `docker exec` is the sup
 - `run_stage` access is unrestricted for any authenticated caller of this host (no publish/allowlist step); it has no `rerun` support (no stored `pipeline_path`, the same constraint an inline `start_run` pipeline has)
 - REST `POST /api/runs` is path-pipeline-only; inline pipelines are MCP-only (see `start_run` REST asymmetry)
 - No catalog listing resource in v1 (use `list_pipelines` / `list_tasks` / `list_models`)
-- No provider login/logout/OAuth, settings-write, or Stage MCP attach MCP tools (`list_providers`, `list_models`, `list_project_mcp`, and `probe_project_mcp` are read-only inspect). Catalog writes are `create_task_file`, `update_task_file`, `import_task_file`, `create_stage_file`, `write_catalog_file`, and `validate_catalog_draft`, plus the pipeline package tools. See [CLI-only capabilities](#cli-only-capabilities-decision-table)
+- No provider login/logout/OAuth, settings-write, or Stage MCP attach MCP tools (`list_providers`, `list_models`, and `list_project_mcp` are read-only catalog inspect; `probe_project_mcp` connects outbound and carries `external` annotations). Catalog writes are `create_task_file`, `update_task_file`, `import_task_file`, `create_stage_file`, `write_catalog_file`, and `validate_catalog_draft`, plus the pipeline package tools. See [CLI-only capabilities](#cli-only-capabilities-decision-table)
 - No MCP tool for debug-bundle / `sf debug-run` (use HTTP `GET /api/runs/<id>/debug-bundle` or CLI)
 - Default `get_run` / run resource read stay lean (no stage event streams or verification evidence) and include `total_cost_usd` plus per-stage `cost_usd` / `definition_id` when the store has them; use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detail
 - Tools return JSON text content blocks, except `read_artifact`, which may return an MCP image content block for known image extensions

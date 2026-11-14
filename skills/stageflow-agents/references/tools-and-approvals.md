@@ -67,6 +67,8 @@ A skill can carry its own tools. Treat a skill that writes, sends, or runs comma
 
 ## Stageflow tools
 
+Host MCP `tools/list` annotations come from `TOOL_META.risk`. Agent grants still use `tools.stageflow.groups` / `tools.stageflow.tools` and `ask_first`; the annotations do not replace those grants.
+
 `tools.stageflow.groups` grants a group. `tools.stageflow.tools` adds single tools. Unknown group: `agent.stageflow_group_unknown`. Unknown tool: `agent.stageflow_tool_unknown`.
 
 These decide things a person must decide. Granting them is `agent.stageflow_operator_only`:

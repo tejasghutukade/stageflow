@@ -24,7 +24,8 @@ Stageflow is a local-first runtime for configurable multi-stage agent workflows.
 | Agent service | Agent definitions, revisions, sessions, turns, approvals, channels and schedules; one turn-lifecycle module owns every transition | `src/agents/` |
 | MCP resolver | Merges the project `.mcp.json` with servers and secrets saved from the console; fills `${VAR}` by caller scope (stage, agent, probe, validate) | `src/config/resolveStageMcpServers.ts`, `src/config/mcpHostCatalog.ts` |
 | Persistence | Store run metadata, DAG snapshots, attempts, events, envelopes, artifacts, and projections | `src/runstore/` |
-| Operator surfaces | Drive and inspect the same runtime through CLI, browser console, or MCP | `src/cli/`, `src/server/`, `src/mcp/`, `ui/` |
+| Run inspection | Poll runs, artifacts, waiting gates, tail logs, and checkout views shared by MCP, HTTP, CLI, and A2A | `src/runread/` |
+| Operator surfaces | Drive and inspect the same runtime through CLI, browser console, or MCP | `src/cli/`, `src/server/`, `src/mcp/`, `src/runread/`, `ui/` |
 
 ## Execution flow
 

@@ -190,5 +190,5 @@ Each has a reference with the exact calls. Read it before acting.
 - `wait_run` / `sf runs wait` do not wake on `cancelled` runs. After a timeout, read top-level `status` from `get_run` or `sf runs show --json`. `run.status` exists only on the wait document.
 - `sf runs gc` executes by default; the MCP `gc_runs` is a dry run unless `execute: true`. Use `--dry-run` first on the CLI.
 - The MCP `rerun` description says "completed or failed", but the Host does not check the status. Do not rerun a run that is still active.
-- `test_connection` is marked read-only but sends the secrets you pass to the provider and makes a live call.
+- `test_connection` is annotated external / open-world (not read-only). It still sends the secrets you pass to the provider and makes a live call; confirm first.
 - The short `sf --help` header is a partial index. Trust `sf <command> --help`.
