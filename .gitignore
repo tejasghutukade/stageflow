@@ -15,6 +15,7 @@ coverage/
 PLAN.md
 .claude/
 .agents/
+skills-lock.json
 .tmp_gallery_chunks/
 
 # Local operator YAML (not part of the package; keep on disk for manual runs)
