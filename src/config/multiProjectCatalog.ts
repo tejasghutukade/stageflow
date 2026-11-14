@@ -31,7 +31,7 @@ export type MultiProjectListResult<T> = {
 };
 
 export const EMPTY_CATALOG_LIST_TIP =
-  "No catalog entries listed. Register a project root (POST /api/projects or local sf run / ensure), ensure stageflow.yaml exists at that root, then retry list_pipelines / list_tasks. Packaged examples use project_root \"examples\" when present. Git is not required for discovery.";
+  "No catalog entries listed. Register a project root (POST /api/projects or local sf run / ensure), ensure stageflow.yaml exists at that root, then retry list_pipelines / list_tasks. The workspace catalog uses project_root \"workspace\". Git is not required for discovery.";
 
 function listTip(
   itemsLength: number,

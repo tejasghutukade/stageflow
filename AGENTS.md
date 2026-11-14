@@ -21,7 +21,8 @@ Stageflow is a runtime for **configurable multi-stage agent workflows**, with a 
 | `src/` | CLI, runtime, config loader, MCP, HTTP server |
 | `ui/` | Operator console (Vite + React workspace) |
 | `tests/` | Vitest suite; **`tests/fixtures/`** is canonical YAML |
-| `examples/` | Runnable walkthroughs with READMEs |
+| `examples/` | Contributor walkthroughs with READMEs; not shipped to users (only `examples/evals/` samples are packaged) |
+| `starters/` | The starter pipelines a new install gets, copied into `$STAGEFLOW_HOME/workspace/starters/` once a provider is connected (`src/project/starters.ts`). Pipelines omit `model`; the copy fills it in. Keep them small, provider-neutral and passing `sf validate --strict` (`tests/project.starters.test.ts`) |
 | `docs/` | Public reference (YAML, CLI, CI, MCP, etc.) |
 | `skills/` | Harness Agent Skills suite — router, shared MCP-vs-CLI reference, job skills |
 | `examples/evals/` | Sample evals: a stage sample (pipeline, dataset, eval, task) and an agent sample (`support-sample.*`: agent, dataset, eval), installed by `POST /api/evals/sample` (`kind` stage or agent) |

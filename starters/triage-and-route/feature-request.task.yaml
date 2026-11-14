@@ -1,0 +1,7 @@
+id: triage-feature-request
+goal: Sort the incoming request and handle it
+input:
+  sender: Aiko
+  message: |
+    It would be great if I could schedule a report to be emailed to my team
+    every Monday morning. Right now I export it by hand each week.

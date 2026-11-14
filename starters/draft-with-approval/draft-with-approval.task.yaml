@@ -1,0 +1,10 @@
+id: draft-with-approval
+goal: Draft an announcement, get it approved, then write shorter versions of it
+input:
+  subject: Our support team now answers on weekends
+  audience: Existing customers
+  key_facts:
+    - Starting next month, support is open Saturday and Sunday, 9:00 to 17:00
+    - Weekend support covers chat and email
+    - Phone support stays weekdays only
+    - Nothing changes for customers on the current plan

@@ -1,0 +1,9 @@
+id: draft-with-approval
+stages:
+  - id: draft
+    uses: ./draft.yaml
+    entry: true
+    route:
+      - to: adapt
+  - id: adapt
+    uses: ./adapt.yaml

@@ -4,6 +4,9 @@ import { globalStageflowHome } from "./globalHome.js";
 
 export const WORKSPACE_CATALOG_ID = "workspace";
 
+/** Written into a workspace created by this install; starters are copied once, then it is removed. */
+export const STARTERS_PENDING_FILE = ".starters-pending";
+
 export type WorkspaceProvisionResult = {
   path: string;
   ok: boolean;
@@ -84,6 +87,8 @@ export function ensureWorkspaceCatalog(home?: string): WorkspaceProvisionResult 
       accessSync(manifestPath, constants.F_OK);
     } catch {
       writeFileSync(manifestPath, workspaceManifestYaml(), "utf8");
+      // A new workspace gets the starters once a provider is connected (see starters.ts).
+      writeFileSync(path.join(wsPath, STARTERS_PENDING_FILE), "", "utf8");
     }
     const result: WorkspaceProvisionResult = { path: wsPath, ok: true };
     lastProvisionResult = result;

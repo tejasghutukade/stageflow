@@ -92,6 +92,30 @@ const CORPUS: CorpusEntry[] = [
     topics: ["mcp", "tools", "stageflow", "server"],
   },
   {
+    path: "starters/topic-brief/README.md",
+    kind: "example",
+    title: "topic-brief (starter)",
+    topics: ["starter", "hello", "linear", "task.input", "io"],
+  },
+  {
+    path: "starters/draft-with-approval/README.md",
+    kind: "example",
+    title: "draft-with-approval (starter)",
+    topics: ["starter", "approval", "hitl", "gate", "artifact_backed", "verify"],
+  },
+  {
+    path: "starters/parallel-research/README.md",
+    kind: "example",
+    title: "parallel-research (starter)",
+    topics: ["starter", "parallel", "fan-out", "fan-in", "join"],
+  },
+  {
+    path: "starters/triage-and-route/README.md",
+    kind: "example",
+    title: "triage-and-route (starter)",
+    topics: ["starter", "route", "if", "branch", "triage"],
+  },
+  {
     path: "examples/README.md",
     kind: "example",
     title: "Examples index",

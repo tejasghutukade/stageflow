@@ -178,7 +178,7 @@ Call `get_started`. The result includes the Host version. If the tool is missing
 
 The Host only lists catalogs it knows. `sf ui` registers the project it was started in. `sf run` from a checkout registers that project over `POST /api/projects`, which is allowed only from trusted loopback. A remote MCP client cannot register an arbitrary path (`ensure_project_not_allowed`).
 
-On MCP, pass catalog-relative paths (`pipelines/hello.pipeline.yaml`). An absolute path from a network caller returns `absolute_path_not_allowed`. `project_root` is the registered id, not a free-form path. The seeded examples catalog uses `project_root` `examples` when that catalog is present.
+On MCP, pass catalog-relative paths (`pipelines/hello.pipeline.yaml`). An absolute path from a network caller returns `absolute_path_not_allowed`. `project_root` is the registered id, not a free-form path. The workspace catalog uses `project_root` `workspace`; on a new install it holds the starter pipelines under `starters/` once a provider is connected.
 
 `STAGEFLOW_ENSURE_PROJECT_ROOTS` is a comma-separated list of roots the Host should register at boot (the compose file uses it for catalogs baked into the image). `STAGEFLOW_OPERATOR_CWD` is the directory for operator skills. It is not `project_root`.
 

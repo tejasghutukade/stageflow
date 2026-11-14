@@ -29,11 +29,10 @@ import {
   manifestForWrite,
   resolveWriteDir,
 } from "../config/evalWriteRoots.js";
-import { installEvalSample, EVAL_SAMPLE_FILES, type EvalSampleAgents } from "../config/installEvalSample.js";
+import { installEvalSample, EVAL_SAMPLE_FILES, resolveEvalSampleDir, type EvalSampleAgents } from "../config/installEvalSample.js";
 import { loadDatasetFile, parseDatasetText } from "../config/loadDataset.js";
 import { loadEvalOutcome, resolveConversation, resolveEvalPaths, type LoadedEval } from "../config/loadEval.js";
 import { resolveEvalTarget } from "../config/resolveEvalTarget.js";
-import { resolveSeededExamplesPath } from "../config/seededCatalog.js";
 import {
   applyCaseOps,
   appendOrReplaceCases,
@@ -1405,10 +1404,7 @@ async function handleDatasetPreview(c: Ctx): Promise<void> {
 }
 
 async function sampleCases(c: Ctx): Promise<DatasetCase[]> {
-  const dir = c.sampleSourceDir ?? (() => {
-    const examples = resolveSeededExamplesPath();
-    return examples === undefined ? undefined : path.join(examples, "evals");
-  })();
+  const dir = c.sampleSourceDir ?? resolveEvalSampleDir(undefined, EVAL_SAMPLE_FILES.dataset);
   if (dir === undefined) throw new EvalsWriteError("SAMPLE_SOURCE_MISSING", "The packaged sample files were not found");
   let text: string;
   try {

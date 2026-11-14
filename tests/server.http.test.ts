@@ -430,7 +430,6 @@ describe("localhost HTTP API", () => {
         const models = await jsonFetch(`${base}/api/models`);
         expect(models.status).toBe(200);
         expect(models.body.models).toContain("cursor/auto");
-        expect(models.body.models).toContain("anthropic/claude-haiku-4-5");
       } finally {
         await closeServer(server);
       }
@@ -1115,51 +1114,19 @@ describe("localhost HTTP API", () => {
         access(path.join(repoB, "pipelines", "stage-in-b.yaml")),
       ).resolves.toBeUndefined();
 
-      const { resolveSeededExamplesPath } = await import(
-        "../src/config/seededCatalog.js"
-      );
-      const seededPath = resolveSeededExamplesPath();
-      expect(seededPath).toBeDefined();
+      // The packaged examples are not a catalog root, so they cannot be a write target.
       const byId = await jsonFetch(`${base}/api/pipelines`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           project_root: "examples",
           directory: "pipelines",
-          id: "seeded-refuse",
+          id: "examples-refuse",
           stages: [{ id: "alpha", uses: "./alpha.yaml" }],
         }),
       });
-      expect(byId.status).toBe(403);
-      expect(byId.body.code).toBe("catalog_root_read_only");
-
-      const byAbs = await jsonFetch(`${base}/api/pipelines`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          project_root: seededPath,
-          directory: "pipelines",
-          id: "seeded-refuse-abs",
-          stages: [{ id: "alpha", uses: "./alpha.yaml" }],
-        }),
-      });
-      expect(byAbs.status).toBe(403);
-      expect(byAbs.body.code).toBe("catalog_root_read_only");
-
-      const stageSeeded = await jsonFetch(`${base}/api/stages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          project_root: "examples",
-          pipeline_directory: "pipelines",
-          filename: "seeded-stage.yaml",
-          id: "seeded-stage",
-          system_prompt: "Refuse.",
-          model: "cursor/auto",
-        }),
-      });
-      expect(stageSeeded.status).toBe(403);
-      expect(stageSeeded.body.code).toBe("catalog_root_read_only");
+      expect(byId.status).toBe(400);
+      expect(byId.body.code).toBe("unknown_project_root");
     } finally {
       clearFindProjectRootCacheForTests();
       await closeServer(server);
@@ -4689,32 +4656,43 @@ describe("HTTP console foundation BF-1–BF-6", () => {
     }
   });
 
-  it("resolves a seeded pipeline against the examples root, not the host cwd", async () => {
+  it("resolves a workspace pipeline against the workspace root, not the host cwd", async () => {
     const bootCwd = await mkdtemp(path.join(tmpdir(), "sf-http-validate-cwd-"));
     const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-validate-store-"));
     const store = createRunStore({ rootDir: storeRoot });
     const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
       cwd: bootCwd,
     });
+    const { lastWorkspaceProvisionResult } = await import("../src/project/workspaceCatalog.js");
+    const workspace = lastWorkspaceProvisionResult()!.path;
+    const dir = path.join(workspace, "starters", "validate-probe");
     try {
+      await mkdir(dir, { recursive: true });
+      for (const name of ["topic-brief.pipeline.yaml", "write-brief.yaml"]) {
+        const text = await readFile(path.join(process.cwd(), "starters", "topic-brief", name), "utf8");
+        await writeFile(
+          path.join(dir, name),
+          name.endsWith(".pipeline.yaml") ? text.replace("id: topic-brief\n", "id: topic-brief\nmodel: cursor/auto\n") : text,
+        );
+      }
       const res = await jsonFetch(`${base}/api/catalog/validate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: "ci-validate/ci-demo.pipeline.yaml",
-          project_root: "examples",
+          pipeline: "starters/validate-probe/topic-brief.pipeline.yaml",
+          project_root: "workspace",
           strict: true,
         }),
       });
       expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
       const findings = (res.body.findings ?? []) as Array<{ message?: string }>;
       const messages = findings.map((finding) => finding.message ?? "").join("\n");
       expect(messages).not.toContain("Pipeline file not found");
       expect(messages).not.toContain(bootCwd);
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
+      await rm(dir, { recursive: true, force: true });
+      await closeServer(server);
     }
   });
 
@@ -5109,7 +5087,7 @@ describe("GET /api/catalog/roots (U6)", () => {
     resetGlobalStageflowHomeForTests();
   });
 
-  it("lists examples, workspace, and registered roots with labels", async () => {
+  it("lists workspace and registered roots with labels, and no packaged examples root", async () => {
     const home = await mkdtemp(path.join(tmpdir(), "sf-http-roots-home-"));
     await withEnv({ STAGEFLOW_HOME: home }, async () => {
       resetGlobalStageflowHomeForTests();
@@ -5134,11 +5112,7 @@ describe("GET /api/catalog/roots (U6)", () => {
         const registered = res.body.roots.find(
           (row: { kind: string }) => row.kind === "registered",
         );
-        expect(examples).toMatchObject({
-          label: "Examples (read-only)",
-          read_only: true,
-          available: true,
-        });
+        expect(examples).toBeUndefined();
         expect(workspace).toMatchObject({
           kind: "workspace",
           label: "Workspace",
