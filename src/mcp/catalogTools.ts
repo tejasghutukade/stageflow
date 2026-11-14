@@ -33,15 +33,15 @@ import {
   resolveEnvelopeRefsToTask,
 } from "../runtime/resolveEnvelopeRef.js";
 import type { InlinePipelineDefinition } from "../types/pipeline.js";
-import { isTerminalProjection, isWaitingProjection, waitRun } from "./waitRun.js";
+import { isTerminalProjection, isWaitingProjection, waitRun } from "../runread/waitRun.js";
 import { mapStoreLookupError } from "../server/operatorResults.js";
 import {
   callerIdFromRequestAuth,
   getRequestAuth,
 } from "../server/requestAuthContext.js";
 import type { McpToolDeps } from "./deps.js";
-import { projectRunForMcp } from "./projectRun.js";
-import { classifyArtifactContent, readRunArtifactBytes } from "./readArtifact.js";
+import { projectRun } from "../projection/projectRun.js";
+import { classifyArtifactContent, readRunArtifactBytes } from "../runread/readArtifact.js";
 import { imageResult, textResult } from "./toolResults.js";
 import { buildRunExportPayload } from "../runstore/exportRunPayload.js";
 import { redactRunManifestForRead } from "../runstore/runManifest.js";
@@ -848,7 +848,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
       try {
         const detail = await store.readRun(runId);
         return textResult({
-          ...projectRunForMcp(detail),
+          ...projectRun(detail),
           run_manifest: redactRunManifestForRead(detail.run_manifest),
         });
       } catch (err) {

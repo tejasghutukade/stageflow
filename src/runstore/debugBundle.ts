@@ -8,8 +8,8 @@ import { redact } from "../logging/redact.js";
 import {
   DEFAULT_DIFF_MAX_BYTES,
   getRunDiff,
-} from "../mcp/checkoutTools.js";
-import { readStreamLogTail } from "../mcp/tailStreamLog.js";
+} from "../runread/checkout.js";
+import { readStreamLogTail } from "../runread/tailStreamLog.js";
 import {
   buildRunExportPayload,
   type RunExportPayload,

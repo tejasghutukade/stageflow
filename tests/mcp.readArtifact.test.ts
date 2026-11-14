@@ -8,7 +8,7 @@ import {
   classifyArtifactContent,
   readRunArtifact,
   readRunArtifactBytes,
-} from "../src/mcp/readArtifact.js";
+} from "../src/runread/readArtifact.js";
 
 describe("readRunArtifact deny-list", () => {
   it("denies .pi-agent/auth.json under attempts", async () => {

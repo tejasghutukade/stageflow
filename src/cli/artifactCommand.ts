@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { readRunArtifact } from "../mcp/readArtifact.js";
+import { readRunArtifact } from "../runread/readArtifact.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import {
   createRunStoreAfterHostEnsure,

@@ -1,10 +1,10 @@
-import { readRunArtifactBytes, artifactMediaType } from "../mcp/readArtifact.js";
+import { readRunArtifactBytes, artifactMediaType } from "../runread/readArtifact.js";
 import {
   CatalogPathError,
   resolveCatalogRelativePath,
   resolveCatalogStartInput,
 } from "../config/catalogRelativePath.js";
-import { waitRun } from "../mcp/waitRun.js";
+import { waitRun } from "../runread/waitRun.js";
 import { readYamlObject } from "../config/readYamlObject.js";
 import { payloadInstanceMismatch } from "../envelope/payloadSchema.js";
 import { parseAskOperatorAnswer } from "../tools/askOperator.js";

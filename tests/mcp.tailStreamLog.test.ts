@@ -6,7 +6,7 @@ import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { attemptStreamLogPath } from "../src/runstore/workspaceLayout.js";
 import { encodeStreamLogHeader } from "../src/runtime/stageStreamLog.js";
-import { readStreamLogTail } from "../src/mcp/tailStreamLog.js";
+import { readStreamLogTail } from "../src/runread/tailStreamLog.js";
 import { startUiServer } from "../src/server/http.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
 

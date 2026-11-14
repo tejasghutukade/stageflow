@@ -22,9 +22,9 @@ import {
 import { attemptStreamLogPath } from "../runstore/workspaceLayout.js";
 import { parseAskOperatorAnswer } from "../tools/askOperator.js";
 import type { McpToolDeps } from "./deps.js";
-import { readStreamLogTail } from "./tailStreamLog.js";
+import { readStreamLogTail } from "../runread/tailStreamLog.js";
 import { textResult } from "./toolResults.js";
-import { projectWaitingGates } from "./waitingGates.js";
+import { projectWaitingGates } from "../runread/waitingGates.js";
 import { readStageVerificationHistory } from "../runstore/verificationHistory.js";
 
 const auditLog = rootLogger.child({ component: "audit" });

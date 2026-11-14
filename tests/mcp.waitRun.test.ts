@@ -10,7 +10,7 @@ import {
   classifyWaitWake,
   sleepAbortable,
   waitRun,
-} from "../src/mcp/waitRun.js";
+} from "../src/runread/waitRun.js";
 
 function baseProjection(
   overrides: Partial<RunProjection> = {},

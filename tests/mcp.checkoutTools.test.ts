@@ -11,7 +11,7 @@ import {
   listCheckoutChanges,
   parseStatusPorcelainZ,
   readCheckoutFileBytes,
-} from "../src/mcp/checkoutTools.js";
+} from "../src/runread/checkout.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { startUiServer } from "../src/server/http.js";
 import { mcpCall } from "./helpers/mcpCall.js";

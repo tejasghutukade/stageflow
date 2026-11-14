@@ -10,7 +10,7 @@ import { registerEvalTools } from "./evalTools.js";
 import { registerTriggerTools } from "./triggerTools.js";
 import type { McpToolDeps } from "./deps.js";
 import { textResult } from "./toolResults.js";
-import { DEFAULT_TIMEOUT_MS, waitRun } from "./waitRun.js";
+import { DEFAULT_TIMEOUT_MS, waitRun } from "../runread/waitRun.js";
 
 import { registerAgentTools } from "./agentTools.js";
 import { registerFunctionTools } from "./functionTools.js";

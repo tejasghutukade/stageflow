@@ -140,12 +140,12 @@ import {
   classifyArtifactContent,
   readRunArtifact,
   readRunArtifactBytes,
-} from "../mcp/readArtifact.js";
+} from "../runread/readArtifact.js";
 import {
   getRunDiff,
   listCheckoutChanges,
   readCheckoutFileBytes,
-} from "../mcp/checkoutTools.js";
+} from "../runread/checkout.js";
 import { readStageVerificationHistory } from "../runstore/verificationHistory.js";
 import { sqliteConnectionFromStore, type RunStoreKind } from "../runstore/createStore.js";
 import {

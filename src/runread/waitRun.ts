@@ -1,7 +1,7 @@
 import type { RunProjection } from "../projection/projectRun.js";
 import type { RunStore } from "../runstore/port.js";
 import { mapStoreLookupError } from "../server/operatorResults.js";
-import { projectRunForMcp } from "./projectRun.js";
+import { projectRun } from "../projection/projectRun.js";
 
 export type WaitUntil = "any" | "waiting" | "terminal";
 
@@ -160,7 +160,7 @@ export async function waitRun(opts: WaitRunOpts): Promise<WaitRunResult> {
       };
     }
 
-    const run = projectRunForMcp(detail);
+    const run = projectRun(detail);
     const wake = classifyWaitWake(run, untilVal, hadWaited);
     const elapsed_ms = Date.now() - started;
     if (wake !== null) {
