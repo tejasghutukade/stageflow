@@ -48,9 +48,7 @@ export async function resolveCatalogRoots(
 ): Promise<CatalogRoot[]> {
   const roots: CatalogRoot[] = [];
   const seenPaths = new Set<string>();
-  const seededRoots =
-    options.seededRoots ??
-    (await import("./seededCatalog.js")).defaultSeededRoots();
+  const seededRoots = options.seededRoots ?? [];
 
   const workspaceAbs = realOrResolve(workspaceCatalogPath());
 

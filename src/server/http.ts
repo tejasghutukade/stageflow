@@ -19,6 +19,8 @@ import {
 } from "../agent/providerAuth.js";
 import { mapProviderAuthError } from "../agent/providerInspect.js";
 import { handleProviderRoutes } from "./providerRoutes.js";
+import { installStartersWhenConnected } from "../project/starters.js";
+import { lastWorkspaceProvisionResult } from "../project/workspaceCatalog.js";
 import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
 import type { ChannelService } from "../channels/service.js";
 import type { EvalRunManager } from "../evals/manager.js";
@@ -3540,6 +3542,13 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             readJsonBody,
             json,
             providerAuthContext,
+            onProviderConnected: () => {
+              const workspace = lastWorkspaceProvisionResult();
+              if (!workspace?.ok) return;
+              void installStartersWhenConnected({ cwd, workspacePath: workspace.path, refresh: true }).catch(
+                () => undefined,
+              );
+            },
           })
         ) {
           return true;

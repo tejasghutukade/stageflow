@@ -69,7 +69,7 @@ export function resolveCatalogRelativePath(
     const rootsList =
       registered.length > 0
         ? registered.join(", ")
-        : "(none — register a project or use seeded examples)";
+        : "(none — register a project or use the workspace catalog)";
     throw new CatalogPathError(
       `Absolute ${field} is not allowed on network surfaces. Use a catalog-relative path under project_root (registered or seeded roots: ${rootsList}). Local CLI may pass absolute paths and auto-registers the project folder.`,
       "absolute_path_not_allowed",

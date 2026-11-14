@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.60.0] - 2026-11-13
+
+### Changed
+
+- **New installs no longer see the test and dogfood examples.** The npm package and the Docker image stop shipping `examples/` as a read-only "Examples" catalog; only the eval samples that **Install sample eval** copies are kept. `examples/` stays in the repository for contributors and docs.
+
+### Added
+
+- **Starter pipelines for new installs.** A new workspace gets four starters in `$STAGEFLOW_HOME/workspace/starters/`, copied once, as soon as a provider is connected, with the pipeline `model` set to the default model: `topic-brief`, `draft-with-approval`, `parallel-research` and `triage-and-route`. They are ordinary files to run, edit or delete; a deleted starter does not come back, and existing workspaces are not changed. See [Quick start — Starter pipelines](docs/quickstart.md#starter-pipelines).
+
 ## [0.59.1] - 2026-11-13
 
 ### Fixed

@@ -53,7 +53,7 @@ More CI-focused examples will follow this pattern (prepare context → run pipel
 
 Current wiring tours: [`route-wiring-smoke-test`](route-wiring-smoke-test/), [`route-if-tour`](route-if-tour/).
 
-Browse scope is declared in repo-root [`stageflow.yaml`](../stageflow.yaml). Cold Host (`sf ui` / `sf mcp`) browses the packaged seeded root via [`examples/stageflow.yaml`](stageflow.yaml): hello-world, plan-review, conditional-fork, generic-fan-in, feedback-loop, and evals (paths relative to `examples/`; wire `project_root: "examples"`). **`sf ui` started from any subdirectory** still uses the global durable root (`$STAGEFLOW_HOME`) for run state.
+Browse scope is declared in repo-root [`stageflow.yaml`](../stageflow.yaml). These examples are for contributors and docs: they are **not** shipped in the npm package (only the eval samples under `evals/` are) and a new install does not see them. New installs get the curated [`starters/`](../starters/) instead, copied into `$STAGEFLOW_HOME/workspace/starters/` once a provider is connected (see [Quick start — Starter pipelines](../docs/quickstart.md#starter-pipelines)). **`sf ui` started from any subdirectory** still uses the global durable root (`$STAGEFLOW_HOME`) for run state.
 
 ## Prerequisites (all examples)
 

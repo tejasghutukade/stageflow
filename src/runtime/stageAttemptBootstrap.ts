@@ -16,7 +16,6 @@ import type {
 } from "../agent/port.js";
 import {
   bindingKindForOrigin,
-  catalogOrSeededOrigin,
   decideWorkspaceConfigTrust,
   type ConfigOriginRecord,
 } from "../config/configOrigin.js";
@@ -35,7 +34,6 @@ import {
   type SkillOrigin,
 } from "../config/listSkills.js";
 import { loadHostConfig } from "../config/hostConfig.js";
-import { defaultSeededRoots } from "../config/seededCatalog.js";
 import { readFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { runSkillsDir } from "./runSkills.js";
@@ -154,10 +152,6 @@ function resolveTrustWorkspaceConfig(explicit?: string[]): string[] {
   }
 }
 
-function seededRootPaths(): string[] {
-  return defaultSeededRoots().map((root) => root.path);
-}
-
 async function resolveStageSkillForRun(
   stage: Pick<StageConfig, "skill">,
   catalog: OperatorCatalog | undefined,
@@ -270,7 +264,7 @@ async function resolveAttemptMcpServers(
       trustWorkspaceConfig: options.trustWorkspaceConfig,
       ...stageIdOpt,
     });
-    const origin = catalogOrSeededOrigin(factoryCwd, seededRootPaths());
+    const origin = "catalog" as const;
     const catalogPath = mcpCatalogPath(factoryCwd);
     return {
       servers: Object.keys(resolved).length > 0 ? resolved : undefined,
@@ -323,7 +317,7 @@ function verifyCommandOrigins(
   factoryCwd: string | undefined,
 ): ConfigOriginRecord[] {
   const completion = dag.nodes.find((node) => node.id === stageId)?.completion;
-  const origin = catalogOrSeededOrigin(factoryCwd, seededRootPaths());
+  const origin = "catalog" as const;
   const records: ConfigOriginRecord[] = [];
   for (const check of completion?.checks ?? []) {
     if (check.type !== "command") continue;

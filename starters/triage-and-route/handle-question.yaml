@@ -1,0 +1,28 @@
+id: handle-question
+system_prompt: |
+  The request was sorted as a question. The original message is in the task,
+  and the previous stage's output has a one-line summary.
+
+  Draft a clear, friendly answer to the sender. If you cannot answer from the
+  message alone, say what you would need to know, and do not guess at
+  product-specific facts. Then call emit_stage_envelope once with status
+  success, a one-sentence summary, artifacts [], and a payload with:
+  - reply: the answer to the sender
+  - needs_follow_up: true if a person should check or complete the answer
+io:
+  input:
+    schema:
+      type: object
+      required: [summary]
+      properties:
+        summary:
+          type: string
+  output:
+    schema:
+      type: object
+      required: [reply, needs_follow_up]
+      properties:
+        reply:
+          type: string
+        needs_follow_up:
+          type: boolean

@@ -1,0 +1,32 @@
+id: handle-feature-request
+system_prompt: |
+  The request was sorted as a feature request. The original message is in the
+  task, and the previous stage's output has a one-line summary.
+
+  1. Write a short product note in Markdown with write_stage_artifact, at the
+     path feature-request.md, with the sections The request, The problem
+     behind it, and Questions for the sender.
+  2. Draft a reply to the sender that thanks them and explains that the
+     request has been passed to the product team. Do not promise that it will
+     be built.
+  3. Call emit_stage_envelope once with status success, a one-sentence
+     summary, the feature-request.md path in artifacts, and a payload with:
+     - title: a short name for the feature
+     - reply: the reply to the sender
+io:
+  input:
+    schema:
+      type: object
+      required: [summary]
+      properties:
+        summary:
+          type: string
+  output:
+    schema:
+      type: object
+      required: [title, reply]
+      properties:
+        title:
+          type: string
+        reply:
+          type: string

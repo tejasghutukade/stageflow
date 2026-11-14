@@ -167,9 +167,10 @@ The Host is machine-global under `$STAGEFLOW_HOME`. Catalog roots are:
 | Kind | Wire `project_root` | Notes |
 |------|---------------------|-------|
 | `registered` | Absolute filesystem path | Durable rows in the store projects registry (ensure / past-run backfill) |
-| `seeded` | Symbolic id (e.g. `examples`) | Read-only packaged catalogs; Host maps id → path |
+| `workspace` | `workspace` | `$STAGEFLOW_HOME/workspace`, always present; on a new install it holds the [starter pipelines](quickstart.md#starter-pipelines) once a provider is connected |
+| `seeded` | Symbolic id | Read-only catalogs a Host is configured with. The packaged Host has none |
 
-There is **no** mandatory `boot` catalog root from Host cwd. Cold Host with an empty registry lists seeded roots only.
+There is **no** mandatory `boot` catalog root from Host cwd. Cold Host with an empty registry lists the workspace root only.
 
 **Path contract (MCP / remote HTTP / A2A sharing the helper):**
 
@@ -314,7 +315,7 @@ No-argument first-run orientation for remote harnesses. Returns host version, pr
 
 ### `list_pipelines`
 
-List manifest-declared pipeline paths across every catalog root this Host knows (registered store roots and seeded `examples`). Each entry includes `project_root`. Optional `project_root` filter; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors` with `catalog_root_unreadable`.
+List manifest-declared pipeline paths across every catalog root this Host knows (registered store roots and the workspace root). Each entry includes `project_root`. Optional `project_root` filter; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors` with `catalog_root_unreadable`.
 
 **Input:** `{ "project_root": "string (optional)" }`
 
@@ -352,7 +353,7 @@ Paths are relative to the catalog root (registered folder or seeded path) as dec
 
 ### `list_tasks`
 
-List manifest-declared task paths across every catalog root this Host knows (registered store roots and seeded `examples`). Each entry includes `project_root`. Optional `project_root` filter; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors` with `catalog_root_unreadable`.
+List manifest-declared task paths across every catalog root this Host knows (registered store roots and the workspace root). Each entry includes `project_root`. Optional `project_root` filter; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors` with `catalog_root_unreadable`.
 
 **Input:** `{ "project_root": "string (optional)" }`
 

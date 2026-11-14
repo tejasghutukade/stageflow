@@ -86,12 +86,4 @@ export function skillOriginKind(
   return "catalog";
 }
 
-export function catalogOrSeededOrigin(
-  projectRoot: string | undefined,
-  seededRoots: readonly string[],
-): ConfigOriginKind {
-  if (projectRoot !== undefined && seededRoots.some((root) => root === projectRoot)) {
-    return "seeded";
-  }
-  return "catalog";
-}
+

@@ -1,0 +1,4 @@
+id: topic-brief
+stages:
+  - id: write-brief
+    uses: ./write-brief.yaml

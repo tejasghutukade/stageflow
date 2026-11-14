@@ -272,11 +272,12 @@ describe("Dockerfile", () => {
     expect(docker).toContain(`ARG PROMPTFOO_VERSION=${PINNED_PROMPTFOO_VERSION}`);
   });
 
-  it("ships the whole examples folder, so the image seeds the same six examples as npm", () => {
+  it("ships the eval samples and the starters, not the whole examples folder", () => {
     const docker = readFileSync(path.resolve(__dirname, "..", "Dockerfile"), "utf8");
-    expect(docker).toContain("COPY examples ./examples");
-    expect(docker).toContain("/src/examples ./examples");
+    expect(docker).toContain("/src/examples/evals ./examples/evals");
+    expect(docker).toContain("/src/starters ./starters");
+    expect(docker).not.toContain("/src/examples ./examples\n");
     const ignore = readFileSync(path.resolve(__dirname, "..", ".dockerignore"), "utf8").split("\n");
-    expect(ignore.filter((line) => line.trim() === "examples" || line.trim() === "examples/stageflow.yaml")).toEqual([]);
+    expect(ignore.filter((line) => ["examples", "examples/evals", "starters"].includes(line.trim()))).toEqual([]);
   });
 });

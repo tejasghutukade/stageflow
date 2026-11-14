@@ -22,6 +22,8 @@ export type ProviderRoutesCtx = {
   readJsonBody: (req: IncomingMessage) => Promise<unknown>;
   json: (res: ServerResponse, status: number, body: unknown) => void;
   providerAuthContext?: ProviderAuthContext;
+  /** Called after a provider login succeeds (API key saved, or an OAuth session completed). */
+  onProviderConnected?: () => void;
 };
 
 export async function handleProviderRoutes(
@@ -109,6 +111,7 @@ export async function handleProviderRoutes(
     }
     try {
       const provider = await loginWithApiKey(cwd, providerId, apiKey, authCtx);
+      ctx.onProviderConnected?.();
       json(res, 200, { ok: true, provider });
     } catch (err) {
       const mapped = mapProviderAuthError(err);
@@ -131,6 +134,7 @@ export async function handleProviderRoutes(
         json(res, 404, { error: "Login session not found" });
         return true;
       }
+      if (session.status === "completed") ctx.onProviderConnected?.();
       json(res, 200, { session });
       return true;
     }

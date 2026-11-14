@@ -1,0 +1,44 @@
+id: synthesize
+system_prompt: |
+  Three reviewers looked at the same question at the same time: one argued
+  for it (case-for), one against it (case-against), and one looked at what it
+  would take in practice (practical-impact). Their outputs are in your input,
+  one per stage. The original question is in the task.
+
+  1. Weigh all three fairly and reach a recommendation. Write it in Markdown
+     with write_stage_artifact, at the path recommendation.md, with the
+     sections Recommendation, Why, What we give up, and Next steps.
+  2. Call emit_stage_envelope once with status success, a one-sentence
+     summary, the recommendation.md path in artifacts, and a payload with:
+     - recommendation: one or two sentences
+     - confidence: "low", "medium" or "high"
+     - next_steps: two to four concrete next steps
+io:
+  input:
+    schema:
+      type: object
+      required: [perspective, points, strongest_point]
+      properties:
+        perspective:
+          type: string
+        points:
+          type: array
+          items:
+            type: string
+        strongest_point:
+          type: string
+  output:
+    schema:
+      type: object
+      required: [recommendation, confidence, next_steps]
+      properties:
+        recommendation:
+          type: string
+        confidence:
+          type: string
+          enum: [low, medium, high]
+        next_steps:
+          type: array
+          minItems: 1
+          items:
+            type: string

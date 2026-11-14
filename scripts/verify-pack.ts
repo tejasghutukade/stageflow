@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const root = process.env.STAGEFLOW_PACK_ROOT ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-const REQUIRED = ["dist/cli.js", "dist/ui/index.html", "skills/stageflow/SKILL.md", "examples/README.md"] as const;
+const REQUIRED = ["dist/cli.js", "dist/ui/index.html", "skills/stageflow/SKILL.md", "starters/README.md"] as const;
 
 function normalizePackPath(p: string): string {
   return p.replace(/\\/g, "/").replace(/^package\//, "");

@@ -1,0 +1,8 @@
+id: triage-bug-report
+goal: Sort the incoming request and handle it
+input:
+  sender: Priya
+  message: |
+    Since this morning, every time I export my report to PDF the download
+    finishes but the file is empty. It worked fine last week. I need it for a
+    meeting tomorrow.

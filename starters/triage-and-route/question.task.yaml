@@ -1,0 +1,7 @@
+id: triage-question
+goal: Sort the incoming request and handle it
+input:
+  sender: Marco
+  message: |
+    Hi, is there a way to share a dashboard with someone outside my company
+    without giving them a full account?

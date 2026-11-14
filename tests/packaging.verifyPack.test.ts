@@ -29,7 +29,7 @@ async function makePackRoot(opts: { dropSkillsFromFiles?: boolean; extra?: Recor
     "dist/cli.js": "",
     "dist/ui/index.html": "",
     "skills/stageflow/SKILL.md": "",
-    "examples/README.md": "",
+    "starters/README.md": "",
     ...opts.extra,
   };
   for (const [rel, body] of Object.entries(files)) {

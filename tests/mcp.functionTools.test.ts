@@ -343,12 +343,12 @@ describe("function MCP tools", () => {
     expect(unknown.isError).toBe(true);
     expect(unknown.payload).toMatchObject({ code: "unknown_project_root" });
 
-    const readOnly = await call(tools, "create_function", {
+    const examples = await call(tools, "create_function", {
       project_root: "examples",
-      definition: definition("seeded_refuse"),
+      definition: definition("examples_refuse"),
     });
-    expect(readOnly.isError).toBe(true);
-    expect(readOnly.payload).toMatchObject({ code: "catalog_root_read_only" });
+    expect(examples.isError).toBe(true);
+    expect(examples.payload).toMatchObject({ code: "unknown_project_root" });
 
     const tested = await call(tools, "test_function", { id: "remote_only", project_root: repoB });
     expect(tested.isError).toBe(false);
