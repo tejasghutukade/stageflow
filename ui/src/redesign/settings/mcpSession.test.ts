@@ -8,6 +8,7 @@ import {
   projectMcpDotToken,
   projectMcpSectionError,
   projectMcpStatusLabel,
+  projectMcpUsableByStagesLabel,
 } from "./mcpSession";
 
 const entry = (name: string, transport: "stdio" | "http" = "http", origin: "project" | "console" = "console") => ({
@@ -408,6 +409,35 @@ describe("session lifecycle", () => {
     expect((await session.importJson({})).ok).toBe(true);
     await session.idle();
     expect(probe.mock.calls.map((c) => c[0])).toEqual(["n"]);
+  });
+});
+
+describe("usable by stages", () => {
+  it("renders the server flag and does not derive it from Check or sign-in", async () => {
+    expect(projectMcpUsableByStagesLabel(true)).toBe("Usable by stages");
+    expect(projectMcpUsableByStagesLabel(false)).toBe("Not usable by stages");
+    expect(projectMcpUsableByStagesLabel(undefined)).toBeNull();
+
+    let usableByStages = false;
+    const probe = vi.fn(async (name: string) => ({ name, status: "connected" as const }));
+    const session = createSession(fakeApi({
+      list: async () => ({
+        status: "ok",
+        servers: [{ ...entry("live", "http", "console"), usableByStages }],
+      }),
+      probe,
+      oauthStatus: async (name) => ({ name, status: "authenticated" as const }),
+    }));
+    await session.load();
+    await session.check("live");
+    expect(session.getState().servers[0]).toMatchObject({ status: "connected", usableByStages: false });
+
+    usableByStages = true;
+    session.startSignIn("live");
+    await session.signedIn("live");
+    await session.idle();
+    expect(session.getState().servers[0]?.usableByStages).toBe(true);
+    expect(session.getState().servers[0]?.status).toBe("connected");
   });
 });
 

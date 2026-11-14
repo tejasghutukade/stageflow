@@ -355,6 +355,11 @@ export async function mcpGrantSecretValues(name: string, url: string): Promise<s
 }
 
 export async function mcpStoredGrantStatus(name: string): Promise<McpOAuthStatus | "unavailable"> {
+  if ((process.env.PI_CODING_AGENT_DIR ?? "").trim() === "") {
+    process.env.PI_CODING_AGENT_DIR = path.join(globalStageflowHome(), "agent");
+  }
+  // No credential file means signed out. Do not create a key, refresh, or open a connection.
+  if (!existsSync(grantCredentialsPath(name))) return "not_authenticated";
   useHostMcpGrantEnv();
   try {
     return await mcpOAuthStatus(name);

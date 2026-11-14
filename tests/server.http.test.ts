@@ -32,7 +32,10 @@ import {
   resetBareCacheStateForTests,
   setBareCacheRemoteUrlOverrideForTests,
 } from "../src/git/cache.js";
+import { removeHostMcpServer, saveHostMcpServer } from "../src/config/mcpHostCatalog.js";
+import { OAUTH_FILE_KEY_ENV, useHostMcpGrantEnv } from "../src/config/mcpOAuth.js";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
+import { updateMcpOAuthTokensForUrl } from "pi-mcp-adapter/oauth";
 import { bindStageflowHomeForTests } from "./helpers/workspaceTestHarness.js";
 import { validateCatalog } from "../src/config/validateCatalog.js";
 
@@ -4060,8 +4063,15 @@ describe("project MCP catalog HTTP", () => {
       expect(listed.body).toEqual({
         status: "ok",
         servers: [
-          { name: "local", transport: "stdio", origin: "project" },
-          { name: "github", transport: "http", origin: "project" },
+          { name: "local", transport: "stdio", origin: "project", tools: [], usableByStages: false },
+          {
+            name: "github",
+            transport: "http",
+            origin: "project",
+            authStatus: "not_authenticated",
+            tools: [],
+            usableByStages: false,
+          },
         ],
       });
       const payload = JSON.stringify(listed.body);
@@ -4175,13 +4185,111 @@ describe("project MCP catalog HTTP", () => {
       expect(listed.status).toBe(200);
       expect(listed.body).toEqual({
         status: "ok",
-        servers: [{ name: "factory", transport: "stdio", origin: "project" }],
+        servers: [{ name: "factory", transport: "stdio", origin: "project", tools: [], usableByStages: false }],
       });
       const payload = JSON.stringify(listed.body);
       expect(payload).not.toContain("decoy");
       expect(payload).not.toContain(secret);
       expect(payload).not.toContain("secret-host.example");
     } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("reports stored auth and cached tool names, and usableByStages only for a signed-in console server", async () => {
+    const sentinel = "u5-list-access-token-sentinel";
+    const refreshSentinel = "u5-list-refresh-token-sentinel";
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-u5-"));
+    await writeHostCatalog(root, {
+      local: {
+        command: "npx",
+        args: ["-y", "secret-bin"],
+        env: { TOKEN: sentinel },
+      },
+      proj: {
+        url: "https://secret-host.example/mcp",
+        headers: { Authorization: `Bearer ${sentinel}` },
+      },
+    });
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    const agentDir = process.env.PI_CODING_AGENT_DIR ?? path.join(root, "agent");
+    const cachePath = path.join(agentDir, "mcp-cache.json");
+    const previousCache = existsSync(cachePath) ? await readFile(cachePath, "utf8") : undefined;
+    saveHostMcpServer("u5live", { url: "https://live.example/mcp" });
+    saveHostMcpServer("u5old", { url: "https://old.example/mcp" });
+    saveHostMcpServer("u5fresh", { url: "https://fresh.example/mcp" });
+    process.env[OAUTH_FILE_KEY_ENV] = Buffer.alloc(32, 7).toString("base64");
+    useHostMcpGrantEnv();
+    const future = Math.floor(Date.now() / 1000) + 3600;
+    await updateMcpOAuthTokensForUrl("u5live", "https://live.example/mcp", {
+      accessToken: sentinel,
+      refreshToken: refreshSentinel,
+      expiresAt: future,
+    }, { credentialStore: "encrypted-file" });
+    await updateMcpOAuthTokensForUrl("u5old", "https://old.example/mcp", {
+      accessToken: sentinel,
+      refreshToken: refreshSentinel,
+      expiresAt: 1,
+    }, { credentialStore: "encrypted-file" });
+    await updateMcpOAuthTokensForUrl("proj", "https://secret-host.example/mcp", {
+      accessToken: sentinel,
+      refreshToken: refreshSentinel,
+      expiresAt: future,
+    }, { credentialStore: "encrypted-file" });
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(cachePath, JSON.stringify({
+      servers: {
+        u5live: {
+          tools: [{ name: "list_boards", description: `see ${sentinel} at https://secret-host.example/mcp` }],
+          cachedAt: 1,
+        },
+      },
+    }));
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    try {
+      fetchSpy.mockClear();
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      const servers = listed.body.servers as Array<Record<string, unknown>>;
+      const row = (name: string) => servers.find((entry) => entry.name === name);
+      expect(row("u5live")).toMatchObject({
+        origin: "console",
+        authStatus: "authenticated",
+        tools: ["list_boards"],
+        usableByStages: true,
+      });
+      expect(row("u5old")).toMatchObject({
+        origin: "console",
+        authStatus: "expired",
+        usableByStages: false,
+      });
+      expect(row("u5fresh")).toMatchObject({
+        origin: "console",
+        authStatus: "not_authenticated",
+        usableByStages: false,
+      });
+      expect(row("proj")).toMatchObject({
+        origin: "project",
+        authStatus: "authenticated",
+        usableByStages: false,
+      });
+      expect(row("local")).toMatchObject({ origin: "project", transport: "stdio", usableByStages: false });
+      expect(row("local")).not.toHaveProperty("authStatus");
+      const payload = JSON.stringify(listed.body);
+      for (const leaked of [sentinel, refreshSentinel, "secret-host.example", "live.example", "Authorization", "secret-bin", "authorization"]) {
+        expect(payload).not.toContain(leaked);
+      }
+      for (const key of ["env", "headers", "args", "command", "url"]) {
+        expect(payload).not.toContain(`"${key}"`);
+      }
+      const called = fetchSpy.mock.calls.map((call) => String(call[0]));
+      expect(called.some((url) => url.includes("/api/project-mcp"))).toBe(true);
+      expect(called.some((url) => /token|live\.example|old\.example|secret-host|fresh\.example/.test(url))).toBe(false);
+    } finally {
+      fetchSpy.mockRestore();
+      for (const name of ["u5live", "u5old", "u5fresh"]) removeHostMcpServer(name);
+      if (previousCache === undefined) await rm(cachePath, { force: true });
+      else await writeFile(cachePath, previousCache);
       await closeServer(server);
     }
   });

@@ -109,6 +109,13 @@ function formatStartFailureJson(
   return formatRunStartFailedJson(started);
 }
 
+const STAGE_MCP_FAILURE_CODES = new Set([
+  "needs_auth",
+  "insufficient_scope",
+  "connect_failed",
+  "oauth_backend_unsupported",
+]);
+
 function baseRunCompletionPayload(
   result: PipelineRunResult,
 ): Record<string, unknown> {
@@ -145,6 +152,9 @@ function baseRunCompletionPayload(
     result.reason !== undefined
   ) {
     payload.reason = result.reason;
+    if (result.outcome === "failed" && STAGE_MCP_FAILURE_CODES.has(result.reason)) {
+      payload.code = result.reason;
+    }
   }
   if (Array.isArray(result.findings) && result.findings.length > 0) {
     payload.findings = result.findings.map((finding) => ({

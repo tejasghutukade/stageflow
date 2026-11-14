@@ -3,8 +3,10 @@ import {
   collectEffectiveRequires,
   type ToolRequirement,
 } from "../config/toolRequires.js";
+import { mcpStoredGrantStatus } from "../config/mcpOAuth.js";
 import {
-  resolveStageMcpServers,
+  partitionHostLogin,
+  resolveStageMcpServersDetailed,
   StageMcpError,
 } from "../config/resolveStageMcpServers.js";
 import {
@@ -43,6 +45,9 @@ export type PreflightItem = {
     | "unknown_server"
     | "invalid_config"
     | "untrusted_config_origin"
+    | "needs_auth"
+    | "insufficient_scope"
+    | "connect_failed"
     | "channel_check_failed";
   tool?: string;
   required?: string;
@@ -184,19 +189,31 @@ export async function checkStageMcpResolution(
     const allowlist = stage.mcp ?? [];
     if (allowlist.length === 0) continue;
     try {
-      await resolveStageMcpServers({
+      const resolution = await resolveStageMcpServersDetailed({
         projectRoot: options.projectRoot,
         allowlist,
         env: stageEnv,
         stageId: stage.id,
         scope: { kind: "stage", secrets: (stage.secrets ?? []).map((d) => d.name) },
       });
+      const hostLogin = new Set(partitionHostLogin(resolution).hostLogin.map((server) => server.name));
       for (const server of allowlist) {
+        if (!hostLogin.has(server)) {
+          items.push({ kind: "mcp", status: "ok", server, stageId: stage.id });
+          continue;
+        }
+        const stored = await mcpStoredGrantStatus(server);
+        const status = stored === "unavailable"
+          ? "connect_failed"
+          : stored === "authenticated"
+            ? "ok"
+            : "needs_auth";
         items.push({
           kind: "mcp",
-          status: "ok",
+          status,
           server,
           stageId: stage.id,
+          ...(status === "ok" ? {} : { message: status }),
         });
       }
     } catch (err) {

@@ -8,6 +8,8 @@ import {
   readMcpSecrets,
 } from "./mcpHostCatalog.js";
 import type { FrozenHostLoginServer } from "./hostLoginMcp.js";
+import { listCachedMcpTools } from "./mcpToolCache.js";
+import { mcpStoredGrantStatus } from "./mcpOAuth.js";
 import { assertSafeMcpUrl, McpUrlPolicyError } from "./mcpRedaction.js";
 
 export type StageMcpErrorCode =
@@ -208,10 +210,18 @@ export async function loadMcpCatalog(
 
 export type ProjectMcpCatalogTransport = "stdio" | "http";
 
+export type ProjectMcpAuthStatus = "authenticated" | "expired" | "not_authenticated";
+
 export type ProjectMcpCatalogEntry = {
   name: string;
   transport: ProjectMcpCatalogTransport;
   origin: McpServerOrigin;
+  /** Stored sign-in for a URL server. Omitted for a local command, and when the store cannot be read. */
+  authStatus?: ProjectMcpAuthStatus;
+  /** Names from the last successful connect. Empty when nothing is cached. */
+  tools: string[];
+  /** True only for a console-origin server whose stored status is authenticated. */
+  usableByStages: boolean;
 };
 
 export type ProjectMcpCatalogListStatus = "ok" | "missing_catalog" | "invalid_config";
@@ -233,6 +243,14 @@ function coarseMcpTransport(
   return undefined;
 }
 
+function cachedToolNames(name: string): string[] {
+  try {
+    return listCachedMcpTools(name)?.tools.map((tool) => tool.name) ?? [];
+  } catch {
+    return [];
+  }
+}
+
 export async function listProjectMcpCatalog(
   projectRoot: string,
 ): Promise<ProjectMcpCatalogList> {
@@ -250,7 +268,17 @@ export async function listProjectMcpCatalog(
         name,
         transport,
         origin: catalog.origins[name] ?? "project",
+        tools: [],
+        usableByStages: false,
       });
+    }
+    for (const row of servers) {
+      row.tools = cachedToolNames(row.name);
+      if (row.transport === "http") {
+        const stored = await mcpStoredGrantStatus(row.name);
+        if (stored !== "unavailable") row.authStatus = stored;
+      }
+      row.usableByStages = row.origin === "console" && row.authStatus === "authenticated";
     }
     return { status: "ok", servers };
   } catch (err) {
