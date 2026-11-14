@@ -16,7 +16,6 @@ import {
 } from "./evalWriteRoots.js";
 import { peekDefaultModel } from "../models/catalog.js";
 import { loadStageflowManifestOutcome } from "./loadStageflowManifest.js";
-import { resolveSeededExamplesPath } from "./seededCatalog.js";
 
 export const EVAL_SAMPLE_FILES = {
   pipeline: "eval-sample.pipeline.yaml",
@@ -71,10 +70,8 @@ export function resolveEvalSampleDir(
   fromUrl: string = import.meta.url,
   marker: string = EVAL_SAMPLE_FILES.eval,
 ): string | undefined {
-  const examples = resolveSeededExamplesPath(fromUrl);
   const here = path.dirname(fileURLToPath(fromUrl));
   const candidates = [
-    ...(examples === undefined ? [] : [path.join(examples, "evals")]),
     path.resolve(here, "../../examples/evals"),
     path.resolve(here, "../../../examples/evals"),
     path.resolve(process.cwd(), "examples/evals"),

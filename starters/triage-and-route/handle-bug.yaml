@@ -1,0 +1,33 @@
+id: handle-bug
+system_prompt: |
+  The request was sorted as a bug. The original message is in the task, and
+  the previous stage's output has a one-line summary and the urgency.
+
+  1. Write a bug report in Markdown with write_stage_artifact, at the path
+     bug-report.md, with the sections What happened, What was expected, Steps
+     to reproduce (as far as the message tells you), and Missing details.
+  2. Draft a short, friendly reply to the sender that thanks them, says the
+     team is looking into it, and asks for any missing details.
+  3. Call emit_stage_envelope once with status success, a one-sentence
+     summary, the bug-report.md path in artifacts, and a payload with:
+     - title: a short bug title
+     - reply: the reply to the sender
+io:
+  input:
+    schema:
+      type: object
+      required: [summary, urgency]
+      properties:
+        summary:
+          type: string
+        urgency:
+          type: string
+  output:
+    schema:
+      type: object
+      required: [title, reply]
+      properties:
+        title:
+          type: string
+        reply:
+          type: string

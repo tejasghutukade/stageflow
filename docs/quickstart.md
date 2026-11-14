@@ -9,13 +9,13 @@ Docker is the recommended way to run Stageflow: pull the published image and ope
 
 ## Docker (recommended)
 
-The image is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.59` is the current minor tag (`0.59.1` is that exact release). Each release is also tagged `x.y.z` and `x.y`.
+The image is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.60` is the current minor tag (`0.60.0` is that exact release). Each release is also tagged `x.y.z` and `x.y`.
 
 ```bash
 docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.59 \
+  ghcr.io/tejasghutukade/stageflow:0.60 \
   sf ui
 ```
 
@@ -31,7 +31,7 @@ docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
   -v "$PWD":/project \
-  ghcr.io/tejasghutukade/stageflow:0.59 \
+  ghcr.io/tejasghutukade/stageflow:0.60 \
   sf ui
 ```
 
@@ -139,6 +139,19 @@ sf providers login anthropic --type api_key --api-key-env ANTHROPIC_API_KEY
 
 See [Providers](providers.md) for `sf_owned` credential storage.
 
+### Starter pipelines
+
+On a new install, Stageflow adds four starter pipelines to your workspace (`$STAGEFLOW_HOME/workspace/starters/`) as soon as a provider is connected. Each one is filled in with your default model, so it runs as is:
+
+| Starter | What it shows |
+|---------|---------------|
+| `topic-brief` | One stage: task input, structured output, a saved file |
+| `draft-with-approval` | A stage that waits for your approval before the run goes on |
+| `parallel-research` | Three stages running at the same time, then one that waits for all of them |
+| `triage-and-route` | Routing a run down one path based on a stage's output |
+
+Pick one under **Start a run** in the console. The starters are ordinary files: edit them, copy them, or delete the `starters` folder (or one starter's folder) when you no longer need them. Stageflow adds them only once, so a deleted starter does not come back, and an existing workspace never gets them.
+
 ## 4. Run the pipeline
 
 ```bash
@@ -174,7 +187,7 @@ If a stage calls `ask_operator`, the run pauses until you reply in the console. 
 ### MCP smoke path
 
 1. Start a Host: `sf ui` or `sf mcp` (default `http://127.0.0.1:3847`)
-2. Ensure/register the catalog folder (`POST /api/projects` on trusted loopback, or a prior local `sf run` ensure) — or use seeded `project_root: "examples"`
+2. Ensure/register the catalog folder (`POST /api/projects` on trusted loopback, or a prior local `sf run` ensure) — or use `project_root: "workspace"` for the workspace catalog and its starters
 3. MCP: `list_pipelines` (catalog-relative paths; absolute paths → `absolute_path_not_allowed`) → `start_run` → `wait_run`
 4. Compare homes/providers with `get_health` (`stageflow_home`, `boot_providers`) and live auth via `list_providers`
 

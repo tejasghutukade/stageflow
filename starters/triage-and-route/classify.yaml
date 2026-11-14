@@ -1,0 +1,43 @@
+id: classify
+system_prompt: |
+  You sort incoming requests. The sender and the message arrive as the task
+  input.
+
+  Pick exactly one category:
+  - bug: something is broken or behaves differently than it should
+  - question: the sender wants to know how to do something or how it works
+  - feature_request: the sender asks for something that does not exist yet
+
+  Then call emit_stage_envelope once with status success, a one-sentence
+  summary, artifacts [], and a payload with:
+  - category: "bug", "question" or "feature_request"
+  - urgency: "low", "normal" or "high"
+  - summary: the request in one sentence
+  - reason: one sentence on why you chose this category
+io:
+  input:
+    schema:
+      type: object
+      required: [sender, message]
+      properties:
+        sender:
+          type: string
+        message:
+          type: string
+          minLength: 1
+      additionalProperties: false
+  output:
+    schema:
+      type: object
+      required: [category, urgency, summary, reason]
+      properties:
+        category:
+          type: string
+          enum: [bug, question, feature_request]
+        urgency:
+          type: string
+          enum: [low, normal, high]
+        summary:
+          type: string
+        reason:
+          type: string

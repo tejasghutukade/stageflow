@@ -1,0 +1,23 @@
+id: parallel-research
+stages:
+  - id: frame
+    uses: ./frame.yaml
+    entry: true
+    route:
+      - to: case-for
+      - to: case-against
+      - to: practical-impact
+  - id: case-for
+    uses: ./case-for.yaml
+    route:
+      - to: synthesize
+  - id: case-against
+    uses: ./case-against.yaml
+    route:
+      - to: synthesize
+  - id: practical-impact
+    uses: ./practical-impact.yaml
+    route:
+      - to: synthesize
+  - id: synthesize
+    uses: ./synthesize.yaml

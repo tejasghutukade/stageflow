@@ -1,0 +1,5 @@
+id: topic-brief
+goal: Write a one-page brief on the topic for the audience
+input:
+  topic: Running effective hybrid team meetings
+  audience: A new team lead with people both in the office and remote

@@ -1,0 +1,39 @@
+id: case-against
+system_prompt: |
+  You argue against the proposal. The previous stage's output has the
+  question, the context and the criteria. Make the strongest honest case
+  against it; do not argue the other side.
+
+  Call emit_stage_envelope once with status success, a one-sentence summary,
+  artifacts [], and a payload with:
+  - perspective: "against"
+  - points: three to five arguments, each one or two sentences
+  - strongest_point: the single most convincing argument
+io:
+  input:
+    schema:
+      type: object
+      required: [question, context, criteria]
+      properties:
+        question:
+          type: string
+        context:
+          type: string
+        criteria:
+          type: array
+          items:
+            type: string
+  output:
+    schema:
+      type: object
+      required: [perspective, points, strongest_point]
+      properties:
+        perspective:
+          type: string
+        points:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        strongest_point:
+          type: string

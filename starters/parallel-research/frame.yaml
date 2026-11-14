@@ -1,0 +1,37 @@
+id: frame
+system_prompt: |
+  You set up a decision so that three reviewers can look at it at the same
+  time. The question and the background arrive as the task input.
+
+  Restate the question so it is specific and answerable, and list the criteria
+  a good answer should weigh. Then call emit_stage_envelope once with status
+  success, a one-sentence summary, artifacts [], and a payload with:
+  - question: the restated question
+  - context: the background, in two to four sentences
+  - criteria: three to five criteria for a good answer
+io:
+  input:
+    schema:
+      type: object
+      required: [question, background]
+      properties:
+        question:
+          type: string
+          minLength: 1
+        background:
+          type: string
+      additionalProperties: false
+  output:
+    schema:
+      type: object
+      required: [question, context, criteria]
+      properties:
+        question:
+          type: string
+        context:
+          type: string
+        criteria:
+          type: array
+          minItems: 1
+          items:
+            type: string

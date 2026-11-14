@@ -1,0 +1,8 @@
+id: parallel-research
+goal: Decide whether to make the change, after looking at it from several sides
+input:
+  question: Should our team move to a four-day work week?
+  background: |
+    We are a 25-person team that builds and supports a web product. Customers
+    expect replies within one business day. Most of the team works remotely,
+    and two people cover support each day.

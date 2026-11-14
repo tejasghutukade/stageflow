@@ -84,6 +84,7 @@ import {
 import { assertTmpdirUsable } from "../runstore/assertTmpdir.js";
 import { logger as rootLogger } from "../logging/logger.js";
 import { getModelCatalog } from "../models/catalog.js";
+import { installStartersWhenConnected } from "../project/starters.js";
 import { createAgentCaseRunner } from "../evals/runner/agentCaseRunner.js";
 import { createEvalCaseRunner } from "../evals/runner/caseRunner.js";
 import { createInternalAgentCaseRunner } from "../evals/runner/internalAgentCaseRunner.js";
@@ -617,6 +618,11 @@ export async function bootstrapStageflowHost(
   void getModelCatalog(cwd)
     .defaultModel()
     .catch((error) => bootLog.warn("models.catalog_warm_failed", String(error)));
+  if (workspaceCatalog.ok) {
+    void installStartersWhenConnected({ cwd, workspacePath: workspaceCatalog.path }).catch((error) =>
+      bootLog.warn("workspace.starters_failed", String(error)),
+    );
+  }
   const consumerIdentity = options.consumerAuthorization
     ? undefined
     : new ConsumerIdentityRuntime({
