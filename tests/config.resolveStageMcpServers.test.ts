@@ -395,8 +395,15 @@ describe("listProjectMcpCatalog", () => {
     expect(listed).toEqual({
       status: "ok",
       servers: [
-        { name: "local", transport: "stdio", origin: "project" },
-        { name: "github", transport: "http", origin: "project" },
+        { name: "local", transport: "stdio", origin: "project", tools: [], usableByStages: false },
+        {
+          name: "github",
+          transport: "http",
+          origin: "project",
+          authStatus: "not_authenticated",
+          tools: [],
+          usableByStages: false,
+        },
       ],
     });
     const payload = JSON.stringify(listed);
@@ -428,7 +435,14 @@ describe("listProjectMcpCatalog", () => {
       const listed = await listProjectMcpCatalog(root);
       expect(listed).toEqual({
         status: "ok",
-        servers: [{ name: "github", transport: "http", origin: "project" }],
+        servers: [{
+          name: "github",
+          transport: "http",
+          origin: "project",
+          authStatus: "not_authenticated",
+          tools: [],
+          usableByStages: false,
+        }],
       });
       expect(JSON.stringify(listed)).not.toContain("interpolated.example");
     } finally {

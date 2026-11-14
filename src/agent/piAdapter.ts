@@ -45,6 +45,18 @@ import {
   SessionManager,
   type SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import {
+  hostLoginAttemptKey,
+  omitFrozenHostLogin,
+  readFrozenHostLoginServers,
+} from "../config/hostLoginMcp.js";
+import {
+  STAGE_MCP_NATIVE_TOOLS_REASON,
+  filterStageWorkerMcpToolNames,
+  stageMcpAllowlistRestricts,
+  stageMcpSessionToolName,
+} from "../runtime/stageMcpHost.js";
+import { callStageMcpTool, listStageMcpTools } from "../runtime/stageMcpWorker.js";
 import { StageMcpError } from "../config/resolveStageMcpServers.js";
 import {
   attachIsolatedMcp,
@@ -1260,6 +1272,9 @@ async function prepareStageSessionWiring(
   existingAskWaitChannel?: AskOperatorWaitChannel,
 ): Promise<StageSessionWiring | StageRunResult> {
   const { roots } = input;
+  if (stageMcpAllowlistRestricts(input.stage) && isCursorModelRef(input.stage.model ?? "")) {
+    return { ok: false, reason: STAGE_MCP_NATIVE_TOOLS_REASON };
+  }
   const functionAttachments = input.stage.tools?.functions ?? [];
   if (functionAttachments.length > 0 && isCursorModelRef(input.stage.model ?? "")) {
     const projectRoot = functionCatalogRoot(input);
@@ -1380,7 +1395,17 @@ async function prepareStageSessionWiring(
         : undefined,
     );
     const settingsManager = createPiSettingsManager();
-    attached = await attachIsolatedMcp(input.resolvedMcpServers, {
+    const hostLogin = readFrozenHostLoginServers(
+      hostLoginAttemptKey({
+        runId: input.runId,
+        stageId: runtimeStageId(input),
+        attempt: roots.attempt,
+      }),
+    );
+    const workerMcpServers = omitFrozenHostLogin(input.resolvedMcpServers, hostLogin);
+    const mcpSnapshot =
+      Object.keys(workerMcpServers).length > 0 ? workerMcpServers : undefined;
+    attached = await attachIsolatedMcp(mcpSnapshot, {
       lifecycle: "eager",
     });
     const failAfterAttach = (reason: string): StageRunResult => {
@@ -1452,21 +1477,21 @@ async function prepareStageSessionWiring(
     await loader.reload();
     if (
       attached.extensionFactories !== undefined &&
-      input.resolvedMcpServers !== undefined &&
+      mcpSnapshot !== undefined &&
       mcpToolMetadataMissing(loader)
     ) {
       // A cold adapter metadata cache registers only the `mcp` gateway at load,
       // and the session allowlist is fixed at load. Warm the cache, then reload
       // so the declared servers' direct tools exist when the allowlist is built.
       try {
-        await warmIsolatedMcpMetadata(input.resolvedMcpServers, { cwd: roots.cwd });
+        await warmIsolatedMcpMetadata(mcpSnapshot, { cwd: roots.cwd });
       } catch (err) {
         return failAfterAttach(err instanceof Error ? err.message : String(err));
       }
       await loader.reload();
       if (mcpToolMetadataMissing(loader)) {
         return failAfterAttach(
-          `MCP tool metadata unavailable for: ${Object.keys(input.resolvedMcpServers).join(", ")}`,
+          `MCP tool metadata unavailable for: ${Object.keys(mcpSnapshot).join(", ")}`,
         );
       }
     }
@@ -1514,7 +1539,11 @@ async function prepareStageSessionWiring(
           `MCP adapter registered unrequested tool(s): ${mcpTools.unrequested.join(", ")}`,
         );
       }
-      tools.push(...mcpTools.names);
+      tools.push(...filterStageWorkerMcpToolNames(
+        input.stage,
+        Object.keys(mcpSnapshot ?? {}),
+        mcpTools.names,
+      ));
     }
     if (input.channels && input.stage.channels?.some(channel => channel.operations.includes("send"))) {
       const definition = createSendMessageTool(input.channels);
@@ -1638,6 +1667,44 @@ async function prepareStageSessionWiring(
           },
         }));
         tools.push(tool.name);
+      }
+    }
+    if (hostLogin.length > 0) {
+      const listed = await listStageMcpTools({
+        runId: input.runId,
+        stageId: runtimeStageId(input),
+        attempt: roots.attempt,
+        stage: input.stage,
+      });
+      if (!listed.ok) return failAfterAttach(listed.code);
+      for (const tool of listed.tools) {
+        const name = stageMcpSessionToolName(tool.server, tool.name);
+        if (tools.includes(name)) return failAfterAttach(`MCP tool "${name}" collides with an existing tool`);
+        customTools.push(defineTool({
+          name,
+          label: name,
+          description: tool.description ?? name,
+          parameters: Type.Unsafe(tool.inputSchema ?? { type: "object" }),
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+          execute: async (_callId: string, args: unknown) => {
+            const view = await callStageMcpTool({
+              runId: input.runId,
+              stageId: runtimeStageId(input),
+              attempt: roots.attempt,
+              stage: input.stage,
+              server: tool.server,
+              tool: tool.name,
+              arguments: args,
+            });
+            const text = view.ok ? view.text : view.code;
+            return {
+              content: [{ type: "text" as const, text }],
+              details: view.ok ? {} : { code: view.code },
+              ...(view.ok ? {} : { isError: true as const }),
+            };
+          },
+        }));
+        tools.push(name);
       }
     }
 

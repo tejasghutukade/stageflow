@@ -400,7 +400,7 @@ async function buildLoadedPipelineFromMerge(
     const stage: StageConfig = {
       ...withChannels.value,
       ...(browser !== undefined ? { browser } : {}),
-      ...(entry.mcp !== undefined ? { mcp: entry.mcp } : {}),
+      ...(entry.mcp !== undefined ? { mcp: entry.mcp, mcp_tools: entry.mcp_tools } : {}),
       ...(entry.secrets !== undefined ? { secrets: entry.secrets } : {}),
       ...(stageRequires !== undefined ? { requires: stageRequires } : {}),
     };

@@ -84,7 +84,14 @@ export type StageConfig = {
   timeout_ms?: number;
   skill?: string;
   email?: { accountId: string; operations: ("send" | "reply" | "getMessage" | "search" | "downloadAttachment")[] }[];
+  /** Servers this stage may use. */
   mcp?: string[];
+  /**
+   * Named tools per server. Absent means every tool of each server in `mcp`
+   * (a YAML name list, or a map whose lists are all `"*"`). When present,
+   * every server in `mcp` has an entry. `["*"]` means every tool of that server.
+   */
+  mcp_tools?: StageMcpTools;
   /** Communication channels this stage may send on. Inherits pipeline `channels` defaults. */
   channels?: StageChannel[];
   /** Memory ids copied from the pipeline at load. Not a stage YAML key. */
@@ -102,6 +109,16 @@ export type StageConfig = {
    */
   agent?: string;
 };
+
+/** Server name to tool names. `["*"]` means every tool of that server. */
+export type StageMcpTools = Readonly<Record<string, readonly string[]>>;
+
+/** Named tools on a loaded stage. `undefined` means every tool of every server in `mcp`. */
+export function stageMcpTools(
+  stage: { mcp_tools?: StageMcpTools } | undefined,
+): StageMcpTools | undefined {
+  return stage?.mcp_tools;
+}
 
 export type LoadedStageConfig = StageConfig & {
   model: string;

@@ -2,7 +2,14 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  freezeHostLoginServers,
+  hostLoginAttemptKey,
+  resetFrozenHostLoginServersForTests,
+} from "../src/config/hostLoginMcp.js";
+import { OAUTH_FILE_KEY_ENV } from "../src/config/mcpOAuth.js";
 import { LEAKED_TOOL_CALL_ERROR } from "../src/agent/stageTurnDriver.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
 import { claudeSessionMarkerPath } from "../src/agent/claudeSession.js";
@@ -801,6 +808,62 @@ describe("ClaudeAgentAdapter — MCP connect-fail", () => {
       }
     }
     expect(lastInterruptSpy).toHaveBeenCalled();
+  });
+
+  it("fails oauth_backend_unsupported before the model when a host-login server remains and keeps the stdio server", async () => {
+    const prevKey = process.env[OAUTH_FILE_KEY_ENV];
+    delete process.env[OAUTH_FILE_KEY_ENV];
+    queryImpl = emptyStream;
+    vi.mocked(query).mockClear();
+    const adapter = await newAdapter();
+    const input = {
+      ...baseInput(),
+      runId: "run-host-login",
+      resolvedMcpServers: {
+        factory: { url: "https://factory.example/mcp" },
+        local: { command: "npx", args: ["-y", "pkg"] },
+      },
+    };
+    freezeHostLoginServers(
+      hostLoginAttemptKey({
+        runId: input.runId,
+        stageId: input.stage.id,
+        attempt: input.roots.attempt,
+      }),
+      [{ name: "factory", url: "https://factory.example/mcp" }],
+    );
+    try {
+      const result = await adapter.runStage(input);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toBe("oauth_backend_unsupported");
+      expect(query).not.toHaveBeenCalled();
+      expect(input.resolvedMcpServers.local).toEqual({ command: "npx", args: ["-y", "pkg"] });
+      expect(process.env[OAUTH_FILE_KEY_ENV]).toBeUndefined();
+    } finally {
+      resetFrozenHostLoginServersForTests();
+      if (prevKey === undefined) delete process.env[OAUTH_FILE_KEY_ENV];
+      else process.env[OAUTH_FILE_KEY_ENV] = prevKey;
+    }
+  });
+
+  it("fails before the model when a named allowlist applies to a worker server", async () => {
+    queryImpl = emptyStream;
+    vi.mocked(query).mockClear();
+    const adapter = await newAdapter();
+    const result = await adapter.runStage({
+      ...baseInput(),
+      stage: {
+        ...baseInput().stage,
+        mcp: ["local"],
+        mcp_tools: { local: ["ping"] },
+      },
+      resolvedMcpServers: {
+        local: { command: "npx", args: ["-y", "pkg"] },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("mcp_tool_allowlist_unsupported");
+    expect(query).not.toHaveBeenCalled();
   });
 });
 

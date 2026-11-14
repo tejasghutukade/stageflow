@@ -164,14 +164,26 @@ describe("MCP catalog inspect", () => {
       expect(mcp.payload).toEqual({
         status: "ok",
         servers: [
-          { name: "local", transport: "stdio", origin: "project" },
-          { name: "github", transport: "http", origin: "project" },
+          { name: "local", transport: "stdio", origin: "project", tools: [], usableByStages: false },
+          {
+            name: "github",
+            transport: "http",
+            origin: "project",
+            authStatus: "not_authenticated",
+            tools: [],
+            usableByStages: false,
+          },
         ],
       });
       expect(mcp.payload).toEqual(expected);
       expect(mcp.payload).toEqual(http.body);
-      for (const row of mcp.payload.servers as { name: string }[]) {
-        expect(Object.keys(row).sort()).toEqual(["name", "origin", "transport"]);
+      for (const row of mcp.payload.servers as Array<Record<string, unknown>>) {
+        const keys = Object.keys(row).sort();
+        expect(keys).toEqual(
+          row.transport === "http"
+            ? ["authStatus", "name", "origin", "tools", "transport", "usableByStages"]
+            : ["name", "origin", "tools", "transport", "usableByStages"],
+        );
       }
     } finally {
       await closeServer(server);

@@ -824,7 +824,9 @@ Walkthrough: [`examples/archify-on-pr/`](../examples/archify-on-pr/) — GHA pro
 
 ### Stage MCP {#stage-mcp}
 
-Pass MCP servers (from the project `.mcp.json` and servers saved in the console, see [MCP servers](mcp-servers.md)) to a stage on the **pipeline stage entry** (alongside `uses:` or inline body). The loader also accepts `mcp:` in external stage files; a pipeline-entry `mcp` overrides the file value on merge, including `mcp: []` to clear a file list. Prefer the pipeline entry. Omit the field or set `mcp: []` for no author-declared MCP.
+Pass MCP servers (from the project `.mcp.json` and servers saved in the console, see [MCP servers](mcp-servers.md)) to a stage on the **pipeline stage entry** (alongside `uses:` or inline body). The loader also accepts `mcp:` in external stage files; a pipeline-entry `mcp` replaces the file value entirely, including a named tool list, and `mcp: []` clears it. Prefer the pipeline entry. Omit the field or set `mcp: []` for no author-declared MCP.
+
+`mcp` is a list of server names or a map of server name to tool names. A list means every tool of those servers. A map names the only tools of that server. A tool list whose only entry is `"*"` means every tool of that server, the same as naming the server in a list. An empty tool list is invalid (`stage.invalid_mcp`), as is a bare string. `sf validate` checks server names and shape and does not connect. It accepts a tool name it has not seen.
 
 Interpolation resolves against the **stage's curated environment** (not the Host ambient env), plus any console secret the stage lists under `secrets:` (a console secret fills MCP servers only and is never put in the stage environment; see [MCP servers](mcp-servers.md#from-a-pipeline-stage)). Default MCP connect timeout is **30s**. Missing catalog `command` binaries on `PATH` fail validate with a distinct error. See [migration-stage-environment.md](migration-stage-environment.md).
 
@@ -833,6 +835,27 @@ stages:
   - id: use-echo
     uses: ./use-echo.yaml
     mcp: [echo]
+```
+
+Every tool of `wonder`:
+
+```yaml
+mcp: [wonder]
+```
+
+Only named tools. A list whose only entry is `"*"` means every tool of that server:
+
+```yaml
+mcp:
+  wonder:
+    - get_artboards
+    - get_basic_info
+```
+
+```yaml
+mcp:
+  wonder:
+    - "*"
 ```
 
 Project `.mcp.json` lives at the same root as `stageflow.yaml`:
@@ -856,7 +879,8 @@ Project `.mcp.json` lives at the same root as `stageflow.yaml`:
 | Catalog | `.mcp.json` `{ "mcpServers": { "NAME": { … } } }` at the project root that holds `stageflow.yaml`, merged with servers saved from the console (**Settings → Project MCP**; a console server wins on a name clash). Repository-bound stages read the repository's own `.mcp.json` as workspace content and never see console servers |
 | Interpolation | `${VAR}` and `${VAR:-default}` in `command`, `args`, `env` values, `url`, `headers` values, and `cwd`. Resolves against the curated stage env only. Stage attach sets `STAGEFLOW_STAGE_ARTIFACTS_DIR` to the attempt artifacts directory and substitutes `${STAGEFLOW_STAGE_ARTIFACTS_DIR}` in the stage `system_prompt` (Settings Check does not). |
 | Spawn root | stdio servers stamp `cwd` to the catalog project root. Relative `command`/`args` paths resolve against that root. A catalog `cwd` must already be an absolute path inside the project root. |
-| Validate | `sf validate` checks names, shape, reserved-name collision, and that each catalog `command` is on `PATH`. It does not require env vars to be set or a live connect. |
+| Validate | `sf validate` checks names, shape, reserved-name collision, and that each catalog `command` is on `PATH`. It does not require env vars to be set or a live connect. A tool name in a map is accepted even when that name has not been seen. |
+| Allowlist | `mcp: [wonder]` means every tool of `wonder`. A map `wonder: [get_artboards]` means those names. `wonder: ["*"]` means every tool of `wonder`. |
 | Run | A required var that is still unset, and a passed server that will not connect, fail the stage at run time before the agent is treated as having those tools. Connect default is 30s. |
 | Tools | On Pi, a stage gets the named tools of its listed servers (for example `exa_web_fetch_exa`). The adapter's `mcpScript` JavaScript tool and its `mcp` gateway tool are not exposed. On a first attempt Stageflow connects the listed servers once before the session starts so their tools are known when the stage tool list is fixed. |
 | Large results | On Pi, every stage tool result except `read`, `bash`, `grep`, `find`, `ls`, and the Stageflow tools is measured against the remaining context window (with a reserve for the rest of the stage, and at most 30% of the window per result). A result that does not fit is written to `stages/<stageId>/attempts/<n>/artifacts/tool-output/<toolCallId>-<tool>.json` (pretty-printed when the body is JSON) or `.txt`, and the model sees the path, the size, and a short preview. A result the MCP adapter already cut at its 8 MiB backstop is always spilled, with the full body taken from the adapter's temp file (which is then removed); if the adapter could not save that file, the notice says the rest is not available. The file is an ordinary attempt artifact: list it in the envelope `artifacts` and let the model `read` or grep it. Stage prompts should treat that file as the source and should not ask the model to copy tool output into `write_stage_artifact`. `read`, `bash`, `grep`, `find`, and `ls` results stay inline but share a per-turn cap: the first one in a turn always returns, and later ones in the same turn (parallel calls) are replaced by a short notice once the turn's results would pass 40% of the window or the remaining window after the reserve. For `read`, `grep`, `find`, and `ls` nothing is lost and the model repeats the call in a later turn; for `bash` the command has already run, so the notice says not to run it again and to re-read its output with a read-only command. Pi also compacts a long session automatically; that is always on and not configurable (see [Context and compaction](context-and-compaction.md)). |

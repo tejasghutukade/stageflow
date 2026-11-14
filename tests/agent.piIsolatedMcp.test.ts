@@ -3,10 +3,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { TOOL_OUTPUT_HARD_CEILING_BYTES } from "../src/agent/toolOutputBudget.js";
+import { omitFrozenHostLogin } from "../src/config/hostLoginMcp.js";
+import { OAUTH_FILE_KEY_ENV } from "../src/config/mcpOAuth.js";
 import {
   StageMcpError,
   resolveStageMcpServers,
 } from "../src/config/resolveStageMcpServers.js";
+import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 
 const createMcpAdapter = vi.hoisted(() => vi.fn(() => () => {}));
 
@@ -176,6 +179,44 @@ describe("attachIsolatedMcp", () => {
       { name: "docs", status: "cached" },
     ]);
     await attached.connecting;
+  });
+
+  it("omits a host-login URL from eager attach and does not put the file key in the environment", async () => {
+    const prevKey = process.env[OAUTH_FILE_KEY_ENV];
+    const prevHome = process.env.STAGEFLOW_HOME;
+    const home = await mkdtemp(path.join(tmpdir(), "sf-mcp-oauth-home-"));
+    process.env.STAGEFLOW_HOME = home;
+    resetGlobalStageflowHomeForTests();
+    delete process.env[OAUTH_FILE_KEY_ENV];
+    createMcpAdapter.mockClear();
+    const snapshot = {
+      factory: { url: "https://factory.example/mcp" },
+      local: { command: "npx", args: ["-y", "pkg"] },
+    };
+    const worker = omitFrozenHostLogin(snapshot, [
+      { name: "factory", url: "https://factory.example/mcp" },
+    ]);
+    try {
+      const attached = await attachIsolatedMcp(worker, { lifecycle: "eager", timeoutMs: 200 });
+      const adapterOptions = createMcpAdapter.mock.calls[0]?.[0] as
+        | { config?: { mcpServers?: Record<string, unknown>; settings?: Record<string, unknown> } }
+        | undefined;
+      expect(Object.keys(adapterOptions?.config?.mcpServers ?? {})).toEqual(["local"]);
+      expect(adapterOptions?.config?.mcpServers?.local).toMatchObject({
+        command: "npx",
+        lifecycle: "eager",
+      });
+      expect(adapterOptions?.config?.settings).not.toHaveProperty("oauthCredentialStore");
+      expect(process.env[OAUTH_FILE_KEY_ENV]).toBeUndefined();
+      emitIsolatedMcpStatus(attached.eventBus!, [{ name: "local", status: "connected" }]);
+      await attached.connecting;
+    } finally {
+      if (prevKey === undefined) delete process.env[OAUTH_FILE_KEY_ENV];
+      else process.env[OAUTH_FILE_KEY_ENV] = prevKey;
+      if (prevHome === undefined) delete process.env.STAGEFLOW_HOME;
+      else process.env.STAGEFLOW_HOME = prevHome;
+      resetGlobalStageflowHomeForTests();
+    }
   });
 
   it("forwards stamped projectRoot cwd from resolveStageMcpServers into isolated config", async () => {

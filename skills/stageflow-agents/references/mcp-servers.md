@@ -21,7 +21,7 @@ Two sources, merged by name. A console-saved server wins when the name clashes.
 | The project | `<project root>/.mcp.json` | You, with the file tools. The project is the folder with `stageflow.yaml` |
 | The console | `$STAGEFLOW_HOME/mcp/.mcp.json` | Settings → Project MCP, or the REST routes below |
 
-`list_project_mcp` (MCP) and `GET /api/project-mcp` list both, with `origin: project` or `origin: console`. They return names and transport only. They do not connect. `probe_project_mcp` and `POST /api/project-mcp/<name>/probe` connect and exit; that is an external call, so confirm with the user first.
+`list_project_mcp` (MCP) and `GET /api/project-mcp` list both. Each row has `name`, `transport`, `origin` (`project` or `console`), `authStatus`, cached `tools`, and `usableByStages`. They do not connect and they do not return tokens or URLs. Read `usableByStages` and `authStatus` before you put a console server on a stage `mcp` list. `probe_project_mcp` and `POST /api/project-mcp/<name>/probe` connect and exit; that is an external call, so confirm with the user first.
 
 MCP tools on the Host act on the Host's own project (the directory `sf ui` or `sf mcp` was started in). A server saved from the console is host-level and is visible to agents in the projects that Host serves. A `.mcp.json` edit is the file in the project you have open.
 
@@ -96,16 +96,15 @@ There is no MCP tool for any of these routes.
 
 ## OAuth
 
-For a remote server that signs in with OAuth. Console: Settings → Project MCP, sign in, then paste the browser address. REST, still no CLI and no MCP tool:
+For a remote server that signs in with OAuth. Console: Settings → Project MCP, sign in, then the user pastes the browser address into that dialog. REST can start the flow and read status. There is still no CLI and no MCP tool for OAuth.
 
 | Action | Call |
 |---|---|
 | Status | `GET /api/project-mcp/<name>/oauth` |
 | Begin | `POST /api/project-mcp/<name>/oauth/start` → `{ authorizationUrl }` |
-| Finish | `POST /api/project-mcp/<name>/oauth/complete` with `{ "input": "<full address from the browser, or the code>" }` |
 | Sign out | `DELETE /api/project-mcp/<name>/oauth` |
 
-Give the user `authorizationUrl` and ask them to paste the resulting address into the console, or into the `input` field of `complete` if they hand it to you. Do not invent a token. A bad paste is `invalid_input` or `invalid_body`.
+Give the user `authorizationUrl` and ask them to paste the resulting address into the console dialog. When they paste that address into the chat, send them back to the console dialog. Leave the redirect there. Do not invent a token. A bad paste is `invalid_input` or `invalid_body`.
 
 ## After it is saved
 

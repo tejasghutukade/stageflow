@@ -38,12 +38,18 @@ import { readFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { runSkillsDir } from "./runSkills.js";
 import {
+  freezeHostLoginServers,
+  hostLoginAttemptKey,
+  type FrozenHostLoginServer,
+} from "../config/hostLoginMcp.js";
+import {
   MCP_CATALOG_FILENAME,
   STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV,
   StageMcpError,
   mcpCatalogExists,
   mcpCatalogPath,
-  resolveStageMcpServers,
+  partitionHostLogin,
+  resolveStageMcpServersDetailed,
   stampStagePromptArtifactsDir,
   type ResolvedMcpServers,
 } from "../config/resolveStageMcpServers.js";
@@ -241,10 +247,14 @@ async function resolveAttemptMcpServers(
   },
 ): Promise<{
   servers: ResolvedMcpServers | undefined;
+  worker: ResolvedMcpServers | undefined;
+  hostLogin: readonly FrozenHostLoginServer[];
   origins: ConfigOriginRecord[];
 }> {
   const names = allowlist ?? [];
-  if (names.length === 0) return { servers: undefined, origins: [] };
+  if (names.length === 0) {
+    return { servers: undefined, worker: undefined, hostLogin: [], origins: [] };
+  }
   const env = {
     ...(options.stageEnv ?? {}),
     [STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV]: artifactsDir,
@@ -252,56 +262,68 @@ async function resolveAttemptMcpServers(
   const stageIdOpt =
     options.stageId !== undefined ? { stageId: options.stageId } : {};
   const bindingKind = bindingKindForOrigin(options.bindingKind);
+  const repositoryBound = bindingKind === "repository";
 
-  if (factoryCwd !== undefined && (await mcpCatalogExists(factoryCwd, { scope: { kind: "validate" } }))) {
+  const finish = async (
+    projectRoot: string,
+    workspaceSourced: boolean,
+    origin: ConfigOriginRecord["origin"],
+  ): Promise<{
+    servers: ResolvedMcpServers | undefined;
+    worker: ResolvedMcpServers | undefined;
+    hostLogin: readonly FrozenHostLoginServer[];
+    origins: ConfigOriginRecord[];
+  }> => {
     await mkdir(artifactsDir, { recursive: true });
-    const resolved = await resolveStageMcpServers({
-      projectRoot: factoryCwd,
+    const resolution = await resolveStageMcpServersDetailed({
+      projectRoot,
       allowlist: names,
       env,
-      scope: { kind: "stage", secrets: options.declaredSecrets ?? [] },
+      ...(workspaceSourced
+        ? {
+            workspaceSourced: true,
+            trustWorkspaceConfig: options.trustWorkspaceConfig,
+            trustProjectRoot: factoryCwd ?? projectRoot,
+          }
+        : { scope: { kind: "stage" as const, secrets: options.declaredSecrets ?? [] } }),
       bindingKind,
-      trustWorkspaceConfig: options.trustWorkspaceConfig,
       ...stageIdOpt,
     });
-    const origin = "catalog" as const;
-    const catalogPath = mcpCatalogPath(factoryCwd);
+    const split = partitionHostLogin(resolution, { bindingKind, workspaceSourced });
+    const catalogPath = mcpCatalogPath(projectRoot);
     return {
-      servers: Object.keys(resolved).length > 0 ? resolved : undefined,
+      servers: Object.keys(resolution.servers).length > 0 ? resolution.servers : undefined,
+      worker: Object.keys(split.worker).length > 0 ? split.worker : undefined,
+      hostLogin: split.hostLogin,
       origins: names.map((name) => ({
         name,
         origin,
         path: catalogPath,
       })),
     };
+  };
+
+  // mcpCatalogExists is true whenever the host catalog is non-empty, so a repository
+  // binding must not take that console-merge branch. It resolves the checkout file only.
+  if (
+    !repositoryBound &&
+    factoryCwd !== undefined &&
+    (await mcpCatalogExists(factoryCwd, { scope: { kind: "validate" } }))
+  ) {
+    return finish(factoryCwd, false, "catalog");
   }
 
   const checkoutRoot = options.checkoutRoot;
   if (
     checkoutRoot !== undefined &&
-    checkoutRoot !== factoryCwd &&
+    (repositoryBound || checkoutRoot !== factoryCwd) &&
     (await mcpCatalogExists(checkoutRoot))
   ) {
-    await mkdir(artifactsDir, { recursive: true });
-    const resolved = await resolveStageMcpServers({
-      projectRoot: checkoutRoot,
-      allowlist: names,
-      env,
-      bindingKind,
-      trustWorkspaceConfig: options.trustWorkspaceConfig,
-      trustProjectRoot: factoryCwd ?? checkoutRoot,
-      workspaceSourced: true,
-      ...stageIdOpt,
-    });
-    const catalogPath = mcpCatalogPath(checkoutRoot);
-    return {
-      servers: Object.keys(resolved).length > 0 ? resolved : undefined,
-      origins: names.map((name) => ({
-        name,
-        origin: "workspace" as const,
-        path: catalogPath,
-      })),
-    };
+    const separateCheckout = factoryCwd === undefined || checkoutRoot !== factoryCwd;
+    if (!separateCheckout) {
+      return finish(checkoutRoot, false, "catalog");
+    }
+    return finish(checkoutRoot, true, "workspace");
   }
 
   throw new StageMcpError(
@@ -368,6 +390,8 @@ async function openStageWithOperatorCatalog(
     },
   );
   let resolvedMcpServers: ResolvedMcpServers | undefined;
+  let workerMcpServers: ResolvedMcpServers | undefined;
+  let hostLogin: readonly FrozenHostLoginServer[] = [];
   const origins: ConfigOriginRecord[] = [];
   try {
     const mcp = await resolveAttemptMcpServers(
@@ -384,6 +408,8 @@ async function openStageWithOperatorCatalog(
       },
     );
     resolvedMcpServers = mcp.servers;
+    workerMcpServers = mcp.worker;
+    hostLogin = mcp.hostLogin;
     origins.push(...mcp.origins);
   } catch (err) {
     if (err instanceof StageMcpError) {
@@ -475,6 +501,14 @@ async function openStageWithOperatorCatalog(
   const humanLoginHandoff = humanLogin ? stageHandoff : undefined;
   const inOwnBrowser =
     !humanLogin && stageHandoff?.kind === "local_window" && stageHandoff.window === "own_browser";
+  freezeHostLoginServers(
+    hostLoginAttemptKey({
+      runId: input.runId,
+      stageId: input.stageId ?? input.stage.id,
+      attempt: input.roots.attempt,
+    }),
+    hostLogin,
+  );
   try {
     const handle = agent.openStage({
       ...input,
@@ -509,7 +543,7 @@ async function openStageWithOperatorCatalog(
       ...(stageBrowserEnvOf(resolveOptions.stageEnv) !== undefined
         ? { browserEnv: stageBrowserEnvOf(resolveOptions.stageEnv)! }
         : {}),
-      ...(resolvedMcpServers !== undefined ? { resolvedMcpServers } : {}),
+      ...(workerMcpServers !== undefined ? { resolvedMcpServers: workerMcpServers } : {}),
       onResolvedModel: async (info) => {
         await patchRunManifest(
           resolveOptions.store,

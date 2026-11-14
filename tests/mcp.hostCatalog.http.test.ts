@@ -71,7 +71,14 @@ describe("project MCP write routes", () => {
     expect(put.status).toBe(200);
     const list = await call("GET", "/api/project-mcp");
     expect(list.body.status).toBe("ok");
-    expect(list.body.servers).toEqual([{ name: "docs", transport: "http", origin: "console" }]);
+    expect(list.body.servers).toEqual([{
+      name: "docs",
+      transport: "http",
+      origin: "console",
+      authStatus: "not_authenticated",
+      tools: [],
+      usableByStages: false,
+    }]);
     expect((await call("GET", "/api/project-mcp/docs")).body.config).toEqual({ url: "https://docs.test/mcp" });
     expect((await call("DELETE", "/api/project-mcp/docs")).status).toBe(200);
     expect((await call("DELETE", "/api/project-mcp/docs")).status).toBe(404);

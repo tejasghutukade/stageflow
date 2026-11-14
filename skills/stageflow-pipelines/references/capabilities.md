@@ -44,6 +44,8 @@ Names resolve from the project `.mcp.json` (`mcpServers`) merged with console-sa
 
 `${VAR}` and `${VAR:-default}` in the server's `command`, `args`, `env`, `url`, `headers` and `cwd` resolve against the stage's curated environment. A console secret named in `secrets:` fills MCP servers only and is not put in the stage environment. The stage still has `emit_stage_envelope`, `write_stage_artifact` and, when allowed, `ask_operator` without listing them.
 
+A console HTTP server with no resolved `Authorization` header is a signed-in server. The Host calls it. A repository binding and a workspace-sourced catalog do not receive that sign-in. A Claude stage reports `oauth_backend_unsupported` when one remains. An eval run calls it only when that run sets `allow_host_login` (`sf eval run --allow-host-login`, or `allow_host_login: true` on `run_eval` and `try_eval_case`). `allow_real_tools` is a different flag: it consents to an agent eval acting on the project.
+
 ## Browser stages
 
 `browser` is an object on the stage file or the `uses:` wrapper. A wrapper object replaces the file object. Allowed keys: `profile`, `headed`, `allow_domains`, `login_url`, `check`. `path`, `scope`, `secret` and launch options (`launch_args`, `args`, `executable_path`, `executable`, `display`, `headless`, `xvfb`, `env`) are `stage.invalid_browser`. The Host chooses the profile directory and the owner scope.

@@ -629,6 +629,7 @@ export type HttpStartEvalRunInput = {
   model?: string;
   user_model?: string;
   allow_real_tools?: boolean;
+  allow_host_login?: boolean;
   max_cost_usd?: number;
   case_ids?: string[];
   tags?: string[];

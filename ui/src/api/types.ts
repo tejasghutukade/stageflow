@@ -1122,6 +1122,12 @@ export type ProjectMcpCatalogEntry = {
   name: string;
   transport: ProjectMcpCatalogTransport;
   origin: ProjectMcpOrigin;
+  /** Stored sign-in for a URL server. The console does not derive this. */
+  authStatus?: McpOAuthStatus;
+  /** Cached tool names from the list payload. */
+  tools?: string[];
+  /** Server-computed. True only for a console server whose stored status is authenticated. */
+  usableByStages?: boolean;
 };
 
 /** A server config as stored in .mcp.json. Secrets appear only as `${NAME}` placeholders. */

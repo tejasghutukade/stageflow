@@ -13,6 +13,8 @@ export type SnapshotOverrides = {
   user_model?: string | null;
   tools?: string | null;
   approvals?: string | null;
+  /** Present only when the run consented to signed-in console MCP servers. Omitted from the fingerprint. */
+  allow_host_login?: true;
 };
 
 export type SnapshotGrader = {

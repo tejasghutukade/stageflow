@@ -49,6 +49,8 @@ import {
   type StageFunctionHost,
 } from "../functions/workerIpc.js";
 import { resolveStageFunctionGrants } from "./stageFunctionChecks.js";
+import { classifyParentHostLogin, serveStageMcpCall, serveStageMcpList } from "./stageMcpHost.js";
+import { isStageMcpMessage, stageMcpCallBody } from "./stageMcpWorker.js";
 
 export type StageLaunchInput = {
   runId: string;
@@ -266,6 +268,7 @@ export class StageProcessLauncher {
   private readonly functionInvokerOption: StageFunctionHost | undefined;
   private resolvedFunctionInvoker: StageFunctionHost | undefined;
   private readonly functionCalls = new Map<ChildProcess, Set<string>>();
+  private readonly mcpCalls = new Map<ChildProcess, Map<string, AbortController>>();
 
   constructor(options: StageProcessLauncherOptions = {}) {
     this.env = options.env ?? process.env;
@@ -587,6 +590,16 @@ export class StageProcessLauncher {
     attachStreamLineLogger(child.stdout, stageLog, "stage.stdout", maxLineBytes);
     attachStreamLineLogger(child.stderr, stageLog, "stage.stderr", maxLineBytes);
 
+    // The child freezes host-login names in its own process. Classify from the
+    // stage this parent forked; do not read that map.
+    const frozenPromise = classifyParentHostLogin({
+      stage: input.stage,
+      bindingKind: input.bindingKind,
+      factoryCwd,
+      rootDir: input.rootDir,
+      env: input.env,
+    });
+
     return new Promise<StageLaunchResult>((resolve) => {
       let settled = false;
 
@@ -600,6 +613,8 @@ export class StageProcessLauncher {
         settled = true;
         const pending = [...(this.functionCalls.get(child) ?? [])];
         this.functionCalls.delete(child);
+        for (const controller of this.mcpCalls.get(child)?.values() ?? []) controller.abort();
+        this.mcpCalls.delete(child);
         void this.cancelFunctionInvocations(pending).finally(() => {
           cleanup();
           resolve(result);
@@ -683,6 +698,55 @@ export class StageProcessLauncher {
             }
             if (child.connected && !settled) child.send({ type: "memory.response", requestId: request.requestId, ...response });
           })();
+          return;
+        }
+        if (!settled && isStageMcpMessage(message)) {
+          if (typeof request.requestId !== "string" || request.requestId.length === 0 || request.requestId.length > 100) return;
+          const requestId = request.requestId;
+          if (request.type === "mcp.cancel") {
+            this.mcpCalls.get(child)?.get(requestId)?.abort();
+            return;
+          }
+          const controller = new AbortController();
+          let calls = this.mcpCalls.get(child);
+          if (!calls) {
+            calls = new Map();
+            this.mcpCalls.set(child, calls);
+          }
+          calls.set(requestId, controller);
+          void (async () => {
+            let result: object;
+            try {
+              const frozen = await frozenPromise;
+              if (controller.signal.aborted || settled) return;
+              if (request.type === "mcp.list") {
+                result = await serveStageMcpList({
+                  frozen,
+                  stage: input.stage ?? {},
+                  signal: controller.signal,
+                });
+              } else {
+                const body = stageMcpCallBody(request.input);
+                result = body
+                  ? await serveStageMcpCall({
+                      frozen,
+                      stage: input.stage ?? {},
+                      server: body.server,
+                      tool: body.tool,
+                      arguments: body.arguments,
+                      signal: controller.signal,
+                    })
+                  : { ok: false, code: "permission_denied", message: "permission_denied" };
+              }
+            } catch {
+              result = controller.signal.aborted
+                ? { ok: false, code: "cancelled", message: "cancelled" }
+                : { ok: false, code: "connect_failed", message: "connect_failed" };
+            }
+            if (child.connected && !settled) child.send({ type: "mcp.response", requestId, result });
+          })().finally(() => {
+            this.mcpCalls.get(child)?.delete(requestId);
+          });
           return;
         }
         if (!settled && request?.type === "channel.send") {

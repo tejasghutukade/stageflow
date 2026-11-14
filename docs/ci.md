@@ -163,6 +163,10 @@ Distinct from `busy_capacity`. The run is not queued. The same floor is re-check
 
 Optional `code` when the start failure reports one.
 
+A stage that uses a host-login MCP server (a console URL server with no `Authorization` header) is checked from the stored sign-in before a run is created. `sf run --json` then fails with no `runId` and `code` set to that result. `needs_auth`, `insufficient_scope`, and `connect_failed` stay distinct: signed out or expired is `needs_auth`, a store that cannot be read is `connect_failed`, and a later `403` with `insufficient_scope` is not rewritten. The document does not contain the access token, refresh token, or authorization code. Preflight does not connect and does not refresh. After the operator signs in, retry can use the server.
+
+When the run was created and a stage then fails with one of those codes, or with `oauth_backend_unsupported` (the Claude backend cannot use a host-login server), the completion document sets both `reason` and `code` to that same string. They are not collapsed into one another.
+
 **Validation failure during `sf run --json`:** stdout is **validate-shaped** JSON (`ok`, `scope`, `checks`, `findings`…) with **no** `outcome` / `runId`. Exit `1`. Distinct from `outcome: "failed"`.
 
 `ok` is `true` only for `succeeded`.
