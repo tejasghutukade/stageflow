@@ -5,6 +5,7 @@ import type {
   StageBrowserConfig,
   StageGateKind,
   StageIoYaml,
+  StageMcpTools,
 } from "./stage.js";
 import type { FunctionGrant } from "../config/loadFunction.js";
 import type { CompletionContract, RecoveryPolicy } from "./completion.js";
@@ -183,7 +184,8 @@ export type PipelineStageYamlEntry = {
   gate_kinds?: StageGateKind[];
   timeout_ms?: number;
   skill?: string;
-  mcp?: string[];
+  /** Server names, or server name to tool names. `"*"` in a tool list means every tool. */
+  mcp?: string[] | Record<string, string[]>;
   browser?: StageBrowserConfig;
   replay_safe?: boolean;
   route?: PipelineRouteEntry[];
@@ -214,7 +216,9 @@ export type NormalizedPipelineStageEntry = {
   routeFunction?: { id: string; grants: FunctionGrant[] };
   entry?: boolean;
   skill?: string;
+  /** Server names. Named tools, when set, are `mcp_tools`. */
   mcp?: string[];
+  mcp_tools?: StageMcpTools;
   secrets?: StageSecretDecl[];
   requires?: ToolRequirement[];
   browser?: StageBrowserConfig;
