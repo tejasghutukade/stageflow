@@ -10,8 +10,8 @@ import { probeGlobalServiceDetailed } from "../server/ensureGlobalService.js";
 export const RESTORE_USAGE = `Usage:
   sf restore <file> [--force] [--json]
 
-Restores a Stageflow backup. The Host must be down (probed via /livez).
-Never autostarts a Host. Previous state.db is moved aside, not deleted.`;
+Restores a Stageflow backup or an archive made by sf archive. The Host must be down (probed via /livez).
+Never autostarts a Host. Previous state.db and any file an archive replaces are moved aside, not deleted.`;
 
 export type RestoreCommandIo = {
   log: (line: string) => void;
@@ -98,6 +98,9 @@ export async function runRestoreCommand(
     } else {
       out.log(
         `Restored schema_version=${result.schema_version}` +
+          (result.kind === "archive"
+            ? ` (archive: ${result.files_restored} files${result.secrets_restored ? `, ${result.secrets_restored} secret files` : ""}${result.links_skipped && result.links_skipped.length > 0 ? `, ${result.links_skipped.length} links skipped` : ""}; replaced files kept as *.pre-restore-${result.pre_restore_stamp})`
+            : "") +
           (result.missing_a2a_artifact_rows > 0
             ? ` (missing A2A artifact bytes: ${result.missing_a2a_artifact_rows})`
             : ""),

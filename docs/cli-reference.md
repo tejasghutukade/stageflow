@@ -668,13 +668,13 @@ sf archive [--out <file>] [--include-secrets] [--include-a2a-artifacts] [--json]
 
 Secrets are left out by default. The manifest lists every file with its size and SHA-256, and every path left out with the reason (disposable, a secret, or not in the inventory). Run files exclude agent directories, credentials, `node_modules` and `.git`. The archive is written with mode `0600` and opens with a standard `tar -xzf`. It needs free space for the data it copies and stops early when there is not enough.
 
-`sf restore` does not accept an archive yet; use it to keep a copy you own and can read. `sf backup` stays the way to restore the run store today.
+[`sf restore`](#sf-restore) restores an archive as well as a backup.
 
 HTTP: `POST /api/archive` with `{ "include_secrets"?: boolean, "include_a2a_artifacts"?: boolean }` builds one under `backups/` and answers `{ name, bytes, sha256, file_count, left_out_count, contains_secrets, archive_version, stageflow_version, created_at }` (never the path); `GET /api/archive/<name>` streams it. Both require **drive** scope. Only one archive is built at a time (`409 archive_in_progress`); `507 archive_insufficient_space` when the disk is too full.
 
 ## `sf restore`
 
-Whole-store restore. Host must be down (probes `GET /livez`; never calls `ensureGlobalService`). Previous `state.db` is moved aside as `*.pre-restore-<ISO>`.
+Whole-store restore of a backup or an [`sf archive`](#sf-archive) archive (detected by its manifest). Host must be down (probes `GET /livez`; never calls `ensureGlobalService`). Previous `state.db` is moved aside as `*.pre-restore-<ISO>`.
 
 ```bash
 sf restore <file> [--force] [--json]
@@ -686,6 +686,8 @@ sf restore <file> [--force] [--json]
 | `--json` | Machine-readable result |
 
 HTTP: `POST /api/restore` with `{ "backup": "<name>" }` (drive) → `202` then drain; boot applies before opening the store.
+
+An archive restore verifies every file against the manifest's size and SHA-256 and every entry against the allowed names before it touches anything. Files the archive carries are placed in the data directory, and a file that already exists is moved aside as `<name>.pre-restore-<ISO>`; files the archive does not carry stay as they are. Secret files are restored only when the archive contains them (`--include-secrets` when it was made). A symbolic link is restored only when it stays inside the data directory; others are skipped and listed. An archive from a newer Stageflow minor version is refused, and `--force` does not change that; a different major version is refused unless `--force` is given. It stops early when the staging area lacks room.
 
 ## `sf export`
 

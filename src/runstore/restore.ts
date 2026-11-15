@@ -39,7 +39,8 @@ export type RestoreErrorCode =
   | "restore_version_mismatch"
   | "restore_unsafe_member"
   | "restore_failed"
-  | "restore_not_found";
+  | "restore_not_found"
+  | "restore_insufficient_space";
 
 export class RestoreError extends Error {
   readonly code: RestoreErrorCode;
@@ -112,6 +113,11 @@ export type RestoreMarker = {
   staged_at: string;
   drain_deadline?: string;
 };
+
+/** `path.extname` of `x.tar.gz` is `.gz`, which the restore would then read as a bare database. */
+function stagedExtension(file: string): string {
+  return /\.tar\.gz$/i.test(file) ? ".tar.gz" : path.extname(file) || ".tar.gz";
+}
 
 function majorVersion(version: string): string {
   return version.split(".")[0] ?? version;
@@ -323,6 +329,12 @@ export type ApplyRestoreResult = {
   schema_version: number;
   missing_a2a_artifact_rows: number;
   pre_restore_stamp: string;
+  /** Set when the file was an `sf archive` archive rather than a backup. */
+  kind?: "archive";
+  files_restored?: number;
+  links_restored?: number;
+  links_skipped?: string[];
+  secrets_restored?: number;
 };
 
 export async function applyRestoreArchive(options: {
@@ -343,6 +355,37 @@ export async function applyRestoreArchive(options: {
       throw new RestoreError(`restore_host_live: ${err.message}`, "restore_host_live");
     }
     throw err;
+  }
+
+  const archives = await import("../archive/restoreArchive.js");
+  const archiveManifest = await archives.detectArchive(options.archivePath);
+  if (archiveManifest) {
+    const stagingDir = await mkdtemp(path.join(tmpdir(), "sf-restore-"));
+    try {
+      const staged = await archives.stageArchive(options.archivePath, stagingDir, { force: options.force === true });
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      let applied: ReturnType<typeof archives.applyStagedArchive> | undefined;
+      withExclusiveStoreLock(homeDir, () => {
+        applied = archives.applyStagedArchive({
+          homeDir,
+          staged,
+          stamp,
+          restoreSecrets: options.restoreCredentials !== false,
+          moveAsideStore: () => moveAsideTriplet(homeDir, stamp),
+        });
+      });
+      assertNoSidecars(path.join(homeDir, "state.db"));
+      const check = new Database(path.join(homeDir, "state.db"));
+      try {
+        assertStoreQuickCheck(check);
+      } finally {
+        check.close();
+      }
+      return { schema_version: staged.schemaVersion, missing_a2a_artifact_rows: 0, pre_restore_stamp: stamp, kind: "archive", ...applied! };
+    } finally {
+      hostLock.release();
+      await rm(stagingDir, { recursive: true, force: true });
+    }
   }
 
   const verified = await extractVerifiedArchive(options.archivePath).catch((err: unknown) => {
@@ -430,6 +473,29 @@ export async function stageRestoreForBoot(options: {
     );
   }
 
+  const archives = await import("../archive/restoreArchive.js");
+  if (await archives.detectArchive(options.archivePath)) {
+    const checkDir = await mkdtemp(path.join(tmpdir(), "sf-restore-check-"));
+    try {
+      await archives.stageArchive(options.archivePath, checkDir, { force: false });
+    } finally {
+      await rm(checkDir, { recursive: true, force: true });
+    }
+    const pending = restorePendingDir(homeDir);
+    mkdirSync(pending, { recursive: true });
+    const basename = `staged-${Date.now()}${stagedExtension(options.archivePath)}`;
+    const stagedPath = path.join(pending, basename);
+    copyFileSync(options.archivePath, stagedPath);
+    const marker: RestoreMarker = {
+      archive: basename,
+      attempts: 0,
+      staged_at: new Date().toISOString(),
+      drain_deadline: new Date(Date.now() + (options.graceMs ?? 8000)).toISOString(),
+    };
+    writeFileSync(restoreMarkerPath(homeDir), `${JSON.stringify(marker, null, 2)}\n`);
+    return { marker, stagedPath };
+  }
+
   const verified = await extractVerifiedArchive(options.archivePath);
   await rm(verified.stagingDir, { recursive: true, force: true });
 
@@ -446,7 +512,7 @@ export async function stageRestoreForBoot(options: {
 
   const pending = restorePendingDir(homeDir);
   mkdirSync(pending, { recursive: true });
-  const basename = `staged-${Date.now()}${path.extname(options.archivePath) || ".tar.gz"}`;
+  const basename = `staged-${Date.now()}${stagedExtension(options.archivePath)}`;
   const stagedPath = path.join(pending, basename);
   copyFileSync(options.archivePath, stagedPath);
 
