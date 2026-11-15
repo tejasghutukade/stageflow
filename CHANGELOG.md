@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.64.1] - 2026-11-15
+
+### Added
+- Internal: the archive builder (`src/archive/`) that a later release exposes as `sf archive`. Nothing calls it yet, so no command, route or file format changes.
+
 ## [0.64.0] - 2026-11-15
 
 ### Upgrade notes
