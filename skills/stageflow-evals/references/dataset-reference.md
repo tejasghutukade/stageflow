@@ -13,7 +13,7 @@ A dataset is a file of cases. Stage cases are one input each. Agent cases are sc
 
 ## Format and case keys
 
-Write `.dataset.jsonl`: one JSON object per line, blank lines ignored. The editing tools only write JSONL. `.dataset.json` (an array, or `{ "cases": [...] }`) and `.dataset.csv` load and run but are read-only to the tools (`DATASET_READ_ONLY`); convert them with `convert_dataset` or the console's **Convert to JSONL**.
+Write `.dataset.jsonl`: one JSON object per line, blank lines ignored. The editing tools only write JSONL. `.dataset.json` (an array, or `{ "cases": [...] }`) and `.dataset.csv` load and run but are read-only to the tools (`DATASET_READ_ONLY`); convert them with `save_dataset` with `action: convert` or the console's **Convert to JSONL**.
 
 | Key | Required | Rule |
 |---|---|---|
@@ -97,7 +97,7 @@ Cover on purpose:
 2. **Edge cases**: empty or very long input, odd formatting, missing optional fields, two intents at once.
 3. **Cases that must not trigger the behavior**: a clean input for a stage that flags problems; a request the agent must decline. Without negatives a stage that always flags passes.
 4. **Ambiguous cases** where the right answer needs judgment. Mark them with a tag such as `ambiguous` and treat their failures as a signal about the grader or the case before the stage.
-5. **Known failures** from real runs, added as you meet them. For stages, copy inputs from past runs (`create_dataset` with `source: runs`, or **From past runs** in the console). For agents, build scripts from finished sessions (`source: sessions`; each session becomes a script of its user messages with `expected.tools` set to the tools it called and the tag `from-session`; tool results are not copied).
+5. **Known failures** from real runs, added as you meet them. For stages, copy inputs from past runs (`save_dataset` with `action: create` and `source: runs`, or **From past runs** in the console). For agents, build scripts from finished sessions (`source: sessions`; each session becomes a script of its user messages with `expected.tools` set to the tools it called and the tag `from-session`; tool results are not copied).
 
 Rules that keep the numbers honest:
 
@@ -114,5 +114,5 @@ Rules that keep the numbers honest:
 - With file access, edit the JSONL directly and run `sf eval validate`. One JSON object per line; no trailing commas; no pretty-printing across lines.
 - A dataset's `base_hash` is a hash of the parsed cases, not of the file bytes, so you cannot compute it with `shasum`. Read it from `sf eval datasets --json` (`hash`) or from the result of the last dataset tool call. An eval file's `base_hash` is different: it is the SHA-256 of the file bytes (`file_hash` in `get_eval`).
 - There is no MCP tool that reads or lists datasets. An MCP-only session must first get the cases and `hash` from `sf eval datasets --json` or the file. If neither is reachable, stop and ask the user. Do not send a placeholder `base_hash`.
-- `update_dataset_cases` applies a whole `ops` list or nothing. `create_dataset` with `mode: replace` overwrites every case: use `append` unless the user asked to start over.
+- `save_dataset` with `action: ops` applies a whole `ops` list or nothing. `save_dataset` with `action: create` and `mode: replace` overwrites every case: use `append` unless the user asked to start over.
 - Changing a dataset changes what the next run measures. Comparisons across different dataset hashes warn (`dataset_differs`). To compare fairly, keep the dataset fixed while you change the stage or agent, and when you must change the dataset, rerun the baseline on the new one.

@@ -28,7 +28,7 @@ export function useEditorOptions(): EditorOptions {
         setStageflowCatalog(catalog);
         set({ stageflow: catalog });
       },
-      () => set({ stageflow: { groups: [] } }),
+      () => set({ stageflow: { groups: [], toolsets: [] } }),
     );
     fetchSkills().then(
       (result) => set({ skills: result.skills.map((skill) => ({ name: skill.name, description: skill.description })) }),

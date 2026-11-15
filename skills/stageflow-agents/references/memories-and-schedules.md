@@ -19,16 +19,16 @@ There is no `sf` command for memories. Use MCP or REST. REST writes need `Origin
 
 | Action | MCP | REST |
 |---|---|---|
-| List (id, description, card count) | `list_memories` | `GET /api/memories` |
-| Read description, cover, and (MCP) card keys | `get_memory { id }` | `GET /api/memories/<id>` returns the description and the cover as `body`. Card keys: `GET /api/memories/<id>/cards`. One card: `GET /api/memories/<id>/cards?key=` |
-| Create | `create_memory { id, description }` | `POST /api/memories` with `{ "id", "description" }` → 201. The cover starts empty |
-| Replace the cover | `write_memory { id, body }` | `PATCH /api/memories/<id>` with `{ "body" }` |
-| Replace an existing card | `write_memory_card { id, key, body }` | `PATCH /api/memories/<id>/cards` with `{ "key", "body" }` |
+| List (id, description, card count) | `get_memory` with `list: true` | `GET /api/memories` |
+| Read description, cover, and (MCP) card keys | `get_memory` with `{ id }` | `GET /api/memories/<id>` returns the description and the cover as `body`. Card keys: `GET /api/memories/<id>/cards`. One card: `GET /api/memories/<id>/cards?key=` |
+| Create | `save_memory` with `mode: create` and `{ id, description }` | `POST /api/memories` with `{ "id", "description" }` → 201. The cover starts empty |
+| Replace the cover | `save_memory` with `mode: update` and `{ id, body }` | `PATCH /api/memories/<id>` with `{ "body" }` |
+| Replace an existing card | `save_memory` with `mode: update`, `card: true`, and `{ id, key, body }` | `PATCH /api/memories/<id>/cards` with `{ "key", "body" }` |
 | Delete a card | `delete_memory_card { id, key }` | `DELETE /api/memories/<id>/cards` with `{ "key" }` |
 | Previous cover | none | `GET /api/memories/<id>/previous` |
 | Previous card | none | `GET /api/memories/<id>/cards/previous?key=` |
 
-No tool and no route can add a new card. `write_memory_card` and the PATCH replace a card that already exists; a missing card is `MEMORY_CARD_NOT_FOUND`. A session's `add_memory_card` is the only way to create one. There is no restore from the previous copy; the previous routes only read it.
+No tool and no route can add a new card. `save_memory` with `card: true` and the PATCH replace a card that already exists; a missing card is `MEMORY_CARD_NOT_FOUND`. A session's `add_memory_card` is the only way to create one. There is no restore from the previous copy; the previous routes only read it.
 
 MCP errors are `{ "error": "<CODE>" }`. REST errors are `{ "code": "<CODE>" }`. When the Host has no memory store, MCP returns `{ "error": "MEMORIES_UNAVAILABLE" }` and REST returns 503 `{ "code": "memory.unavailable" }`.
 
@@ -40,7 +40,7 @@ Sub-agents do not inherit the list. Each agent that should see the memory names 
 
 Do not attach a memory to a public web agent. Public chat refuses memories with `identity.setup_required`. See [channels-and-identity.md](channels-and-identity.md).
 
-Seed facts you want present on the first run with `write_memory` (the cover) before the agent is enabled. Card keys should be stable (an email, an order id, a date), so a later session can find the same card.
+Seed facts you want present on the first run with `save_memory` with `mode: update` (the cover) before the agent is enabled. Card keys should be stable (an email, an order id, a date), so a later session can find the same card.
 
 ## What a session is given
 

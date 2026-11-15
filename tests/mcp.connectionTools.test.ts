@@ -101,37 +101,30 @@ describe("connection MCP tools", () => {
   it("registers the connection tools and their arguments", () => {
     const tools = recordConnectionTools(depsFor());
     expect(tools.map((tool) => tool.name)).toEqual([
-      "list_connections",
-      "create_connection",
-      "update_connection",
+      "get_connection",
+      "save_connection",
       "remove_connection",
       "test_connection",
-      "validate_connection_target",
     ]);
     const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
-    expect(schemaKeys(byName.list_connections!.inputSchema)).toEqual([]);
-    expect(schemaKeys(byName.create_connection!.inputSchema)).toEqual(["config", "credential", "displayName", "id", "provider", "secrets"]);
-    expect(schemaKeys(byName.update_connection!.inputSchema)).toEqual(["config", "displayName", "enabled", "id", "secrets"]);
+    expect(schemaKeys(byName.get_connection!.inputSchema)).toEqual([]);
+    expect(schemaKeys(byName.save_connection!.inputSchema)).toEqual(["mode"]);
     expect(schemaKeys(byName.remove_connection!.inputSchema)).toEqual(["id"]);
     expect(schemaKeys(byName.test_connection!.inputSchema)).toEqual(["config", "credential", "displayName", "id", "provider", "secrets"]);
-    expect(schemaKeys(byName.validate_connection_target!.inputSchema)).toEqual(["cc", "id", "template", "to"]);
-    expect(byName.list_connections!.readOnlyHint).toBe(true);
+    expect(byName.get_connection!.readOnlyHint).toBe(true);
     expect(byName.test_connection!.readOnlyHint).toBe(false);
-    expect(byName.validate_connection_target!.readOnlyHint).toBe(true);
-    expect(byName.create_connection!.readOnlyHint).toBe(false);
-    expect(byName.update_connection!.readOnlyHint).toBe(false);
+    expect(byName.save_connection!.readOnlyHint).toBe(false);
     expect(byName.remove_connection!.readOnlyHint).toBe(false);
   });
 
   it("returns CHANNELS_UNAVAILABLE without echoing arguments when the service is missing", async () => {
     const tools = recordConnectionTools(depsFor());
     const calls: Array<[string, Record<string, unknown>]> = [
-      ["list_connections", {}],
-      ["create_connection", createBody()],
-      ["update_connection", { id: "box", secrets: { token: SECRET } }],
+      ["get_connection", {}],
+      ["save_connection", { mode: "create", ...createBody() }],
+      ["save_connection", { mode: "update", id: "box", secrets: { token: SECRET } }],
       ["remove_connection", { id: "box" }],
       ["test_connection", createBody()],
-      ["validate_connection_target", { id: "box", to: "a@b.test" }],
     ];
     for (const [name, args] of calls) {
       const result = await invoke(tools, name, args);
@@ -164,8 +157,15 @@ describe("connection MCP tools", () => {
     );
     try {
       const tools = recordConnectionTools(depsFor(service));
-      for (const name of ["list_connections", "create_connection", "update_connection", "remove_connection", "test_connection", "validate_connection_target"]) {
-        const result = await invoke(tools, name, createBody({ id: "box", to: "a@b.test" }));
+      const calls: Array<[string, Record<string, unknown>]> = [
+        ["get_connection", {}],
+        ["save_connection", { mode: "create", ...createBody({ id: "box" }) }],
+        ["save_connection", { mode: "update", id: "box", enabled: true }],
+        ["remove_connection", { id: "box" }],
+        ["test_connection", createBody({ id: "box" })],
+      ];
+      for (const [name, args] of calls) {
+        const result = await invoke(tools, name, args);
         expect(result.isError).toBe(true);
         expect(bodyOf(result)).toEqual({ error: "CHANNEL_SECRET_UNAVAILABLE" });
         expect(JSON.stringify(result)).not.toContain(SECRET);
@@ -188,7 +188,10 @@ describe("connection MCP tools", () => {
       meta: () => { throw new Error("unused"); },
       stop: async () => {},
     } as ChannelService;
-    const result = await invoke(recordConnectionTools(depsFor(service)), "create_connection", createBody());
+    const result = await invoke(recordConnectionTools(depsFor(service)), "save_connection", {
+      mode: "create",
+      ...createBody(),
+    });
     expect(result.isError).toBe(true);
     expect(bodyOf(result)).toEqual({ error: "CHANNEL_STORAGE_FAILED" });
     expect(JSON.stringify(result)).not.toContain(SECRET);
@@ -228,11 +231,11 @@ describe("connection MCP tools against a local channel service", () => {
       vi.spyOn(console, method).mockImplementation(() => {}),
     );
     try {
-      const listed = await invoke(tools, "list_connections");
+      const listed = await invoke(tools, "get_connection");
       expect(listed.isError).toBeUndefined();
       expect(bodyOf(listed)).toEqual(service.list());
 
-      const created = await invoke(tools, "create_connection", createBody({ id: "box", displayName: "Box" }));
+      const created = await invoke(tools, "save_connection", { mode: "create", ...createBody({ id: "box", displayName: "Box" }) });
       expect(created.isError).toBeUndefined();
       expect(JSON.stringify(created)).not.toContain(SECRET);
       expect(bodyOf(created)).toMatchObject({ id: "box", health: { state: "ok" } });
@@ -244,14 +247,14 @@ describe("connection MCP tools against a local channel service", () => {
       const stored = JSON.parse(await readFile(path.join(home, "channel-secrets.json"), "utf8")) as Record<string, string>;
       expect(stored["connection.box.token"]).toBe(SECRET);
 
-      const afterCreate = await invoke(tools, "list_connections");
+      const afterCreate = await invoke(tools, "get_connection");
       expect(JSON.stringify(afterCreate)).not.toContain(SECRET);
       expect(bodyOf(afterCreate)).toEqual(service.list());
       const summary = (bodyOf(afterCreate) as { connections: Array<{ secrets: Record<string, string> }> }).connections[0]!;
       expect(summary.secrets).toEqual({ token: "store" });
       expect(Object.values(summary.secrets).every((kind) => kind === "env" || kind === "store")).toBe(true);
 
-      const replaced = await invoke(tools, "update_connection", { id: "box", secrets: { token: REPLACED_SECRET } });
+      const replaced = await invoke(tools, "save_connection", { mode: "update", id: "box", secrets: { token: REPLACED_SECRET } });
       expect(replaced.isError).toBeUndefined();
       expect(JSON.stringify(replaced)).not.toContain(SECRET);
       expect(JSON.stringify(replaced)).not.toContain(REPLACED_SECRET);
@@ -259,9 +262,10 @@ describe("connection MCP tools against a local channel service", () => {
       const replacedStore = JSON.parse(await readFile(path.join(home, "channel-secrets.json"), "utf8")) as Record<string, string>;
       expect(replacedStore["connection.box.token"]).toBe(REPLACED_SECRET);
 
-      const disabled = await invoke(tools, "update_connection", { id: "box", enabled: false });
+      const disabled = await invoke(tools, "save_connection", { mode: "update", id: "box", enabled: false });
       expect(bodyOf(disabled)).toEqual({});
-      const renamed = await invoke(tools, "update_connection", {
+      const renamed = await invoke(tools, "save_connection", {
+        mode: "update",
         id: "box",
         enabled: true,
         displayName: "Renamed",
@@ -269,28 +273,25 @@ describe("connection MCP tools against a local channel service", () => {
       });
       expect(JSON.stringify(renamed)).not.toContain(REPLACED_SECRET);
       expect(bodyOf(renamed)).toMatchObject({ health: { state: "ok" } });
-      const current = (bodyOf(await invoke(tools, "list_connections")) as { connections: Array<Record<string, unknown>> }).connections[0]!;
+      const current = (bodyOf(await invoke(tools, "get_connection")) as { connections: Array<Record<string, unknown>> }).connections[0]!;
       expect(current).toMatchObject({ enabled: true, displayName: "Renamed", identity: "c@d.test", secrets: { token: "store" } });
 
-      const cleared = await invoke(tools, "update_connection", { id: "box", displayName: null });
+      const cleared = await invoke(tools, "save_connection", { mode: "update", id: "box", displayName: null });
       expect(JSON.stringify(cleared)).not.toContain(REPLACED_SECRET);
-      expect((bodyOf(await invoke(tools, "list_connections")) as { connections: Array<{ displayName: string }> }).connections[0]!.displayName).toBe("box");
-
-      expect(bodyOf(await invoke(tools, "validate_connection_target", { id: "box", to: "person@b.test" }))).toEqual({ ok: true });
-      expect(bodyOf(await invoke(tools, "validate_connection_target", { id: "box", to: "person@b.test", cc: ["other@b.test"] }))).toEqual({ ok: false, issues: ["target"] });
+      expect((bodyOf(await invoke(tools, "get_connection")) as { connections: Array<{ displayName: string }> }).connections[0]!.displayName).toBe("box");
 
       const tested = await invoke(tools, "test_connection", createBody({ id: "draft-only" }));
       expect(tested.isError).toBeUndefined();
       expect(JSON.stringify(tested)).not.toContain(SECRET);
       expect(bodyOf(tested)).toMatchObject({ state: "ok" });
-      expect((bodyOf(await invoke(tools, "list_connections")) as { connections: unknown[] }).connections.map((item) => (item as { id: string }).id)).toEqual(["box"]);
+      expect((bodyOf(await invoke(tools, "get_connection")) as { connections: unknown[] }).connections.map((item) => (item as { id: string }).id)).toEqual(["box"]);
       await expect(stat(path.join(home, "connections.yaml"))).resolves.toBeTruthy();
 
       const removed = await invoke(tools, "remove_connection", { id: "box" });
       expect(removed.isError).toBeUndefined();
       expect(bodyOf(removed)).toEqual({ removed: true });
       expect(JSON.stringify(removed)).not.toContain(REPLACED_SECRET);
-      expect((bodyOf(await invoke(tools, "list_connections")) as { connections: unknown[] }).connections).toEqual([]);
+      expect((bodyOf(await invoke(tools, "get_connection")) as { connections: unknown[] }).connections).toEqual([]);
 
       const missing = await invoke(tools, "remove_connection", { id: "box" });
       expect(missing.isError).toBe(true);
@@ -303,6 +304,18 @@ describe("connection MCP tools against a local channel service", () => {
     }
   });
 
+  it("returns connection_EXISTS when creating a duplicate id", async () => {
+    await start();
+    await invoke(tools, "save_connection", { mode: "create", ...createBody({ id: "box" }) });
+    const duplicate = await invoke(tools, "save_connection", {
+      mode: "create",
+      ...createBody({ id: "box", displayName: "Second" }),
+    });
+    expect(duplicate.isError).toBe(true);
+    expect(bodyOf(duplicate)).toEqual({ error: "connection_EXISTS", code: "connection_EXISTS" });
+    expect(JSON.stringify(duplicate)).not.toContain(SECRET);
+  });
+
   it("lists an env secret reference as env and never the variable name's value", async () => {
     await start();
     await writeFile(
@@ -313,7 +326,7 @@ describe("connection MCP tools against a local channel service", () => {
     await releaseChannelHost(home);
     service = startChannelService(home, { intervalMs: 3_600_000 });
     deps.channels = service;
-    const listed = await invoke(tools, "list_connections");
+    const listed = await invoke(tools, "get_connection");
     expect(listed.isError).toBeUndefined();
     expect(bodyOf(listed)).toEqual(service.list());
     const summary = (bodyOf(listed) as { connections: Array<{ secrets: Record<string, string> }> }).connections[0]!;
@@ -323,7 +336,7 @@ describe("connection MCP tools against a local channel service", () => {
 
   it("rejects an invalid create with a code and does not save or return the secret", async () => {
     await start();
-    const result = await invoke(tools, "create_connection", createBody({ config: { inbox: 1 } }));
+    const result = await invoke(tools, "save_connection", { mode: "create", ...createBody({ config: { inbox: 1 } }) });
     expect(result.isError).toBe(true);
     expect(bodyOf(result)).toEqual({ error: "CHANNEL_INVALID_INPUT" });
     expect(JSON.stringify(result)).not.toContain(SECRET);

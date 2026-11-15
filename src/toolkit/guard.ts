@@ -1,6 +1,8 @@
 import type { AgentDefinition } from "../config/loadAgent.js";
 import { grantedToolIds, parseAgentDefinition } from "../config/loadAgent.js";
 import type { AgentService } from "../agents/service.js";
+import { guardDeniedByMode } from "./modePolicy.js";
+import { resolveMode } from "./modes.js";
 
 /** The running agent on whose behalf a toolkit tool is called. Absent for operators (MCP, CLI, console). */
 export type ToolCaller = { agentId: string; definition: AgentDefinition };
@@ -56,6 +58,8 @@ export async function checkAgentCaller(
   service: AgentService | undefined,
   projectRoot: string,
 ): Promise<{ ok: false; message: string } | null> {
+  const modeRefusal = guardDeniedByMode(tool, args);
+  if (modeRefusal) return refusal(modeRefusal);
   if (tool === "test_function" && args.real === true) {
     return refusal("An agent cannot run a real function test.");
   }
@@ -68,30 +72,34 @@ export async function checkAgentCaller(
     return weakened.length > 0 ? refusal(`${what} would let tools run without asking first that this agent must ask about: ${weakened.join(", ")}.`) : null;
   };
   switch (tool) {
-    case "create_agent": {
-      const parsed = parseAgentDefinition(args.definition);
-      return parsed.ok ? checkDefinition(parsed.value, "That agent") : null;
-    }
     case "save_agent": {
+      const resolved = resolveMode(tool, args);
+      if (!resolved?.ok) return null;
+      if (resolved.resolved.mode === "create") {
+        const parsed = parseAgentDefinition(args.definition);
+        return parsed.ok ? checkDefinition(parsed.value, "That agent") : null;
+      }
       if (args.id === self) return refusal("An agent cannot edit its own definition.");
+      if (resolved.resolved.mode === "restore") {
+        if (typeof args.id !== "string" || typeof args.revision !== "number") return null;
+        const definition = await service.definitionAt(projectRoot, args.id, args.revision).catch(() => null);
+        if (!definition) return null;
+        const parsed = parseAgentDefinition(definition);
+        if (!parsed.ok) return refusal(`That revision is invalid: ${parsed.issues.map((issue) => issue.message).join("; ")}`);
+        return checkDefinition(parsed.value, "That revision");
+      }
       const parsed = parseAgentDefinition(args.definition);
       return parsed.ok ? checkDefinition(parsed.value, "That change") : null;
     }
-    case "restore_agent_revision": {
-      if (args.id === self) return refusal("An agent cannot edit its own definition.");
-      if (typeof args.id !== "string" || typeof args.revision !== "number") return null;
-      const definition = await service.definitionAt(projectRoot, args.id, args.revision).catch(() => null);
-      return definition ? checkDefinition(definition, "That revision") : null;
-    }
     case "archive_agent":
       return args.id === self ? refusal("An agent cannot archive itself.") : null;
-    case "enable_agent": {
+    case "set_agent_enabled": {
+      if (args.enabled !== true) return null;
       if (typeof args.id !== "string") return null;
       const detail = await service.get(projectRoot, args.id).catch(() => null);
       return detail?.definition ? checkDefinition(detail.definition, "Enabling that agent") : null;
     }
-    case "approve_agent_action":
-    case "deny_agent_action": {
+    case "decide_agent_action": {
       if (typeof args.sessionId !== "string") return null;
       const session = await service.getSession(projectRoot, args.sessionId).catch(() => null);
       return session?.session.agentId === self ? refusal("An agent cannot decide approvals on its own sessions.") : null;

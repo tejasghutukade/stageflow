@@ -48,32 +48,32 @@ An agent can be given Stageflow's own tools (the ones in [MCP tools](mcp.md#tool
 
 | Group | Tools | Notes |
 |-------|-------|-------|
-| `discover` | `list_skills`, `list_pipelines`, `list_tasks`, `list_models`, `list_providers`, `get_health`, `preflight`, `validate`, `describe_pipeline`, `list_project_mcp` (read), `probe_project_mcp` (external) | `get_started` is operator-only. |
-| `runs.read` | `list_runs`, `get_run`, `export_run`, `read_artifact`, `wait_run`, `list_stage_events`, `tail_stage_log`, `get_stage_verification`, `get_envelope`, `list_checkout_changes`, `get_run_diff`, `read_checkout_file` | All read. |
-| `runs.control` | `start_run`, `run_stage`, `rerun`, `retry_stage`, `resume_stage`, `recover_manual_stage`, `stop_manual_recovery` | Write. |
-| `runs.cleanup` | `cancel_run`, `abandon_stage`, `delete_run`, `gc_runs` | Destructive. |
-| `gates.read` | `list_waiting`, `get_waiting_summary` | Read. |
-| `gates.decide` | `answer_gate`, `decide_feedback_loop`, `approve_agent_action`, `deny_agent_action` | **Operator-only: cannot be granted.** |
-| `triggers` | `list_triggers`, `get_trigger` (read), `create_trigger`, `update_trigger`, `set_trigger_enabled` (write), `fire_trigger` (external) | |
-| `agents.read` | `list_agents`, `get_agent`, `validate_agent`, `list_agent_revisions`, `get_agent_revision`, `diff_agent_revisions`, `get_agent_session`, `list_agent_sessions` | Read. |
-| `agents.manage` | `create_agent`, `save_agent`, `enable_agent`, `disable_agent`, `restore_agent_revision` | Write. |
+| `discover` | `list_catalog` with `kind: skills`, `list_catalog` with `kind: pipelines`, `list_catalog` with `kind: tasks`, `list_catalog` with `kind: models`, `list_catalog` with `kind: providers`, `list_catalog` with `kind: health`, `validate` (catalog paths, `draft`, `preflight: true`, and the rest), `read_pipeline` with `view: dag`, `list_catalog` with `kind: mcp_servers` (read), `probe_project_mcp` (external) | `get_started` is operator-only. |
+| `runs.read` | `get_run` (omit `runId`), `get_run`, `get_run` with `view: export`, `get_stage` with `view: events`, `log`, `envelope`, or `verification`, `run_files` with `view: artifact`, `changes`, `diff`, or `file`, `wait_run` | All read. |
+| `runs.control` | `start_run`, `start_run` with `stage`, `start_run` with `from_run`, `stage_action` with `action: retry`, `resume`, `recover`, or `stop_recovery` | Write. |
+| `runs.cleanup` | `cancel_run`, `abandon_stage`, `delete_runs`, `delete_runs` with `gc: true` | Destructive. |
+| `gates.read` | `list_waiting` with `detail: full` or `summary` | Read. |
+| `gates.decide` | `answer_gate`, `decide_feedback_loop`, `decide_agent_action` | **Operator-only: cannot be granted.** |
+| `triggers` | `get_trigger` with `list: true`, `get_trigger` (read), `save_trigger` with `mode: create` or `update` (write), `save_trigger` with `enabled_only` (write), `fire_trigger` (external) | |
+| `agents.read` | `get_agent` with `list: true` or `view: definition`, `revisions`, `revision`, or `diff`, `validate` with `kind: agent`, `get_agent_session` with `list: true` or by id | Read. |
+| `agents.manage` | `save_agent` with `mode: create`, `mode: update`, or `from_revision: true`, `set_agent_enabled` with `enabled: true`, `set_agent_enabled` with `enabled: false` | Write. |
 | `agents.cleanup` | `archive_agent` | Destructive. |
 | `agents.converse` | `agent_chat` (external), `stop_agent_session` (write) | |
-| `evals.read` | `list_evals`, `get_eval`, `validate_eval`, `get_eval_run`, `list_eval_runs`, `get_eval_results`, `get_eval_result`, `compare_eval_runs`, `get_eval_failure_suggestions`, `get_eval_failure_sort_status`, `get_eval_run_export` | Read, free. See [Evals](evals.md). |
+| `evals.read` | `get_eval` with `list: true` or `view: definition` or `calibrations`, `validate` with `kind: eval`, `get_eval_run` (list or `view: export`), `get_eval_results` (table or `case_id`), `compare_eval_runs`, `get_eval_failures` with `view: suggestions` or `sort_status` | Read, free. See [Evals](evals.md). |
 | `evals.run` | `run_eval` (external), `try_eval_case` (external), `sort_eval_failures` (external), `cancel_eval_run` (write) | `run_eval` and `try_eval_case` call models and cost money, bounded by the eval's cost limit. `sort_eval_failures` sends failed results to an external classifier and costs a little. |
-| `evals.write` | `create_eval`, `update_eval`, `create_dataset`, `update_dataset_cases`, `convert_dataset`, `install_eval_sample`, `put_eval_review`, `accept_eval_failure_suggestions`, `dismiss_eval_failure_suggestions` | Write. |
+| `evals.write` | `save_eval` with `mode: create`, `update`, or `source: sample`, `save_dataset` with `action: create`, `ops`, or `convert`, `review_eval_results` with `action: label`, `accept`, or `dismiss` | Write. |
 | `evals.cleanup` | `delete_eval_run` | Destructive. |
-| `pipelines.author` | `read_pipeline` (read), `create_pipeline`, `edit_pipeline`, `create_stage`, `edit_stage`, `create_task`, `edit_task`, `create_task_file`, `update_task_file`, `create_stage_file`, `write_catalog_file` (write), `validate_catalog_draft` (read), `import_task_file` (external) | Package edits and the standalone task, stage, and catalog-file saves. |
-| `connections` | `list_connections`, `validate_connection_target` (read), `create_connection`, `update_connection` (write), `test_connection` (external) | Secret values are stored and never returned. |
+| `pipelines.author` | `read_pipeline` (read), `write_pipeline` with `mode: create`, `write_pipeline` with `mode: update`, `write_stage` with `mode: create`, `patch: true`, `no_pipeline: true`, or `form: content` update (write), `write_task` with `mode: create` or `update` (`no_pipeline: true` for standalone tasks), `validate` with `kind: draft` (read), `import_task` (external) | Package edits and standalone task, stage, and catalog-file saves. |
+| `connections` | `get_connection`, `validate` with `kind: connection_recipient` (read), `save_connection` with `mode: create`, `save_connection` with `mode: update` (write), `test_connection` (external) | Secret values are stored and never returned. |
 | `connections.cleanup` | `remove_connection` | Destructive. |
-| `memories` | `list_memories`, `get_memory` (read), `create_memory`, `write_memory`, `write_memory_card` (write) | |
+| `memories` | `get_memory` with `list: true` (read), `get_memory`, `save_memory` with `mode: create`, `mode: update`, or `card: true` (write) | |
 | `memories.cleanup` | `delete_memory_card` | Destructive. |
 
 Rules:
 
 - **Only a person decides.** Gates and approvals (`gates.decide`) cannot be granted, so one agent can never approve or deny another's action (`agent.stageflow_operator_only`).
-- **Destructive tools have their own groups**, so ticking "Run and recover pipelines" never selects `delete_run`.
-- **An agent cannot hand out more than it holds.** `create_agent`, `save_agent`, `restore_agent_revision` and `enable_agent` called by an agent refuse any grant it does not itself hold (tools, MCP tools, skills, the browser), and refuse a copy that would drop an ask-first the caller is bound by.
+- **Destructive tools have their own groups**, so ticking "Run and recover pipelines" never selects `delete_runs`.
+- **An agent cannot hand out more than it holds.** `save_agent` with `mode: create`, `mode: update`, or `from_revision: true` and `set_agent_enabled` with `enabled: true` called by an agent refuse any grant it does not itself hold (tools, MCP tools, skills, the browser), and refuse a copy that would drop an ask-first the caller is bound by.
 - **No self-service.** An agent cannot edit or archive itself.
 - **Web chat warning.** A web-chat agent that can read agent sessions gets `agent.web_chat_reads_conversations`, because those hold visitors' messages.
 - The serving list for the console is `GET /api/agents/stageflow-tools`. The console turns on ask-first for every non-read tool when you tick a group.
@@ -98,7 +98,7 @@ A call to a tool in `approvals.ask_first` (always including `bash`) pauses the t
 - **One at a time.** A session has at most one pending approval, and it stands for the exact call it was raised for (same tool, same arguments). A different call while one is pending is refused with `agent.session_busy`.
 - **Approved once means approved for the session.** An identical call (same tool, same arguments) that a person approved is not asked about again in that session. A different call, or a new session, asks again.
 - **Denied** tells the model the operator refused and not to retry. The turn carries on.
-- **Who decides.** A person, in the Inbox or the agent session page, with `sf agents`, or with the MCP tools `approve_agent_action` and `deny_agent_action`. Channels cannot decide (`approvals.approvers.channel_ids` is reserved and ignored). When desktop notifications are on (Settings → Notifications), the console also raises one when an agent asks; it checks every 15 seconds while the console is open.
+- **Who decides.** A person, in the Inbox or the agent session page, with `sf agents`, or with the MCP tool `decide_agent_action` (`action: approve` or `deny`). Channels cannot decide (`approvals.approvers.channel_ids` is reserved and ignored). When desktop notifications are on (Settings → Notifications), the console also raises one when an agent asks; it checks every 15 seconds while the console is open.
 - **Timeout.** After `timeout_minutes`, `on_timeout: skip` tells the model the action was skipped and the turn goes on; `deny` ends the turn with `agent.approval_expired`.
 - **Stopping the turn** closes a waiting approval (stored as `expired`): it leaves the pending list, cannot be approved later, and does not pre-approve a later identical call.
 - **Disabling the agent** while an approval waits: the approval can still be **denied**, but approving it is refused (`agent.disabled`).

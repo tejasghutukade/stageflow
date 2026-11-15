@@ -28,7 +28,7 @@ A server is stdio (\`command\`, \`args\`, \`env\`, \`cwd\`) or http (\`url\`, \`
 **Using it.**
 - Stage: \`mcp: [linear]\` on the pipeline entry (or the stage file) plus \`secrets: [LINEAR_TOKEN]\` if needed. \`validate\` checks names and that stdio commands are on PATH; connect failures and unset variables fail at run time. Default connect timeout 30 s. Large tool results are written to an artifact file and the model sees a preview. MCP elicitation (a server asking the user a question) is not supported.
 - Agent: \`tools.mcp: { linear: ["*"] }\` or a list of tool names. Grant id \`<server>.<tool>\`, usable in \`approvals.ask_first\`. Servers start lazily per session. An unknown server only warns (\`agent.mcp_server_unknown\`).
-- Tools: \`list_project_mcp\` (read), \`probe_project_mcp\` (connects to the server). There is no tool to add or remove a project MCP server or set an MCP secret; that is done in Settings → Project MCP.
+- Tools: \`list_catalog\` with \`kind: mcp_servers\` (read), \`probe_project_mcp\` (connects to the server). There is no tool to add or remove a project MCP server or set an MCP secret; that is done in Settings → Project MCP.
 
 ## Skills
 
@@ -38,7 +38,7 @@ A skill is an instruction bundle (\`SKILL.md\`) the agent loads.
 - Agent: \`tools.skills: [names]\`.
 - Lookup order for a stage: skills shipped with the run (\`start_run.skills\`), then \`<checkout>/.pi/skills/<name>/\` (needs workspace trust for repository bindings), then the Host's Pi skills directory.
 - A missing skill fails the stage before the agent starts, or fails the agent session.
-- Install on the Host: console **Catalog → Skills** (Install), or \`sf skills install --from-zip <url> --skill-name <name>\`. \`list_skills\` shows name, description and origin. There is no tool to install a skill.
+- Install on the Host: console **Catalog → Skills** (Install), or \`sf skills install --from-zip <url> --skill-name <name>\`. \`list_catalog\` with \`kind: skills\` shows name, description and origin. There is no tool to install a skill.
 
 ## Browser sessions
 

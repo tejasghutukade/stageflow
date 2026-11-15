@@ -14,6 +14,12 @@ import type { ChannelService } from "../channels/service.js";
 import type { IssueFetch } from "../config/importTask.js";
 import type { MemoryHost } from "../memory/host.js";
 import type { RunManager } from "../runtime/runManager.js";
+import type { ToolsetId } from "../toolkit/meta.js";
+
+export type McpToolsetSession = {
+  loadedToolsetIds: readonly ToolsetId[];
+  baseUrl: string;
+};
 
 export type McpToolDeps = {
   manager: RunManager;
@@ -36,8 +42,10 @@ export type McpToolDeps = {
   channels?: ChannelService;
   /** Host memories under $STAGEFLOW_HOME. Absent when memory is not configured. */
   memories?: MemoryHost;
-  /** GitHub issue fetch for `import_task_file`. Tests inject this. Production uses the default client. */
+  /** GitHub issue fetch for `import_task`. Tests inject this. Production uses the default client. */
   issueFetch?: IssueFetch;
+  /** Connect-time toolset selection and reconnect base URL for `get_started`. */
+  mcpToolsetSession?: McpToolsetSession;
 };
 
 export type McpHttpDeps = McpToolDeps & {

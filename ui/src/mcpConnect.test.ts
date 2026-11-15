@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MCP_URL,
+  MCP_BARE_URL_NOTES,
+  OPTIONAL_MCP_TOOLSET_IDS,
   cursorMcpConfigJson,
   mcpEndpointUrl,
+  mcpToolsetsQuery,
 } from "./mcpConnect";
 
 describe("mcpEndpointUrl", () => {
@@ -77,5 +80,61 @@ describe("cursorMcpConfigJson", () => {
 }
 `,
     );
+  });
+
+  it("carries the same URL when toolsets are selected", () => {
+    const url = "http://127.0.0.1:3847/mcp?toolsets=agents,evals";
+    expect(cursorMcpConfigJson(url)).toContain(url);
+  });
+});
+
+describe("mcpToolsetsQuery", () => {
+  it("omits the query when no optional toolsets are chosen", () => {
+    expect(mcpToolsetsQuery([])).toBe("");
+  });
+
+  it("adds evals and agents in stable sorted order", () => {
+    expect(mcpToolsetsQuery(["evals", "agents"])).toBe("?toolsets=agents,evals");
+  });
+
+  it("uses all when every optional toolset is selected", () => {
+    expect(mcpToolsetsQuery([...OPTIONAL_MCP_TOOLSET_IDS])).toBe("?toolsets=all");
+  });
+
+  it("ignores core in the selection", () => {
+    expect(mcpToolsetsQuery(["core", "evals"])).toBe("?toolsets=evals");
+  });
+});
+
+describe("mcpEndpointUrl with toolsets", () => {
+  it("keeps a bare path without optional toolsets", () => {
+    expect(
+      mcpEndpointUrl({ hostname: "127.0.0.1", port: "3847", protocol: "http:" }, { toolsets: [] }),
+    ).toBe("http://127.0.0.1:3847/mcp");
+  });
+
+  it("appends the toolsets query to the derived origin", () => {
+    expect(
+      mcpEndpointUrl(
+        { hostname: "127.0.0.1", port: "3847", protocol: "http:" },
+        { toolsets: ["agents", "evals"] },
+      ),
+    ).toBe("http://127.0.0.1:3847/mcp?toolsets=agents,evals");
+  });
+
+  it("appends toolsets on the default Vite dev URL", () => {
+    expect(
+      mcpEndpointUrl(
+        { hostname: "127.0.0.1", port: "5173", protocol: "http:" },
+        { viteDev: true, toolsets: ["evals"] },
+      ),
+    ).toBe(`${DEFAULT_MCP_URL}?toolsets=evals`);
+  });
+});
+
+describe("MCP panel copy", () => {
+  it("reminds operators that bare URLs are core-only and sessions need reconnect", () => {
+    expect(MCP_BARE_URL_NOTES).toMatch(/core tools/i);
+    expect(MCP_BARE_URL_NOTES).toMatch(/reconnect/i);
   });
 });

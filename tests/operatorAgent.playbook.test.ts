@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   buildCreateStageDraft,
@@ -15,6 +18,8 @@ import {
   type DocsRetrievalResult,
   type OperatorAgentToolContext,
 } from "../src/operatorAgent/index.js";
+import { STAGEFLOW_GUIDE_PLAYBOOK } from "../src/operatorAgent/profiles/stageflowGuide.js";
+import { TOOL_RENAMES } from "../src/toolkit/toolRenames.js";
 
 function emptyToolContext(): OperatorAgentToolContext {
   let context: unknown = createWorkshopDraftContext(emptyDraftPackage("demo"));
@@ -26,6 +31,48 @@ function emptyToolContext(): OperatorAgentToolContext {
     emitProposal: () => {},
   };
 }
+
+const WORKSHOP_HOST_ALIASES = new Set([
+  "create_pipeline",
+  "edit_pipeline",
+  "create_stage",
+  "edit_stage",
+  "create_task",
+  "edit_task",
+]);
+
+const FORBIDDEN_OLD_HOST_TOOLS = Object.keys(TOOL_RENAMES).filter(
+  (oldName) => TOOL_RENAMES[oldName]!.newTool !== oldName && !WORKSHOP_HOST_ALIASES.has(oldName),
+);
+
+const guideKnowledgeDir = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../src/guide/knowledge/topics",
+);
+
+function oldHostToolPattern(name: string, backtickOnly = false): RegExp {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (backtickOnly) return new RegExp(`\`${escaped}\``);
+  return new RegExp(`\`${escaped}\`|\\b${escaped}\\b`);
+}
+
+describe("Stageflow Guide playbook + knowledge", () => {
+  it("names only consolidated Host MCP tools", () => {
+    for (const oldName of FORBIDDEN_OLD_HOST_TOOLS) {
+      expect(STAGEFLOW_GUIDE_PLAYBOOK).not.toMatch(oldHostToolPattern(oldName));
+    }
+    for (const file of readdirSync(guideKnowledgeDir).filter(
+      (entry) => entry.endsWith(".ts") && entry !== "overview.ts",
+    )) {
+      const text = readFileSync(path.join(guideKnowledgeDir, file), "utf8");
+      for (const oldName of FORBIDDEN_OLD_HOST_TOOLS) {
+        expect(text).not.toMatch(oldHostToolPattern(oldName, true));
+      }
+    }
+    expect(STAGEFLOW_GUIDE_PLAYBOOK).toContain("write_pipeline");
+    expect(STAGEFLOW_GUIDE_PLAYBOOK).toMatch(/list_catalog/);
+  });
+});
 
 describe("Workshop Author playbook + docs retrieval", () => {
   it("bakes core-path and explain-only guidance into the Author playbook", () => {

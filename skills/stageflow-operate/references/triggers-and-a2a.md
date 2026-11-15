@@ -2,7 +2,7 @@
 
 Fire and inspect triggers. Manage who can call published pipelines. Designing the trigger or the publication YAML is the `stageflow-pipelines` skill. This file is the operate path.
 
-Confirm before `fire_trigger`, `sf trigger fire`, `create_trigger`, `update_trigger`, `set_trigger_enabled`, and any `sf a2a` change that enables the server, adds a caller, or publishes a pipeline. Firing calls models. An enabled schedule or event trigger starts runs on its own. A caller token and a publication are visible outside this machine.
+Confirm before `fire_trigger`, `sf trigger fire`, `save_trigger` with `mode: create` or `update`, `save_trigger` with `enabled_only`, and any `sf a2a` change that enables the server, adds a caller, or publishes a pipeline. Firing calls models. An enabled schedule or event trigger starts runs on its own. A caller token and a publication are visible outside this machine.
 
 ## Contents
 
@@ -24,7 +24,7 @@ Confirm before `fire_trigger`, `sf trigger fire`, `create_trigger`, `update_trig
 
 `--task-inline` is required for a dynamic trigger (one with no catalog task) and rejected for a trigger that already names a task. The object matches a task file: `id`, `goal`, and optional `context`, `constraints`, `input`, and either `repository` plus `ref` or `checkout`.
 
-MCP equivalents, which return immediately: `list_triggers`, `get_trigger` (`id`, optional `project_root`), `fire_trigger` (`id`, optional `project_root`, optional `task`). `fire_trigger` returns `{ "runId" }` or `{ "runId", "queued": true, "queuePosition" }`. A disabled trigger fails with status 409. An unknown id is 404. The same id in two catalog roots is 409 until you pass `project_root`.
+MCP equivalents, which return immediately: `get_trigger` with `list: true`, `get_trigger` (`id`, optional `project_root`), `fire_trigger` (`id`, optional `project_root`, optional `task`). `fire_trigger` returns `{ "runId" }` or `{ "runId", "queued": true, "queuePosition" }`. A disabled trigger fails with status 409. An unknown id is 404. The same id in two catalog roots is 409 until you pass `project_root`.
 
 There is no delete verb on the CLI, in MCP, or in REST. To stop a trigger from firing, disable it.
 
@@ -34,11 +34,11 @@ The CLI cannot create or enable a trigger. Use MCP or REST.
 
 | Action | MCP | REST |
 |---|---|---|
-| Create | `create_trigger` | `POST /api/triggers` |
-| Replace the definition | `update_trigger` | `PUT /api/triggers/<id>` |
-| Enable or disable | `set_trigger_enabled` with `{ "id", "enabled" }` | `PATCH /api/triggers/<id>` with `{ "enabled": true \| false }` |
+| Create | `save_trigger` with `mode: create` | `POST /api/triggers` |
+| Replace the definition | `save_trigger` with `mode: update` | `PUT /api/triggers/<id>` |
+| Enable or disable | `save_trigger` with `enabled_only` and `{ "id", "enabled" }` | `PATCH /api/triggers/<id>` with `{ "enabled": true \| false }` |
 
-`create_trigger` fields: `directory`, `id`, `pipeline`, optional `task` (omit for a dynamic trigger), optional `enabled`, optional `project_root`, and `kind`.
+`save_trigger` with `mode: create` fields: `directory`, `id`, `pipeline`, optional `task` (omit for a dynamic trigger), optional `enabled`, optional `project_root`, and `kind`.
 
 | `kind` | Also required |
 |---|---|
@@ -46,13 +46,13 @@ The CLI cannot create or enable a trigger. Use MCP or REST.
 | `schedule` | `schedule.cron`, optional `schedule.timezone` |
 | `event` | `event.source`, optional `event.match`, optional `event.config` |
 
-`update_trigger` sends the full definition (`pipeline`, `kind`, `enabled`, and the schedule or event). The id does not change. An enabled schedule starts runs without another confirmation later, so say that in the confirm you ask for now.
+`save_trigger` with `mode: update` sends the full definition (`pipeline`, `kind`, `enabled`, and the schedule or event). The id does not change. An enabled schedule starts runs without another confirmation later, so say that in the confirm you ask for now.
 
 List and status routes that have no MCP twin: `GET /api/triggers/<id>/status` and `GET /api/triggers/<id>/fires`. Webhook intake is `POST /api/triggers/<id>/webhook`. Callers authenticate with the trigger's HMAC, not with the control token. Do not invent a signature.
 
 ## Trigger secrets
 
-Webhook, `github.*`, and `email.message` event triggers can hold a signing secret. The CLI does not set it. MCP `create_trigger` and `update_trigger` have no secret argument.
+Webhook, `github.*`, and `email.message` event triggers can hold a signing secret. The CLI does not set it. MCP `save_trigger` with `mode: create` or `update` has no secret argument.
 
 The user enters it in the operator console, or you pass it once on REST, from the harness secret prompt, never from chat:
 

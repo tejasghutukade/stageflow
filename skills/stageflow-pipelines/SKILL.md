@@ -33,7 +33,7 @@ Other work belongs to sibling skills. Name them; do not do their job here:
 
 1. Write the author dialect only: wiring with `route`, `entry: true` and `{ type: loop }`; contracts with `io`, `verify` and `on_verify_fail`. Never write `needs`, `fork`, a `feedback_loop` key, `route_select`, `allow_none`, `clonable`, `clone_actions`, or the legacy keys `payload_schema`, `pre_emit_checks`, `completion`, `recovery`, `clone_input_schema`.
 2. Every stage has `system_prompt`, `io.input.schema` and `io.output.schema`, both with `type: object` at the root.
-3. A model must resolve at some tier (stage, then pipeline, then `stageflow.yaml`). Never invent a model id. Take one from MCP `list_models` or `sf providers status`, or write the placeholder `CHANGE_ME/<provider-model>` and tell the user.
+3. A model must resolve at some tier (stage, then pipeline, then `stageflow.yaml`). Never invent a model id. Take one from MCP `list_catalog` with `kind: models` or `sf providers status`, or write the placeholder `CHANGE_ME/<provider-model>` and tell the user.
 4. Never put a secret value in YAML, a file, a log, a commit or the chat. Stages get credentials only through `secrets:` names that the Host resolves.
 5. Ask before anything that costs money, is visible outside the project, or destroys work: running a pipeline or a stage, enabling or firing a trigger, publishing over A2A, overwriting or deleting a file the user wrote. Writing and validating new YAML is free and needs no confirmation once the user asked for it.
 6. Never report a pipeline as done while validation shows an error.
@@ -55,10 +55,10 @@ Other work belongs to sibling skills. Name them; do not do their job here:
 ## Step 0: Orient (every path)
 
 1. **Project root.** `git rev-parse --show-toplevel`, else the current directory. Run every `sf` command from there: `sf validate` resolves `stageflow.yaml`, `.mcp.json` and secrets from the current directory.
-2. **Manifest.** Read `stageflow.yaml`. Its `catalog.pipelines` and `catalog.tasks` lists are the scan roots (recursive); files outside them still validate by path but do not show in the console or in `list_pipelines`. If there is no manifest, ask the user before running `sf init` (it writes `stageflow.yaml`, `pipelines/hello.pipeline.yaml` and `tasks/hello.task.yaml`), or hand off to the `stageflow` skill.
+2. **Manifest.** Read `stageflow.yaml`. Its `catalog.pipelines` and `catalog.tasks` lists are the scan roots (recursive); files outside them still validate by path but do not show in the console or in `list_catalog` with `kind: pipelines`. If there is no manifest, ask the user before running `sf init` (it writes `stageflow.yaml`, `pipelines/hello.pipeline.yaml` and `tasks/hello.task.yaml`), or hand off to the `stageflow` skill.
 3. **Surface.** If your harness exposes the Stageflow MCP tools, call `get_started`. The seven authoring tools write under the Host's project and take no project argument. Use them only when a `catalog_roots` entry with `kind: "registered"` has `project_root` equal to this project's absolute path and `read_pipeline` can see a file in this project. A `kind: "workspace"` root is `$STAGEFLOW_HOME/workspace`, not this project. Otherwise write files directly and use the CLI. Both paths are complete; see [authoring-tools.md](references/authoring-tools.md).
-4. **Models.** MCP `list_models`, or `sf providers status` (no `--json`; a provider is usable when the second column is `configured`). `node scripts/check-provider-gate.mjs` wraps that check and prints `{"ok":true}` or a reason. With no provider you can still draft and validate with the placeholder model; running needs a provider, which is the `stageflow` skill's job.
-5. **Existing work.** List what is already there (MCP `list_pipelines` and `list_tasks`, or glob `**/*.pipeline.yaml` under the roots). Do not create a second pipeline for something that exists; offer to edit it.
+4. **Models.** MCP `list_catalog` with `kind: models`, or `sf providers status` (no `--json`; a provider is usable when the second column is `configured`). `node scripts/check-provider-gate.mjs` wraps that check and prints `{"ok":true}` or a reason. With no provider you can still draft and validate with the placeholder model; running needs a provider, which is the `stageflow` skill's job.
+5. **Existing work.** List what is already there (MCP `list_catalog` with `kind: pipelines` and `list_catalog` with `kind: tasks`, or glob `**/*.pipeline.yaml` under the roots). Do not create a second pipeline for something that exists; offer to edit it.
 
 ## New pipeline
 
@@ -89,7 +89,7 @@ Settle these before writing; each links to the reference that has the rules.
 ### 3. Write
 
 - Lay files out as `<dir>/<pipeline-id>.pipeline.yaml` plus `<dir>/<stage-id>.yaml` per stage, wired with `uses: ./<stage-id>.yaml`. Put `<dir>` under a `catalog.pipelines` root; if it is not under one, add it to `catalog.pipelines` (and `catalog.tasks` when you write a task).
-- Ids are lowercase kebab case (`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`), and the stage file's `id` equals its filename stem and its pipeline entry `id`. `sf validate` does not enforce the pattern. The console create APIs and MCP `create_stage_file` and `create_task_file` reject anything else. `create_pipeline`, `create_stage` and `create_task` do not, so still write kebab case.
+- Ids are lowercase kebab case (`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`), and the stage file's `id` equals its filename stem and its pipeline entry `id`. `sf validate` does not enforce the pattern. The console create APIs and MCP `create_stage_file` and `create_task_file` reject anything else. `write_pipeline` with `mode: create`, `write_stage` with `mode: create` and `write_task` with `mode: create` do not, so still write kebab case.
 - Before writing a file, check the path is free. Never overwrite a file you did not create in this session without asking. `node scripts/resolve-catalog-id.mjs --text "<phrase>" --dir <dir> --kind pipeline|stage` prints a free id.
 - Write each `system_prompt` from [stage-prompt-template.md](references/stage-prompt-template.md): goal, inputs, the required output fields by name, gate sequence if any, and the closing `emit_stage_envelope` instruction.
 - Add a task file when the user wants to start runs from the console or a trigger: `id`, `goal`, and an `input` that satisfies the entry stage's `io.input.schema`. [yaml-reference.md](references/yaml-reference.md#task-file)
@@ -115,8 +115,8 @@ Run this loop until there are no errors, then once more after any later edit.
 
    Exit 0 means no errors. `pipeline.model_applies` always appears when the pipeline sets a model and is informational; `pipeline.route_all_gated` is expected when every forward `if` is written so the conditions cannot be true together.
 3. **Repair.** Look each code up in [finding-codes.md](references/finding-codes.md), fix the file, and go back to step 1. Fix `stage.*` findings before the `pipeline.missing_stage` that accompanies them.
-4. **Show the wiring.** `sf graph --pipeline <pipeline-path>` prints the resolved DAG; use it to confirm the shape with the user in one or two sentences. MCP `describe_pipeline` does the same but labels edges with the legacy words needs, fork and feedback_loop; translate them, never copy them into YAML.
-5. **Readiness.** When the pipeline uses `requires`, `secrets`, `mcp` or `channels`, run `sf doctor --pipeline <pipeline-path> --json` or MCP `preflight { pipeline }`. A saved login and `browser.check` are not covered by `sf doctor` or `preflight`. `sf validate` checks names and shapes only, not whether a tool is installed, a secret has a value or a server starts.
+4. **Show the wiring.** `sf graph --pipeline <pipeline-path>` prints the resolved DAG; use it to confirm the shape with the user in one or two sentences. MCP `read_pipeline` with `view: dag` does the same but labels edges with the legacy words needs, fork and feedback_loop; translate them, never copy them into YAML.
+5. **Readiness.** When the pipeline uses `requires`, `secrets`, `mcp` or `channels`, run `sf doctor --pipeline <pipeline-path> --json` or MCP `validate` with `preflight: true` and `{ pipeline }`. A saved login and `browser.check` are not covered by `sf doctor` or live preflight checks. `sf validate` checks names and shapes only, not whether a tool is installed, a secret has a value or a server starts.
 
 Validation never calls a model and never starts the Host; repeat it freely.
 
@@ -128,7 +128,7 @@ In a few sentences: the pipeline id and path, each stage file written, the task 
 
 1. Read the whole package: the pipeline, every `uses:` file, any `include:` fragment and the task. MCP `read_pipeline { path, task_path? }` returns the parsed draft plus its validation in one call.
 2. Validate before changing anything, so you know which findings were already there.
-3. Make the smallest edit that does what the user asked. Keep their ids, prompts, comments and file layout. Prefer editing files directly: the MCP `edit_*` tools re-serialize files (comments are lost) and merge objects, so they cannot delete a key.
+3. Make the smallest edit that does what the user asked. Keep their ids, prompts, comments and file layout. Prefer editing files directly: the MCP `write_pipeline`, `write_stage`, and `write_task` tools re-serialize files (comments are lost) and merge objects, so they cannot delete a key.
 4. When you add a stage, write its file and add the pipeline entry together, and re-check the `io` of its parent and children. When you remove one, remove every `route` entry that targets it.
 5. When the file uses legacy keys (`catalog.legacy_yaml` warning) and the user agrees, convert with `sf migrate-yaml <path> --json` (dry run), then `--write`. Never mix legacy and author keys in one file (`catalog.mixed_yaml_dialect`).
 6. Run the full check-validate-repair loop, then report what changed as a short diff summary (`git diff --stat` if the project is a git repo).

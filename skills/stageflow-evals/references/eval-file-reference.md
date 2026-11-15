@@ -166,12 +166,12 @@ Use the MCP write tools only when you have no file access (a remote Host, a harn
 
 | Tool | Use |
 |---|---|
-| `create_eval` | Pass `definition` (an object shaped like the file). Validates the whole plan first and writes only when it passes. `EVAL_EXISTS` if the id is taken. |
-| `update_eval` | Pass exactly one of `definition` (merged into the current file) or `yaml` (full text), plus `base_hash` from `get_eval` (`file_hash`). |
-| `create_dataset` | New file from `name` plus `cases`, or `source` `sample`, `runs` or `sessions`. To change an existing file pass `dataset_id`, `mode` (`append` or `replace`) and `base_hash`. |
-| `update_dataset_cases` | `ops` of `add`, `update`, `delete`, `set_tags` in one all-or-nothing write, plus `base_hash`. |
-| `convert_dataset` | Copy a `.dataset.json` or `.dataset.csv` to an editable `.dataset.jsonl`. |
-| `install_eval_sample` | Install the packaged stage sample or the agent sample (see below). |
+| `save_eval` with `mode: create` | Pass `definition` (an object shaped like the file). Validates the whole plan first and writes only when it passes. `EVAL_EXISTS` if the id is taken. |
+| `save_eval` with `mode: update` | Pass exactly one of `definition` (merged into the current file) or `yaml` (full text), plus `base_hash` from `get_eval` (`file_hash`). |
+| `save_dataset` with `action: create` | New file from `name` plus `cases`, or `source` `sample`, `runs` or `sessions`. To change an existing file pass `dataset_id`, `mode` (`append` or `replace`) and `base_hash`. |
+| `save_dataset` with `action: ops` | `ops` of `add`, `update`, `delete`, `set_tags` in one all-or-nothing write, plus `base_hash`. |
+| `save_dataset` with `action: convert` | Copy a `.dataset.json` or `.dataset.csv` to an editable `.dataset.jsonl`. |
+| `save_eval` with `mode: create` and `source: sample` | Install the packaged stage sample or the agent sample (see below). |
 
 Write-path rules:
 
@@ -182,7 +182,7 @@ Write-path rules:
 
 ## Samples
 
-`install_eval_sample` (MCP, or `POST /api/evals/sample` with `{ "kind": "stage" | "agent" }`, or **Try the sample eval** in the console) copies a ready eval into the project:
+`save_eval` with `mode: create` and `source: sample` (MCP, or `POST /api/evals/sample` with `{ "kind": "stage" | "agent" }`, or **Try the sample eval** in the console) copies a ready eval into the project:
 
 - `kind: stage` writes a `critique` pipeline, an 8-case dataset and an eval with four judge-free graders. It needs a default `model:` in `stageflow.yaml`.
 - `kind: agent` writes a `support_sample` agent through the agent service, enables it and copies a script-mode eval with 6 scenarios and five judge-free graders. It fails `SAMPLE_NO_DEFAULT_MODEL` without a default model and `SAMPLE_EXISTS` if it is already installed.

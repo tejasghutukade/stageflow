@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { STUB_RESULT, type EvalToolCallRecord, type EvalToolPolicy } from "../agents/evalGate.js";
+import { evalGateDeniedByMode } from "../toolkit/modePolicy.js";
 import { TOOL_META } from "../toolkit/meta.js";
 import type { OperatorAgentToolResult } from "./types.js";
 
@@ -10,21 +11,17 @@ const ALWAYS_BLOCKED = new Set([
   "sort_eval_failures",
   "cancel_eval_run",
   "start_run",
-  "run_stage",
-  "rerun",
-  "retry_stage",
-  "resume_stage",
-  "delete_run",
+  "stage_action",
+  "delete_runs",
   "cancel_run",
-  "gc_runs",
   "remove_connection",
   "delete_eval_run",
   "delete_memory_card",
   "archive_agent",
-  "enable_agent",
-  "set_trigger_enabled",
+  "set_agent_enabled",
+  "save_trigger",
   "test_connection",
-  "import_task_file",
+  "import_task",
   "probe_project_mcp",
 ]);
 
@@ -64,6 +61,8 @@ export function createOperatorEvalGate(options: {
         push({ ...base, policyOutcome, status: "not_run", result });
         return { ok: false, error: "eval.tool_not_run", content: { error: "eval.tool_not_run", message: result } };
       };
+      const modeRefusal = evalGateDeniedByMode(name, args);
+      if (modeRefusal) return deny(modeRefusal, "denied");
       if (ALWAYS_BLOCKED.has(name)) return deny(`${name} cannot run in an evaluation.`, "denied");
       if (name === "test_function" && args.real === true) {
         return deny("Real function tests cannot run in an evaluation.", "denied");

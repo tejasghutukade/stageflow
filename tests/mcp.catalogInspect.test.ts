@@ -132,12 +132,12 @@ const twoServerCatalog = {
 };
 
 describe("MCP catalog inspect", () => {
-  it("list_models returns the same { models } as GET /api/models", async () => {
+  it("list_catalog models returns the same { models } as GET /api/models", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-list-models-"));
     const { server, base } = await withInspectServer(root);
     try {
       const http = await jsonFetch(`${base}/api/models`);
-      const mcp = await mcpCall(base, "list_models");
+      const mcp = await mcpCall(base, "list_catalog", { kind: "models" });
       const catalog = await browseCatalog(catalogRoot);
       expect(http.status).toBe(200);
       expect(mcp.isError).toBe(false);
@@ -159,7 +159,7 @@ describe("MCP catalog inspect", () => {
     const { server, base } = await withInspectServer(root);
     try {
       const http = await jsonFetch(`${base}/api/project-mcp`);
-      const mcp = await mcpCall(base, "list_project_mcp");
+      const mcp = await mcpCall(base, "list_catalog", { kind: "mcp_servers" });
       expect(mcp.isError).toBe(false);
       expect(mcp.payload).toEqual({
         status: "ok",
@@ -195,7 +195,7 @@ describe("MCP catalog inspect", () => {
     await writeHostCatalog(root, twoServerCatalog);
     const { server, base } = await withInspectServer(root);
     try {
-      const mcp = await mcpCall(base, "list_project_mcp");
+      const mcp = await mcpCall(base, "list_catalog", { kind: "mcp_servers" });
       expect(mcp.isError).toBe(false);
       expect(mcp.payload.status).toBe("ok");
       expect(mcp.payload.servers).toHaveLength(2);
@@ -220,7 +220,7 @@ describe("MCP catalog inspect", () => {
     const expected = await listProjectMcpCatalog(root);
     const { server, base } = await withInspectServer(root);
     try {
-      const mcp = await mcpCall(base, "list_project_mcp");
+      const mcp = await mcpCall(base, "list_catalog", { kind: "mcp_servers" });
       expect(mcp.isError).toBe(false);
       expect(mcp.payload).toEqual({ status: "missing_catalog", servers: [] });
       expect(mcp.payload).toEqual(expected);
@@ -265,7 +265,7 @@ describe("MCP catalog inspect", () => {
     const { server, base, openStage } = await withInspectServer(root);
     try {
       const listedHttp = await jsonFetch(`${base}/api/project-mcp`);
-      const listed = await mcpCall(base, "list_project_mcp");
+      const listed = await mcpCall(base, "list_catalog", { kind: "mcp_servers" });
       expect(listed.isError).toBe(false);
       expect(listed.payload).toEqual({ status: "invalid_config", servers: [] });
       expect(listed.payload).toEqual(listedHttp.body);

@@ -1,12 +1,22 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import type { Server } from "node:http";
 import { fileURLToPath } from "node:url";
+import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
+import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
+import { createRunStore } from "../src/runstore/createStore.js";
+import { startUiServer } from "../src/server/http.js";
 import {
   runRunStageCommand,
+  RUN_STAGE_HOST_RESTART_MESSAGE,
   type RunStageCallFn,
   type RunStageToolArgs,
 } from "../src/cli/runStageCommand.js";
+import { closeServer } from "./helpers/closeServer.js";
+import { FIXTURES_ROOT } from "./helpers/fixturePaths.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(root, "src", "cli.ts");
@@ -72,7 +82,7 @@ describe("sf run-stage --help / wiring", () => {
     },
     // Two real tsx subprocess spawns — the default 5s timeout can flake
     // under full-suite parallel load (CPU contention across 200+ files).
-    15000,
+    60_000,
   );
 });
 
@@ -436,6 +446,19 @@ describe("sf run-stage call shapes", () => {
     expect(cap.stderrText()).toBe("");
   });
 
+  it("prints the Host restart message when the MCP layer reports tool not found", async () => {
+    const cap = captureIo();
+    const callTool: RunStageCallFn = vi.fn(async () => {
+      throw new Error(RUN_STAGE_HOST_RESTART_MESSAGE);
+    });
+    const code = await runRunStageCommand(
+      ["--stage", "stages/check.yaml", "--task", "tasks/sample.task.yaml"],
+      { cwd: "/proj", io: cap.io, callTool },
+    );
+    expect(code).toBe(1);
+    expect(cap.stderrText()).toContain("Restart the Stageflow Host");
+  });
+
   it("a thrown error from the underlying call (e.g. ensureGlobalService failure) exits 1 with the message", async () => {
     const cap = captureIo();
     const callTool: RunStageCallFn = vi.fn(async () => {
@@ -448,4 +471,78 @@ describe("sf run-stage call shapes", () => {
     expect(code).toBe(1);
     expect(cap.stderrText()).toMatch(/port occupied/);
   });
+});
+
+describe("sf run-stage against bare /mcp", () => {
+  let home: string;
+  let root: string;
+  let base: string;
+  let server: Server;
+  const savedHome = process.env.STAGEFLOW_HOME;
+
+  beforeAll(async () => {
+    home = await mkdtemp(path.join(tmpdir(), "sf-run-stage-cli-home-"));
+    root = await mkdtemp(path.join(tmpdir(), "sf-run-stage-cli-root-"));
+    process.env.STAGEFLOW_HOME = home;
+    resetGlobalStageflowHomeForTests();
+    const store = createRunStore({ rootDir: root });
+    const started = await startUiServer({
+      agent: scriptedFakeAgent([
+        {
+          type: "emit",
+          envelope: { status: "success", summary: "ok", artifacts: [] },
+        },
+      ]),
+      cwd: FIXTURES_ROOT,
+      rootDir: root,
+      store,
+      port: 0,
+      uiDistDir: path.join(root, "missing-ui"),
+    });
+    server = started.server;
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("expected TCP address");
+    base = `http://127.0.0.1:${address.port}`;
+  });
+
+  afterAll(async () => {
+    await closeServer(server);
+    if (savedHome === undefined) delete process.env.STAGEFLOW_HOME;
+    else process.env.STAGEFLOW_HOME = savedHome;
+    resetGlobalStageflowHomeForTests();
+    await rm(home, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it(
+    "starts a stage through the default MCP client on core-only /mcp",
+    async () => {
+      const cap = captureIo();
+      const code = await runRunStageCommand(
+        [
+          "--stage-inline",
+          JSON.stringify({
+            id: "check",
+            system_prompt: "Do work",
+            model: "anthropic/claude-sonnet-4-5",
+            io: {
+              input: { schema: { type: "object" } },
+              output: { schema: { type: "object" } },
+            },
+          }),
+          "--task-inline",
+          JSON.stringify({ id: "t", goal: "check" }),
+        ],
+        {
+          cwd: FIXTURES_ROOT,
+          io: cap.io,
+          hostBaseUrl: base,
+          ensureService: async () => ({ ok: true, alreadyRunning: true }),
+        },
+      );
+      expect(code).toBe(0);
+      expect(cap.stdoutText()).toMatch(/Stage run started:/);
+    },
+    60_000,
+  );
 });

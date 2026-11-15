@@ -58,7 +58,7 @@ On start, Stageflow prints the console URL and MCP endpoint, then opens your def
 | Connect | **Memories** | `#/memories` | List and create memories. Edit the cover. List card keys, open a card, correct it, or delete it. A session adds cards. The pipeline editor and the agent editor attach memory ids from this list |
 | (footer) | **Settings** | `#/settings` | General, Providers, Concurrency, MCP server, Project MCP, Notifications |
 
-Below the groups, **Pinned pipelines** lists pipelines you pinned. The Workshop has no rail item of its own: reach it from a pipeline row (**Open in Workshop**, `W`), from **New pipeline** (`N`) or from the command palette. The rail footer can also show active run count vs soft max, the same data as MCP `get_health`.
+Below the groups, **Pinned pipelines** lists pipelines you pinned. The Workshop has no rail item of its own: reach it from a pipeline row (**Open in Workshop**, `W`), from **New pipeline** (`N`) or from the command palette. The rail footer can also show active run count vs soft max, the same data as MCP `list_catalog` with `kind: health`.
 
 ### Command palette
 

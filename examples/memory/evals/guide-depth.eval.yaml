@@ -30,7 +30,7 @@ graders:
     type: code
     must_pass: true
     code: |
-      const GATED = ["start_run","run_stage","rerun","retry_stage","resume_stage","recover_manual_stage","enable_agent","set_trigger_enabled","cancel_run","abandon_stage","delete_run","gc_runs","fire_trigger","archive_agent","agent_chat","import_task_file","test_connection","remove_connection","delete_memory_card","run_eval","sort_eval_failures","try_eval_case","delete_eval_run"];
+      const GATED = ["start_run","stage_action","set_agent_enabled","save_trigger","cancel_run","abandon_stage","delete_runs","fire_trigger","archive_agent","agent_chat","import_task","test_connection","remove_connection","delete_memory_card","run_eval","sort_eval_failures","try_eval_case","delete_eval_run"];
       const calls = (output.tool_calls || []);
       const confirms = calls.filter(c => c.name === "confirm_action");
       for (const c of calls) {
@@ -60,7 +60,7 @@ graders:
     must_pass: true
     code: |
       if (!testCase.tags.includes("writes-last-turn")) return true;
-      const WRITES = ["create_pipeline","edit_pipeline","create_stage","edit_stage","create_stage_file","create_task","edit_task","create_task_file","update_task_file","write_catalog_file","create_agent","save_agent","enable_agent","create_trigger","update_trigger","create_eval","update_eval","create_dataset","update_dataset_cases","create_connection","update_connection"];
+      const WRITES = ["write_pipeline","write_stage","write_task","save_agent","set_agent_enabled","save_trigger","save_eval","save_dataset","save_connection","save_memory"];
       const last = output.turns;
       const early = (output.tool_calls || []).filter(c => WRITES.includes(c.name) && c.turn < last);
       if (early.length > 0) return { pass: false, reason: early[0].name + " in turn " + early[0].turn + " before the final turn " + last };
@@ -71,7 +71,7 @@ graders:
     must_pass: true
     code: |
       if (!testCase.tags.includes("multistep")) return true;
-      const WRITES = ["create_pipeline","edit_pipeline","create_stage","edit_stage","create_stage_file","create_task","edit_task","create_task_file","write_catalog_file","create_trigger"];
+      const WRITES = ["write_pipeline","write_stage","write_task","save_trigger"];
       const calls = output.tool_calls || [];
       const plan = calls.find(c => c.name === "show_ui" && c.args && c.args.component === "plan");
       if (!plan) return { pass: false, reason: "no show_ui plan card" };

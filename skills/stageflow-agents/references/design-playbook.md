@@ -72,7 +72,7 @@ Learn these, in whatever order the gaps are. Skip a row that is already answered
 | Source of truth | Where the facts live. Read only the project's own documentation: `docs/`, `policies/`, `AGENTS.md`, and `README.md` (`.md` and `.txt`). If they point at source code, say you only read documentation for this interview and ask which doc describes the behavior |
 | How people reach it | Console, a public web link, signed-in customers, email, Slack, Telegram, iMessage, a schedule, or another agent |
 
-After they confirm the two-or-three-sentence summary, write the file in that same turn. Show the YAML. Name anything they asked for that you left off because `list_connections`, `list_project_mcp`, `sf skills list`, `list_memories`, or `sf agents list` did not return it.
+After they confirm the two-or-three-sentence summary, write the file in that same turn. Show the YAML. Name anything they asked for that you left off because `get_connection`, `list_catalog` with `kind: mcp_servers`, `sf skills list`, `get_memory` with `list: true`, or `sf agents list` did not return it.
 
 ## Agent or pipeline
 
@@ -93,7 +93,7 @@ If they insist on an agent for a fixed sequence, and it is possible and safe, bu
 3. What it refuses, in concrete cases (refunds, file changes, other people's data), not a slogan.
 4. What a good reply contains: length, shape, and the evidence it must include.
 
-Use a YAML block scalar (`|`). Name the tools by the names the model sees (`helpdesk_search_articles`, `stageflow_list_runs`, `agent_<id>`), and say which of those wait for a person. The grant ids in `approvals.ask_first` use dots and colons; those ids are for the file, not for the prompt. See [tools-and-approvals.md](tools-and-approvals.md).
+Use a YAML block scalar (`|`). Name the tools by the names the model sees (`helpdesk_search_articles`, `stageflow_get_run`, `agent_<id>`), and say which of those wait for a person. The grant ids in `approvals.ask_first` use dots and colons; those ids are for the file, not for the prompt. See [tools-and-approvals.md](tools-and-approvals.md).
 
 Closest shapes to copy: `assets/examples/research_helper.agent.yaml`, `support_inbox.agent.yaml`, `morning_digest.agent.yaml`, `public_faq.agent.yaml`.
 

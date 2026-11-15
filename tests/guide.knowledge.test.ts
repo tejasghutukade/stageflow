@@ -171,13 +171,13 @@ describe("guide knowledge Artifact contract", () => {
     expect(practices).toMatch(/Artifact contract/i);
     expect(practices).toContain("write_stage_artifact");
     expect(practices).toContain("/workspace/grants");
-    expect(practices).toMatch(/create_stage/);
+    expect(practices).toMatch(/write_stage|bare new stage/);
     expect(practices).toMatch(/after-phase.*artifact|verify.*type: artifact/i);
 
     const stages = findGuideKnowledge("stages")!.body;
     expect(stages).toContain("write_stage_artifact");
     expect(stages).toContain("/workspace/grants");
-    expect(stages).toMatch(/create_stage/);
+    expect(stages).toMatch(/write_stage/);
     expect(stages).toMatch(/does not auto-add after-phase artifact/i);
   });
 });

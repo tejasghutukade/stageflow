@@ -18,11 +18,11 @@ There is no `sf` verb for connections. Use MCP when the Host is up, or REST on t
 
 The user enters a secret in the operator console's connection form, or through this harness's secret prompt. The value goes straight into the tool argument or the REST body. It never appears in chat, a command line you echo, YAML, a log, or a file you write.
 
-`create_connection` and `update_connection` take secret values as arguments (`secrets`, and for Photon `credential.secrets`). The Host stores them and does not return them. `list_connections` shows each secret field as `"env"` or `"store"`. A failure answer is a code, never the request body.
+`save_connection` with `mode: create` and `save_connection` with `mode: update` take secret values as arguments (`secrets`, and for Photon `credential.secrets`). The Host stores them and does not return them. `get_connection` shows each secret field as `"env"` or `"store"`. A failure answer is a code, never the request body.
 
 YAML that refers to a secret uses an env reference the user already exported, such as `botToken: env:SLACK_BOT_TOKEN`. Do not put the raw value in that file.
 
-Confirm before `create_connection`, `update_connection`, `remove_connection`, and `test_connection`. `test_connection` makes a live provider call with the values you pass.
+Confirm before `save_connection` with `mode: create`, `save_connection` with `mode: update`, `remove_connection`, and `test_connection`. `test_connection` makes a live provider call with the values you pass.
 
 ## Providers
 
@@ -38,11 +38,11 @@ Confirm before `create_connection`, `update_connection`, `remove_connection`, an
 
 iMessage and WhatsApp share a Photon credential. Sending needs the optional Spectrum packages on the Host. A missing package fails with `CHANNEL_PROVIDER_UNSUPPORTED`.
 
-Recipients are pinned on the stage. The connection does not choose who receives a message. `validate_connection_target` checks a recipient against the provider rules. It does not call the network and does not read the secret. Arguments: `id`, `to`, optional `cc`, optional `template`.
+Recipients are pinned on the stage. The connection does not choose who receives a message. `validate` with `kind: connection_recipient` checks a recipient against the provider rules. It does not call the network and does not read the secret. Arguments: `id`, `to`, optional `cc`, optional `template`.
 
 ## Create
 
-MCP `create_connection`. REST `POST /api/connections` (201). Same body.
+MCP `save_connection` with `mode: create`. REST `POST /api/connections` (201). Same body.
 
 ```json
 {
@@ -84,7 +84,7 @@ Success is the health object. An unknown id is 404 `{ "code": "CHANNEL_NOT_FOUND
 
 ## Replace a key, rename, enable
 
-MCP `update_connection`. REST `PATCH /api/connections/<id>`.
+MCP `save_connection` with `mode: update`. REST `PATCH /api/connections/<id>`.
 
 | Change | Arguments |
 |---|---|

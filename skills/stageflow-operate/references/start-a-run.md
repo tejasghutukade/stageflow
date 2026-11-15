@@ -12,7 +12,7 @@ Print a short pick list (id + path). Ask which.
 
 ## MCP catalog
 
-`list_pipelines` and `list_tasks` (native tools, or [`mcp-call.md`](mcp-call.md)). Listing objects carry `path` and `id`. The Host must already know the catalog root (seeded or registered via ensure / `POST /api/projects`) and that root needs a readable `stageflow.yaml`. Git is optional for listing — register + manifest is enough.
+`list_catalog` with `kind: pipelines` and `list_catalog` with `kind: tasks` (native tools, or [`mcp-call.md`](mcp-call.md)). Listing objects carry `path` and `id`. The Host must already know the catalog root (seeded or registered via ensure / `POST /api/projects`) and that root needs a readable `stageflow.yaml`. Git is optional for listing — register + manifest is enough.
 
 **Paths:** MCP requires catalog-relative paths under `project_root`. Absolute pipeline/task/checkout paths return `absolute_path_not_allowed` (with `registered_roots`). Local CLI may pass absolute paths and auto-register.
 
@@ -37,13 +37,13 @@ CLI parity with MCP inline: `sf run --repository owner/repo --ref <ref>` (or `--
 
 ### MCP
 
-An existing `task_path` from `list_tasks`, or an inline `task` object built from the stated goal:
+An existing `task_path` from `list_catalog` with `kind: tasks`, or an inline `task` object built from the stated goal:
 
 ```json
 { "id": "<slug>", "goal": "<goal>", "context": "optional", "constraints": "optional", "checkout": "optional", "repository": "optional", "ref": "optional" }
 ```
 
-Use either `repository`+`ref` or `checkout`, not both. `start_run` accepts that object. Do not write a scratch file on the MCP path. After start, inspect checkout state with `list_checkout_changes`, `get_run_diff`, or `read_checkout_file` when the human asks what changed in the bound tree (reclaimed succeeded worktrees → `checkout_reclaimed`).
+Use either `repository`+`ref` or `checkout`, not both. `start_run` accepts that object. Do not write a scratch file on the MCP path. After start, inspect checkout state with `run_files` and `view: changes`, `diff`, or `file` when the human asks what changed in the bound tree (reclaimed succeeded worktrees → `checkout_reclaimed`).
 
 ### CLI
 

@@ -11,122 +11,71 @@ function defaultBaseUrl(env = process.env) {
 }
 
 const DEFAULT_BASE_URL = defaultBaseUrl();
+const MCP_TOOLSETS_ALL = "?toolsets=all";
+
+function mcpEndpoint(baseUrl, query = "") {
+  const root = baseUrl.replace(/\/$/, "");
+  if (!query) return `${root}/mcp`;
+  return `${root}/mcp${query.startsWith("?") ? query : `?${query}`}`;
+}
 const ALLOWED_TOOLS = new Set([
   "abandon_stage",
-  "accept_eval_failure_suggestions",
   "agent_chat",
   "answer_gate",
-  "approve_agent_action",
   "archive_agent",
   "calibrate_eval_grader",
   "cancel_eval_run",
   "cancel_run",
   "compare_eval_runs",
-  "convert_dataset",
-  "create_agent",
-  "create_connection",
-  "create_dataset",
-  "create_eval",
-  "create_memory",
-  "create_pipeline",
-  "create_stage",
-  "create_stage_file",
-  "create_task",
-  "create_task_file",
-  "create_trigger",
+  "decide_agent_action",
   "decide_feedback_loop",
   "delete_eval_run",
+  "delete_function",
   "delete_memory_card",
-  "delete_run",
-  "deny_agent_action",
-  "describe_pipeline",
-  "diff_agent_revisions",
-  "disable_agent",
-  "dismiss_eval_failure_suggestions",
-  "edit_pipeline",
-  "edit_stage",
-  "edit_task",
-  "enable_agent",
-  "export_run",
+  "delete_runs",
   "fire_trigger",
-  "gc_runs",
   "get_agent",
-  "get_agent_revision",
   "get_agent_session",
-  "get_envelope",
+  "get_connection",
   "get_eval",
-  "get_eval_failure_sort_status",
-  "get_eval_failure_suggestions",
-  "get_eval_result",
+  "get_eval_failures",
   "get_eval_results",
   "get_eval_run",
-  "get_eval_run_export",
-  "get_health",
+  "get_function",
   "get_memory",
   "get_run",
-  "get_run_diff",
-  "get_stage_verification",
+  "get_stage",
   "get_started",
   "get_trigger",
-  "get_waiting_summary",
-  "import_task_file",
-  "install_eval_sample",
-  "list_agent_revisions",
-  "list_agent_sessions",
-  "list_agents",
-  "list_checkout_changes",
-  "list_connections",
-  "list_eval_runs",
-  "list_evals",
-  "list_grader_calibrations",
-  "list_memories",
-  "list_models",
-  "list_pipelines",
-  "list_project_mcp",
-  "list_providers",
-  "list_runs",
-  "list_skills",
-  "list_stage_events",
-  "list_tasks",
-  "list_triggers",
+  "import_task",
+  "list_catalog",
   "list_waiting",
-  "preflight",
   "probe_project_mcp",
-  "put_eval_review",
-  "read_artifact",
-  "read_checkout_file",
   "read_pipeline",
-  "recover_manual_stage",
   "remove_connection",
-  "rerun",
-  "restore_agent_revision",
-  "resume_stage",
-  "retry_stage",
+  "review_eval_results",
   "run_eval",
-  "run_stage",
+  "run_files",
   "save_agent",
-  "set_trigger_enabled",
+  "save_connection",
+  "save_dataset",
+  "save_eval",
+  "save_function",
+  "save_memory",
+  "save_trigger",
+  "set_agent_enabled",
   "sort_eval_failures",
+  "stage_action",
   "start_run",
   "stop_agent_session",
-  "stop_manual_recovery",
-  "tail_stage_log",
   "test_connection",
+  "test_function",
   "try_eval_case",
-  "update_connection",
-  "update_dataset_cases",
-  "update_eval",
-  "update_task_file",
-  "update_trigger",
   "validate",
-  "validate_agent",
-  "validate_catalog_draft",
-  "validate_connection_target",
-  "validate_eval",
   "wait_run",
-  "write_catalog_file",
-  "write_memory",
-  "write_memory_card",
+  "write_pipeline",
+  "write_stage",
+  "write_task",
 ]);
 const PROTOCOL_VERSION = "2025-03-26";
 const INIT_TIMEOUT_MS = 10_000;
@@ -283,7 +232,7 @@ function toolTimeoutMs(tool, toolArgs, override) {
   if (LONG_CALL_TOOLS.has(tool)) return LONG_CALL_MS;
   const waits =
     tool === "wait_run" ||
-    (tool === "run_stage" && toolArgs.blocking === true) ||
+    (tool === "start_run" && toolArgs.stage && toolArgs.blocking === true) ||
     (tool === "run_eval" && toolArgs.wait === true);
   if (!waits) return DEFAULT_TOOL_TIMEOUT_MS;
   const budget =
@@ -465,12 +414,13 @@ async function probeHost(baseUrl) {
 }
 
 async function listRemoteTools(baseUrl, stateless) {
-  const mcpUrl = `${baseUrl}/mcp`;
+  const mcpAll = mcpEndpoint(baseUrl, MCP_TOOLSETS_ALL);
+  const mcpSession = mcpEndpoint(baseUrl);
   const token = controlTokenFromEnv();
   let sessionId;
   try {
-    if (!stateless) sessionId = await initializeSession(mcpUrl, token);
-    const { res, text } = await postMcp(mcpUrl, {
+    if (!stateless) sessionId = await initializeSession(mcpAll, token);
+    const { res, text } = await postMcp(stateless ? mcpAll : mcpSession, {
       body: { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
       sessionId,
       timeoutMs: DEFAULT_TOOL_TIMEOUT_MS,
@@ -491,7 +441,7 @@ async function listRemoteTools(baseUrl, stateless) {
     }
     return 1;
   } finally {
-    if (sessionId) await closeSession(mcpUrl, sessionId, token);
+    if (sessionId) await closeSession(mcpSession, sessionId, token);
   }
 }
 
@@ -520,7 +470,8 @@ if (!ALLOWED_TOOLS.has(tool)) {
 }
 
 const toolArgs = parseToolArgs(argsText);
-const mcpUrl = `${baseUrl}/mcp`;
+const mcpAll = mcpEndpoint(baseUrl, MCP_TOOLSETS_ALL);
+const mcpSession = mcpEndpoint(baseUrl);
 const timeoutMs = toolTimeoutMs(tool, toolArgs, timeoutOverride);
 const token = controlTokenFromEnv();
 
@@ -528,9 +479,9 @@ let sessionId;
 let exitCode = 1;
 try {
   if (!stateless) {
-    sessionId = await initializeSession(mcpUrl, token);
+    sessionId = await initializeSession(mcpAll, token);
   }
-  const { res, text } = await postMcp(mcpUrl, {
+  const { res, text } = await postMcp(stateless ? mcpAll : mcpSession, {
     body: {
       jsonrpc: "2.0",
       id: 1,
@@ -552,7 +503,7 @@ try {
   }
 } finally {
   if (sessionId) {
-    await closeSession(mcpUrl, sessionId, token);
+    await closeSession(mcpSession, sessionId, token);
   }
 }
 process.exit(exitCode);

@@ -7,7 +7,7 @@ export const troubleshootingTopic: GuideKnowledgeTopic = {
     "What common validation finding codes and run, trigger, channel, agent and eval errors mean, and how to fix each one.",
   body: `# Troubleshooting
 
-Run \`validate\` (or \`validate_catalog_draft\` for a draft, \`validate_agent\`, \`validate_eval\`) first. Findings have a \`code\`; errors block, warnings do not.
+Run \`validate\` (with \`kind: draft\`, \`agent\`, or \`eval\`, or \`preflight: true\`) first. Findings have a \`code\`; errors block, warnings do not.
 
 ## Pipelines and stages
 
@@ -46,7 +46,7 @@ Run \`validate\` (or \`validate_catalog_draft\` for a draft, \`validate_agent\`,
 | \`provider error: …\` | Usually a missing or invalid provider key or an unavailable model. Check Settings → Providers. |
 | \`stage timed out after …ms\` | Raise \`timeout_ms\` or simplify; the session is kept, so Resume works. |
 | Run waiting | A stage asked a person. Answer in the Inbox. |
-| Stage failed after-phase verify | See the stage's verification history (\`get_stage_verification\`). With \`mode: manual\`, use Retry with guidance or Stop recovery; plain retry is refused. |
+| Stage failed after-phase verify | See the stage's verification history (\`get_stage\` with \`view: verification\`). With \`mode: manual\`, use Retry with guidance or Stop recovery; plain retry is refused. |
 | Join never runs | One parent failed. A join does not run on a failed parent. |
 | "waiting for browser profile" | Another run holds the browser profile until it ends. |
 | Stage fails with \`site blocked this browser:\` | The site challenged or rejected the Host's browser. With \`browser.attach\` configured the Host pins the profile to the operator's Chrome and retries the stage once; without it the stage fails. Console Connections → Browser logins shows the pin, and Switch back tries the Host's browser again. |

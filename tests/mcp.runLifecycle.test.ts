@@ -233,7 +233,7 @@ describe("MCP/REST/CLI cancel_run lifecycle", () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-abandon-desc-"));
     const { server, base } = await withServer(root);
     try {
-      const res = await fetch(`${base}/mcp`, {
+      const res = await fetch(`${base}/mcp?toolsets=all`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -282,7 +282,7 @@ describe("MCP/REST/CLI delete_run lifecycle", () => {
       });
       await store.updateRunStatus(planted.runId, "succeeded");
 
-      const deleted = await mcpCall(base, "delete_run", {
+      const deleted = await mcpCall(base, "delete_runs", {
         runId: planted.runId,
       });
       expect(deleted.isError).toBe(false);
@@ -407,7 +407,7 @@ describe("MCP/REST/CLI gc_runs lifecycle", () => {
           planted.runId,
         );
 
-      const dry = await mcpCall(base, "gc_runs", {});
+      const dry = await mcpCall(base, "delete_runs", { gc: true });
       expect(dry.isError).toBe(false);
       expect(dry.payload).toEqual({
         slimmed: [planted.runId],
@@ -438,7 +438,7 @@ describe("MCP/REST/CLI gc_runs lifecycle", () => {
       expect(code).toBe(0);
       expect(JSON.parse(cap.stdout.join("\n"))).toEqual(dry.payload);
 
-      const executed = await mcpCall(base, "gc_runs", { execute: true });
+      const executed = await mcpCall(base, "delete_runs", { gc: true, execute: true });
       expect(executed.isError).toBe(false);
       expect(executed.payload).toEqual({
         slimmed: [planted.runId],

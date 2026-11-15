@@ -17,11 +17,11 @@ A trigger file is \`<id>.trigger.yaml\`. It binds one id to an existing pipeline
 | \`pipeline\` | yes | Id of a catalog pipeline. |
 | \`task\` | no | Id of a catalog task. Its presence is the mode switch (below). |
 | \`kind\` | yes | \`manual\`, \`schedule\` or \`event\`. |
-| \`enabled\` | yes in the file | A disabled trigger refuses to fire (409). \`create_trigger\` defaults it to \`true\`. |
+| \`enabled\` | yes in the file | A disabled trigger refuses to fire (409). \`save_trigger\` with \`mode: create\` defaults it to \`true\`. |
 | \`schedule\` | for \`schedule\` | \`{ cron, timezone? }\`. Cron is checked when created. |
 | \`event\` | for \`event\` | \`{ source, match?, config? }\`. |
 
-The pipeline and task ids must exist in the catalog; \`create_trigger\` refuses unknown ids (422) and \`validate\` reports \`trigger.unknown_pipeline\` / \`trigger.unknown_task\`.
+The pipeline and task ids must exist in the catalog; \`save_trigger\` with \`mode: create\` refuses unknown ids (422) and \`validate\` reports \`trigger.unknown_pipeline\` / \`trigger.unknown_task\`.
 
 ## Catalog mode vs dynamic mode
 
@@ -32,9 +32,9 @@ The pipeline and task ids must exist in the catalog; \`create_trigger\` refuses 
 
 **manual.** Fires only when asked: console Fire, \`fire_trigger\`, \`sf trigger fire\`, \`POST /api/triggers/<id>/fire\`.
 
-**schedule.** While a Host is running, a scheduler checks about every 30 seconds and fires when the cron time passes. If the Host was down, it fires **once** for the latest missed time, not once per missed slot. A schedule trigger needs a catalog task: in dynamic mode the timer has no task, so every automatic fire fails with \`trigger.task_required\`. The console blocks that combination on save; \`create_trigger\` does not, so check it yourself.
+**schedule.** While a Host is running, a scheduler checks about every 30 seconds and fires when the cron time passes. If the Host was down, it fires **once** for the latest missed time, not once per missed slot. A schedule trigger needs a catalog task: in dynamic mode the timer has no task, so every automatic fire fails with \`trigger.task_required\`. The console blocks that combination on save; \`save_trigger\` with \`mode: create\` does not, so check it yourself.
 
-**event, \`source\` starting with \`github.\`** (console tile uses \`github.pull_request\`). Polls the GitHub pull request list of \`event.config.repo\` (\`owner/repo\`) about every 60 seconds, with a token from \`event.config.secretRef\` (default \`GITHUB_TOKEN\`). Only pull requests, not issues or repo pushes outside a PR. The first poll of a repo only records a cursor (and per-PR head SHAs) and fires nothing for old PRs; the same quiet baseline runs when a cursor already exists but heads were never written (upgrade). \`match.action\` is **required** for github sources — \`create_trigger\` / validate reject omit-match. Actions: \`opened\` (brand-new PR: equal created/updated timestamps, or created after the cursor), \`synchronize\` (head SHA changed — use this for every push), \`updated\` (other activity, same head; also aged PRs with no prior SHA), \`merged\`, \`closed\`. \`match\` can also filter \`author\` and the other normalized fields; exact equality only.
+**event, \`source\` starting with \`github.\`** (console tile uses \`github.pull_request\`). Polls the GitHub pull request list of \`event.config.repo\` (\`owner/repo\`) about every 60 seconds, with a token from \`event.config.secretRef\` (default \`GITHUB_TOKEN\`). Only pull requests, not issues or repo pushes outside a PR. The first poll of a repo only records a cursor (and per-PR head SHAs) and fires nothing for old PRs; the same quiet baseline runs when a cursor already exists but heads were never written (upgrade). \`match.action\` is **required** for github sources — \`save_trigger\` with \`mode: create\` / validate reject omit-match. Actions: \`opened\` (brand-new PR: equal created/updated timestamps, or created after the cursor), \`synchronize\` (head SHA changed — use this for every push), \`updated\` (other activity, same head; also aged PRs with no prior SHA), \`merged\`, \`closed\`. \`match\` can also filter \`author\` and the other normalized fields; exact equality only.
 
 **event, \`source: webhook\`.** Gets its own endpoint \`POST /api/triggers/<id>/webhook\`, verified by HMAC-SHA256 over the raw body. \`event.config\`: \`secretRef\` (required, a Host env name or \`store:NAME\`), \`header\` (required, for example \`x-hub-signature-256\`), \`scheme\` (\`hex\` default or \`base64\`). Wrong signature is 401. A body that does not match \`match\` returns 200 with \`fired: false\`. The Host listens on loopback by default, so an outside sender needs a tunnel or an exposed deployment.
 
@@ -62,7 +62,7 @@ Trigger secrets (webhook, GitHub, email) are referenced by \`secretRef\`, never 
 
 ## Tools
 
-\`list_triggers\`, \`get_trigger\`, \`create_trigger\` (\`directory\`, \`id\`, \`pipeline\`, optional \`task\`, \`kind\`, \`schedule\`, \`event\`, \`enabled\`), \`update_trigger\` (replaces the whole definition; the id cannot change), \`set_trigger_enabled\`, \`fire_trigger\`. There is no delete tool: to stop a trigger, disable it; removing it means deleting the file by hand.
+\`get_trigger\` (list or by id), \`save_trigger\` (\`mode: create\` or \`mode: update\`; \`enabled_only: true\` toggles enablement), \`fire_trigger\`. There is no delete tool: to stop a trigger, disable it; removing it means deleting the file by hand.
 
 ## Before you add a trigger
 

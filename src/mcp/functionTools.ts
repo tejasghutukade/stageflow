@@ -10,14 +10,12 @@ import {
 import type { FunctionInvoker } from "../functions/invoke.js";
 import { isFunctionError } from "../functions/service.js";
 import type { FunctionService } from "../functions/service.js";
+import { getFunctionFlatSchema, saveFunctionFlatSchema } from "../toolkit/agentFunctionToolModes.js";
 import type { McpToolDeps } from "./deps.js";
 import { textResult } from "./toolResults.js";
 
 const functionId = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
-const projectRootField = z
-  .string()
-  .optional()
-  .describe("Catalog project root; omit to use the host default");
+const projectRootField = z.string().optional();
 const MCP_ACTOR = { source: "api" as const, author: "mcp" };
 
 function required(deps: McpToolDeps): FunctionService {
@@ -53,6 +51,10 @@ async function call(work: () => Promise<unknown>) {
   }
 }
 
+function schemaError(message: string) {
+  return textResult({ code: "invalid_arguments", message, status: 400 }, true);
+}
+
 export function registerFunctionTools(server: McpServer, deps: McpToolDeps): void {
   const service = () => required(deps);
   const roots = { store: deps.store, bootCwd: deps.cwd };
@@ -68,107 +70,83 @@ export function registerFunctionTools(server: McpServer, deps: McpToolDeps): voi
   const writeRoot = catalogRoot(true);
 
   server.registerTool(
-    "list_functions",
-    {
-      description: "List function definitions in functions/*.function.yaml.",
-      inputSchema: z.object({ project_root: projectRootField }),
-    },
-    ({ project_root }) =>
-      call(async () => ({ functions: await service().list(await readRoot(project_root)) })),
-  );
-
-  server.registerTool(
     "get_function",
     {
-      description: "Get one function definition and its current revision.",
-      inputSchema: z.object({ id: functionId, project_root: projectRootField }),
+      description:
+        "List functions without id; with id get one function; view revisions or revision reads stored revisions.",
+      inputSchema: getFunctionFlatSchema,
+      annotations: { readOnlyHint: true },
     },
-    ({ id, project_root }) => call(async () => service().get(await readRoot(project_root), id)),
-  );
-
-  server.registerTool(
-    "list_function_revisions",
-    {
-      description: "List the revisions of a function.",
-      inputSchema: z.object({ id: functionId, project_root: projectRootField }),
+    async (args) => {
+      const parsed = getFunctionFlatSchema.safeParse(args);
+      if (!parsed.success) return schemaError(parsed.error.issues[0]?.message ?? "Invalid arguments");
+      const value = parsed.data;
+      try {
+        const project = await readRoot(value.project_root);
+        if (value.id === undefined) {
+          return call(async () => ({ functions: await service().list(project) }));
+        }
+        const view = value.view ?? "definition";
+        switch (view) {
+          case "definition":
+            return call(async () => service().get(project, value.id!));
+          case "revisions":
+            return call(async () => ({ revisions: await service().listRevisions(project, value.id!) }));
+          case "revision":
+            return call(async () => service().getRevision(project, value.id!, value.revision!));
+        }
+      } catch (error) {
+        if (error instanceof CatalogPathError) {
+          return textResult(catalogPathErrorBody(error), true);
+        }
+        throw error;
+      }
     },
-    ({ id, project_root }) =>
-      call(async () => ({ revisions: await service().listRevisions(await readRoot(project_root), id) })),
-  );
-
-  server.registerTool(
-    "get_function_revision",
-    {
-      description: "Get one stored revision of a function.",
-      inputSchema: z.object({
-        id: functionId,
-        revision: z.number().int().positive(),
-        project_root: projectRootField,
-      }),
-    },
-    ({ id, revision, project_root }) =>
-      call(async () => service().getRevision(await readRoot(project_root), id, revision)),
-  );
-
-  server.registerTool(
-    "create_function",
-    {
-      description: "Create a function definition.",
-      inputSchema: z.object({
-        definition: z.record(z.string(), z.unknown()),
-        format: z.enum(["js", "yaml", "yml"]).optional(),
-        project_root: projectRootField,
-      }),
-    },
-    ({ definition, format, project_root }) =>
-      call(async () =>
-        service().create(await writeRoot(project_root), definition, MCP_ACTOR, format ? { format } : {}),
-      ),
   );
 
   server.registerTool(
     "save_function",
     {
-      description: "Save a function definition. baseRevision must be the current revision.",
-      inputSchema: z.object({
-        id: functionId,
-        baseRevision: z.number().int().nonnegative(),
-        definition: z.record(z.string(), z.unknown()),
-        summary: z.string().max(200).optional(),
-        project_root: projectRootField,
-      }),
+      description:
+        "Create or update a function. mode create duplicates with copy_from and id, or creates from definition. mode update needs baseRevision.",
+      inputSchema: saveFunctionFlatSchema,
     },
-    ({ id, baseRevision, definition, summary, project_root }) =>
-      call(async () =>
-        service().save(
-          await writeRoot(project_root),
-          id,
-          { baseRevision, definition, summary: summary ?? null },
-          MCP_ACTOR,
-        ),
-      ),
-  );
-
-  server.registerTool(
-    "duplicate_function",
-    {
-      description: "Copy a function to a new id with its own revision history.",
-      inputSchema: z.object({
-        id: functionId,
-        newId: functionId,
-        format: z.enum(["js", "yaml", "yml"]).optional(),
-        project_root: projectRootField,
-      }),
+    async (args) => {
+      const parsed = saveFunctionFlatSchema.safeParse(args);
+      if (!parsed.success) return schemaError(parsed.error.issues[0]?.message ?? "Invalid arguments");
+      const value = parsed.data;
+      try {
+        const project = await writeRoot(value.project_root);
+        if (value.mode === "create") {
+          if (value.copy_from !== undefined) {
+            return call(async () =>
+              service().duplicate(
+                project,
+                value.copy_from!,
+                { id: value.id!, ...(value.format ? { format: value.format } : {}) },
+                MCP_ACTOR,
+              ),
+            );
+          }
+          return call(async () =>
+            service().create(project, value.definition!, MCP_ACTOR, value.format ? { format: value.format } : {}),
+          );
+        }
+        return call(async () =>
+          service().save(
+            project,
+            value.id!,
+            { baseRevision: value.baseRevision!, definition: value.definition!, summary: value.summary ?? null },
+            MCP_ACTOR,
+          ),
+        );
+      } catch (error) {
+        if (error instanceof CatalogPathError) {
+          return textResult(catalogPathErrorBody(error), true);
+        }
+        throw error;
+      }
     },
-    ({ id, newId, format, project_root }) =>
-      call(async () =>
-        service().duplicate(
-          await writeRoot(project_root),
-          id,
-          { id: newId, ...(format ? { format } : {}) },
-          MCP_ACTOR,
-        ),
-      ),
   );
 
   server.registerTool(
@@ -194,17 +172,26 @@ export function registerFunctionTools(server: McpServer, deps: McpToolDeps): voi
         project_root: projectRootField,
       }),
     },
-    ({ id, source, input, real, mocks, timeoutMs, memoryLimitBytes, project_root }) =>
-      call(async () =>
-        invoker(deps).test(await writeRoot(project_root), id, {
+    async ({ id, source, input, real, mocks, timeoutMs, memoryLimitBytes, project_root }) => {
+      try {
+        const project = await writeRoot(project_root);
+        return call(async () =>
+          invoker(deps).test(project, id!, {
           ...(source !== undefined ? { source } : {}),
           ...(input !== undefined ? { input } : {}),
           ...(real !== undefined ? { real } : {}),
           ...(mocks !== undefined ? { mocks } : {}),
           ...(timeoutMs !== undefined ? { timeoutMs } : {}),
           ...(memoryLimitBytes !== undefined ? { memoryLimitBytes } : {}),
-        }),
-      ),
+          }),
+        );
+      } catch (error) {
+        if (error instanceof CatalogPathError) {
+          return textResult(catalogPathErrorBody(error), true);
+        }
+        throw error;
+      }
+    },
   );
 
   server.registerTool(
@@ -213,6 +200,15 @@ export function registerFunctionTools(server: McpServer, deps: McpToolDeps): voi
       description: "Delete a function that no pipeline, stage, or agent references.",
       inputSchema: z.object({ id: functionId, project_root: projectRootField }),
     },
-    ({ id, project_root }) => call(async () => service().delete(await writeRoot(project_root), id)),
+    async ({ id, project_root }) => {
+      try {
+        return call(async () => service().delete(await writeRoot(project_root), id!));
+      } catch (error) {
+        if (error instanceof CatalogPathError) {
+          return textResult(catalogPathErrorBody(error), true);
+        }
+        throw error;
+      }
+    },
   );
 }

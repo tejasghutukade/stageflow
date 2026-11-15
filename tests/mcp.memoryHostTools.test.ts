@@ -9,14 +9,7 @@ import { MEMORY_PAGE_CAP } from "../src/memory/ids.js";
 import type { McpToolDeps } from "../src/mcp/deps.js";
 import { registerMemoryHostTools } from "../src/mcp/memoryHostTools.js";
 
-const TOOL_NAMES = [
-  "list_memories",
-  "get_memory",
-  "create_memory",
-  "write_memory",
-  "write_memory_card",
-  "delete_memory_card",
-];
+const TOOL_NAMES = ["get_memory", "save_memory", "delete_memory_card"];
 
 const SESSION_TOOL_NAMES = [
   "replace_memory",
@@ -93,9 +86,8 @@ describe("MCP host memory tools", () => {
     expect(tools.map((item) => item.name)).toEqual(TOOL_NAMES);
     for (const name of SESSION_TOOL_NAMES) expect(tools.map((item) => item.name)).not.toContain(name);
     expect(tools.every((item) => item.description.length > 0 && item.inputSchema)).toBe(true);
-    expect(tool(tools, "get_memory").inputSchema!.safeParse({}).success).toBe(false);
     expect(tool(tools, "get_memory").inputSchema!.safeParse({ id: "pool" }).success).toBe(true);
-    expect(tool(tools, "write_memory_card").inputSchema!.safeParse({ id: "pool", key: "k" }).success).toBe(false);
+    expect(tool(tools, "save_memory").inputSchema!.safeParse({ mode: "update", id: "pool", card: "k" }).success).toBe(false);
   });
 
   it("creates, lists, reads, and replaces a cover, then updates and deletes an existing card", async () => {
@@ -103,11 +95,15 @@ describe("MCP host memory tools", () => {
     const tools = record(deps(host));
     const call = (name: string, args: Record<string, unknown> = {}) => tool(tools, name).handler(args).then(read);
 
-    const created = await call("create_memory", { id: "pool", description: "People already sourced." });
+    const created = await call("save_memory", {
+      mode: "create",
+      id: "pool",
+      description: "People already sourced.",
+    });
     expect(created.isError).toBe(false);
     expect(created.body).toEqual({ id: "pool", description: "People already sourced.", body: "" });
 
-    const listed = await call("list_memories");
+    const listed = await call("get_memory");
     expect(listed.body).toEqual({
       memories: [{ id: "pool", description: "People already sourced.", cardCount: 0 }],
     });
@@ -117,17 +113,22 @@ describe("MCP host memory tools", () => {
       body: { id: "pool", description: "People already sourced.", body: "", keys: [] },
     });
 
-    const written = await call("write_memory", { id: "pool", body: "new cover" });
+    const written = await call("save_memory", { mode: "update", id: "pool", body: "new cover" });
     expect(written.body).toEqual({ id: "pool", description: "People already sourced.", body: "new cover" });
 
     await host.addCard("pool", "ada@example.com", "sourced");
-    const covered = await call("write_memory", { id: "pool", body: "newer cover" });
+    const covered = await call("save_memory", { mode: "update", id: "pool", body: "newer cover" });
     expect(covered.body).toMatchObject({ body: "newer cover" });
     expect(await call("get_memory", { id: "pool" })).toMatchObject({
       body: { body: "newer cover", keys: ["ada@example.com"] },
     });
 
-    const card = await call("write_memory_card", { id: "pool", key: "ada@example.com", body: "shortlisted" });
+    const card = await call("save_memory", {
+      mode: "update",
+      id: "pool",
+      card: "ada@example.com",
+      body: "shortlisted",
+    });
     expect(card).toEqual({ isError: false, body: { body: "shortlisted" } });
     expect(await host.readCard("pool", "ada@example.com")).toBe("shortlisted");
 
@@ -143,17 +144,17 @@ describe("MCP host memory tools", () => {
     const tools = record(deps(host));
     const call = (name: string, args: Record<string, unknown> = {}) => tool(tools, name).handler(args).then(read);
 
-    expect(await call("create_memory", { id: "1pool", description: "nope" })).toEqual({
+    expect(await call("save_memory", { mode: "create", id: "1pool", description: "nope" })).toEqual({
       isError: true,
       body: { error: "MEMORY_INVALID_ID" },
     });
-    expect(await call("create_memory", { id: "pool", description: "" })).toEqual({
+    expect(await call("save_memory", { mode: "create", id: "pool", description: "" })).toEqual({
       isError: true,
       body: { error: "MEMORY_INVALID_DESCRIPTION" },
     });
 
-    expect((await call("create_memory", { id: "pool", description: "People already sourced." })).isError).toBe(false);
-    expect(await call("create_memory", { id: "pool", description: "again" })).toEqual({
+    expect((await call("save_memory", { mode: "create", id: "pool", description: "People already sourced." })).isError).toBe(false);
+    expect(await call("save_memory", { mode: "create", id: "pool", description: "again" })).toEqual({
       isError: true,
       body: { error: "MEMORY_EXISTS" },
     });
@@ -161,20 +162,26 @@ describe("MCP host memory tools", () => {
       isError: true,
       body: { error: "MEMORY_NOT_FOUND" },
     });
-    expect(await call("write_memory", { id: "missing", body: "x" })).toEqual({
+    expect(await call("save_memory", { mode: "update", id: "missing", body: "x" })).toEqual({
       isError: true,
       body: { error: "MEMORY_NOT_FOUND" },
     });
 
-    const missingCard = await call("write_memory_card", { id: "pool", key: "ada@example.com", body: "sourced" });
+    const missingCard = await call("save_memory", {
+      mode: "update",
+      id: "pool",
+      card: "ada@example.com",
+      body: "sourced",
+    });
     expect(missingCard).toEqual({ isError: true, body: { error: "MEMORY_CARD_NOT_FOUND" } });
     expect(addCard).not.toHaveBeenCalled();
     expect(await host.listCards("pool")).toEqual([]);
 
     await host.addCard("pool", "ada@example.com", "sourced");
-    expect(await call("write_memory_card", {
+    expect(await call("save_memory", {
+      mode: "update",
       id: "pool",
-      key: "ada@example.com",
+      card: "ada@example.com",
       body: "x".repeat(MEMORY_PAGE_CAP + 1),
     })).toEqual({ isError: true, body: { error: "MEMORY_TOO_LARGE" } });
     expect(await host.readCard("pool", "ada@example.com")).toBe("sourced");
@@ -189,8 +196,13 @@ describe("MCP host memory tools", () => {
 
   it("returns MEMORIES_UNAVAILABLE when the host is not configured", async () => {
     const tools = record(deps());
-    for (const item of tools) {
-      const result = read(await item.handler({}));
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ["get_memory", {}],
+      ["save_memory", { mode: "create", id: "pool", description: "x" }],
+      ["delete_memory_card", { id: "pool", key: "k" }],
+    ];
+    for (const [name, args] of cases) {
+      const result = read(await tool(tools, name).handler(args));
       expect(result).toEqual({ isError: true, body: { error: "MEMORIES_UNAVAILABLE" } });
     }
   });

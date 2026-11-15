@@ -182,18 +182,18 @@ describe("optional task input", () => {
   });
 
   it("MCP taskFileSchema includes optional input", async () => {
-    const source = await readFile(
-      path.join(root, "src", "mcp", "catalogTools.ts"),
+    const schemaSource = await readFile(
+      path.join(root, "src", "toolkit", "runToolModes.ts"),
       "utf8",
     );
-    expect(source).toMatch(
+    expect(schemaSource).toMatch(
       /input:\s*z\.record\(z\.string\(\),\s*z\.unknown\(\)\)\.optional\(\)/,
     );
-    expect(source).toMatch(/repository:\s*z\.string\(\)\.optional\(\)/);
-    expect(source).toMatch(/ref:\s*z\.string\(\)\.optional\(\)/);
-    expect(source).toMatch(/checkout:\s*z[\s\S]*?\.string\(\)\.optional\(\)/);
-    expect(source).toMatch(/checkout_override:\s*z[\s\S]*?\.string\(\)\.optional\(\)/);
-    expect(source).toMatch(/skip_gates:\s*z\.boolean\(\)\.optional\(\)/);
+    expect(schemaSource).toMatch(/repository:\s*z\.string\(\)\.optional\(\)/);
+    expect(schemaSource).toMatch(/ref:\s*z\.string\(\)\.optional\(\)/);
+    expect(schemaSource).toMatch(/checkout:\s*z[\s\S]*?\.string\(\)\.optional\(\)/);
+    expect(schemaSource).toMatch(/checkout_override:\s*z\.string\(\)\.optional\(\)/);
+    expect(schemaSource).toMatch(/skip_gates:\s*z\.boolean\(\)\.optional\(\)/);
   });
 });
 

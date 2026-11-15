@@ -65,7 +65,7 @@ Read verbs start a Host only when the store needs a migration. Mutating verbs al
 | `cancel` | `{ "ok": true, "runId" }` | 0 |
 | `delete` | `{ "ok": true, "runId" }` | 0 |
 | `gc` | `{ "slimmed", "purged", "bareCachesEvicted" }` arrays of run ids. Executes unless `--dry-run` | 0 |
-| `rerun` | `sf run` completion document | 0, 1, or 2 |
+| `start_run` with `from_run` | `sf run` completion document | 0, 1, or 2 |
 
 `list --status` accepts `created`, `queued`, `running`, `succeeded`, `failed`, `cancelled`. `waiting` is not a run status. Parked HITL runs stay `running`. Use `sf runs waiting`.
 

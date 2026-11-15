@@ -64,7 +64,7 @@ Submit the selected label as `text` for `free_text` items. If the prompt also li
 
 ## Artifact-backed
 
-1. Print the pending message and artifact paths (from `list_waiting`) in this chat. Do not put artifact bodies on the card. Do not call `read_artifact` unless the human asked to open a file.
+1. Print the pending message and artifact paths (from `list_waiting`) in this chat. Do not put artifact bodies on the card. Do not call `run_files` with `view: artifact` unless the human asked to open a file.
 2. Open the picker with Accept and Reject.
 3. Accept → submit immediately (`decision: "accept"`).
 4. Reject → one chat follow-up for optional notes, then submit `decision: "reject"` and `text` when they typed notes.

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
 import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -560,6 +561,30 @@ describe("sf validate integration", () => {
     } finally {
       await cleanup();
     }
+  });
+
+  it("rejects stale bare tool names in Guide eval datasets", async () => {
+    process.env.STAGEFLOW_SHOW_INTERNAL_AGENTS = "1";
+    const evalPath = path.join(process.cwd(), "examples/memory/evals/guide-behavior.eval.yaml");
+    const loaded = await load(path.join(process.cwd(), "examples/memory/evals/guide-behavior.eval.yaml"), process.cwd());
+    const datasetPath = path.join(process.cwd(), "examples/memory/evals/guide-behavior.dataset.jsonl");
+    const cases = (await import("node:fs")).readFileSync(datasetPath, "utf8").trimEnd().split("\n").map((line) => JSON.parse(line));
+    const withStale = cases.map((row, index) =>
+      index === 0 ? { ...row, expected: { ...row.expected, forbidden_tools: [...(row.expected?.forbidden_tools ?? []), "delete_run"] } } : row,
+    );
+    const findings = await validateEval(loaded, {
+      projectRoot: process.cwd(),
+      datasetReport: {
+        path: datasetPath,
+        relPath: "examples/memory/evals/guide-behavior.dataset.jsonl",
+        cases: withStale,
+        findings: [],
+        contentHash: "x",
+      },
+    });
+    expect(findings.some((f) => f.code === "eval.stageflow_tool_unknown" && f.message.includes("delete_runs"))).toBe(true);
+    delete process.env.STAGEFLOW_SHOW_INTERNAL_AGENTS;
+    expect(existsSync(evalPath)).toBe(true);
   });
 
   it("buildValidationResult promotes an eval warning under strict only", () => {

@@ -1,6 +1,6 @@
 # Capabilities
 
-Optional stage and pipeline features. Key lists and placement rules are in [yaml-reference.md](yaml-reference.md). After writing any of these, `sf validate` checks names and shapes only. Run `sf doctor --pipeline <path> --json` or MCP `preflight` with `{ pipeline }` before calling the pipeline ready.
+Optional stage and pipeline features. Key lists and placement rules are in [yaml-reference.md](yaml-reference.md). After writing any of these, `sf validate` checks names and shapes only. Run `sf doctor --pipeline <path> --json` or MCP `validate` with `preflight: true` and `{ pipeline }` before calling the pipeline ready.
 
 ## Contents
 
@@ -27,7 +27,7 @@ system_prompt: |
   Follow the archify skill. Emit one success envelope when the diagram spec is written.
 ```
 
-Lookup order, first match wins: run skills (`$STAGEFLOW_HOME/runs/<runId>/skills/<name>/`), the checkout's `.pi/skills/<name>/`, the host Pi skills directory, then package built-ins. MCP `list_skills` reports `name`, `description` and `origin` (`run`, `checkout`, `host` or `builtin`). A missing skill fails the stage before the session starts. Install a durable host skill with `sf skills install --from-path <dir> --skill-name <name>` or `sf skills install --from-zip <url-or-path> --skill-name <name>`.
+Lookup order, first match wins: run skills (`$STAGEFLOW_HOME/runs/<runId>/skills/<name>/`), the checkout's `.pi/skills/<name>/`, the host Pi skills directory, then package built-ins. MCP `list_catalog` with `kind: skills` reports `name`, `description` and `origin` (`run`, `checkout`, `host` or `builtin`). A missing skill fails the stage before the session starts. Install a durable host skill with `sf skills install --from-path <dir> --skill-name <name>` or `sf skills install --from-zip <url-or-path> --skill-name <name>`.
 
 ## Stage MCP
 
@@ -255,7 +255,7 @@ event:
 
 `github.*` sources require `event.match.action` to be `opened`, `synchronize`, `updated`, `merged` or `closed` (`trigger.github_action_required`, `trigger.invalid_github_action`). A webhook source uses `event.config.secretRef` and `event.config.header` (`scheme` is `hex` or `base64`, default `hex`). An `email.message` source uses `event.config` `host`, `port`, `user` and `secretRef`. `secretRef` is a name, never a value: a plain name reads the environment or `NAME_FILE`, and `store:NAME` reads the console secret store. A malformed `store:` name is `trigger.invalid_secret_ref`.
 
-`sf validate --trigger <path> --json` checks the shape, that `pipeline` and `task` resolve (`trigger.unknown_pipeline`, `trigger.unknown_task`), the GitHub action and a `store:` name. It does not parse `cron` and does not require webhook or email config fields. MCP `create_trigger` does parse `cron` and writes the file. Its parameters are `directory`, `id`, `pipeline`, `kind` (`manual`, `schedule` or `event`), optional `task`, `enabled`, `schedule`, `event` and `project_root`. A `schedule` trigger with no `task` is accepted by the schema and then fails on every automatic tick, because nothing supplies a task. Give a schedule a `task`.
+`sf validate --trigger <path> --json` checks the shape, that `pipeline` and `task` resolve (`trigger.unknown_pipeline`, `trigger.unknown_task`), the GitHub action and a `store:` name. It does not parse `cron` and does not require webhook or email config fields. MCP `save_trigger` with `mode: create` does parse `cron` and writes the file. Its parameters are `directory`, `id`, `pipeline`, `kind` (`manual`, `schedule` or `event`), optional `task`, `enabled`, `schedule`, `event` and `project_root`. A `schedule` trigger with no `task` is accepted by the schema and then fails on every automatic tick, because nothing supplies a task. Give a schedule a `task`.
 
 Unknown extra keys are dropped on load with no finding. Keep to the table above.
 

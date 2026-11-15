@@ -25,7 +25,7 @@ The CLI talks to `http://127.0.0.1:<port>` only. The port is `STAGEFLOW_SERVICE_
 
 | Group | Commands | Host behavior |
 |---|---|---|
-| Autostart a Host | `sf run`, `sf run-stage`, `sf trigger`, every `sf agents` verb, `sf eval` verbs other than `validate` and `engine`, `sf a2a` verbs that call the Host, and these `sf runs` verbs: `answer`, `feedback-decide`, `retry`, `resume`, `recover`, `abandon`, `cancel`, `delete`, `gc`, `rerun` | Probes `/livez`. If nothing is listening, spawns a detached `sf mcp --port <port>` (log: `$STAGEFLOW_HOME/service.log`) and waits up to `STAGEFLOW_AUTOSTART_TIMEOUT_MS` (default 10000) |
+| Autostart a Host | `sf run`, `sf run-stage`, `sf trigger`, every `sf agents` verb, `sf eval` verbs other than `validate` and `engine`, `sf a2a` verbs that call the Host, and these `sf runs` verbs: `answer`, `feedback-decide`, `retry`, `resume`, `recover`, `abandon`, `cancel`, `delete`, `gc`, `start_run` with `from_run` | Probes `/livez`. If nothing is listening, spawns a detached `sf mcp --port <port>` (log: `$STAGEFLOW_HOME/service.log`) and waits up to `STAGEFLOW_AUTOSTART_TIMEOUT_MS` (default 10000) |
 | Host-down reads | `sf runs list`, `show`, `verify`, `waiting`, `wait`; `sf artifact`; `sf envelope`; `sf export-run`; `sf debug-run`; `sf export --all`; `sf backup` | Read the SQLite store directly. They start a Host only when a store migration is pending |
 | Never use a Host | `sf validate`, `sf graph`, `sf migrate-yaml`, `sf doctor`, `sf init`, `sf skills`, `sf providers`, `sf browser`, `sf eval validate`, `sf eval engine`, `sf a2a validate`, `list` and `add-caller`, `sf restore`, `--version`, `--help` | Run in-process |
 
@@ -49,7 +49,7 @@ Under `--json`, a failure to start the Host exits 1. The document depends on the
 | `sf run-stage` | `{ "error": "<message>" }` on stdout. No reason id. |
 | `sf agents` | `{ "code": "host.unavailable", "message": "<message>", "issues": [] }` on stdout. |
 | `sf a2a` status, enable, reload, caller, publication | The message on stderr. `--json` does not wrap it. |
-| Mutating `sf runs` (`answer`, `feedback-decide`, `retry`, `resume`, `recover`, `abandon`, `cancel`, `delete`, `gc`, `rerun`) | `{ "error": "<message>", "reason": "<reason id>" }` on stdout. |
+| Mutating `sf runs` (`answer`, `feedback-decide`, `retry`, `resume`, `recover`, `abandon`, `cancel`, `delete`, `gc`, `start_run` with `from_run`) | `{ "error": "<message>", "reason": "<reason id>" }` on stdout. |
 
 `sf eval` verbs that autostart print `{ "error": "<message>", "reason": "<reason id>" }` on stdout, the same shape as mutating `sf runs`.
 
@@ -76,7 +76,7 @@ Use `--json` on `sf run`, `sf run-stage`, `sf runs ...`, `sf validate`, `sf doct
 | `sf run` | run succeeded | run failed, or the Host could not be reached | run is waiting for an operator (`--json` outcome says so) |
 | `sf run-stage` | async: call accepted. Blocking (`--blocking`): stage succeeded | bad input, or blocking stage failed | blocking only: parked on a gate (`needs_input`), or `--timeout-ms` elapsed |
 | `sf runs wait` | woke on `waiting`, `terminal`, `already` or `timeout`; read `reason` and `run.status` | error, such as run not found | not used; 130 means the wait was aborted |
-| `sf runs retry`, `rerun`, `recover` | succeeded (`recover --stop`: done) | failed, busy or cancelled | waiting after the retry |
+| `sf runs retry`, `start_run` with `from_run`, `recover` | succeeded (`recover --stop`: done) | failed, busy or cancelled | waiting after the retry |
 | `sf eval run` | `--no-wait`: the Host accepted the run, before any score. Waited: the outcome is `passed` | anything else: below threshold, failed, cancelled, cost limit, invalid eval, missing engine, Host error | never |
 | `sf browser check` | logged in | error | 2 profile in use, 3 logged out, 4 unknown |
 

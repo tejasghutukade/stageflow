@@ -95,9 +95,9 @@ There is no `sf eval accept`. Accepting and dismissing are MCP or HTTP, and they
 
 | Action | How |
 |---|---|
-| Accept specific rows | MCP `accept_eval_failure_suggestions` with `ids`, or `POST /api/eval-runs/:id/failures/suggestions/accept` with `{ "ids": [...] }` |
+| Accept specific rows | MCP `review_eval_results` with `action: accept` and `ids`, or `POST /api/eval-runs/:id/failures/suggestions/accept` with `{ "ids": [...] }` |
 | Bulk accept | Omit `ids`. Pending suggestions at or above `min_confidence` (default 0.7) are accepted. `unclear` is excluded. Optional `bucket` limits the bulk to one bucket |
-| Dismiss | MCP `dismiss_eval_failure_suggestions` with `ids` (required), or `POST .../failures/suggestions/dismiss` |
+| Dismiss | MCP `review_eval_results` with `action: dismiss` and `ids` (required), or `POST .../failures/suggestions/dismiss` |
 
 Passing `ids` can accept an `unclear` or low-confidence row, because the confidence filter applies only to the bulk path. Do not bulk-accept, and do not pass ids the user did not choose.
 

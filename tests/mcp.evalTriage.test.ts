@@ -89,7 +89,7 @@ async function setup(hasKey = true) {
 describe("MCP failure sorting tools", () => {
   it("lists the tools with a cost and privacy note on the sort action", async () => {
     const h = await setup();
-    const res = await fetch(`${h.base}/mcp`, {
+    const res = await fetch(`${h.base}/mcp?toolsets=all`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
@@ -98,15 +98,15 @@ describe("MCP failure sorting tools", () => {
     const data = JSON.parse(text.split("\n").find((l) => l.startsWith("data: "))!.slice(6));
     const tools = data.result.tools as Array<{ name: string; description: string }>;
     const names = tools.map((t) => t.name);
-    for (const name of ["sort_eval_failures", "get_eval_failure_suggestions", "get_eval_failure_sort_status"]) {
+    for (const name of ["sort_eval_failures", "get_eval_failures"]) {
       expect(names).toContain(name);
     }
     const sort = tools.find((t) => t.name === "sort_eval_failures")!;
     expect(sort.description).toMatch(/external classifier/i);
     expect(sort.description).toMatch(/manual only/i);
     expect(sort.description).toMatch(/\$0\.04/);
-    expect(TOOL_META.sort_eval_failures).toMatchObject({ group: "evals.run", risk: "external" });
-    expect(TOOL_META.get_eval_failure_suggestions).toMatchObject({ group: "evals.read", risk: "read" });
+    expect(TOOL_META.sort_eval_failures).toMatchObject({ groups: ["evals.run"], risk: "external" });
+    expect(TOOL_META.get_eval_failures).toMatchObject({ groups: ["evals.read"], risk: "read" });
   });
 
   it("sorts, then reads suggestions and status; the key never appears", async () => {
@@ -114,10 +114,10 @@ describe("MCP failure sorting tools", () => {
     const sorted = await h.tool("sort_eval_failures", { eval_run_id: h.runId });
     expect(sorted.isError).toBe(false);
     expect(sorted.payload).toMatchObject({ classifier: "jev", sorted: 1, failed: 0 });
-    const list = await h.tool("get_eval_failure_suggestions", { eval_run_id: h.runId, status: "pending" });
+    const list = await h.tool("get_eval_failures", { eval_run_id: h.runId, view: "suggestions", status: "pending" });
     expect(list.payload.items).toHaveLength(1);
     expect(list.payload.summary).toMatchObject({ pending: 1, by_bucket: { agent_wrong: 1 } });
-    const status = await h.tool("get_eval_failure_sort_status", { eval_run_id: h.runId });
+    const status = await h.tool("get_eval_failures", { eval_run_id: h.runId, view: "sort_status" });
     expect(status.payload).toMatchObject({ default: "jev", classifiers: { jev: { available: true, key_sources: ["JEV_API_KEY"] } } });
     for (const res of [sorted, list, status]) expect(JSON.stringify(res.raw)).not.toContain(KEY);
   });

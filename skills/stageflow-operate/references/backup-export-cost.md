@@ -47,7 +47,7 @@ An export stream is not a backup. `sf restore` will not apply it.
 | `sf export-run --run <id> [--from <sf-run.json>] [--out <file>]` | One run as JSON. `--out` must stay under the current directory. | Starts a Host only if the store needs a migration. |
 | `sf export --all [--status <status>] [--since <iso>] [--pipeline <id>] [--out <file>]` | NDJSON: a header line, then one projected run per line, including runs that are not finished. | Same. |
 | `sf debug-run <runId> [--out <file>]` | A capped, redacted post-mortem. | Same. |
-| MCP `export_run` | One run, while the Host is up. | Required. |
+| MCP `get_run` with `view: export` | One run, while the Host is up. | Required. |
 
 The `sf export --all` header is `{ "type": "stageflow_export", "version": 1, "stageflow_version", "created_at", "filter"? }`. There is no `--json` flag; the stream is the output. It is a copy of run records for inspection. It does not restore a Host.
 
@@ -70,11 +70,11 @@ The Host runs this sweep on its own. To run it now:
 | Surface | Dry run | Execute |
 |---|---|---|
 | CLI | `sf runs gc --dry-run --json` | `sf runs gc --json` executes. It is not a dry run. |
-| MCP | `gc_runs` with `execute` omitted or false | `gc_runs` with `execute: true` |
+| MCP | `delete_runs` with `gc: true` with `execute` omitted or false | `delete_runs` with `gc: true` with `execute: true` |
 
 Confirm before an executing sweep. Slim and purge cannot be undone. JSON is `{ "slimmed": ["<runId>"], "purged": ["<runId>"], "bareCachesEvicted": ["<runId>"] }`. A dry run fills those arrays with the candidates and changes nothing. A run that is not terminal is left alone. `sf runs show` includes `slimmed_at` after a slim.
 
-`sf runs delete --run <id> --json` removes one run. A run that is not finished needs `--force` (MCP `delete_run` with `force: true`). Confirm first. Success is `{ "ok": true, "runId" }`.
+`sf runs delete --run <id> --json` removes one run. A run that is not finished needs `--force` (MCP `delete_runs` with `force: true`). Confirm first. Success is `{ "ok": true, "runId" }`.
 
 ## Cost
 
@@ -85,7 +85,7 @@ Stageflow reports cost when a stage or a session recorded provider usage. Absent
 | `sf run --json`, `sf runs show --json`, `get_run` | `total_cost_usd` on the run, `cost_usd` on each stage that reported usage. Omitted when nothing was reported. |
 | `sf runs list --json` | `total_cost_usd` on each summary that has it. |
 | `GET /api/overview?range=24h\|7d\|30d` | `totals.cost_usd`, `previous.cost_usd`, and `pipelines[].cost_usd` for runs in that window. No CLI or MCP twin. |
-| `list_agent_sessions` | `costUsd` per session (null if unreported). |
-| `get_health` | Disk and capacity, not spend. |
+| `get_agent_session` with `list: true` | `costUsd` per session (null if unreported). |
+| `list_catalog` with `kind: health` | Disk and capacity, not spend. |
 
 Say "not reported" when the field is missing. Per-stage figures are the ones to show next to `total_cost_usd` so a single expensive stage is visible. Agent-session cost is separate from pipeline-run cost; add them only when the user asked for a combined figure and label the two sources.

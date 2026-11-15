@@ -66,10 +66,10 @@ No checkout or repository for cases. A stage that asks a person (HITL gate) reco
 
 ## Sort failures
 
-After a run, \`sort_eval_failures\` (manual only) suggests for each failed result a bucket (\`agent_wrong\`, \`grader_wrong\`, \`case_wrong\`, \`unclear\`) and a failure type. Classifier \`jev\` (TypeSafe; needs a TypeSafe key, about $0.04 per million input tokens, outside the cost cap) or \`judge\` (the run's judge model). Nothing is tagged until someone accepts (\`accept_eval_failure_suggestions\`).
+After a run, \`sort_eval_failures\` (manual only) suggests for each failed result a bucket (\`agent_wrong\`, \`grader_wrong\`, \`case_wrong\`, \`unclear\`) and a failure type. Classifier \`jev\` (TypeSafe; needs a TypeSafe key, about $0.04 per million input tokens, outside the cost cap) or \`judge\` (the run's judge model). Nothing is tagged until someone accepts through \`review_eval_results\` with \`action: accept\`.
 
 ## Tools
 
-Read (free): \`list_evals\`, \`get_eval\`, \`validate_eval\`, \`list_eval_runs\`, \`get_eval_run\`, \`get_eval_results\`, \`get_eval_result\`, \`compare_eval_runs\`, \`get_eval_failure_suggestions\`, \`get_eval_failure_sort_status\`, \`get_eval_run_export\`. Write: \`create_eval\`, \`update_eval\`, \`create_dataset\`, \`update_dataset_cases\`, \`convert_dataset\`, \`install_eval_sample\`, \`put_eval_review\`, \`accept_eval_failure_suggestions\`, \`dismiss_eval_failure_suggestions\`. Costs money: \`run_eval\`, \`try_eval_case\`, \`sort_eval_failures\`. Also \`cancel_eval_run\`, \`delete_eval_run\` (destructive).
+Read (free): \`get_eval\` (list or views), \`validate\` with \`kind: eval\`, \`get_eval_run\` (list or detail/export), \`get_eval_results\` (table or one case), \`compare_eval_runs\`, \`get_eval_failures\` (suggestions or sort status). Write: \`save_eval\`, \`save_dataset\` (\`action: create\`, \`ops\`, \`convert\`), \`review_eval_results\` (\`label\`, \`accept\`, \`dismiss\` on failure suggestions). Costs money: \`run_eval\`, \`try_eval_case\`, \`sort_eval_failures\`, \`calibrate_eval_grader\`. Also \`cancel_eval_run\`, \`delete_eval_run\` (destructive).
 `,
 };

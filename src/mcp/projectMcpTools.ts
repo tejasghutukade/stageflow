@@ -1,7 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { probeProjectMcpServer } from "../agent/piIsolatedMcpProbe.js";
-import { listProjectMcpCatalog } from "../config/resolveStageMcpServers.js";
 import type { McpToolDeps } from "./deps.js";
 import { textResult } from "./toolResults.js";
 
@@ -11,16 +10,6 @@ export function registerProjectMcpTools(
 ): void {
   const { cwd, projectRoot } = deps;
   const root = projectRoot ?? cwd;
-
-  server.registerTool(
-    "list_project_mcp",
-    {
-      description:
-        "List git-root .mcp.json and console-saved servers: name, transport, origin, stored auth status, cached tool names, and usableByStages. Inspect is not attach; it does not interpolate, spawn, start sign-in, or return a token, header, URL, or authorization code.",
-      inputSchema: z.object({}),
-    },
-    async () => textResult(await listProjectMcpCatalog(root)),
-  );
 
   server.registerTool(
     "probe_project_mcp",

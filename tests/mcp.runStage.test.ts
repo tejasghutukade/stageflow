@@ -45,7 +45,7 @@ async function runAndWait(
   store: RunStore,
   args: Record<string, unknown>,
 ): Promise<string> {
-  const started = await mcpCall(base, "run_stage", args);
+  const started = await mcpCall(base, "start_run", args);
   expect(started.isError).toBe(false);
   const runId = started.payload.runId as string;
   await waitFor(async () => (await store.readRun(runId)).status === "succeeded");
@@ -120,7 +120,7 @@ describe("run_stage — standalone stage execution (MCP)", () => {
 
   it("runs an inline bare stage body to completion, no pipeline wrapper authored by the caller", async () => {
     await withServer([emitOk("checked")], async (base, store) => {
-      const started = await mcpCall(base, "run_stage", {
+      const started = await mcpCall(base, "start_run", {
         stage: checkStage("check", { system_prompt: "Review the diff for obvious bugs." }),
         task: { id: "t", goal: "check this change" },
       });
@@ -136,11 +136,11 @@ describe("run_stage — standalone stage execution (MCP)", () => {
       expect(detail.payload.pipeline_path).toBeUndefined();
       expect(detail.payload.stages[0]?.envelope.summary).toBe("checked");
 
-      const envelope = await mcpCall(base, "get_envelope", { runId, stageId: "check" });
+      const envelope = await mcpCall(base, "get_stage", { view: "envelope", runId, stageId: "check" });
       expect(envelope.isError).toBe(false);
       expect(envelope.payload.envelope.summary).toBe("checked");
 
-      const listed = await mcpCall(base, "list_runs", {});
+      const listed = await mcpCall(base, "get_run", {});
       expect(
         listed.payload.runs.some((r: { run_id: string }) => r.run_id === runId),
       ).toBe(true);
@@ -149,7 +149,7 @@ describe("run_stage — standalone stage execution (MCP)", () => {
 
   it("runs a catalog stage referenced by filesystem path, no pipeline file authored", async () => {
     await withServer([emitOk("researched")], async (base, store) => {
-      const started = await mcpCall(base, "run_stage", {
+      const started = await mcpCall(base, "start_run", {
         stage: "stages/research.yaml",
         task: { id: "t", goal: "look into it" },
       });
@@ -159,7 +159,7 @@ describe("run_stage — standalone stage execution (MCP)", () => {
 
       await waitFor(async () => (await store.readRun(runId)).status === "succeeded");
 
-      const envelope = await mcpCall(base, "get_envelope", { runId, stageId: "research" });
+      const envelope = await mcpCall(base, "get_stage", { view: "envelope", runId, stageId: "research" });
       expect(envelope.isError).toBe(false);
       expect(envelope.payload.envelope.summary).toBe("researched");
     });
@@ -209,7 +209,7 @@ describe("run_stage — standalone stage execution (MCP)", () => {
     },
   ])("rejects an invalid inline stage body: $name", async ({ stage, assertPayload }) => {
     await withServer([], async (base) => {
-      const started = await mcpCall(base, "run_stage", {
+      const started = await mcpCall(base, "start_run", {
         stage,
         task: { id: "t", goal: "check" },
       });
@@ -226,10 +226,8 @@ describe("run_stage — standalone stage execution (MCP)", () => {
         }),
         task: { id: "t", goal: "check" },
       });
-      const verification = await mcpCall(base, "get_stage_verification", {
-        runId,
-        stageId: "check",
-      });
+      const verification = await mcpCall(base, "get_stage", { view: "verification", runId,
+        stageId: "check", });
       expect(verification.isError).toBe(false);
       expect(verification.payload.attempts[0].verification_outcome).toBe("passed");
       expect(verification.payload.attempts[0].checks).toEqual([
@@ -241,7 +239,7 @@ describe("run_stage — standalone stage execution (MCP)", () => {
   describe("blocking mode", () => {
     it("a blocking call against a gate-free stage returns the final envelope directly, no polling", async () => {
       await withServer([emitOk("done")], async (base) => {
-        const started = await mcpCall(base, "run_stage", {
+        const started = await mcpCall(base, "start_run", {
           stage: checkStage(),
           task: { id: "t", goal: "check" },
           blocking: true,
@@ -264,7 +262,7 @@ describe("run_stage — standalone stage execution (MCP)", () => {
           },
         ],
         async (base, store) => {
-          const started = await mcpCall(base, "run_stage", {
+          const started = await mcpCall(base, "start_run", {
             stage: checkStage("clarify", { system_prompt: "Ask a question" }),
             task: { id: "t", goal: "check" },
             blocking: true,
@@ -320,7 +318,7 @@ describe("run_stage — standalone stage execution (MCP)", () => {
       };
 
       await withServer(hangingAgent, async (base) => {
-        const started = await mcpCall(base, "run_stage", {
+        const started = await mcpCall(base, "start_run", {
           stage: checkStage(),
           task: { id: "t", goal: "check" },
           blocking: true,
@@ -404,7 +402,7 @@ describe("run_stage — standalone stage execution (MCP)", () => {
 
     it("an unknown envelope reference fails with a 404-style error, matching get_envelope, as a bare ref or inside a multi-ref array", async () => {
       await withServer([emitOk()], async (base, store) => {
-        const bare = await mcpCall(base, "run_stage", {
+        const bare = await mcpCall(base, "start_run", {
           stage: checkStage(),
           envelope_ref: { runId: "does-not-exist", stageId: "whatever" },
         });
@@ -416,7 +414,7 @@ describe("run_stage — standalone stage execution (MCP)", () => {
           task: { id: "t1", goal: "research it" },
         });
         const runsBefore = await store.listRuns();
-        const inArray = await mcpCall(base, "run_stage", {
+        const inArray = await mcpCall(base, "start_run", {
           stage: checkStage(),
           envelope_ref: [
             { runId: researchRunId, stageId: "research" },
@@ -478,7 +476,7 @@ describe("run_stage — standalone stage execution (MCP)", () => {
       // load time (see parseModelField) — the one structurally-invalid value
       // is an empty/whitespace string, which stage.model validation rejects.
       await withServer([], async (base) => {
-        const started = await mcpCall(base, "run_stage", {
+        const started = await mcpCall(base, "start_run", {
           stage: checkStage(),
           model: "",
           task: { id: "t", goal: "check" },
@@ -544,15 +542,14 @@ describe("run_stage — standalone stage execution (MCP)", () => {
         });
 
         // Caller resolves the reference: which artifacts does it declare?
-        const envelopeResult = await mcpCall(base, "get_envelope", {
-          runId,
-          stageId: "research",
-        });
+        const envelopeResult = await mcpCall(base, "get_stage", { view: "envelope", runId,
+          stageId: "research", });
         expect(envelopeResult.isError).toBe(false);
         expect(envelopeResult.payload.envelope.artifacts).toEqual([artifactRelPath]);
 
         // Caller reads the bytes via the existing artifact-read tool.
-        const artifact = await mcpCall(base, "read_artifact", {
+        const artifact = await mcpCall(base, "run_files", {
+          view: "artifact",
           runId,
           path: envelopeResult.payload.envelope.artifacts[0],
         });

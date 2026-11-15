@@ -107,7 +107,9 @@ describe("MCP preflight", () => {
 
   it("path pipeline returns tool_version_mismatch and creates no Run", async () => {
     const before = await store.listRuns();
-    const result = await mcpCall(base, "preflight", {
+    const result = await mcpCall(base, "validate", {
+      kind: "pipeline",
+      preflight: true,
       pipeline: "pipelines/requires-demo.pipeline.yaml",
     });
     expect(result.isError).toBe(false);
@@ -125,7 +127,9 @@ describe("MCP preflight", () => {
 
   it("inline pipeline preflight works without creating a Run", async () => {
     const before = await store.listRuns();
-    const result = await mcpCall(base, "preflight", {
+    const result = await mcpCall(base, "validate", {
+      kind: "pipeline",
+      preflight: true,
       pipeline: {
         id: "inline-missing",
         requires: [{ tool: "totally-absent-bin-xyz" }],
@@ -161,8 +165,8 @@ describe("MCP preflight", () => {
     expect(after.length).toBe(before.length);
   });
 
-  it("get_health includes toolchain map", async () => {
-    const result = await mcpCall(base, "get_health");
+  it("list_catalog health includes toolchain map", async () => {
+    const result = await mcpCall(base, "list_catalog", { kind: "health" });
     expect(result.isError).toBe(false);
     expect(result.payload.toolchain).toEqual(
       expect.objectContaining({

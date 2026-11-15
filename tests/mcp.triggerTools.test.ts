@@ -12,6 +12,7 @@ import { initTempGitRepo } from "./helpers/projectContext.js";
 import { bindStageflowHomeForTests } from "./helpers/workspaceTestHarness.js";
 import { triggerStoreId } from "../src/config/triggerCatalog.js";
 import { realpath } from "node:fs/promises";
+import { guideConfirmationOutcome } from "../src/toolkit/modePolicy.js";
 import { mcpCall } from "./helpers/mcpCall.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
@@ -61,7 +62,7 @@ function successEnvelope(summary: string) {
 }
 
 describe("MCP trigger tools", () => {
-  it("list_triggers returns the fixture trigger; get_trigger success + unknown-id 404", async () => {
+  it("get_trigger list returns the fixture trigger; get_trigger success + unknown-id 404", async () => {
     const { root, cleanup } = await initTempGitRepo();
     try {
       await seedCatalog(root);
@@ -73,7 +74,7 @@ describe("MCP trigger tools", () => {
       await store.ensureProject(root);
       const service = await startTestService(store, scriptedFakeAgent([]), root);
       try {
-        const listed = await mcpCall(service.baseUrl, "list_triggers");
+        const listed = await mcpCall(service.baseUrl, "get_trigger", {});
         expect(listed.isError).toBe(false);
         const manual = listed.payload.triggers.find(
           (t: { id: string }) => t.id === "manual-hello-world",
@@ -133,7 +134,7 @@ describe("MCP trigger tools", () => {
       const agent = scriptedFakeAgent([successEnvelope("clarified")]);
       const service = await startTestService(store, agent, root);
       try {
-        const listed = await mcpCall(service.baseUrl, "list_triggers");
+        const listed = await mcpCall(service.baseUrl, "get_trigger", {});
         const projectRoot = listed.payload.triggers.find(
           (t: { id: string }) => t.id === "manual-hello-world",
         ).project_root;
@@ -229,7 +230,7 @@ describe("MCP trigger tools", () => {
     }
   });
 
-  it("create_trigger writes a real trigger visible via list_triggers; rejects dangling refs, bad cron, and duplicate ids", async () => {
+  it("save_trigger create writes a real trigger visible via get_trigger list; rejects dangling refs, bad cron, and duplicate ids", async () => {
     const { root, cleanup } = await initTempGitRepo();
     try {
       await seedCatalog(root);
@@ -241,7 +242,8 @@ describe("MCP trigger tools", () => {
       await store.ensureProject(root);
       const service = await startTestService(store, scriptedFakeAgent([]), root);
       try {
-        const danglingRef = await mcpCall(service.baseUrl, "create_trigger", {
+        const danglingRef = await mcpCall(service.baseUrl, "save_trigger", {
+          mode: "create",
           project_root: root,
           directory: "triggers",
           id: "dangling",
@@ -253,7 +255,8 @@ describe("MCP trigger tools", () => {
         expect(danglingRef.payload.status).toBe(422);
         expect(danglingRef.payload.error).toMatch(/unknown pipeline/);
 
-        const badCron = await mcpCall(service.baseUrl, "create_trigger", {
+        const badCron = await mcpCall(service.baseUrl, "save_trigger", {
+          mode: "create",
           project_root: root,
           directory: "triggers",
           id: "bad-cron",
@@ -266,7 +269,8 @@ describe("MCP trigger tools", () => {
         expect(badCron.payload.status).toBe(422);
         expect(badCron.payload.error).toMatch(/Invalid schedule.cron/);
 
-        const duplicate = await mcpCall(service.baseUrl, "create_trigger", {
+        const duplicate = await mcpCall(service.baseUrl, "save_trigger", {
+          mode: "create",
           project_root: root,
           directory: "triggers",
           id: "manual-hello-world",
@@ -276,8 +280,10 @@ describe("MCP trigger tools", () => {
         });
         expect(duplicate.isError).toBe(true);
         expect(duplicate.payload.status).toBe(409);
+        expect(duplicate.payload.code).toBe("trigger_EXISTS");
 
-        const created = await mcpCall(service.baseUrl, "create_trigger", {
+        const created = await mcpCall(service.baseUrl, "save_trigger", {
+          mode: "create",
           project_root: root,
           directory: "triggers",
           id: "nightly-hello",
@@ -285,6 +291,7 @@ describe("MCP trigger tools", () => {
           task: "my-task",
           kind: "schedule",
           schedule: { cron: "0 2 * * *", timezone: "UTC" },
+          enabled: true,
         });
         expect(created.isError).toBe(false);
         expect(created.payload).toMatchObject({
@@ -299,13 +306,14 @@ describe("MCP trigger tools", () => {
         const written = await readFile(writtenPath, "utf8");
         expect(written).toContain("id: nightly-hello");
 
-        const listed = await mcpCall(service.baseUrl, "list_triggers");
+        const listed = await mcpCall(service.baseUrl, "get_trigger", {});
         expect(listed.isError).toBe(false);
         expect(listed.payload.triggers.map((t: { id: string }) => t.id)).toContain(
           "nightly-hello",
         );
 
-        const createdDynamic = await mcpCall(service.baseUrl, "create_trigger", {
+        const createdDynamic = await mcpCall(service.baseUrl, "save_trigger", {
+          mode: "create",
           project_root: root,
           directory: "triggers",
           id: "dynamic-created",
@@ -317,7 +325,7 @@ describe("MCP trigger tools", () => {
           id: "dynamic-created",
           pipeline: "hello",
           kind: "manual",
-          enabled: true,
+          enabled: false,
         });
         expect(createdDynamic.payload.task).toBeUndefined();
 
@@ -333,7 +341,7 @@ describe("MCP trigger tools", () => {
     }
   });
 
-  it("create_trigger passes through event.config; the created trigger fires end to end via POST /:id/webhook", async () => {
+  it("save_trigger create passes through event.config; the created trigger fires end to end via POST /:id/webhook", async () => {
     const { root, cleanup } = await initTempGitRepo();
     const secret = "mcp-created-webhook-secret-please-ignore";
     const priorSecret = process.env.MCP_CREATED_WEBHOOK_SECRET;
@@ -349,13 +357,15 @@ describe("MCP trigger tools", () => {
       const agent = scriptedFakeAgent([successEnvelope("clarified")]);
       const service = await startTestService(store, agent, root);
       try {
-        const created = await mcpCall(service.baseUrl, "create_trigger", {
+        const created = await mcpCall(service.baseUrl, "save_trigger", {
+          mode: "create",
           project_root: root,
           directory: "triggers",
           id: "mcp-on-webhook",
           pipeline: "hello",
           task: "my-task",
           kind: "event",
+          enabled: true,
           event: {
             source: "webhook",
             config: { secretRef: "MCP_CREATED_WEBHOOK_SECRET", header: "x-signature" },
@@ -396,7 +406,7 @@ describe("MCP trigger tools", () => {
     }
   });
 
-  it("create_trigger passes through email event.config (numeric port); get_trigger shows it intact", async () => {
+  it("save_trigger create passes through email event.config (numeric port); get_trigger shows it intact", async () => {
     const { root, cleanup } = await initTempGitRepo();
     try {
       await seedCatalog(root);
@@ -409,7 +419,8 @@ describe("MCP trigger tools", () => {
       const agent = scriptedFakeAgent([successEnvelope("clarified")]);
       const service = await startTestService(store, agent, root);
       try {
-        const created = await mcpCall(service.baseUrl, "create_trigger", {
+        const created = await mcpCall(service.baseUrl, "save_trigger", {
+          mode: "create",
           project_root: root,
           directory: "triggers",
           id: "mcp-on-email",
@@ -495,5 +506,54 @@ describe("MCP trigger tools", () => {
       clearFindProjectRootCacheForTests();
       await cleanup();
     }
+  });
+
+  it("save_trigger confirmation policy binds enable, disable, and full update", () => {
+    expect(
+      guideConfirmationOutcome("save_trigger", {
+        mode: "update",
+        id: "nightly",
+        enabled: true,
+      }),
+    ).toBe("required");
+    expect(
+      guideConfirmationOutcome("save_trigger", {
+        mode: "update",
+        id: "nightly",
+        enabled: true,
+        pipeline: "hello",
+        kind: "manual",
+      }),
+    ).toBe("required");
+    expect(
+      guideConfirmationOutcome("save_trigger", {
+        mode: "create",
+        enabled: true,
+        directory: "triggers",
+        id: "nightly",
+        pipeline: "hello",
+        kind: "manual",
+      }),
+    ).toBe("required");
+    expect(
+      guideConfirmationOutcome("save_trigger", {
+        mode: "create",
+        enabled: false,
+        directory: "triggers",
+        id: "nightly",
+        pipeline: "hello",
+        kind: "manual",
+      }),
+    ).toBe("none");
+    expect(guideConfirmationOutcome("save_trigger", { mode: "update", id: "nightly", enabled: false })).toBe("required");
+    expect(
+      guideConfirmationOutcome("save_trigger", {
+        mode: "update",
+        id: "nightly",
+        pipeline: "hello",
+        kind: "manual",
+        enabled: false,
+      }),
+    ).toBe("required");
   });
 });

@@ -27,7 +27,8 @@ export type AgentErrorCode =
   | "agent.limit_reached"
   | "agent.model_timeout"
   | "agent.backend_unavailable"
-  | "agent.approval_denied";
+  | "agent.approval_denied"
+  | "agent.stale_stageflow_tools";
 
 const STATUS: Partial<Record<AgentErrorCode, number>> = {
   "agent.invalid": 422,

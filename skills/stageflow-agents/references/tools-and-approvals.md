@@ -53,7 +53,7 @@ A wildcard grant `tools.mcp.<server>: ["*"]` lets `ask_first` name any `<server>
 
 `tools.mcp` is a map of server name to a list of tool names. The server name matches `^[A-Za-z0-9_.-]{1,64}$`. Each list needs at least one entry. `["*"]` grants every tool that server exposes. `[]` is an error. The name `stageflow` is reserved (`agent.mcp_name_reserved`).
 
-Use a server name that `list_project_mcp` or the project's `.mcp.json` already has. A name the Host does not know warns `agent.mcp_server_unknown` and still saves. Adding a server is [mcp-servers.md](mcp-servers.md).
+Use a server name that `list_catalog` with `kind: mcp_servers` or the project's `.mcp.json` already has. A name the Host does not know warns `agent.mcp_server_unknown` and still saves. Adding a server is [mcp-servers.md](mcp-servers.md).
 
 Read-only MCP tools stay out of `ask_first`. Each tool that creates, updates, deletes, sends, or pays goes in, as `<server>.<tool>`.
 
@@ -74,7 +74,7 @@ Host MCP `tools/list` annotations come from `TOOL_META.risk`. Agent grants still
 These decide things a person must decide. Granting them is `agent.stageflow_operator_only`:
 
 - Group `gates.decide`
-- Tools `get_started`, `answer_gate`, `decide_feedback_loop`, `approve_agent_action`, `deny_agent_action`
+- Tools `get_started`, `answer_gate`, `decide_feedback_loop`, `decide_agent_action`
 
 A coding agent acting for the user approves with `sf agents approve` only after the user decides. It does not grant that power to the project agent.
 
@@ -82,27 +82,27 @@ Put every granted tool whose risk is write, destructive, or external into `ask_f
 
 | Group | Read (no ask-first) | Ask first |
 |---|---|---|
-| `discover` | `list_skills`, `list_pipelines`, `list_tasks`, `list_models`, `list_providers`, `get_health`, `preflight`, `validate`, `describe_pipeline`, `list_project_mcp` | `probe_project_mcp` (connects out) |
-| `runs.read` | `list_runs`, `get_run`, `export_run`, `read_artifact`, `wait_run`, `list_stage_events`, `tail_stage_log`, `get_stage_verification`, `get_envelope`, `list_checkout_changes`, `get_run_diff`, `read_checkout_file` | |
-| `runs.control` | | `start_run`, `run_stage`, `rerun`, `retry_stage`, `resume_stage`, `recover_manual_stage`, `stop_manual_recovery` |
-| `runs.cleanup` | | `cancel_run`, `abandon_stage`, `delete_run`, `gc_runs` |
-| `gates.read` | `list_waiting`, `get_waiting_summary` | |
-| `triggers` | `list_triggers`, `get_trigger` | `create_trigger`, `update_trigger`, `set_trigger_enabled`, `fire_trigger` |
-| `agents.read` | `list_agents`, `get_agent`, `validate_agent`, `list_agent_revisions`, `get_agent_revision`, `diff_agent_revisions`, `get_agent_session`, `list_agent_sessions` | |
-| `agents.manage` | | `create_agent`, `save_agent`, `enable_agent`, `disable_agent`, `restore_agent_revision` |
+| `discover` | `list_catalog` with `kind: skills`, `list_catalog` with `kind: pipelines`, `list_catalog` with `kind: tasks`, `list_catalog` with `kind: models`, `list_catalog` with `kind: providers`, `list_catalog` with `kind: health`, `validate` (including `preflight: true`), `read_pipeline` with `view: dag`, `list_catalog` with `kind: mcp_servers` | `probe_project_mcp` (connects out) |
+| `runs.read` | `get_run` (omit `runId`), `get_run`, `get_run` with `view: export`, `get_stage` with `view: events`, `log`, `envelope`, or `verification`, `run_files` with `view: artifact`, `changes`, `diff`, or `file`, `wait_run` | |
+| `runs.control` | | `start_run`, `start_run` with `stage`, `start_run` with `from_run`, `stage_action` with `action: retry`, `resume`, `recover`, or `stop_recovery` |
+| `runs.cleanup` | | `cancel_run`, `abandon_stage`, `delete_runs`, `delete_runs` with `gc: true` |
+| `gates.read` | `list_waiting` with `detail: full` or `summary` | |
+| `triggers` | `get_trigger` with `list: true`, `get_trigger` | `save_trigger` with `mode: create` or `update`, `save_trigger` with `enabled_only`, `fire_trigger` |
+| `agents.read` | `get_agent` with `list: true` or `view: definition`, `revisions`, `revision`, or `diff`, `validate` with `kind: agent`, `get_agent_session` with `list: true` or by id | |
+| `agents.manage` | | `save_agent` with `mode: create`, `mode: update`, or `from_revision: true`, `set_agent_enabled` with `enabled: true` or `false` |
 | `agents.cleanup` | | `archive_agent` |
 | `agents.converse` | | `agent_chat` (spends money), `stop_agent_session` |
-| `pipelines.author` | `read_pipeline`, `validate_catalog_draft` | `create_pipeline`, `edit_pipeline`, `create_stage`, `edit_stage`, `create_task`, `edit_task`, `create_task_file`, `update_task_file`, `import_task_file`, `create_stage_file`, `write_catalog_file` |
-| `connections` | `list_connections`, `validate_connection_target` | `create_connection`, `update_connection`, `test_connection` |
+| `pipelines.author` | `read_pipeline`, `validate` with `kind: draft` | `write_pipeline` with `mode: create` or `update`, `write_stage` with `mode: create`, `patch: true`, `no_pipeline: true`, or `form: content` update, `write_task` with `mode: create` or `update`, `import_task` |
+| `connections` | `get_connection`, `validate` with `kind: connection_recipient` | `save_connection` with `mode: create`, `save_connection` with `mode: update`, `test_connection` |
 | `connections.cleanup` | | `remove_connection` |
-| `memories` | `list_memories`, `get_memory` | `create_memory`, `write_memory`, `write_memory_card` |
+| `memories` | `get_memory` with `list: true`, `get_memory` | `save_memory` with `mode: create`, `mode: update`, or `card: true` |
 | `memories.cleanup` | | `delete_memory_card` |
-| `evals.read` | `list_evals`, `get_eval`, `validate_eval`, `get_eval_run`, `list_eval_runs`, `get_eval_results`, `get_eval_result`, `compare_eval_runs`, `get_eval_failure_suggestions`, `get_eval_failure_sort_status`, `get_eval_run_export`, `list_grader_calibrations` | |
+| `evals.read` | `get_eval` with `list: true` or `view: definition` or `calibrations`, `validate` with `kind: eval`, `get_eval_run` (list or `view: export`), `get_eval_results` (table or `case_id`), `compare_eval_runs`, `get_eval_failures` with `view: suggestions` or `sort_status` | |
 | `evals.run` | | `run_eval`, `sort_eval_failures`, `calibrate_eval_grader`, `cancel_eval_run`, `try_eval_case` |
-| `evals.write` | | `create_eval`, `update_eval`, `create_dataset`, `update_dataset_cases`, `convert_dataset`, `install_eval_sample`, `put_eval_review`, `accept_eval_failure_suggestions`, `dismiss_eval_failure_suggestions` |
+| `evals.write` | | `save_eval` with `mode: create`, `update`, or `source: sample`, `save_dataset` with `action: create`, `ops`, or `convert`, `review_eval_results` with `action: label`, `accept`, or `dismiss` |
 | `evals.cleanup` | | `delete_eval_run` |
 
-Web chat plus `get_agent_session` or `list_agent_sessions` warns `agent.web_chat_reads_conversations`: the public link's agent can read every agent's sessions. Do not combine them.
+Web chat plus `get_agent_session` (including `list: true`) warns `agent.web_chat_reads_conversations`: the public link's agent can read every agent's sessions. Do not combine them.
 
 The live list is `GET /api/agents/stageflow-tools`. There is no CLI for that registry.
 
@@ -126,7 +126,7 @@ One pending approval per session. A second, different call while one is pending 
 
 `on_timeout: skip` (default) tells the model the action was skipped. `on_timeout: deny` ends the turn with `agent.approval_expired`.
 
-Who can decide: the Inbox (`#/inbox`), the session page, `sf agents approve|deny <id> <sessionId>`, or MCP `approve_agent_action` / `deny_agent_action`. `approvals.approvers.operators` stays `true`. `approvers.channel_ids` is ignored (warning `agent.channel_approvers_unused`). A channel cannot approve.
+Who can decide: the Inbox (`#/inbox`), the session page, `sf agents approve|deny <id> <sessionId>`, or MCP `decide_agent_action` with `action: approve` or `deny`. `approvals.approvers.operators` stays `true`. `approvers.channel_ids` is ignored (warning `agent.channel_approvers_unused`). A channel cannot approve.
 
 Pass on a decision the user made. Do not approve because the action looks reasonable.
 
@@ -155,4 +155,4 @@ When the caller is itself an agent (not you, not the console), the Host enforces
 - It cannot edit, restore, or archive itself.
 - It cannot approve or deny an action on its own sessions.
 
-`enable_agent` checks the definition being enabled against those same rules. A new agent created through the API still starts disabled.
+`set_agent_enabled` with `enabled: true` checks the definition being enabled against those same rules. A new agent created through the API still starts disabled.

@@ -31,7 +31,7 @@ describe("withToolDefaults", () => {
   });
 
   it("labels a destructive tool as destructive", () => {
-    expect(toolAnnotations("delete_run")).toMatchObject({ readOnlyHint: false, destructiveHint: true });
+    expect(toolAnnotations("delete_runs")).toMatchObject({ readOnlyHint: false, destructiveHint: true });
   });
 
   it("labels an external tool as open-world", () => {
@@ -40,8 +40,8 @@ describe("withToolDefaults", () => {
 
   it("attaches the annotations when a tool registers", () => {
     const { server, calls } = capture();
-    server.registerTool("delete_run", { description: "Delete a run.", inputSchema: z.object({ runId: z.string() }) }, async () => ({ content: [] }));
-    expect(calls[0]!.config.annotations).toEqual(toolAnnotations("delete_run"));
+    server.registerTool("delete_runs", { description: "Delete runs.", inputSchema: z.object({ runId: z.string() }) }, async () => ({ content: [] }));
+    expect(calls[0]!.config.annotations).toEqual(toolAnnotations("delete_runs"));
   });
 
   it("refuses a tool with no metadata", () => {
@@ -103,8 +103,8 @@ describe("Host tool registrations", () => {
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
 
   it("keeps the purpose sentence of a tool whose description used to name a route", () => {
-    const description = byName.get("list_connections")!.description;
-    expect(description.startsWith("List host connections.")).toBe(true);
+    const description = byName.get("get_connection")!.description;
+    expect(description.startsWith("List host connections")).toBe(true);
     expect(description).not.toContain("/api/");
   });
 

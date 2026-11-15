@@ -10,11 +10,7 @@ import type {
   DeleteRunResult,
   GcRunsResult,
 } from "../runtime/runManager.js";
-import {
-  mapRetryStageFailure,
-  mapStartFailure,
-  mapStoreLookupError,
-} from "../server/operatorResults.js";
+import { mapRetryStageFailure, mapStoreLookupError } from "../server/operatorResults.js";
 import {
   callerIdFromRequestAuth,
   getRequestAuth,
@@ -26,6 +22,12 @@ import { readStreamLogTail } from "../runread/tailStreamLog.js";
 import { textResult } from "./toolResults.js";
 import { projectWaitingGates } from "../runread/waitingGates.js";
 import { readStageVerificationHistory } from "../runstore/verificationHistory.js";
+import {
+  deleteRunsFlatSchema,
+  getStageFlatSchema,
+  listWaitingFlatSchema,
+  stageActionFlatSchema,
+} from "../toolkit/runToolModes.js";
 
 const auditLog = rootLogger.child({ component: "audit" });
 
@@ -70,39 +72,24 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
     "list_waiting",
     {
       description:
-        "List stages waiting for operator input across runs (optional runId filter). Includes pending_prompt and waiting_* fields per gate.",
-      inputSchema: z.object({
-        runId: z.string().optional(),
-      }),
+        "Stages waiting for operator input. detail: full (default) includes pending_prompt and waiting_* fields; detail: summary returns only count and run/stage identity. Optional runId filter; optional path scopes to one project when runId is omitted.",
+      inputSchema: listWaitingFlatSchema,
     },
-    async ({ runId }) => {
-      const waiting = await projectWaitingGates(store, { runId });
-      return textResult({ waiting });
-    },
-  );
-
-  server.registerTool(
-    "get_waiting_summary",
-    {
-      description:
-        "Lightweight count and identity of stages waiting for operator input — no pending_prompt, waiting_artifacts, or waiting_questions (use list_waiting for full detail). Optional runId scopes to one run; optional path scopes to one project (derived via findProjectRoot, same rule as elsewhere); omitting both spans every project the store knows about.",
-      inputSchema: z.object({
-        runId: z.string().optional(),
-        path: z.string().optional(),
-      }),
-    },
-    async ({ runId, path: scopePath }) => {
+    async ({ runId, path: scopePath, detail }) => {
       const projectRoot =
         runId === undefined && scopePath !== undefined
           ? (findProjectRoot(path.resolve(cwd, scopePath)) ?? path.resolve(cwd, scopePath))
           : undefined;
       const waiting = await projectWaitingGates(store, { runId, projectRoot });
-      const runs = waiting.map((item) => ({
-        runId: item.runId as string,
-        stageId: item.stageId as string,
-        ...(item.waiting_kind !== undefined ? { kind: item.waiting_kind as string } : {}),
-      }));
-      return textResult({ count: runs.length, runs });
+      if (detail === "summary") {
+        const runs = waiting.map((item) => ({
+          runId: item.runId as string,
+          stageId: item.stageId as string,
+          ...(item.waiting_kind !== undefined ? { kind: item.waiting_kind as string } : {}),
+        }));
+        return textResult({ count: runs.length, runs });
+      }
+      return textResult({ waiting });
     },
   );
 
@@ -195,17 +182,21 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
   );
 
   server.registerTool(
-    "list_stage_events",
+    "get_stage",
     {
       description:
-        "List persisted stage log events for a run stage (optional attempt filter). Prefer over bloating get_run.",
-      inputSchema: z.object({
-        runId: z.string(),
-        stageId: z.string(),
-        attempt: z.number().int().positive().optional(),
-      }),
+        "Read stage detail for a run. view: events — persisted log events; log — live assistant text since a byte cursor; envelope — full StageEnvelope (404 when absent); verification — attempt history and completion checks.",
+      inputSchema: getStageFlatSchema,
     },
-    async ({ runId, stageId, attempt }) => {
+    async ({ runId, stageId, view, attempt, since_offset }) => {
+      if (view === "verification") {
+        try {
+          return textResult(await readStageVerificationHistory(store, runId, stageId));
+        } catch (err) {
+          const mapped = mapStoreLookupError(err, { policy: "run" });
+          return textResult({ error: mapped.error, status: mapped.status }, true);
+        }
+      }
       try {
         await store.readRunMeta(runId);
       } catch (err) {
@@ -216,199 +207,93 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
         const detail = await store.readRun(runId);
         const stage = detail.stages.find((s) => s.stage_id === stageId);
         if (!stage) {
-          return textResult(
-            { error: `Stage not found: ${stageId}`, status: 404 },
-            true,
-          );
+          return textResult({ error: `Stage not found: ${stageId}`, status: 404 }, true);
         }
-        const events = await store.listStageEvents(runId, stageId, attempt);
-        return textResult({ runId, stageId, attempt, events });
-      } catch (err) {
-        const mapped = mapStoreLookupError(err, { policy: "run" });
-        return textResult(
-          { error: mapped.error, status: mapped.status },
-          true,
-        );
-      }
-    },
-  );
-
-  server.registerTool(
-    "tail_stage_log",
-    {
-      description:
-        "Poll for new live assistant text a running (or recently finished) stage attempt has produced, since a byte-offset cursor. Separate from list_stage_events — no prompt/artifact/question detail, just the raw redacted text as it streamed. Omit since_offset to catch up on everything currently retained.",
-      inputSchema: z.object({
-        runId: z.string(),
-        stageId: z.string(),
-        attempt: z.number().int().positive().optional(),
-        since_offset: z.number().int().nonnegative().optional(),
-      }),
-    },
-    async ({ runId, stageId, attempt, since_offset }) => {
-      try {
-        await store.readRunMeta(runId);
-      } catch (err) {
-        const mapped = mapStoreLookupError(err, { policy: "run" });
-        return textResult({ error: mapped.error, status: 404 }, true);
-      }
-      try {
-        const detail = await store.readRun(runId);
-        const stage = detail.stages.find((s) => s.stage_id === stageId);
-        if (!stage) {
-          return textResult(
-            { error: `Stage not found: ${stageId}`, status: 404 },
-            true,
-          );
+        if (view === "events") {
+          const events = await store.listStageEvents(runId, stageId, attempt);
+          return textResult({ runId, stageId, attempt, events });
         }
-        const effectiveAttempt = attempt ?? stage.attempt_count;
-        const attemptComplete =
-          effectiveAttempt < stage.attempt_count || stage.status !== "running";
-        const streamLogPath = attemptStreamLogPath(
-          store.getWorkspaceDir(runId),
-          stageId,
-          effectiveAttempt,
-        );
-        const tail = await readStreamLogTail(streamLogPath, since_offset);
-        return textResult({
-          text: tail.text,
-          next_offset: tail.nextOffset,
-          attempt_complete: attemptComplete,
-          ...(tail.truncated ? { truncated: true, earliest_offset: tail.earliestOffset } : {}),
-        });
-      } catch (err) {
-        const mapped = mapStoreLookupError(err, { policy: "run" });
-        return textResult(
-          { error: mapped.error, status: mapped.status },
-          true,
-        );
-      }
-    },
-  );
-
-  server.registerTool(
-    "get_stage_verification",
-    {
-      description:
-        "Read every execution attempt for a stage, including durable completion-check results and their evidence. Use this to understand an automatic repair or a failed verification.",
-      inputSchema: z.object({
-        runId: z.string(),
-        stageId: z.string(),
-      }),
-    },
-    async ({ runId, stageId }) => {
-      try {
-        return textResult(
-          await readStageVerificationHistory(store, runId, stageId),
-        );
-      } catch (err) {
-        const mapped = mapStoreLookupError(err, { policy: "run" });
-        return textResult(
-          { error: mapped.error, status: mapped.status },
-          true,
-        );
-      }
-    },
-  );
-
-  server.registerTool(
-    "recover_manual_stage",
-    {
-      description:
-        "Explicitly approve one fresh attempt for a manual-recovery stage after a completion verification failure. Optional guidance is recorded and supplied to the agent with the failed-check evidence.",
-      inputSchema: z.object({
-        runId: z.string(),
-        stageId: z.string(),
-        guidance: z.string().max(4_000).optional(),
-      }),
-    },
-    async ({ runId, stageId, guidance }) => {
-      const result = await manager.recoverManualStage(runId, stageId, guidance);
-      if (!result.ok) {
-        return textResult(
-          { ...mapRetryStageFailure(result), status: result.status },
-          true,
-        );
-      }
-      return textResult({
-        runId: result.runId,
-        stageId: result.stageId,
-        attemptIndex: result.attemptIndex,
-      });
-    },
-  );
-
-  server.registerTool(
-    "stop_manual_recovery",
-    {
-      description:
-        "Record the operator's decision to leave a manual-recovery stage failed. This is terminal for that stage; start a fresh run to try again later.",
-      inputSchema: z.object({
-        runId: z.string(),
-        stageId: z.string(),
-      }),
-    },
-    async ({ runId, stageId }) => {
-      const result = await manager.stopManualRecovery(runId, stageId);
-      if (!result.ok) {
-        return textResult(
-          { error: result.reason, status: result.status },
-          true,
-        );
-      }
-      return textResult(result);
-    },
-  );
-
-  server.registerTool(
-    "get_envelope",
-    {
-      description:
-        "Read the full StageEnvelope for a run stage. Optional attempt (omit = latest). Returns 404 when absent.",
-      inputSchema: z.object({
-        runId: z.string(),
-        stageId: z.string(),
-        attempt: z.number().int().positive().optional(),
-      }),
-    },
-    async ({ runId, stageId, attempt }) => {
-      try {
-        await store.readRunMeta(runId);
-      } catch (err) {
-        const mapped = mapStoreLookupError(err, { policy: "run" });
-        return textResult({ error: mapped.error, status: 404 }, true);
-      }
-      try {
-        const detail = await store.readRun(runId);
-        if (!detail.stages.some((s) => s.stage_id === stageId)) {
-          return textResult(
-            { error: `Stage not found: ${stageId}`, status: 404 },
-            true,
+        if (view === "log") {
+          const effectiveAttempt = attempt ?? stage.attempt_count;
+          const attemptComplete =
+            effectiveAttempt < stage.attempt_count || stage.status !== "running";
+          const streamLogPath = attemptStreamLogPath(
+            store.getWorkspaceDir(runId),
+            stageId,
+            effectiveAttempt,
           );
+          const tail = await readStreamLogTail(streamLogPath, since_offset);
+          return textResult({
+            text: tail.text,
+            next_offset: tail.nextOffset,
+            attempt_complete: attemptComplete,
+            ...(tail.truncated ? { truncated: true, earliest_offset: tail.earliestOffset } : {}),
+          });
         }
         const envelope = await store.readEnvelope(runId, stageId, attempt);
         return textResult({ runId, stageId, attempt, envelope });
       } catch (err) {
-        const mapped = mapStoreLookupError(err, { policy: "envelope" });
-        return textResult(
-          { error: mapped.error, status: mapped.status },
-          true,
+        const mapped = mapStoreLookupError(
+          err,
+          { policy: view === "envelope" ? "envelope" : "run" },
         );
+        return textResult({ error: mapped.error, status: mapped.status }, true);
       }
     },
   );
 
   server.registerTool(
-    "retry_stage",
+    "stage_action",
     {
       description:
-        "Retry a failed stage (same as POST .../retry). Waiting stages cannot be retried — answer them with answer_gate instead.",
-      inputSchema: z.object({
-        runId: z.string(),
-        stageId: z.string(),
-      }),
+        "Operate on a run stage. action: retry — new attempt on failure; resume — continue a timed-out/interrupted attempt; recover — approve manual recovery; stop_recovery — leave a manual-recovery stage failed.",
+      inputSchema: stageActionFlatSchema,
     },
-    async ({ runId, stageId }) => {
+    async ({ runId, stageId, action, guidance }) => {
+      if (action === "recover") {
+        const result = await manager.recoverManualStage(runId, stageId, guidance);
+        if (!result.ok) {
+          return textResult({ ...mapRetryStageFailure(result), status: result.status }, true);
+        }
+        return textResult({
+          runId: result.runId,
+          stageId: result.stageId,
+          attemptIndex: result.attemptIndex,
+        });
+      }
+      if (action === "stop_recovery") {
+        const result = await manager.stopManualRecovery(runId, stageId);
+        if (!result.ok) {
+          return textResult({ error: result.reason, status: result.status }, true);
+        }
+        return textResult(result);
+      }
+      if (action === "resume") {
+        const result = await manager.resumeTimedOutStage(runId, stageId);
+        if (!result.ok) {
+          writeAudit(auditLog, {
+            caller_id: callerIdFromRequestAuth(),
+            surface: getRequestAuth()?.surface ?? "mcp",
+            action: "resume_stage",
+            target_run_id: runId,
+            outcome: "error",
+            ...(result.code !== undefined ? { error_code: result.code } : {}),
+          });
+          return textResult({ ...mapRetryStageFailure(result), status: result.status }, true);
+        }
+        writeAudit(auditLog, {
+          caller_id: callerIdFromRequestAuth(),
+          surface: getRequestAuth()?.surface ?? "mcp",
+          action: "resume_stage",
+          target_run_id: runId,
+          outcome: "ok",
+        });
+        return textResult({
+          runId: result.runId,
+          stageId: result.stageId,
+          attemptIndex: result.attemptIndex,
+        });
+      }
       const result = await manager.retryStage(runId, stageId);
       if (!result.ok) {
         writeAudit(auditLog, {
@@ -419,56 +304,12 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
           outcome: "error",
           ...(result.code !== undefined ? { error_code: result.code } : {}),
         });
-        return textResult(
-          { ...mapRetryStageFailure(result), status: result.status },
-          true,
-        );
+        return textResult({ ...mapRetryStageFailure(result), status: result.status }, true);
       }
       writeAudit(auditLog, {
         caller_id: callerIdFromRequestAuth(),
         surface: getRequestAuth()?.surface ?? "mcp",
         action: "retry_stage",
-        target_run_id: runId,
-        outcome: "ok",
-      });
-      return textResult({
-        runId: result.runId,
-        stageId: result.stageId,
-        attemptIndex: result.attemptIndex,
-      });
-    },
-  );
-
-  server.registerTool(
-    "resume_stage",
-    {
-      description:
-        "Resume an interrupted stage or a stage that failed because it timed out, continuing the same attempt/session (same as POST .../resume). Does not start a new attempt — use retry_stage to start over.",
-      inputSchema: z.object({
-        runId: z.string(),
-        stageId: z.string(),
-      }),
-    },
-    async ({ runId, stageId }) => {
-      const result = await manager.resumeTimedOutStage(runId, stageId);
-      if (!result.ok) {
-        writeAudit(auditLog, {
-          caller_id: callerIdFromRequestAuth(),
-          surface: getRequestAuth()?.surface ?? "mcp",
-          action: "resume_stage",
-          target_run_id: runId,
-          outcome: "error",
-          ...(result.code !== undefined ? { error_code: result.code } : {}),
-        });
-        return textResult(
-          { ...mapRetryStageFailure(result), status: result.status },
-          true,
-        );
-      }
-      writeAudit(auditLog, {
-        caller_id: callerIdFromRequestAuth(),
-        surface: getRequestAuth()?.surface ?? "mcp",
-        action: "resume_stage",
         target_run_id: runId,
         outcome: "ok",
       });
@@ -562,17 +403,29 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
   );
 
   server.registerTool(
-    "delete_run",
+    "delete_runs",
     {
       description:
-        "Hard-delete a terminal run (store rows, workspace, worktree, run branch, and A2A tasks/artifacts). Active runs (created/queued/running) require force: true, which cancels first then deletes. Irreversible.",
-      inputSchema: z.object({
-        runId: z.string(),
-        force: z.boolean().optional(),
-      }),
+        "Delete one run (runId) or run retention GC (gc: true). Active runs require force: true before delete. GC defaults to dry-run unless execute: true.",
+      inputSchema: deleteRunsFlatSchema,
     },
-    async ({ runId, force }) => {
-      const result = await manager.deleteRun(runId, {
+    async ({ runId, force, gc, execute }) => {
+      if (gc === true) {
+        const result = await manager.gcRuns({
+          execute: execute === true,
+          channel: "mcp",
+        });
+        if (!result.ok) {
+          const fail = result as Extract<GcRunsResult, { ok: false }>;
+          return textResult({ error: fail.reason, status: fail.status }, true);
+        }
+        return textResult({
+          slimmed: result.slimmed,
+          purged: result.purged,
+          bareCachesEvicted: result.bareCachesEvicted,
+        });
+      }
+      const result = await manager.deleteRun(runId!, {
         force,
         channel: "mcp",
       });
@@ -585,10 +438,7 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
           target_run_id: runId,
           outcome: "error",
         });
-        return textResult(
-          { error: fail.reason, status: fail.status },
-          true,
-        );
+        return textResult({ error: fail.reason, status: fail.status }, true);
       }
       writeAudit(auditLog, {
         caller_id: callerIdFromRequestAuth(),
@@ -597,83 +447,7 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
         target_run_id: runId,
         outcome: "ok",
       });
-      return textResult({
-        ok: true,
-        runId: result.runId,
-      });
-    },
-  );
-
-  server.registerTool(
-    "gc_runs",
-    {
-      description:
-        "Run retention GC (SLIM then PURGE then bare-cache eviction). Default execute: false is dry-run (report candidates only). execute: true is irreversible bulk reclaim — slimmed/purged runIds and evicted bare caches are returned in the report.",
-      inputSchema: z.object({
-        execute: z.boolean().optional(),
-      }),
-    },
-    async ({ execute }) => {
-      const result = await manager.gcRuns({
-        execute: execute === true,
-        channel: "mcp",
-      });
-      if (!result.ok) {
-        const fail = result as Extract<GcRunsResult, { ok: false }>;
-        return textResult(
-          { error: fail.reason, status: fail.status },
-          true,
-        );
-      }
-      return textResult({
-        slimmed: result.slimmed,
-        purged: result.purged,
-        bareCachesEvicted: result.bareCachesEvicted,
-      });
-    },
-  );
-
-  server.registerTool(
-    "rerun",
-    {
-      description:
-        "Start a new run from a completed or failed run's pipeline/task locators. Optional pinned: true replays the prior resolved_sha for repository bindings. Returns { runId } for the new run.",
-      inputSchema: z.object({
-        runId: z.string(),
-        pinned: z.boolean().optional(),
-      }),
-    },
-    async ({ runId, pinned }) => {
-      const callerId = callerIdFromRequestAuth();
-      const result = await manager.rerun(runId, {
-        ...(pinned !== undefined ? { pinned } : {}),
-        callerId,
-      });
-      if (!result.ok) {
-        writeAudit(auditLog, {
-          caller_id: callerId,
-          surface: getRequestAuth()?.surface ?? "mcp",
-          action: "rerun",
-          target_run_id: runId,
-          outcome: "error",
-          ...(result.code !== undefined ? { error_code: result.code } : {}),
-        });
-        return textResult(
-          {
-            ...mapStartFailure(result),
-            ...(result.status !== undefined ? { status: result.status } : {}),
-          },
-          true,
-        );
-      }
-      writeAudit(auditLog, {
-        caller_id: callerId,
-        surface: getRequestAuth()?.surface ?? "mcp",
-        action: "rerun",
-        target_run_id: result.runId,
-        outcome: "ok",
-      });
-      return textResult({ runId: result.runId });
+      return textResult({ ok: true, runId: result.runId });
     },
   );
 }

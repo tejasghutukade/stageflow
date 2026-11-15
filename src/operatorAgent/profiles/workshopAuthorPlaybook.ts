@@ -97,7 +97,7 @@ Sealed emitter → clone child → Join. One named $ref array on the emitter; th
 mcp: [names] on the pipeline entry; project-root .mcp.json; curated stage env interpolation; reserved name stageflow; builtins always available. Validate checks shape/names/PATH; connect/env fail at run. Explain and retrieve docs/examples (e.g. examples/stage-mcp); do not offer a Workshop MCP editor.
 
 ### Complex recovery
-Beyond basic repair/manual: operator sf runs recover / MCP recover_manual_stage; after-phase gates/artifacts are history- and disk-aware. Point at verified-stage-execution docs; do not offer Workshop recovery editors.
+Beyond basic repair/manual: operator sf runs recover / MCP stage_action with action recover (or stop_recovery); after-phase gates/artifacts are history- and disk-aware. Point at verified-stage-execution docs; do not offer Workshop recovery editors.
 
 ## Anti-patterns
 - Never needs / fork / top-level feedback_loop → use route / { type: loop }.

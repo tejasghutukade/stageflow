@@ -28,7 +28,7 @@ This skill does what the console's Agent Author does (interview, draft, validate
 | Situation | Use |
 |---|---|
 | You have a shell in the project (default) | Write `agents/<id>.agent.yaml` with your file tools, validate with `sf agents validate <file> --json`, manage with `sf agents …` |
-| No shell, or the Host is remote or in a container | MCP tools on the Host's `/mcp` endpoint: `validate_agent`, `create_agent`, `save_agent`, … |
+| No shell, or the Host is remote or in a container | MCP tools on the Host's `/mcp?toolsets=agents` endpoint (add `connections` if you manage channels): `validate` with `kind: agent`, `save_agent` with `mode: create`, `save_agent`, … |
 | Something neither has (MCP server setup, identity, delivery resend, OTLP export) | REST on the Host, or the console page named in the reference |
 
 Facts that change how you call things (all verified in code):
@@ -43,7 +43,7 @@ Facts that change how you call things (all verified in code):
   ```
   (`sf run` registers the project the same way.)
 - MCP agent tools take no project argument. They act on the Host's own project, the directory `sf ui` or `sf mcp` was started in. If that is not the user's project, use the CLI from the project directory.
-- There is no `sf agents create`, `save` or `archive`. Create by writing the file (or MCP `create_agent`); save by editing the file (or MCP `save_agent`); archive by deleting the file (or MCP `archive_agent`).
+- There is no `sf agents create`, `save` or `archive`. Create by writing the file (or MCP `save_agent` with `mode: create`); save by editing the file (or MCP `save_agent`); archive by deleting the file (or MCP `archive_agent`).
 - Full operation-by-surface table, HTTP auth and `Origin` rules: [references/control-surface.md](references/control-surface.md).
 
 ## Workflow
@@ -74,7 +74,7 @@ sf skills list                   # installed Pi skills (for tools.skills)
 sf providers status              # connected model providers
 ```
 
-With a Host up, also (MCP tool, or the REST route in brackets): `list_connections` (`GET /api/connections`), `list_project_mcp` (`GET /api/project-mcp`, includes servers saved in the console), `list_memories` (`GET /api/memories`), `list_models` (`GET /api/models`). There is no CLI for connections, project MCP servers, memories or the model list.
+With a Host up, also (MCP tool, or the REST route in brackets): `get_connection` (`GET /api/connections`), `list_catalog` with `kind: mcp_servers` (`GET /api/project-mcp`, includes servers saved in the console), `get_memory` with `list: true` (`GET /api/memories`), `list_catalog` with `kind: models` (`GET /api/models`). There is no CLI for connections, project MCP servers, memories or the model list.
 
 ### 2–3. Interview and propose
 
@@ -147,7 +147,7 @@ The agent must appear with `revision` 1 or more and `issues: []`. Revision `0` w
 Show the user the final YAML (or a diff, when revising), what it can reach, what asks first, and what still needs setting up (connection, MCP server, memory, identity). Then, only on their yes:
 
 ```bash
-sf agents enable <id> --json     # MCP: enable_agent { "id": "<id>" }
+sf agents enable <id> --json     # MCP: set_agent_enabled { "id": "<id>", "enabled": true }
 ```
 
 Enabling is refused while the file has issues or a memory is missing. Enabling (like any save through the Host) rewrites the file in canonical form with `enabled: true`. **Re-read the file before you edit it again, and keep `enabled: true` in it**: a hand edit without that line disables the agent.
@@ -181,7 +181,7 @@ A session stays on the revision it started with. After an edit, test in a new se
 3. Validate (step 6), confirm the new revision appears (step 7), and show the user the diff:
    - MCP `diff_agent_revisions { id, from, to }`, or `GET /api/agents/<id>/revisions/<from>/diff/<to>`, or `git diff` on the file.
 4. Without a shell, save with MCP `save_agent { id, baseRevision, definition, summary? }`. `baseRevision` must be the current revision; `agent.conflict` means someone saved in between: re-read, reapply, retry. An identical save is a no-op.
-5. To undo, restore an older revision as the newest one (after the user agrees): `sf agents restore <id> <revision> --base <current revision>` (MCP `restore_agent_revision`). Run it without `--base` to see the current revision. Restore keeps the current enabled state.
+5. To undo, restore an older revision as the newest one (after the user agrees): `sf agents restore <id> <revision> --base <current revision>` (MCP `save_agent` with `from_revision: true`). Run it without `--base` to see the current revision. Restore keeps the current enabled state.
 6. Open sessions keep their old revision; test in a new session.
 
 Archive (only on the user's explicit request): delete the file, or MCP `archive_agent { id }`. History and sessions stay readable; new sessions are refused; the id can be reused later.

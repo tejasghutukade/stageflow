@@ -127,7 +127,7 @@ Each `stages[]` item is a `StageProjection` (snake_case): `stage_id`, `status`, 
 
 ## `sf run-stage` {#sf-run-stage}
 
-Run a single stage directly against the shared Stageflow service, without authoring a pipeline file — the CLI counterpart of the MCP [`run_stage`](mcp.md#run_stage) tool (it talks to the same running `sf ui`/`sf mcp` service over MCP). Distinct from the internal-only, worker-process-only `sf internal run-stage` below.
+Run a single stage directly against the shared Stageflow service, without authoring a pipeline file — the CLI counterpart of the MCP [`start_run` with `stage`](mcp.md#tools) tool (it talks to the same running `sf ui`/`sf mcp` service over MCP). Distinct from the internal-only, worker-process-only `sf internal run-stage` below.
 
 ```bash
 sf run-stage (--stage <path> | --stage-inline '<json>') (--task <path> | --task-inline '<json>' | --envelope-ref <runId>:<stageId>[:<attempt>] [--envelope-ref ...]) [--checkout <path>] [--model <id>] [--blocking] [--timeout-ms <n>] [--json]
@@ -203,7 +203,7 @@ sf runs rerun --run <runId> [--json]
 
 | Subcommand | Role |
 |------------|------|
-| `list` | Stored runs (same filters as MCP `list_runs`) |
+| `list` | Stored runs (same filters as MCP `get_run` (omit `runId`)) |
 | `show` | Live `projectRun` for any run status (not the `export-run` completeness gate) |
 | `verify` | After-phase verify attempts, verification dispositions, and evidence for one stage |
 | `recover` | Explicitly retry or stop a manual-recovery stage |
@@ -217,7 +217,7 @@ sf runs rerun --run <runId> [--json]
 | `cancel` | Cancel a non-terminal run (`created` / `queued` / `running`). On a `failed` run that still has running stages (after an abandon, for example), it stops them and the run stays `failed`. |
 | `delete` | Hard-delete a terminal run (`--force` cancels then deletes an active run) |
 | `gc` | Retention SLIM/PURGE + bare-cache eviction (`--dry-run` report-only) |
-| `rerun` | Start a new run from a stored run; process waits until waiting or terminal |
+| `start_run` with `from_run` | Start a new run from a stored run; process waits until waiting or terminal |
 
 `--from` is accepted on `show` and `wait` only (reads `runId` from a prior `sf run --json` file). `--answer` is `answer` only.
 
@@ -226,7 +226,7 @@ sf runs rerun --run <runId> [--json]
 | Kind | Verbs | Path |
 |------|-------|------|
 | Read | `list`, `show`, `verify`, `waiting`, `wait` | Open the global run store in assert mode (no schema changes in the CLI). If `state.db` is missing or behind this binary, start the Host first so it can migrate, then reopen |
-| Mutate | `answer`, `feedback-decide`, `retry`, `resume`, `recover`, `abandon`, `cancel`, `delete`, `gc`, `rerun` | Sent over HTTP to the global service |
+| Mutate | `answer`, `feedback-decide`, `retry`, `resume`, `recover`, `abandon`, `cancel`, `delete`, `gc`, `start_run` with `from_run` | Sent over HTTP to the global service |
 
 Read verbs that open the store themselves (`list`, `show`, `verify`, `waiting`, `wait`) and the related `sf artifact` / `sf envelope` / `sf export-run` commands do not apply migrations in the CLI process. When the database is missing or its schema version is behind, they start the Host the same way mutating verbs do, then open again in assert mode. Autostart may append to `$STAGEFLOW_HOME/service.log`.
 
@@ -261,7 +261,7 @@ Do not treat `answer` `{ "ok": true }` as terminal — call `sf runs wait` / `wa
 
 | Verb | `--json` shape | Exit |
 |------|----------------|------|
-| `retry`, `rerun` | `sf run` completion JSON (`ok`, `outcome`, `runId`, …) | `0` succeeded, `1` failed/busy/cancelled, `2` waiting |
+| `retry`, `start_run` with `from_run` | `sf run` completion JSON (`ok`, `outcome`, `runId`, …) | `0` succeeded, `1` failed/busy/cancelled, `2` waiting |
 | `resume` | `{ "ok", "runId", "stageId", "attemptIndex" }` | `0` success, `1` error |
 | `abandon` | `{ "ok", "runId", "stageId" }` | `0` success, `1` error |
 | `cancel` | `{ "ok", "runId" }` | `0` success, `1` error |
@@ -391,9 +391,9 @@ Same semantics as MCP [`decide_feedback_loop`](mcp.md#decide_feedback_loop) and 
 
 Inspect loop state with `sf runs show --json` (`active_feedback_loop`, `feedback_loops`) and `sf runs waiting` (`waiting_kind: "feedback_loop_decision"`).
 
-### `sf runs retry` / `resume` / `abandon` / `rerun`
+### `sf runs retry` / `resume` / `abandon` / `start_run` with `from_run`
 
-Human/API parity for the remaining control verbs. Waiting stages are not retryable or abandonable. `resume` continues an **interrupted** stage or a **timed-out** failed attempt on the same session (does not start a new attempt). `retry` and `rerun` block in-process until waiting or terminal (same `0` / `1` / `2` as `sf run`). MCP `{ "runId" }` fire-and-forget is not the CLI contract.
+Human/API parity for the remaining control verbs. Waiting stages are not retryable or abandonable. `resume` continues an **interrupted** stage or a **timed-out** failed attempt on the same session (does not start a new attempt). `retry` and `start_run` with `from_run` block in-process until waiting or terminal (same `0` / `1` / `2` as `sf run`). MCP `{ "runId" }` fire-and-forget is not the CLI contract.
 
 ### `sf runs cancel`
 
@@ -440,11 +440,11 @@ sf runs gc [--dry-run] [--json]
 | `--dry-run` | Report candidates only (default without this flag is execute) |
 | `--json` | `{ "slimmed", "purged", "bareCachesEvicted" }` |
 
-`--dry-run` is report-only; omitting it mutates. Matching MCP tool is `gc_runs` with `execute` (default `false` = dry-run). No operator-console GC button in this release.
+`--dry-run` is report-only; omitting it mutates. Matching MCP tool is `delete_runs` with `gc: true` with `execute` (default `false` = dry-run). No operator-console GC button in this release.
 
 ## `sf agents`
 
-Manage project-owned agents (`agents/*.agent.yaml`). Like `sf run` and `sf trigger`, this is an HTTP client of the shared global Stageflow service, which it starts if nothing is listening. Every request carries the project of the current directory as `project_root`. There is no `sf agents create`, `save` or `archive`: write the YAML file (or use the console), and use the [`create_agent`/`save_agent`/`archive_agent` MCP tools](mcp.md#agent-tools) or the [REST API](agent-api.md) from scripts. `chat` streams a real reply.
+Manage project-owned agents (`agents/*.agent.yaml`). Like `sf run` and `sf trigger`, this is an HTTP client of the shared global Stageflow service, which it starts if nothing is listening. Every request carries the project of the current directory as `project_root`. There is no `sf agents create`, `save` or `archive`: write the YAML file (or use the console), and use the [`save_agent` with `mode: create`/`save_agent`/`archive_agent` MCP tools](mcp.md#agent-tools) or the [REST API](agent-api.md) from scripts. `chat` streams a real reply.
 
 ```bash
 sf agents list [--json]
@@ -678,7 +678,7 @@ HTTP: `GET /api/export` (**read** scope) with the same query filters.
 
 ## `sf artifact read`
 
-Read a run workspace artifact as UTF-8 text (same path rules as MCP `read_artifact`).
+Read a run workspace artifact as UTF-8 text (same path rules as MCP `run_files` with `view: artifact`).
 
 ```bash
 sf artifact read --run <runId> --path <relPath> [--out <file>]
@@ -924,7 +924,7 @@ Exit `0` whether or not the engine is installed. `sf eval engine install` exits 
 sf doctor [--json] [--pipeline <path>] [--strict]
 ```
 
-Operator preflight: shared `/readyz` checks (store, home, migrations, git), plus bash, Node, credentials presence/source, TLS CA path existence, free disk, and `.mcp.json` commands on PATH. With `--pipeline`, also diffs that pipeline's `requires:` / `secrets:` / stage MCP against the toolchain manifest and curated stage env (same check as MCP `preflight` / `start_run`). With `--pipeline`, stages that declare [`channels:`](channels.md) also get a live check of each connection (it never sends a message); a failure is `channel_check_failed` with the connection and reason. `--strict` treats `unknown_version` as failure. Exits non-zero when any check is `fail`.
+Operator preflight: shared `/readyz` checks (store, home, migrations, git), plus bash, Node, credentials presence/source, TLS CA path existence, free disk, and `.mcp.json` commands on PATH. With `--pipeline`, also diffs that pipeline's `requires:` / `secrets:` / stage MCP against the toolchain manifest and curated stage env (same check as MCP `validate` with `preflight: true` / `start_run`). With `--pipeline`, stages that declare [`channels:`](channels.md) also get a live check of each connection (it never sends a message); a failure is `channel_check_failed` with the connection and reason. `--strict` treats `unknown_version` as failure. Exits non-zero when any check is `fail`.
 
 **Never use `sf doctor` as a container `HEALTHCHECK`.** Use `GET /livez` for liveness; doctor is a human/CI preflight tool.
 
@@ -983,7 +983,7 @@ sf graph --pipeline examples/feature-loop/feature-loop.pipeline.yaml
 sf graph --pipeline examples/feature-loop/feature-loop.pipeline.yaml --json
 ```
 
-Harnesses should use MCP `describe_pipeline` / `get_run` instead of `sf graph`. In containers this command is [docker exec–only](docker.md#cli-via-docker-exec) — see [MCP — CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table).
+Harnesses should use MCP `read_pipeline` with `view: dag` / `get_run` instead of `sf graph`. In containers this command is [docker exec–only](docker.md#cli-via-docker-exec) — see [MCP — CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table).
 
 ## `sf migrate-yaml` {#sf-migrate-yaml}
 
@@ -1168,5 +1168,5 @@ Full CI-related flags and env vars: [CI / headless](ci.md).
 - [CI / headless](ci.md) — GitHub Actions and `--json`
 - [Providers](providers.md) — `sf_owned` credential storage
 - [HITL](hitl.md) — `--skip-gates`, exit `2`, and `sf runs` answer/wait
-- [MCP](mcp.md#run_stage) — `run_stage`, the tool `sf run-stage` talks to
-- [A2A](a2a.md) — publish pipelines for other agents to call over JSON-RPC, plus `run_stage` when that caller has `allow_run_stage` (off by default)
+- [MCP](mcp.md#tools) — `start_run` with `stage`, the tool `sf run-stage` talks to
+- [A2A](a2a.md) — publish pipelines for other agents to call over JSON-RPC, plus `start_run` with `stage` when that caller has `allow_run_stage` (off by default)

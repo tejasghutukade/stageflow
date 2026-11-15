@@ -4,7 +4,7 @@ Operate sessions, approvals, and schedules. Changing an agent definition (instru
 
 Every `sf agents` subcommand talks to the Host for the project in the current directory and starts a Host when one is not up. There is no offline mode. Pass `--json`.
 
-Confirm before `sf agents chat` and `agent_chat` (they call the model) and before `approve_agent_action` (show the pending action first). Confirm before `stop_agent_session`. Enabling an agent whose definition has a schedule lets that schedule start sessions on its own.
+Confirm before `sf agents chat` and `agent_chat` (they call the model) and before `decide_agent_action` with `action: approve` (show the pending action first). Confirm before `stop_agent_session`. Enabling an agent whose definition has a schedule lets that schedule start sessions on its own.
 
 ## Contents
 
@@ -31,8 +31,8 @@ There is no MCP "list approvals" tool. Pending work for one session is `pendingA
 
 | Decision | MCP | CLI |
 |---|---|---|
-| Approve | `approve_agent_action` with `{ "id", "sessionId" }` | `sf agents approve <id> <sessionId> --json` |
-| Deny | `deny_agent_action` with the same arguments | `sf agents deny <id> <sessionId> --json` |
+| Approve | `decide_agent_action` with `{ "action": "approve", "id", "sessionId" }` | `sf agents approve <id> <sessionId> --json` |
+| Deny | `decide_agent_action` with `{ "action": "deny", "id", "sessionId" }` | `sf agents deny <id> <sessionId> --json` |
 
 Success includes the approval and its `tool`. Deny tells the agent the action was refused. Both act as the operator. Do not approve an action the user has not accepted.
 
@@ -42,7 +42,7 @@ Success includes the approval and its `tool`. Deny tells the agent the action wa
 
 | Want | MCP | CLI |
 |---|---|---|
-| List one agent's sessions | `list_agent_sessions` with `id`, optional `status`, `search`, `limit` (max 100), `cursor` | `sf agents sessions <id> [--status <status>] --json` |
+| List one agent's sessions | `get_agent_session` with `list: true`, `id`, optional `status`, `search`, `limit` (max 100), `cursor` | `sf agents sessions <id> [--status <status>] --json` |
 | One session, including the transcript and approvals | `get_agent_session` with `id` and `sessionId` | `sf agents session <id> <sessionId> --json` |
 | Stop the turn that is running | `stop_agent_session` | no CLI verb |
 | Send a message | `agent_chat` with `id`, `message`, optional `sessionId` | `sf agents chat <id> --message <text> [--session <sessionId>] --json` |
@@ -59,19 +59,19 @@ Eval sessions (`source: "eval"`) are hidden from these lists. Do not go looking 
 
 A schedule lives on the agent definition (`schedule.cron`, optional `schedule.timezone`). Reading it is `sf agents get <id> --json` or MCP `get_agent`. Writing it is `save_agent` in the `stageflow-agents` skill.
 
-The Host fires due schedules about every 30 seconds (`STAGEFLOW_AGENT_SCHEDULE_TICK_INTERVAL_MS`). The next fire across agents is `activity.next_agent_schedule_at` on `GET /api/health`. MCP `get_health` does not include that field. A null means nothing is scheduled.
+The Host fires due schedules about every 30 seconds (`STAGEFLOW_AGENT_SCHEDULE_TICK_INTERVAL_MS`). The next fire across agents is `activity.next_agent_schedule_at` on `GET /api/health`. MCP `list_catalog` with `kind: health` does not include that field. A null means nothing is scheduled.
 
 To see whether a schedule is producing sessions, list sessions and look at `source: "schedule"`. Disabling the agent (`sf agents disable <id>`) stops new scheduled sessions. That does not edit the cron. Re-enable with `sf agents enable <id>` only when the user wants the schedule to run again.
 
 ## What stays in stageflow-agents
 
-Use `stageflow-agents` for `create_agent`, `save_agent`, `archive_agent`, revisions, tools, and the text of the definition. This skill can:
+Use `stageflow-agents` for `save_agent` with `mode: create`, `save_agent`, `archive_agent`, revisions, tools, and the text of the definition. This skill can:
 
 | CLI | MCP | Role |
 |---|---|---|
-| `sf agents enable <id>` / `disable <id>` | `enable_agent` / `disable_agent` | Turn the saved definition on or off. |
-| `sf agents history <id>` | `list_agent_revisions` | Read revisions. |
-| `sf agents restore <id> <revision> --base <current>` | `restore_agent_revision` | Put an old revision back. `--base` is the revision you read. If the agent moved, the restore is refused. |
-| `sf agents validate <file.agent.yaml>` | `validate_agent` | Check a file. This does not save it. |
+| `sf agents enable <id>` / `disable <id>` | `set_agent_enabled` with `enabled: true` / `set_agent_enabled` with `enabled: false` | Turn the saved definition on or off. |
+| `sf agents history <id>` | `get_agent` with `view: revisions` | Read revisions. |
+| `sf agents restore <id> <revision> --base <current>` | `save_agent` with `from_revision: true` | Put an old revision back. `--base` is the revision you read. If the agent moved, the restore is refused. |
+| `sf agents validate <file.agent.yaml>` | `validate` with `kind: agent` | Check a file. This does not save it. |
 
 `sf agents` has no `create`, `save`, `archive`, or `stop` verb. Host errors with `--json` are `{ "code", "message", "issues" }` and exit `1`.

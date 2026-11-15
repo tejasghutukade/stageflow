@@ -1,6 +1,7 @@
 import { AGENT_ID_PATTERN, isReservedAgentId, RESERVED_AGENT_IDS } from "../agents/agentId.js";
 import { normalizeEntry, SENDER_ENTRY } from "../agents/communications/allowlist.js";
 import { grantedStageflowTools, isOperatorOnlyGroup, isOperatorOnlyTool, isToolGroupId, stageflowGrantId, TOOL_META } from "../toolkit/meta.js";
+import { stageflowDefinitionValidation } from "../toolkit/stageflowToolNames.js";
 import { Cron } from "croner";
 import { parse as parseYaml, stringify as stringifyYaml, YAMLParseError } from "yaml";
 import { z } from "zod";
@@ -274,11 +275,16 @@ function zodIssues(error: z.ZodError): AgentIssue[] {
 /** Cross-field rules zod cannot express per-field. */
 function semanticIssues(definition: AgentDefinition): AgentIssue[] {
   const issues: AgentIssue[] = [];
+  const stageflow = stageflowDefinitionValidation(definition);
+  issues.push(...stageflow.errors);
+  const staleAskPaths = new Set(stageflow.errors.filter((issue) => issue.path.startsWith("approvals.ask_first.")).map((issue) => issue.path));
   const granted = grantedToolIds(definition);
   definition.approvals.ask_first.forEach((tool, index) => {
+    const path = `approvals.ask_first.${index}`;
+    if (staleAskPaths.has(path)) return;
     if (!granted.has(tool) && !isWildcardMcpTool(definition, tool)) {
       issues.push({
-        path: `approvals.ask_first.${index}`,
+        path,
         code: "agent.ask_first_not_granted",
         message: `${tool} is not a tool this agent is granted`,
       });
@@ -292,9 +298,8 @@ function semanticIssues(definition: AgentDefinition): AgentIssue[] {
     }
   });
   definition.tools.stageflow.tools.forEach((tool, index) => {
-    if (!(tool in TOOL_META)) {
-      issues.push({ path: `tools.stageflow.tools.${index}`, code: "agent.stageflow_tool_unknown", message: `${tool} is not a Stageflow tool` });
-    } else if (isOperatorOnlyTool(tool)) {
+    if (!(tool in TOOL_META)) return;
+    if (isOperatorOnlyTool(tool)) {
       issues.push({ path: `tools.stageflow.tools.${index}`, code: "agent.stageflow_operator_only", message: `${tool} is for operators only and cannot be granted to an agent` });
     }
   });
@@ -312,6 +317,8 @@ function semanticIssues(definition: AgentDefinition): AgentIssue[] {
 }
 
 /** Parse an untrusted object (API body or parsed YAML) into a definition. */
+export { stageflowDefinitionValidation, stageflowStaleIssues } from "../toolkit/stageflowToolNames.js";
+
 export function parseAgentDefinition(raw: unknown): AgentParseResult {
   const parsed = agentDefinitionSchema.safeParse(raw, {
     error: (issue) => (issue.code === "invalid_type" && issue.input === undefined ? "Required" : undefined),

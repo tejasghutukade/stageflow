@@ -67,7 +67,7 @@ describe("tool classification", () => {
     expect(classifyTool(definition, "write")).toEqual({ class: "write", readOnly: false });
     expect(classifyTool(definition, "bash")).toEqual({ class: "shell", readOnly: false });
     expect(classifyTool(definition, "stageflow.get_agent")).toEqual({ class: "read", readOnly: true });
-    expect(classifyTool(definition, "stageflow.create_agent")).toMatchObject({ class: "write", readOnly: false });
+    expect(classifyTool(definition, "stageflow.save_agent")).toMatchObject({ class: "write", readOnly: false });
     expect(classifyTool(definition, "stageflow.archive_agent")).toEqual({ class: "destructive", readOnly: false });
     expect(classifyTool(definition, "stageflow.fire_trigger")).toEqual({ class: "external", readOnly: false });
     expect(classifyTool(definition, "stageflow.get_started")).toEqual({ class: "operator_only", readOnly: false });
@@ -138,7 +138,7 @@ describe("eval gate: read_only", () => {
 describe("eval gate: declared read-only cannot upgrade builtin or Stageflow tools", () => {
   it("classifies declared write, shell, destructive and external tools as not read-only", () => {
     const definition = { tools: { builtin: [], mcp: {}, stageflow: { groups: [], tools: [] } }, sub_agents: [] } as never;
-    for (const tool of ["write", "edit", "bash", "browser", "stageflow.archive_agent", "stageflow.fire_trigger", "stageflow.create_agent"]) {
+    for (const tool of ["write", "edit", "bash", "browser", "stageflow.archive_agent", "stageflow.fire_trigger", "stageflow.save_agent"]) {
       expect(classifyTool(definition, tool, [tool]).readOnly).toBe(false);
     }
   });

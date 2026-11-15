@@ -35,7 +35,7 @@ import {
 } from "../config/writeDataset.js";
 import { createEvalFile, previewEvalUpdate, renderEvalCreateYaml, updateEvalFile } from "../config/writeEval.js";
 import { CompareMismatchError } from "../evals/compare.js";
-import { EVAL_LIMITS, EVAL_REVIEW_LABELS, EVAL_RUN_STATUSES } from "../evals/constants.js";
+import { EVAL_LIMITS, EVAL_REVIEW_LABELS } from "../evals/constants.js";
 import { engineStatus as promptfooEngineStatus } from "../evals/engine/promptfoo/status.js";
 import { EvalRunError, type EvalRunManager, type TryCaseInput, type TryResult } from "../evals/manager.js";
 import type { EvalOverrides } from "../evals/plan.js";
@@ -53,7 +53,6 @@ import {
   MAX_LIMIT,
   planFindings,
   runByIdOr404,
-  validateEvalText,
 } from "../evals/read/api.js";
 import { buildCompare } from "../evals/read/compare.js";
 import {
@@ -64,7 +63,7 @@ import {
 } from "../evals/read/datasets.js";
 import { buildExport, buildRunDetail } from "../evals/read/runs.js";
 import { EvalStoreError } from "../evals/storeError.js";
-import { SUGGESTION_STATUSES, TRIAGE_BUCKETS, TRIAGE_MAX_LIMIT } from "../evals/triage/constants.js";
+import { TRIAGE_MAX_LIMIT } from "../evals/triage/constants.js";
 import { isTriageBucket, TriageService } from "../evals/triage/service.js";
 import type { EvalFile } from "../evals/types.js";
 import type { EvalRunRow } from "../evals/storeTypes.js";
@@ -74,6 +73,17 @@ import { globalStageflowHome } from "../project/globalHome.js";
 import { callerIdFromRequestAuth, getRequestAuth } from "../server/requestAuthContext.js";
 import type { McpToolDeps } from "./deps.js";
 import { textResult } from "./toolResults.js";
+import {
+  getEvalFailuresFlatSchema,
+  getEvalFlatSchema,
+  getEvalResultsFlatSchema,
+  getEvalRunFlatSchema,
+  reviewEvalResultsFlatSchema,
+  runEvalFlatSchema,
+  saveDatasetFlatSchema,
+  saveEvalFlatSchema,
+  tryEvalCaseFlatSchema,
+} from "../toolkit/evalToolModes.js";
 
 const auditLog = rootLogger.child({ component: "audit" });
 
@@ -83,151 +93,15 @@ const MAX_WAIT_MS = 1_800_000;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const CASE_OPS = new Set(["add", "update", "delete", "set_tags"]);
 
-const datasetTargetObject = z
-  .object({
-    pipeline_path: z.string().optional(),
-    stage_id: z.string().optional(),
-    file: z.string().optional(),
-    agent_id: z.string().optional(),
-  })
-  .describe("Stage (pipeline_path + stage_id, or file) or agent_id the imported cases must match");
-
-const datasetTargetField = datasetTargetObject.optional();
-
 const projectRootField = z
   .string()
   .optional()
   .describe("Catalog project root; omit to use the host default");
 
-const evalPathField = z
-  .string()
-  .optional()
-  .describe("Eval path relative to the project, used to resolve dataset and target paths");
-
 const datasetCasesField = z
   .array(z.unknown())
   .optional()
   .describe("Inline cases used instead of the dataset file");
-
-const validateEvalSchema = z.union([
-  z.strictObject({
-    eval_id: z.string(),
-    path: evalPathField,
-    dataset_cases: datasetCasesField,
-    project_root: projectRootField,
-  }),
-  z.strictObject({
-    yaml: z.string(),
-    path: evalPathField,
-    dataset_cases: datasetCasesField,
-    project_root: projectRootField,
-  }),
-]);
-
-const definitionField = z.record(z.string(), z.unknown());
-
-const updateEvalSchema = z.union([
-  z.strictObject({
-    eval_id: z.string(),
-    base_hash: z.string().min(1),
-    definition: definitionField,
-    project_root: projectRootField,
-  }),
-  z.strictObject({
-    eval_id: z.string(),
-    base_hash: z.string().min(1),
-    yaml: z.string(),
-    project_root: projectRootField,
-  }),
-]);
-
-const caseRecord = z.record(z.string(), z.unknown());
-const caseOpSchema = z.discriminatedUnion("op", [
-  z.strictObject({ op: z.literal("add"), case: caseRecord }),
-  z.strictObject({ op: z.literal("update"), id: z.string(), case: caseRecord }),
-  z.strictObject({ op: z.literal("delete"), id: z.string() }),
-  z.strictObject({ op: z.literal("set_tags"), id: z.string(), tags: z.array(z.string()) }),
-]);
-
-const datasetDirectoryField = z
-  .string()
-  .optional()
-  .describe("Catalog directory for a new dataset, relative to the project");
-
-const datasetCreateShared = {
-  directory: datasetDirectoryField,
-  project_root: projectRootField,
-};
-
-const createDatasetSchema = z.union([
-  z.strictObject({
-    dataset_id: z.string().min(1),
-    mode: z.literal("append"),
-    base_hash: z.string().min(1),
-    source: z.literal("runs"),
-    target: datasetTargetObject,
-    run_ids: z.array(z.string()).min(1),
-    project_root: projectRootField,
-  }),
-  z.strictObject({
-    dataset_id: z.string().min(1),
-    mode: z.literal("append"),
-    base_hash: z.string().min(1),
-    source: z.literal("sessions"),
-    target: datasetTargetObject,
-    session_ids: z.array(z.string()).min(1),
-    project_root: projectRootField,
-  }),
-  z.strictObject({
-    dataset_id: z.string().min(1),
-    mode: z.enum(["append", "replace"]),
-    base_hash: z.string().min(1),
-    cases: z.array(caseRecord),
-    project_root: projectRootField,
-  }),
-  z.strictObject({
-    name: z.string().min(1),
-    source: z.literal("sample"),
-    target: datasetTargetObject,
-    ...datasetCreateShared,
-  }),
-  z.strictObject({
-    name: z.string().min(1),
-    source: z.literal("runs"),
-    target: datasetTargetObject,
-    run_ids: z.array(z.string()).min(1),
-    ...datasetCreateShared,
-  }),
-  z.strictObject({
-    name: z.string().min(1),
-    source: z.literal("sessions"),
-    target: datasetTargetObject,
-    session_ids: z.array(z.string()).min(1),
-    ...datasetCreateShared,
-  }),
-  z.strictObject({
-    name: z.string().min(1),
-    cases: z.array(caseRecord),
-    target: datasetTargetField,
-    ...datasetCreateShared,
-  }),
-]);
-
-const tryShared = {
-  dataset_cases: datasetCasesField,
-  allow_real_tools: z.boolean().optional().describe("Agent evals: consent to conversation.tools real; no effect on other policies"),
-  allow_host_login: z.boolean().optional().describe("Stage evals: consent to call a signed-in console MCP server on this try"),
-  project_root: projectRootField,
-};
-
-const tryCaseField = caseRecord.describe("Inline case; must include an input object");
-
-const tryEvalCaseSchema = z.union([
-  z.strictObject({ eval_id: z.string(), case_id: z.string(), ...tryShared }),
-  z.strictObject({ eval_id: z.string(), case: tryCaseField, ...tryShared }),
-  z.strictObject({ definition: definitionField, case_id: z.string(), ...tryShared }),
-  z.strictObject({ definition: definitionField, case: tryCaseField, ...tryShared }),
-]);
 
 function audit(action: string, outcome: "ok" | "error", target?: string, code?: string): void {
   writeAudit(auditLog, {
@@ -436,15 +310,19 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
   const runDetail = (row: EvalRunRow) =>
     buildRunDetail({ store, row, live: manager().getLive(row.evalRunId), ...agentsInput() });
 
+  const schemaError = (message: string) => textResult({ error: message, code: "invalid_request" }, true);
+
   const tool = <S extends z.ZodType>(
     name: string,
     description: string,
     inputSchema: S,
     handler: (input: z.infer<S>) => Promise<unknown>,
   ): void => {
-    const run = async (input: z.infer<S>) => {
+    const run = async (raw: unknown) => {
+      const parsed = inputSchema.safeParse(raw);
+      if (!parsed.success) return schemaError(parsed.error.issues[0]?.message ?? "Invalid arguments");
       try {
-        return textResult(await handler(input));
+        return textResult(await handler(parsed.data));
       } catch (err) {
         return errorResult(err);
       }
@@ -452,102 +330,51 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
     server.registerTool(name, { description, inputSchema }, run as never);
   };
 
-  tool(
-    "list_evals",
-    "List the evals (*.eval.yaml) in a project with target (a stage, or an agent with its revision), dataset size, last-run headline and trend. Read-only, free.",
-    z.object({ project_root: projectRootField }),
-    async ({ project_root }) => {
-      manager();
-      const { items } = await loadAggregatedEvalList({
-        options: { store, bootCwd: cwd },
-        wire: project_root,
-        now: new Date(),
-        ...agentsInput(),
-      });
-      return { items };
-    },
-  );
-
-  tool(
+  server.registerTool(
     "get_eval",
-    "Get one eval: parsed definition, raw YAML, file hash, validation findings, run count and last run; for an agent eval also the live agent (model, revision, tools with risk, ask-first list). Read-only, free. Fails EVAL_NOT_FOUND for an unknown id.",
-    z.object({ eval_id: z.string(), project_root: projectRootField }),
-    async ({ eval_id, project_root }) => {
-      manager();
-      const { projectRoot, ref } = await locateEval({ store, bootCwd: cwd }, project_root, eval_id);
-      return buildEvalDetail({ store, projectRoot, absPath: ref.absPath, ...agentsInput() });
+    {
+      description:
+        "List evals without eval_id; with eval_id and view definition get one eval; view calibrations lists grader calibration history for grader_id. Read-only, free.",
+      inputSchema: getEvalFlatSchema,
+      annotations: { readOnlyHint: true },
     },
-  );
-
-  tool(
-    "validate_eval",
-    "Validate an eval without running it: pass eval_id for a file in the catalog, or yaml for unsaved text (exactly one). Optional path is the file location used to resolve relative paths (required only to check an unsaved eval against a specific path). Optional dataset_cases stand in for the dataset file. Checks schema, target, dataset and graders and returns { findings }. Read-only, free, calls no model; writes no files.",
-    validateEvalSchema,
-    async (input) => {
-      const { eval_id, yaml, path: evalPath, dataset_cases, project_root } = input as typeof input & {
-        eval_id?: string;
-        yaml?: string;
-        path?: string;
-      };
-      manager();
-      if ((eval_id === undefined) === (yaml === undefined)) {
-        throw new EvalApiError(400, "invalid_request", "Provide exactly one of eval_id or yaml");
+    async (raw) => {
+      const parsed = getEvalFlatSchema.safeParse(raw);
+      if (!parsed.success) return schemaError(parsed.error.issues[0]?.message ?? "Invalid arguments");
+      const input = parsed.data;
+      try {
+        manager();
+        if (input.eval_id === undefined) {
+          const { items } = await loadAggregatedEvalList({
+            options: { store, bootCwd: cwd },
+            wire: input.project_root,
+            now: new Date(),
+            ...agentsInput(),
+          });
+          return textResult({ items });
+        }
+        if ((input.view ?? "definition") === "calibrations") {
+          const { projectRoot } = await locateEval({ store, bootCwd: cwd }, input.project_root, input.eval_id);
+          const items = await store.listEvalCalibrations(
+            projectRoot,
+            input.eval_id,
+            input.grader_id!,
+            input.include_candidates === true,
+          );
+          return textResult({ items });
+        }
+        const { projectRoot, ref } = await locateEval({ store, bootCwd: cwd }, input.project_root, input.eval_id);
+        return textResult(await buildEvalDetail({ store, projectRoot, absPath: ref.absPath, ...agentsInput() }));
+      } catch (err) {
+        return errorResult(err);
       }
-      const datasetCases = optDatasetCases(dataset_cases);
-      const located = eval_id !== undefined ? await locateEval(roots, project_root, eval_id) : undefined;
-      const projectRoot = located?.projectRoot ?? (await projectRootFor(project_root));
-      let evalAbs: string;
-      if (evalPath !== undefined) {
-        evalAbs = path.resolve(projectRoot, evalPath);
-        assertInsideProject(projectRoot, evalAbs, "eval path");
-      } else if (located !== undefined) {
-        evalAbs = located.ref.absPath;
-      } else {
-        const manifest = await manifestForWrite(projectRoot);
-        const dir = await resolveWriteDir(projectRoot, manifest, "evals");
-        const rawId = /^id:\s*["']?([A-Za-z0-9][A-Za-z0-9._-]{0,63})["']?\s*$/m.exec(yaml as string)?.[1];
-        evalAbs = path.join(dir.absDir, `${rawId ?? "new"}.eval.yaml`);
-        assertInsideProject(projectRoot, evalAbs, "eval path");
-      }
-      const derived =
-        yaml !== undefined
-          ? yaml.endsWith("\n")
-            ? yaml
-            : `${yaml}\n`
-          : await readFile(located!.ref.absPath, "utf8");
-      const { findings } = await validateEvalText({
-        projectRoot,
-        evalAbs,
-        derived,
-        ...(datasetCases !== undefined ? { datasetCases } : {}),
-        ...agentsInput(),
-      });
-      return { findings };
     },
   );
 
   tool(
     "run_eval",
     "Run an eval: executes every case of the eval's dataset through its target (a stage, or an agent held as a conversation; repeats times each) and grades the results. This calls models and may cost real money (stage calls plus judge calls for rubric graders), bounded by max_cost_usd. Agent runs call the agent's model, a simulator model that plays the user (simulated cases) and the judge, and can cost much more than stage runs. Agent tools are read-only by default: write, shell and unlisted tools are stubbed and recorded, never executed. An eval with conversation.tools: real needs allow_real_tools true on top of allow_real_tools in the eval file, else it fails EVAL_REAL_TOOLS_NOT_CONFIRMED. A stage eval skips signed-in console MCP servers unless allow_host_login is true; stdio servers and HTTP servers with a resolved Authorization header still run. allow_host_login is the consent for that host path. allow_real_tools is the consent for an agent eval to act on the project. Only one eval run is active per host; a second start fails EVAL_RUN_ACTIVE. With wait false (default) it returns { eval_run_id } immediately and the run continues in the background: poll get_eval_run. With wait true it blocks up to timeout_ms (default 600000, max 1800000) and returns the finished run detail, or { eval_run_id, status: \"timeout\" } if still running (the run keeps going; cancel_eval_run stops it). An invalid eval returns an error result with findings.",
-    z.object({
-      eval_id: z.string(),
-      repeats: z.number().int().min(EVAL_LIMITS.repeats.min).max(EVAL_LIMITS.repeats.max).optional().describe("Override executions per case"),
-      judge: z.string().optional().describe("Override the judge model for rubric graders"),
-      model: z.string().optional().describe("Override the stage or agent model"),
-      user_model: z.string().optional().describe("Agent evals: override the model that plays the simulated user"),
-      allow_real_tools: z.boolean().optional().describe("Agent evals: consent to conversation.tools real; no effect on other policies"),
-      allow_host_login: z.boolean().optional().describe("Stage evals: consent to call a signed-in console MCP server on this run"),
-      tools: z.enum(["read_only", "mocked"]).optional().describe("Agent evals: run with a safer tool policy than the file (never riskier)"),
-      approvals: z.enum(["deny", "record_only"]).optional().describe("Agent evals: run with a safer approval policy than the file (never riskier)"),
-      max_cost_usd: z.number().positive().optional().describe("Override the cost cap in USD"),
-      case_ids: z.array(z.string()).optional().describe("Run only these case ids"),
-      tags: z.array(z.string()).optional().describe("Run only cases with these tags"),
-      only_failed_from: z.string().optional().describe("Run only cases that failed in this earlier eval run of the same eval"),
-      label: z.string().max(EVAL_LIMITS.labelMaxChars).optional().describe("Free-text label for the run"),
-      wait: z.boolean().optional().describe("Block until finished (default false)"),
-      timeout_ms: z.number().int().min(1).max(MAX_WAIT_MS).optional().describe(`Wait budget in ms when wait is true (default ${DEFAULT_WAIT_MS}, max ${MAX_WAIT_MS})`),
-      project_root: projectRootField,
-    }),
+    runEvalFlatSchema,
     async (input) => {
       const evalRunManager = manager();
       const { projectRoot, ref } = await locateEval(roots, input.project_root, input.eval_id);
@@ -598,64 +425,66 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
     },
   );
 
-  tool(
+  server.registerTool(
     "get_eval_run",
-    "Get one eval run: status, progress, stats, cost, config snapshot and per-grader summary. Read-only, free. Fails EVAL_RUN_NOT_FOUND for an unknown id.",
-    z.object({ eval_run_id: z.string() }),
-    async ({ eval_run_id }) => {
-      manager();
-      return runDetail(await runByIdOr404(store, eval_run_id));
+    {
+      description:
+        "List eval runs without eval_run_id; with eval_run_id get one run; view export returns run results or config snapshot. Read-only, free.",
+      inputSchema: getEvalRunFlatSchema,
+      annotations: { readOnlyHint: true },
+    },
+    async (raw) => {
+      const parsed = getEvalRunFlatSchema.safeParse(raw);
+      if (!parsed.success) return schemaError(parsed.error.issues[0]?.message ?? "Invalid arguments");
+      const input = parsed.data;
+      try {
+        manager();
+        if (input.eval_run_id === undefined) {
+          const page = await listEvalRunsPage(store, {
+            ...(input.eval_id !== undefined ? { evalId: input.eval_id } : {}),
+            ...(input.status !== undefined ? { status: input.status } : {}),
+            limit: input.limit ?? DEFAULT_LIMIT,
+          });
+          return textResult({ items: page.items });
+        }
+        const row = await runByIdOr404(store, input.eval_run_id);
+        if (input.view === "export") {
+          return textResult(await buildExport({ store, row, what: input.what ?? "results" }));
+        }
+        return textResult(await runDetail(row));
+      } catch (err) {
+        return errorResult(err);
+      }
     },
   );
 
-  tool(
-    "list_eval_runs",
-    "List eval runs, newest first, as headlines (status, pass rate, cost). Filter by eval_id or status. Read-only, free.",
-    z.object({
-      eval_id: z.string().optional(),
-      status: z.enum(EVAL_RUN_STATUSES).optional(),
-      limit: z.number().int().min(1).max(MAX_LIMIT).optional().describe(`Default ${DEFAULT_LIMIT}`),
-    }),
-    async ({ eval_id, status, limit }) => {
-      manager();
-      const page = await listEvalRunsPage(store, {
-        ...(eval_id !== undefined ? { evalId: eval_id } : {}),
-        ...(status !== undefined ? { status } : {}),
-        limit: limit ?? DEFAULT_LIMIT,
-      });
-      return { items: page.items };
-    },
-  );
-
-  tool(
+  server.registerTool(
     "get_eval_results",
-    "List the result rows (one per case) of an eval run with pass state, score and failing graders. Filter by status or grader; page with cursor. Read-only, free.",
-    z.object({
-      eval_run_id: z.string(),
-      status: z.string().optional().describe("Result row status filter, for example failed or passed"),
-      grader: z.string().optional().describe("Only results this grader failed"),
-      limit: z.number().int().min(1).max(MAX_LIMIT).optional().describe(`Default ${DEFAULT_LIMIT}`),
-      cursor: z.string().optional(),
-    }),
-    async ({ eval_run_id, status, grader, limit, cursor }) => {
-      manager();
-      const page = await buildResultsPage(store, eval_run_id, {
-        ...(status !== undefined ? { status } : {}),
-        ...(grader !== undefined ? { grader } : {}),
-        limit: limit ?? DEFAULT_LIMIT,
-        ...(cursor !== undefined ? { cursor } : {}),
-      });
-      return { items: page.items, next_cursor: page.next_cursor };
+    {
+      description:
+        "List result rows for an eval run, or set case_id for one case in full with every repeat. Read-only, free.",
+      inputSchema: getEvalResultsFlatSchema,
+      annotations: { readOnlyHint: true },
     },
-  );
-
-  tool(
-    "get_eval_result",
-    "Get one case of an eval run in full: the case input and expected value plus every repeat's stage output (for an agent eval, the conversation subject: messages, tool calls with policy outcomes, usage), grades, cost and review. Read-only, free.",
-    z.object({ eval_run_id: z.string(), case_id: z.string() }),
-    async ({ eval_run_id, case_id }) => {
-      manager();
-      return buildResultDetail(store, eval_run_id, case_id);
+    async (raw) => {
+      const parsed = getEvalResultsFlatSchema.safeParse(raw);
+      if (!parsed.success) return schemaError(parsed.error.issues[0]?.message ?? "Invalid arguments");
+      const input = parsed.data;
+      try {
+        manager();
+        if (input.case_id !== undefined) {
+          return textResult(await buildResultDetail(store, input.eval_run_id, input.case_id));
+        }
+        const page = await buildResultsPage(store, input.eval_run_id, {
+          ...(input.status !== undefined ? { status: input.status } : {}),
+          ...(input.grader !== undefined ? { grader: input.grader } : {}),
+          limit: input.limit ?? DEFAULT_LIMIT,
+          ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+        });
+        return textResult({ items: page.items, next_cursor: page.next_cursor });
+      } catch (err) {
+        return errorResult(err);
+      }
     },
   );
 
@@ -693,40 +522,27 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
     },
   );
 
-  tool(
-    "get_eval_failure_suggestions",
-    "List the suggested buckets and failure types for an eval run's failed results, with a summary (counts by bucket, by failure type, by status, low confidence). Read-only, free, calls no model. Filter by status (pending, accepted, dismissed).",
-    z.object({ eval_run_id: z.string(), status: z.enum(SUGGESTION_STATUSES).optional() }),
-    async ({ eval_run_id, status }) => {
-      manager();
-      return triage().list(await runByIdOr404(store, eval_run_id), status);
+  server.registerTool(
+    "get_eval_failures",
+    {
+      description:
+        "view suggestions lists failure suggestions for an eval run; view sort_status reports which classifiers can run (no key values). Read-only, free.",
+      inputSchema: getEvalFailuresFlatSchema,
+      annotations: { readOnlyHint: true },
     },
-  );
-
-  tool(
-    "get_eval_failure_sort_status",
-    "Report which failure classifiers can run for an eval run: jev (needs a TypeSafe key; reports only the names of the sources that hold one, never the key) and judge (the run's judge model), and which one auto would use. Read-only, free.",
-    z.object({ eval_run_id: z.string() }),
-    async ({ eval_run_id }) => {
-      manager();
-      return triage().status(await runByIdOr404(store, eval_run_id));
-    },
-  );
-
-  tool(
-    "list_grader_calibrations",
-    "List how well a rubric or goal_reached grader's judge agreed with the author's own Pass/Fail labels, newest first: number of labels, agreement, Cohen's kappa, pass and fail recall, confusion counts, warnings and the results where the judge disagreed. Read-only, free, calls no model. Labels are set by the author in the console or API; this does not create them.",
-    z.object({
-      eval_id: z.string(),
-      grader_id: z.string(),
-      include_candidates: z.boolean().optional().describe("Also list measurements of unsaved candidate rubrics (default false)"),
-      project_root: projectRootField,
-    }),
-    async ({ eval_id, grader_id, include_candidates, project_root }) => {
-      manager();
-      const { projectRoot } = await locateEval({ store, bootCwd: cwd }, project_root, eval_id);
-      const items = await store.listEvalCalibrations(projectRoot, eval_id, grader_id, include_candidates === true);
-      return { items };
+    async (raw) => {
+      const parsed = getEvalFailuresFlatSchema.safeParse(raw);
+      if (!parsed.success) return schemaError(parsed.error.issues[0]?.message ?? "Invalid arguments");
+      const input = parsed.data;
+      try {
+        manager();
+        const row = await runByIdOr404(store, input.eval_run_id);
+        const view = input.view ?? "suggestions";
+        if (view === "sort_status") return textResult(await triage().status(row));
+        return textResult(await triage().list(row, input.status));
+      } catch (err) {
+        return errorResult(err);
+      }
     },
   );
 
@@ -792,68 +608,85 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
   const evalDetail = (projectRoot: string, absPath: string) =>
     buildEvalDetail({ store, projectRoot, absPath, ...agentsInput() });
 
-  tool(
-    "create_eval",
-    "Create an eval file from a definition object. Validates the full plan first (target, dataset, graders) and writes only when that passes. Fails EVAL_EXISTS when the id is already in the catalog, EVAL_INVALID with findings when the definition is not runnable. Does not call a model.",
-    z.object({
-      definition: z.record(z.string(), z.unknown()).describe("Eval definition object, the same shape as an eval file"),
-      directory: z.string().optional().describe("Catalog directory to write into, relative to the project"),
-      project_root: projectRootField,
-    }),
-    async ({ definition, directory, project_root }) => {
-      const file = definition as unknown as EvalFile;
-      const projectRoot = await writableRoot(project_root);
-      const manifest = await manifestForWrite(projectRoot);
-      const dir = await resolveWriteDir(projectRoot, manifest, "evals", directory);
-      const rawId = (file as { id?: unknown }).id;
-      const fileName = typeof rawId === "string" && ID_RE.test(rawId) ? `${rawId}.eval.yaml` : "new.eval.yaml";
-      const absPath = path.join(dir.absDir, fileName);
-      assertInsideProject(projectRoot, absPath, "eval path");
-      if (typeof rawId === "string" && (await findEvalFile(projectRoot, rawId, manifest)) !== undefined) {
-        throw new EvalsWriteError("EVAL_EXISTS", `Eval "${rawId}" already exists`);
-      }
-      const text = renderEvalCreateYaml(file);
-      const checked = await planFindings({ projectRoot, evalPath: absPath, evalText: text, ...agentsInput() });
-      if (!checked.ok) {
-        audit("eval_create", "error", undefined, "EVAL_INVALID");
-        throw new EvalApiError(422, "EVAL_INVALID", "Eval definition is invalid", { findings: checked.findings });
-      }
-      const written = await createEvalFile({ projectRoot, definition: file, ...(directory !== undefined ? { directory } : {}) });
-      audit("eval_create", "ok");
-      return evalDetail(projectRoot, written.path);
+  server.registerTool(
+    "save_eval",
+    {
+      description:
+        "mode create writes a new eval from definition, or source sample installs the packaged sample. mode update replaces an eval with definition or yaml and base_hash. Does not call a model.",
+      inputSchema: saveEvalFlatSchema,
     },
-  );
-
-  tool(
-    "update_eval",
-    "Replace an eval file. Pass exactly one of definition (merged into the current file) or yaml (the full file text), plus base_hash from get_eval. Refuses with FILE_CHANGED and current_hash when the file moved, and EVAL_INVALID with findings when the result is not runnable. Does not call a model.",
-    updateEvalSchema,
-    async (input) => {
-      const { eval_id, base_hash, definition, yaml, project_root } = input as typeof input & {
-        definition?: Record<string, unknown>;
-        yaml?: string;
-      };
-      if ((definition === undefined) === (yaml === undefined)) throw bad("Provide exactly one of definition or yaml");
-      if (base_hash === "") throw bad(`"base_hash" is required`);
-      const { projectRoot, ref } = await locateEval(roots, project_root, eval_id, true);
-      const current = await readFile(ref.absPath);
-      const currentHash = contentHash(current);
-      if (currentHash !== base_hash) throw new FileChangedError(currentHash);
-      const text =
-        yaml !== undefined ? (yaml.endsWith("\n") ? yaml : `${yaml}\n`) : previewEvalUpdate(current.toString("utf8"), definition);
-      const checked = await planFindings({ projectRoot, evalPath: ref.absPath, evalText: text, ...agentsInput() });
-      if (!checked.ok) {
-        audit("eval_update", "error", undefined, "EVAL_INVALID");
-        throw new EvalApiError(422, "EVAL_INVALID", "Eval definition is invalid", { findings: checked.findings });
+    async (raw) => {
+      const parsed = saveEvalFlatSchema.safeParse(raw);
+      if (!parsed.success) return schemaError(parsed.error.issues[0]?.message ?? "Invalid arguments");
+      const input = parsed.data;
+      try {
+        if (input.mode === "create" && input.source === "sample") {
+          const projectRoot = await writableRoot(input.project_root);
+          const port = sampleAgents();
+          const result = await installEvalSample({
+            projectRoot,
+            ...(input.kind === "agent" ? { kind: input.kind } : {}),
+            ...(port ? { agents: port } : {}),
+          });
+          audit("eval_sample_install", "ok");
+          return textResult({ eval_id: result.evalId });
+        }
+        if (input.mode === "create") {
+          const file = input.definition! as unknown as EvalFile;
+          const projectRoot = await writableRoot(input.project_root);
+          const manifest = await manifestForWrite(projectRoot);
+          const dir = await resolveWriteDir(projectRoot, manifest, "evals", input.directory);
+          const rawId = (file as { id?: unknown }).id;
+          const fileName = typeof rawId === "string" && ID_RE.test(rawId) ? `${rawId}.eval.yaml` : "new.eval.yaml";
+          const absPath = path.join(dir.absDir, fileName);
+          assertInsideProject(projectRoot, absPath, "eval path");
+          if (typeof rawId === "string" && (await findEvalFile(projectRoot, rawId, manifest)) !== undefined) {
+            throw new EvalsWriteError("EVAL_EXISTS", `Eval "${rawId}" already exists`);
+          }
+          const text = renderEvalCreateYaml(file);
+          const checked = await planFindings({ projectRoot, evalPath: absPath, evalText: text, ...agentsInput() });
+          if (!checked.ok) {
+            audit("eval_create", "error", undefined, "EVAL_INVALID");
+            throw new EvalApiError(422, "EVAL_INVALID", "Eval definition is invalid", { findings: checked.findings });
+          }
+          const written = await createEvalFile({
+            projectRoot,
+            definition: file,
+            ...(input.directory !== undefined ? { directory: input.directory } : {}),
+          });
+          audit("eval_create", "ok");
+          return textResult(await evalDetail(projectRoot, written.path));
+        }
+        const { eval_id, base_hash, definition, yaml } = input;
+        const { projectRoot, ref } = await locateEval(roots, input.project_root, eval_id!, true);
+        const current = await readFile(ref.absPath);
+        const currentHash = contentHash(current);
+        if (currentHash !== base_hash) throw new FileChangedError(currentHash);
+        const text =
+          yaml !== undefined
+            ? yaml.endsWith("\n")
+              ? yaml
+              : `${yaml}\n`
+            : previewEvalUpdate(current.toString("utf8"), definition!);
+        const checked = await planFindings({ projectRoot, evalPath: ref.absPath, evalText: text, ...agentsInput() });
+        if (!checked.ok) {
+          audit("eval_update", "error", undefined, "EVAL_INVALID");
+          throw new EvalApiError(422, "EVAL_INVALID", "Eval definition is invalid", { findings: checked.findings });
+        }
+        await updateEvalFile({
+          projectRoot,
+          id: eval_id!,
+          baseHash: base_hash!,
+          ...(yaml !== undefined ? { yaml } : { definition: definition! }),
+        });
+        audit("eval_update", "ok");
+        return textResult(await evalDetail(projectRoot, ref.absPath));
+      } catch (err) {
+        if (err instanceof EvalsWriteError && input.mode === "create" && input.source === "sample") {
+          audit("eval_sample_install", "error", undefined, err.code);
+        }
+        return errorResult(err);
       }
-      await updateEvalFile({
-        projectRoot,
-        id: eval_id,
-        baseHash: base_hash,
-        ...(yaml !== undefined ? { yaml } : { definition }),
-      });
-      audit("eval_update", "ok");
-      return evalDetail(projectRoot, ref.absPath);
     },
   );
 
@@ -895,149 +728,109 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
     }
   };
 
-  tool(
-    "create_dataset",
-    "Create a dataset, or append or replace cases in one. Pass name and cases for a new file. source sample copies the packaged sample cases (they must match target). source runs copies recorded stage inputs (run_ids, append only when updating). source sessions copies finished agent sessions (session_ids and target.agent_id, append only when updating; needs the agent service). To update an existing file pass dataset_id, mode append or replace, and base_hash. Does not call a model.",
-    createDatasetSchema,
+  server.registerTool(
+    "save_dataset",
+    {
+      description:
+        "mode create writes a new dataset (cases or source sample, runs, sessions). mode update with action append, replace, ops, or convert edits an existing dataset. Does not call a model.",
+      inputSchema: saveDatasetFlatSchema,
+    },
     async (raw) => {
-      const input = raw as {
-        name?: string;
-        cases?: Record<string, unknown>[];
-        source?: "sample" | "runs" | "sessions";
-        target?: z.infer<typeof datasetTargetObject>;
-        run_ids?: string[];
-        session_ids?: string[];
-        dataset_id?: string;
-        mode?: "append" | "replace";
-        base_hash?: string;
-        directory?: string;
-        project_root?: string;
-      };
-      const datasetId = input.dataset_id !== undefined && input.dataset_id !== "" ? input.dataset_id : undefined;
-      const projectRoot =
-        datasetId !== undefined
-          ? (await locateDataset(roots, input.project_root, datasetId, { write: true, missing: "default" })).projectRoot
-          : await writableRoot(input.project_root);
-      let absPath: string;
-      let id: string;
-      if (datasetId !== undefined) {
-        id = datasetId;
-        if (input.mode !== "append" && input.mode !== "replace") throw bad(`"mode" must be append or replace`);
-        if (typeof input.base_hash !== "string" || input.base_hash === "") throw bad(`"base_hash" is required`);
-        let newCases: NewDatasetCase[];
-        if (input.source === "runs") {
-          if (input.mode !== "append") throw bad(`source "runs" requires mode "append"`);
-          newCases = await casesFromRunsInput(projectRoot, input.target, input.run_ids);
-        } else if (input.source === "sessions") {
-          if (input.mode !== "append") throw bad(`source "sessions" requires mode "append"`);
-          newCases = await casesFromSessionsInput(projectRoot, input.target, input.session_ids);
-        } else {
-          if (!Array.isArray(input.cases)) throw bad(`"cases" must be an array`);
-          newCases = input.cases as NewDatasetCase[];
-        }
-        const written = await appendOrReplaceCases({
-          projectRoot,
-          id,
-          baseHash: input.base_hash,
-          mode: input.mode,
-          cases: newCases,
-        });
-        absPath = written.path;
-      } else {
-        const name = input.name;
-        if (name === undefined || name === "") throw bad(`"name" is required`);
-        id = name;
-        let cases: NewDatasetCase[];
-        if (input.source === "sessions") {
-          cases = await casesFromSessionsInput(projectRoot, input.target, input.session_ids);
-        } else if (input.source === "sample" || input.source === "runs") {
-          const resolved = await resolveDatasetTarget(projectRoot, targetFrom(input.target), deps.agentService);
-          if (!resolved.ok) throw new EvalApiError(422, "EVAL_INVALID", resolved.message);
-          if (resolved.value.agentId !== undefined) throw bad(`source "${input.source}" is not available for an agent target`);
-          if (input.source === "sample") {
-            const sample = await sampleCases();
-            const failing = checkDatasetAgainstStage(sample, resolved.value.inputSchema).find((row) => !row.valid);
-            if (failing) throw new EvalsWriteError("DATASET_INVALID", "The sample cases do not match this stage's input");
-            cases = sample;
-          } else {
-            cases = await casesFromRunsInput(projectRoot, input.target, input.run_ids);
-          }
-        } else {
-          if (!Array.isArray(input.cases)) throw bad(`"cases" must be an array`);
-          cases = input.cases as NewDatasetCase[];
-        }
-        const written = await createDatasetFile({
-          projectRoot,
-          name,
-          cases,
-          ...(input.directory !== undefined ? { directory: input.directory } : {}),
-        });
-        absPath = written.path;
-      }
-      audit("dataset_write", "ok");
-      return datasetDetailFor(projectRoot, id, absPath);
-    },
-  );
-
-  tool(
-    "update_dataset_cases",
-    "Apply add, update, delete, and set_tags operations to a .dataset.jsonl file. base_hash must be the current file hash. The whole list is one write: a bad op changes nothing. Fails DATASET_READ_ONLY for json or csv (convert_dataset first). Does not call a model.",
-    z.object({
-      dataset_id: z.string(),
-      base_hash: z.string().min(1),
-      ops: z.array(caseOpSchema),
-      project_root: projectRootField,
-    }),
-    async ({ dataset_id, base_hash, ops, project_root }) => {
-      if (base_hash === "") throw bad(`"base_hash" is required`);
-      if (ops.some((op) => !CASE_OPS.has(String(op.op)))) {
-        throw bad(`"ops" must be an array of add, update, delete or set_tags operations`);
-      }
-      const { projectRoot } = await locateDataset(roots, project_root, dataset_id, { write: true, missing: "default" });
-      const written = await applyCaseOps({ projectRoot, id: dataset_id, baseHash: base_hash, ops: ops as CaseOp[] });
-      audit("dataset_write", "ok");
-      return datasetDetailFor(projectRoot, dataset_id, written.path);
-    },
-  );
-
-  tool(
-    "convert_dataset",
-    "Copy a .dataset.json or .dataset.csv file to an editable .dataset.jsonl sibling and return that file. The original is left in place. base_hash is the current source hash. Does not call a model.",
-    z.object({
-      dataset_id: z.string(),
-      base_hash: z.string(),
-      project_root: projectRootField,
-    }),
-    async ({ dataset_id, base_hash, project_root }) => {
-      if (base_hash === "") throw bad(`"base_hash" is required`);
-      const { projectRoot } = await locateDataset(roots, project_root, dataset_id, { write: true, missing: "default" });
-      const written = await convertDatasetToJsonl({ projectRoot, id: dataset_id, baseHash: base_hash });
-      audit("dataset_write", "ok");
-      return datasetDetailFor(projectRoot, written.id, written.path);
-    },
-  );
-
-  tool(
-    "install_eval_sample",
-    "Install the packaged sample eval into the project. kind stage (default) writes the critique sample pipeline, dataset, and eval. kind agent writes the support sample and creates its agent; without the agent service it fails SAMPLE_AGENTS_UNAVAILABLE. Fails SAMPLE_EXISTS when that sample is already installed. Does not call a model.",
-    z.object({
-      kind: z.enum(["stage", "agent"]).optional().describe('Default "stage"'),
-      project_root: projectRootField,
-    }),
-    async ({ kind, project_root }) => {
-      const projectRoot = await writableRoot(project_root);
+      const parsed = saveDatasetFlatSchema.safeParse(raw);
+      if (!parsed.success) return schemaError(parsed.error.issues[0]?.message ?? "Invalid arguments");
+      const input = parsed.data;
       try {
-        const port = sampleAgents();
-        const result = await installEvalSample({
-          projectRoot,
-          ...(kind === "agent" ? { kind } : {}),
-          ...(port ? { agents: port } : {}),
-        });
-        audit("eval_sample_install", "ok");
-        return { eval_id: result.evalId };
+        if (input.mode === "update" && input.action === "convert") {
+          const { projectRoot } = await locateDataset(roots, input.project_root, input.dataset_id!, {
+            write: true,
+            missing: "default",
+          });
+          const written = await convertDatasetToJsonl({
+            projectRoot,
+            id: input.dataset_id!,
+            baseHash: input.base_hash!,
+          });
+          audit("dataset_write", "ok");
+          return textResult(await datasetDetailFor(projectRoot, written.id, written.path));
+        }
+        if (input.mode === "update" && input.action === "ops") {
+          const ops = input.ops!;
+          if (ops.some((op) => !CASE_OPS.has(String(op.op)))) {
+            throw bad(`"ops" must be an array of add, update, delete or set_tags operations`);
+          }
+          const { projectRoot } = await locateDataset(roots, input.project_root, input.dataset_id!, {
+            write: true,
+            missing: "default",
+          });
+          const written = await applyCaseOps({
+            projectRoot,
+            id: input.dataset_id!,
+            baseHash: input.base_hash!,
+            ops: ops as CaseOp[],
+          });
+          audit("dataset_write", "ok");
+          return textResult(await datasetDetailFor(projectRoot, input.dataset_id!, written.path));
+        }
+        const projectRoot =
+          input.mode === "update"
+            ? (await locateDataset(roots, input.project_root, input.dataset_id!, { write: true, missing: "default" }))
+                .projectRoot
+            : await writableRoot(input.project_root);
+        let absPath: string;
+        let id: string;
+        if (input.mode === "update") {
+          id = input.dataset_id!;
+          const appendMode = input.action as "append" | "replace";
+          let newCases: NewDatasetCase[];
+          if (input.source === "runs") {
+            newCases = await casesFromRunsInput(projectRoot, input.target, input.run_ids);
+          } else if (input.source === "sessions") {
+            newCases = await casesFromSessionsInput(projectRoot, input.target, input.session_ids);
+          } else {
+            newCases = input.cases! as NewDatasetCase[];
+          }
+          const written = await appendOrReplaceCases({
+            projectRoot,
+            id,
+            baseHash: input.base_hash!,
+            mode: appendMode,
+            cases: newCases,
+          });
+          absPath = written.path;
+        } else {
+          id = input.name!;
+          let cases: NewDatasetCase[];
+          if (input.source === "sessions") {
+            cases = await casesFromSessionsInput(projectRoot, input.target, input.session_ids);
+          } else if (input.source === "sample" || input.source === "runs") {
+            const resolved = await resolveDatasetTarget(projectRoot, targetFrom(input.target), deps.agentService);
+            if (!resolved.ok) throw new EvalApiError(422, "EVAL_INVALID", resolved.message);
+            if (resolved.value.agentId !== undefined) {
+              throw bad(`source "${input.source}" is not available for an agent target`);
+            }
+            if (input.source === "sample") {
+              const sample = await sampleCases();
+              const failing = checkDatasetAgainstStage(sample, resolved.value.inputSchema).find((row) => !row.valid);
+              if (failing) throw new EvalsWriteError("DATASET_INVALID", "The sample cases do not match this stage's input");
+              cases = sample;
+            } else {
+              cases = await casesFromRunsInput(projectRoot, input.target, input.run_ids);
+            }
+          } else {
+            cases = input.cases! as NewDatasetCase[];
+          }
+          const written = await createDatasetFile({
+            projectRoot,
+            name: id,
+            cases,
+            ...(input.directory !== undefined ? { directory: input.directory } : {}),
+          });
+          absPath = written.path;
+        }
+        audit("dataset_write", "ok");
+        return textResult(await datasetDetailFor(projectRoot, id, absPath));
       } catch (err) {
-        if (err instanceof EvalsWriteError) audit("eval_sample_install", "error", undefined, err.code);
-        throw err;
+        return errorResult(err);
       }
     },
   );
@@ -1045,19 +838,11 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
   tool(
     "try_eval_case",
     "Run one case of an eval and return its grade. Pass exactly one of eval_id or definition, and exactly one of case_id or case. dataset_cases stand in for the dataset file. This calls the target model once and may cost real money, bounded by the eval's max_cost_usd; graders that need a judge call the judge too. Agent tools stay read-only unless the eval file sets conversation.tools real and allow_real_tools is true. A stage try skips signed-in console MCP servers unless allow_host_login is true; stdio servers and HTTP servers with a resolved Authorization header still run. Nothing is saved as an eval run, and no eval session is returned.",
-    tryEvalCaseSchema,
+    tryEvalCaseFlatSchema,
     async (input) => {
       const { eval_id, definition, case_id, case: caseInput, dataset_cases, allow_real_tools, allow_host_login, project_root } =
-        input as typeof input & {
-          eval_id?: string;
-          definition?: Record<string, unknown>;
-          case_id?: string;
-          case?: Record<string, unknown>;
-          allow_host_login?: boolean;
-        };
+        input;
       const evalRunManager = manager();
-      if ((eval_id === undefined) === (definition === undefined)) throw bad("Provide exactly one of eval_id or definition");
-      if ((case_id === undefined) === (caseInput === undefined)) throw bad("Provide exactly one of case_id or case");
       const datasetCases = optDatasetCases(dataset_cases);
       const located = eval_id !== undefined ? await locateEval(roots, project_root, eval_id) : undefined;
       const projectRoot = located?.projectRoot ?? (await projectRootFor(project_root));
@@ -1088,102 +873,58 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
     },
   );
 
-  tool(
-    "get_eval_run_export",
-    "Export one eval run. what results (default) is the run detail plus every result row. what config is the config snapshot written when the run started. Read-only, free. Grader failures are codes.",
-    z.object({
-      eval_run_id: z.string(),
-      what: z.enum(["results", "config"]).optional().describe('Default "results"'),
-    }),
-    async ({ eval_run_id, what }) => {
-      manager();
-      const row = await runByIdOr404(store, eval_run_id);
-      return buildExport({ store, row, what: what ?? "results" });
+  server.registerTool(
+    "review_eval_results",
+    {
+      description:
+        "action label sets pass, fail, note, or tags on one repeat; action accept writes tags from suggestions; action dismiss dismisses suggestions. Does not call a model.",
+      inputSchema: reviewEvalResultsFlatSchema,
     },
-  );
-
-  tool(
-    "put_eval_review",
-    "Set the review label, note, or failure-type tags on one repeat of an eval result. Tags are stored only on results that failed; tagging a passed result fails EVAL_TAGS_ON_PASSED_RESULT. Does not call a model.",
-    z.object({
-      eval_run_id: z.string(),
-      case_id: z.string(),
-      repeat_index: z.number().int().min(0),
-      label: z.string().optional().describe("pass or fail"),
-      note: z.string().nullable().optional(),
-      tags: z.array(z.string()).optional().describe("Failure types; only on a failed result"),
-    }),
-    async ({ eval_run_id, case_id, repeat_index, label, note, tags }) => {
-      manager();
-      await runByIdOr404(store, eval_run_id);
-      const patch: { label?: "pass" | "fail"; note?: string | null; tags?: string[] } = {};
-      if (label !== undefined) {
-        if (!(EVAL_REVIEW_LABELS as readonly string[]).includes(label)) throw bad(`"label" must be pass or fail`);
-        patch.label = label as "pass" | "fail";
-      }
-      if (note !== undefined) {
-        if (note !== null && note.length > EVAL_LIMITS.reviewNoteMaxChars) {
-          throw bad(`"note" must be a string of at most ${EVAL_LIMITS.reviewNoteMaxChars} characters or null`);
-        }
-        patch.note = note;
-      }
-      if (tags !== undefined) {
-        if (tags.some((t) => t.length > EVAL_LIMITS.failureTypeNameMaxChars)) {
-          throw bad(`Each tag must be at most ${EVAL_LIMITS.failureTypeNameMaxChars} characters`);
-        }
-        patch.tags = tags;
-      }
+    async (raw) => {
+      const parsed = reviewEvalResultsFlatSchema.safeParse(raw);
+      if (!parsed.success) return schemaError(parsed.error.issues[0]?.message ?? "Invalid arguments");
+      const input = parsed.data;
       try {
-        const review = await store.putEvalReview(eval_run_id, case_id, repeat_index, patch);
-        audit("eval_review", "ok", eval_run_id);
-        return { label: review.label, note: review.note, tags: review.tags };
+        manager();
+        const row = await runByIdOr404(store, input.eval_run_id);
+        if (input.action === "accept") {
+          const result = await triage().accept(row, {
+            ...(input.ids !== undefined ? { ids: input.ids } : {}),
+            ...(input.min_confidence !== undefined ? { minConfidence: input.min_confidence } : {}),
+            ...(isTriageBucket(input.bucket) ? { bucket: input.bucket } : {}),
+          });
+          audit("eval_suggestions_accept", "ok", input.eval_run_id);
+          return textResult(result);
+        }
+        if (input.action === "dismiss") {
+          const result = await triage().dismiss(row, input.ids!);
+          audit("eval_suggestions_dismiss", "ok", input.eval_run_id);
+          return textResult(result);
+        }
+        const patch: { label?: "pass" | "fail"; note?: string | null; tags?: string[] } = {};
+        if (input.label !== undefined) {
+          if (!(EVAL_REVIEW_LABELS as readonly string[]).includes(input.label)) throw bad(`"label" must be pass or fail`);
+          patch.label = input.label as "pass" | "fail";
+        }
+        if (input.note !== undefined) {
+          if (input.note !== null && input.note.length > EVAL_LIMITS.reviewNoteMaxChars) {
+            throw bad(`"note" must be a string of at most ${EVAL_LIMITS.reviewNoteMaxChars} characters or null`);
+          }
+          patch.note = input.note;
+        }
+        if (input.tags !== undefined) {
+          if (input.tags.some((t) => t.length > EVAL_LIMITS.failureTypeNameMaxChars)) {
+            throw bad(`Each tag must be at most ${EVAL_LIMITS.failureTypeNameMaxChars} characters`);
+          }
+          patch.tags = input.tags;
+        }
+        const review = await store.putEvalReview(input.eval_run_id, input.case_id!, input.repeat_index!, patch);
+        audit("eval_review", "ok", input.eval_run_id);
+        return textResult({ label: review.label, note: review.note, tags: review.tags });
       } catch (err) {
-        if (err instanceof EvalStoreError) throw err;
-        if (err instanceof Error) throw bad(err.message);
-        throw err;
+        if (err instanceof EvalStoreError) return errorResult(err);
+        return errorResult(err);
       }
-    },
-  );
-
-  tool(
-    "accept_eval_failure_suggestions",
-    "Accept pending failure suggestions for an eval run and write their failure types as tags. Pass ids to accept those rows, or min_confidence and bucket to accept every pending suggestion that matches (unclear is never included). Tags land only on failed results. Does not call a model.",
-    z.object({
-      eval_run_id: z.string(),
-      ids: z.array(z.string()).optional().describe("Suggestion ids to accept; omit to accept by confidence and bucket"),
-      min_confidence: z.number().optional().describe("Lowest confidence to accept when ids is omitted, from 0 to 1"),
-      bucket: z.string().optional().describe(`Only this bucket when ids is omitted: ${TRIAGE_BUCKETS.join(", ")}`),
-    }),
-    async ({ eval_run_id, ids, min_confidence, bucket }) => {
-      manager();
-      const row = await runByIdOr404(store, eval_run_id);
-      if (min_confidence !== undefined && (min_confidence < 0 || min_confidence > 1)) {
-        throw bad(`"min_confidence" must be a number from 0 to 1`);
-      }
-      if (bucket !== undefined && !isTriageBucket(bucket)) throw bad(`"bucket" must be one of ${TRIAGE_BUCKETS.join(", ")}`);
-      const result = await triage().accept(row, {
-        ...(ids !== undefined ? { ids } : {}),
-        ...(min_confidence !== undefined ? { minConfidence: min_confidence } : {}),
-        ...(isTriageBucket(bucket) ? { bucket } : {}),
-      });
-      audit("eval_suggestions_accept", "ok", eval_run_id);
-      return result;
-    },
-  );
-
-  tool(
-    "dismiss_eval_failure_suggestions",
-    "Dismiss failure suggestions so they are not tagged. ids are required. Does not call a model.",
-    z.object({
-      eval_run_id: z.string(),
-      ids: z.array(z.string()).describe("Suggestion ids to dismiss"),
-    }),
-    async ({ eval_run_id, ids }) => {
-      manager();
-      const row = await runByIdOr404(store, eval_run_id);
-      const result = await triage().dismiss(row, ids);
-      audit("eval_suggestions_dismiss", "ok", eval_run_id);
-      return result;
     },
   );
 

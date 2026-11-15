@@ -195,7 +195,7 @@ describe("MCP Tier 3 sessions", () => {
       const sessionId = await mcpInitialize(base);
       expect(sessionId.length).toBeGreaterThan(0);
 
-      const health = await mcpToolCall(base, sessionId, "get_health");
+      const health = await mcpToolCall(base, sessionId, "list_catalog", { kind: "health" });
       expect(health.isError).toBe(false);
       expect(health.payload.ok).toBe(true);
 
@@ -223,7 +223,7 @@ describe("MCP Tier 3 sessions", () => {
           jsonrpc: "2.0",
           id: 9,
           method: "tools/call",
-          params: { name: "get_health", arguments: {} },
+          params: { name: "list_catalog", arguments: {} },
         }),
       });
       expect(unknown.status).toBe(404);
@@ -251,7 +251,7 @@ describe("MCP Tier 3 sessions", () => {
     const base = `http://127.0.0.1:${address.port}`;
 
     try {
-      const health = await mcpToolCall(base, undefined, "get_health");
+      const health = await mcpToolCall(base, undefined, "list_catalog", { kind: "health" });
       expect(health.isError).toBe(false);
       expect(health.payload.ok).toBe(true);
     } finally {
@@ -460,7 +460,7 @@ describe("MCP Tier 3 sf mcp host", () => {
       expect(mcpUrl).toBe(`${base}/mcp`);
       const healthHttp = await fetch(`${base}/api/health`);
       expect(healthHttp.status).toBe(200);
-      const health = await mcpToolCall(base, undefined, "get_health");
+      const health = await mcpToolCall(base, undefined, "list_catalog", { kind: "health" });
       expect(health.isError).toBe(false);
       expect(health.payload.ok).toBe(true);
 

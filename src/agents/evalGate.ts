@@ -1,6 +1,8 @@
 import { redactSecrets } from "../agent/streamLogRedact.js";
 import type { AgentDefinition } from "../config/loadAgent.js";
 import { globalStageflowHome } from "../project/globalHome.js";
+import { STAGEFLOW_GRANT_PREFIX } from "../toolkit/meta.js";
+import { evalGateDeniedByMode } from "../toolkit/modePolicy.js";
 import { forbiddenWriteTarget, isToolGranted, requiresAskFirst } from "./policy.js";
 import type { GateDecision, ToolCall } from "./runtime/types.js";
 import { classifyTool } from "./toolRisk.js";
@@ -94,6 +96,11 @@ export function createEvalGate(options: {
     };
 
     if (!isToolGranted(definition, call.tool)) return refuse("denied", `Tool ${call.tool} is not granted to this agent.`);
+    if (call.tool.startsWith(STAGEFLOW_GRANT_PREFIX)) {
+      const bare = call.tool.slice(STAGEFLOW_GRANT_PREFIX.length);
+      const modeRefusal = evalGateDeniedByMode(bare, call.input);
+      if (modeRefusal) return refuse("denied", modeRefusal);
+    }
     if (call.tool === "stageflow.test_function" && call.input.real === true) {
       return refuse("denied", "Real function tests cannot run in an evaluation.");
     }

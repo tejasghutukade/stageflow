@@ -184,7 +184,7 @@ sf runs recover --run <runId> --stage <stageId> --guidance "Fix the failing chec
 sf runs recover --run <runId> --stage <stageId> --stop
 POST /api/runs/<runId>/stages/<stageId>/recovery { "guidance": "…" }
 POST /api/runs/<runId>/stages/<stageId>/recovery/stop
-MCP: recover_manual_stage / stop_manual_recovery
+MCP: `stage_action` with `action: recover` / `stop_recovery`
 ```
 
 ## Visibility
@@ -210,7 +210,7 @@ The same history is available to automation:
 ```text
 sf runs verify --run <runId> --stage <stageId> --json
 GET /api/runs/<runId>/stages/<stageId>/verification
-MCP: get_stage_verification
+MCP: `get_stage` with `view: verification`
 ```
 
 The focused stage endpoint is intentional. Command output can be sizable, so normal

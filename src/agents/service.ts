@@ -10,6 +10,8 @@ import {
   parseAgentDefinition,
   parseAgentYaml,
   serializeAgentDefinition,
+  stageflowDefinitionValidation,
+  stageflowStaleIssues,
   type AgentDefinition,
   type AgentIssue,
 } from "../config/loadAgent.js";
@@ -92,7 +94,7 @@ export type AgentSummary = {
 };
 
 /** Tools that return session transcripts, which hold visitors' messages. */
-const CONVERSATION_READING_TOOLS = new Set(["get_agent_session", "list_agent_sessions"]);
+const CONVERSATION_READING_TOOLS = new Set(["get_agent_session"]);
 
 export type AgentDetail = {
   agent: AgentSummary;
@@ -395,13 +397,14 @@ export class AgentService {
     const revision = row.currentRevision > 0 ? this.store.getRevision(projectKey, row.agentId, row.currentRevision) : undefined;
     const definition = revision?.definition;
     const since = new Date(this.now().getTime() - RECENT_WINDOW_MS).toISOString();
+    const sessionIssues = this.stalePinnedSessionIssues(projectKey, row.agentId);
     return {
       id: row.agentId,
       name: definition?.name ?? row.agentId,
       description: definition?.description ?? null,
       enabled: definition?.enabled ?? false,
       revision: row.currentRevision,
-      issues: row.issues,
+      issues: [...row.issues, ...sessionIssues],
       model: definition?.model ?? null,
       tools: {
         builtin: definition?.tools.builtin ?? [],
@@ -420,6 +423,26 @@ export class AgentService {
       pendingApprovals: pending.get(row.agentId) ?? 0,
       updatedAt: row.updatedAt,
     };
+  }
+
+  private stalePinnedSessionIssues(projectKey: string, agentId: string): AgentIssue[] {
+    for (const session of this.store.listSessions(projectKey, agentId, { limit: 50, status: "open" }).sessions) {
+      const revision = this.store.getRevision(projectKey, agentId, session.revision);
+      if (!revision) continue;
+      const stale = stageflowStaleIssues(revision.definition);
+      if (stale.length === 0) continue;
+      return stale.map((issue) => ({ ...issue, path: issue.path || `sessions.${session.id}` }));
+    }
+    for (const status of ["running", "waiting"] as const) {
+      for (const session of this.store.listSessions(projectKey, agentId, { limit: 50, status }).sessions) {
+        const revision = this.store.getRevision(projectKey, agentId, session.revision);
+        if (!revision) continue;
+        const stale = stageflowStaleIssues(revision.definition);
+        if (stale.length === 0) continue;
+        return stale.map((issue) => ({ ...issue, path: issue.path || `sessions.${session.id}` }));
+      }
+    }
+    return [];
   }
 
   private pendingByAgent(projectKey: string): Map<string, number> {
@@ -525,7 +548,7 @@ export class AgentService {
   /* ---------- validation ---------- */
 
   private async warningsFor(projectRoot: string, definition: AgentDefinition): Promise<AgentIssue[]> {
-    const warnings: AgentIssue[] = [];
+    const warnings: AgentIssue[] = [...stageflowDefinitionValidation(definition).warnings];
     if (definition.web_chat.enabled && !definition.web_chat.slug) {
       warnings.push({ path: "web_chat.slug", code: "agent.web_chat_slug_missing", message: "Web chat has no link yet; save the agent in the console to generate one" });
     }
@@ -930,7 +953,9 @@ export class AgentService {
       if (row.currentRevision !== input.baseRevision) throw new AgentError("agent.conflict");
       const target = this.store.getRevision(agentProjectKey(projectRoot), agentId, input.revision);
       if (!target) throw new AgentError("agent.revision_not_found");
-      const definition = { ...target.definition, enabled: current.definition.enabled };
+      const restored = parseAgentDefinition(target.definition);
+      if (!restored.ok) throw new AgentError("agent.invalid", "That revision is invalid", restored.issues);
+      const definition = { ...restored.value, enabled: current.definition.enabled };
       if (sameDefinition(definition, current.definition)) return;
       await this.writeRevision(
         projectRoot,
@@ -954,6 +979,11 @@ export class AgentService {
     return this.exclusive(projectRoot, async () => {
       await this.sync(projectRoot);
       const isEval = input.source === EVAL_SESSION_SOURCE;
+      const projectKey = agentProjectKey(projectRoot);
+      const row = this.store.getDefinition(projectKey, agentId);
+      if (row && row.issues.length > 0) {
+        throw new AgentError("agent.invalid", "Fix the agent definition before opening a session", row.issues);
+      }
       const { revision: current } = this.currentRevision(projectRoot, agentId);
       let revision = current;
       if (input.eval?.revision !== undefined && input.eval.revision !== current.revision) {
@@ -1099,9 +1129,26 @@ export class AgentService {
       if (!live.definition.enabled && !isEvalSession(session)) throw new AgentError("agent.disabled");
       if (session.status === "running" || session.status === "waiting") throw new AgentError("agent.session_busy");
       const definition = await this.effectiveDefinition(projectRoot, session);
+      const staleIssues = stageflowStaleIssues(definition);
+      if (staleIssues.length > 0) {
+        const now = this.iso();
+        this.store.updateSession(sessionId, { status: "closed" }, now);
+        throw new AgentError("agent.stale_stageflow_tools", staleIssues[0]!.message, staleIssues);
+      }
       this.assertWithinLimits(definition, session);
       const now = this.iso();
       return this.store.transaction(() => {
+        if (input.resumeTurnId) {
+          const prior = this.store.getTurn(input.resumeTurnId);
+          if (prior && prior.sessionId === sessionId && prior.status === "running") {
+            const userMessage = this.store.listMessages(sessionId).find((m) => m.turnId === prior.id && m.role === "user");
+            if (userMessage) {
+              const history = this.store.listMessages(sessionId).filter((m) => m.id !== userMessage.id);
+              this.store.updateSession(sessionId, { status: "running" }, now);
+              return { session: this.store.getSession(sessionId)!, definition, turn: prior, history, userMessage };
+            }
+          }
+        }
         // A retry takes over the earlier turn's unanswered message instead of adding it a second time.
         const retried = input.resumeTurnId ? this.store.listMessages(sessionId).find((m) => m.turnId === input.resumeTurnId && m.role === "user") : undefined;
         const own = this.store.listMessages(sessionId).filter((m) => m.id !== retried?.id);
@@ -1309,8 +1356,21 @@ export class AgentService {
   private interrupted: string[] = [];
 
   recoverInterruptedTurns(): number {
-    this.interrupted = this.store.interruptedTurnIds();
-    return this.lifecycle.interruptedByRestart();
+    const ids = this.store.interruptedTurnIds();
+    const resumable: string[] = [];
+    let failed = 0;
+    for (const turnId of ids) {
+      const turn = this.store.getTurn(turnId);
+      const session = turn ? this.store.getSession(turn.sessionId) : undefined;
+      if (session?.source === "imessage" && session.sourceRef && session.threadKey) {
+        this.store.updateSession(session.id, { status: "open" }, this.iso());
+        resumable.push(turnId);
+        continue;
+      }
+      if (this.lifecycle.finish(turnId, { status: "failed", errorCode: "agent.host_restarted" })) failed += 1;
+    }
+    this.interrupted = resumable;
+    return failed;
   }
 
   /**
@@ -1326,6 +1386,15 @@ export class AgentService {
       if (!session || session.source !== "imessage" || !session.sourceRef || !session.threadKey) continue;
       const definition = await this.definitionAt(projectRoot, session.agentId, session.revision).catch(() => undefined);
       if (!definition?.limits.always_on || !definition.enabled) continue;
+      const stale = stageflowStaleIssues(definition);
+      if (stale.length > 0) {
+        this.lifecycle.finish(turnId, {
+          status: "failed",
+          errorCode: "agent.stale_stageflow_tools",
+          sessionStatus: "closed",
+        });
+        continue;
+      }
       const messages = this.store.listMessages(session.id).filter((m) => m.turnId === turnId);
       const user = messages.find((m) => m.role === "user");
       if (!user || messages.some((m) => m.role === "assistant")) continue;
@@ -1468,12 +1537,14 @@ export class AgentService {
         return { agentId: target.agentId, sessionId: existing.id, duplicate: true };
       }
       const definition = existing ? await this.effectiveDefinition(projectRoot, existing) : null;
+      const stalePinned = Boolean(definition && stageflowStaleIssues(definition).length > 0);
       // Roll onto a new session at a turn or time limit, unless the thread is over its cost cap for the last 24 hours.
       const rollOver = Boolean(
-        existing &&
-          definition &&
-          !this.threadCostBlocked(definition, existing) &&
-          this.turnOrTimeLimit(definition, existing) !== null,
+        stalePinned ||
+          (existing &&
+            definition &&
+            !this.threadCostBlocked(definition, existing) &&
+            this.turnOrTimeLimit(definition, existing) !== null),
       );
       if (existing && !rollOver) {
         return { agentId: target.agentId, sessionId: existing.id, duplicate: false };

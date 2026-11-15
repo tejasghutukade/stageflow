@@ -499,6 +499,8 @@ A grader reads the **conversation subject**, not the envelope. A grader type tha
 
 A call counts as called whatever its outcome, so an attempted `billing.refund` that was stubbed still breaks `must_not_call`. `args` checks the arguments of **every** call to that tool (`path` into the arguments, `op` as for `field`); a tool never called passes it vacuously, so pair it with `must_call`. A trailing `.*` matches a server prefix. When `must_call` or `must_not_call` is absent, the case's `expected.tools` and `expected.forbidden_tools` are used; write `[]` to opt out. With no rule at all for a case the grade is an error (`EVAL_CASE_MISSING_EXPECTED`) and the case is left out of that grader's statistics.
 
+`tool_mocks`, `must_call`, `must_not_call` and expected tool lists are keyed by **tool name only**, not by mode fields on consolidated Stageflow tools: a mock or grader on `start_run` applies to every `start_run` mode (pipeline, single-stage, rerun), and the same rule applies to Guide eval forbidden lists.
+
 **`conversation_check`.** Deterministic checks of the shape of the conversation: `max_turns` (user turns), `max_agent_questions_per_turn` (a question is a `?` followed by a space or the end of the text, outside code fences and URLs) and `final_reply` (a list of `field` checks applied to the last assistant message).
 
 **`goal_reached`.** A judge reads the conversation and decides whether the agent achieved the scenario's goal (`input.goal`, else `expected.outcome`). It does not trust the simulator's own "done" signal. Pass or fail only. Optional `judge` and `guidance`. Needs a judge model.

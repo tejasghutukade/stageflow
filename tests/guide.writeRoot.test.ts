@@ -21,38 +21,44 @@ describe("guideWriteRoot", () => {
 describe("placeGuideWriteArgs", () => {
   it("stores a new pipeline under pipelines/<id> and ignores the directory given", () => {
     expect(
-      placeGuideWriteArgs("create_pipeline", {
+      placeGuideWriteArgs("write_pipeline", {
+        mode: "create",
         id: "policy-check",
         directory: "/Volumes/work/policy-samples",
         project_root: "/tmp/elsewhere",
       }),
-    ).toEqual({ id: "policy-check", directory: "pipelines/policy-check" });
+    ).toEqual({ ok: true, args: { mode: "create", id: "policy-check", directory: "pipelines/policy-check" } });
   });
 
   it("points a missing pipeline path at that same folder", () => {
     expect(
       placeGuideWriteArgs(
-        "create_stage",
-        { path: "catalog/policy-check/policy-check.pipeline.yaml", id: "review" },
+        "write_stage",
+        {
+          mode: "create",
+          path: "catalog/policy-check/policy-check.pipeline.yaml",
+          id: "review",
+          system_prompt: "Do work.",
+        },
         () => false,
-      ).path,
+      ).args.path,
     ).toBe(guidePipelineFile("policy-check"));
   });
 
   it("keeps a relative path when that pipeline file is already saved", () => {
     expect(
       placeGuideWriteArgs(
-        "edit_pipeline",
-        { path: "policy-check/policy-check.pipeline.yaml" },
+        "write_pipeline",
+        { mode: "update", path: "policy-check/policy-check.pipeline.yaml", patch: { summary: "x" } },
         (rel) => rel === "policy-check/policy-check.pipeline.yaml",
-      ).path,
+      ).args.path,
     ).toBe("policy-check/policy-check.pipeline.yaml");
   });
 
   it("does not follow an absolute path even when a file is there", () => {
     const given = "/Volumes/work/policy-samples/policy-check.pipeline.yaml";
     expect(
-      placeGuideWriteArgs("create_stage", { path: given }, () => true).path,
+      placeGuideWriteArgs("write_stage", { mode: "create", path: given }, () => true).args.path,
     ).toBe(guidePipelineFile("policy-check"));
   });
 });

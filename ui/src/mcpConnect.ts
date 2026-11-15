@@ -6,11 +6,41 @@ export type LocationLike = {
   protocol: string;
 };
 
+/** Non-core toolsets in catalog order (must match `TOOLSETS` in the Host). */
+export const OPTIONAL_MCP_TOOLSET_IDS = [
+  "runs",
+  "catalog",
+  "agents",
+  "evals",
+  "functions",
+  "triggers",
+  "connections",
+  "memories",
+] as const;
+
+export const MCP_BARE_URL_NOTES =
+  "A URL with no toolsets query loads only the core tools. Reconnect the client after changing the URL; the tool list is fixed for the session.";
+
+export function mcpToolsetsQuery(selected: readonly string[]): string {
+  const pick = new Set(
+    selected.map((id) => id.trim().toLowerCase()).filter((id) => id && id !== "core"),
+  );
+  if (pick.size === 0) return "";
+  if (pick.size === OPTIONAL_MCP_TOOLSET_IDS.length && OPTIONAL_MCP_TOOLSET_IDS.every((id) => pick.has(id))) {
+    return "?toolsets=all";
+  }
+  return `?toolsets=${[...pick].sort().join(",")}`;
+}
+
 export function mcpEndpointUrl(
   location: LocationLike,
-  options: { viteDev?: boolean } = {},
+  options: { viteDev?: boolean; toolsets?: readonly string[] } = {},
 ): string {
-  if (options.viteDev) return DEFAULT_MCP_URL;
+  if (options.viteDev) {
+    const base = DEFAULT_MCP_URL;
+    const query = options.toolsets ? mcpToolsetsQuery(options.toolsets) : "";
+    return `${base}${query}`;
+  }
   let host = location.hostname;
   if (host === "localhost" || host === "::1" || host === "[::1]") {
     host = "127.0.0.1";
@@ -18,7 +48,8 @@ export function mcpEndpointUrl(
     host = `[${host}]`;
   }
   const origin = `${location.protocol}//${host}${location.port ? `:${location.port}` : ""}`;
-  return `${origin}/mcp`;
+  const query = options.toolsets ? mcpToolsetsQuery(options.toolsets) : "";
+  return `${origin}/mcp${query}`;
 }
 
 export function cursorMcpConfigJson(url: string): string {

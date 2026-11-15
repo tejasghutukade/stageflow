@@ -53,4 +53,4 @@ Walkthrough: [`examples/generic-fan-in/`](../examples/generic-fan-in/). Fixture:
 
 ## Capacity
 
-The rail footer can show active run count against the soft maximum (the same data as MCP `get_health`). Change the limit in [Settings → Concurrency](console-settings.md#concurrency).
+The rail footer can show active run count against the soft maximum (the same data as MCP `list_catalog` with `kind: health`). Change the limit in [Settings → Concurrency](console-settings.md#concurrency).

@@ -474,4 +474,27 @@ describe("validateEval: scenarios", () => {
     const findings = await validate(evalYaml({ defaults: "  repeats: 10" }), { datasetReport });
     expect(find(findings, "eval.large_run")?.severity).toBe("warning");
   });
+
+  it("rejects renamed Stageflow grant ids in graders", async () => {
+    const graders = [
+      "graders:",
+      "  - id: bounds",
+      "    type: tool_calls",
+      "    must_not_call:",
+      "      - stageflow.delete_run",
+    ].join("\n");
+    const findings = await validate(evalYaml({ graders }));
+    const hit = find(findings, "eval.stageflow_tool_unknown");
+    expect(hit?.severity).toBe("error");
+    expect(hit?.message).toContain("delete_runs");
+  });
+
+  it("warns when a mock names a widened consolidated tool", async () => {
+    await writeFile(
+      path.join(fx.project, "datasets", "support-scenarios.dataset.jsonl"),
+      `${JSON.stringify({ id: "m1", input: { script: ["hi"], tool_mocks: { "stageflow.get_run": { result: { ok: true } } } } })}\n`,
+    );
+    const findings = await validate(evalYaml({ conversation: "  tools: mocked" }), { datasetReport: await report() });
+    expect(find(findings, "eval.stageflow_tool_widened")?.message).toContain("list_runs");
+  });
 });

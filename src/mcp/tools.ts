@@ -22,8 +22,34 @@ import { withToolDefaults } from "./defineTool.js";
 
 export type { McpToolDeps };
 
-export function registerMcpTools(rawServer: McpServer, deps: McpToolDeps): void {
-  const server = withToolDefaults(rawServer);
+export type RegisterMcpToolsOptions = {
+  selectedTools?: readonly string[];
+};
+
+function serverWithToolSelection(rawServer: McpServer, selectedTools: readonly string[]): McpServer {
+  const allowed = new Set(selectedTools);
+  return new Proxy(rawServer, {
+    get(target, prop, receiver) {
+      if (prop === "registerTool") {
+        return (name: string, config: unknown, handler: unknown) => {
+          if (!allowed.has(name)) return undefined;
+          return (target.registerTool as (n: string, c: unknown, h: unknown) => unknown)(name, config, handler);
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as McpServer;
+}
+
+export function registerMcpTools(
+  rawServer: McpServer,
+  deps: McpToolDeps,
+  options?: RegisterMcpToolsOptions,
+): void {
+  const base =
+    options?.selectedTools !== undefined ? serverWithToolSelection(rawServer, options.selectedTools) : rawServer;
+  const server = withToolDefaults(base);
   const { store } = deps;
 
   registerGetStartedTool(server, deps);
