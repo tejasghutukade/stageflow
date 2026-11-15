@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, readdirSync, renameSync, rmSync, statSync, chmodSync } from "node:fs";
+import { createReadStream, createWriteStream, type Stats, mkdirSync, readFileSync, renameSync, rmSync, statSync, chmodSync } from "node:fs";
+import { lstat, readdir, readlink, stat } from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -15,6 +16,8 @@ import { ARCHIVE_RULES, isDeniedRunPath, ruleFor, ruleMentions, type ArchiveRule
 import { TarStream } from "./tarStream.js";
 
 export const ARCHIVE_VERSION = 1;
+/** First member of every archive: lets a restore recognise one from its first header, without reading the whole file. */
+export const ARCHIVE_MARKER = ".stageflow-archive";
 
 export type ArchiveErrorCode = "archive_insufficient_space" | "archive_out_denied" | "archive_verify_failed";
 
@@ -93,61 +96,80 @@ function describe(rule: ArchiveRule, options: { includeSecrets: boolean; include
   return "include";
 }
 
-/** Walks the data directory under the inventory rules and returns what to copy and what is left out, with a reason. */
-export function planArchive(homeDir: string, options: { includeSecrets: boolean; includeA2a: boolean }): { entries: PlannedEntry[]; leftOut: ArchiveLeftOut[] } {
+const gone = (error: unknown): boolean => (error as NodeJS.ErrnoException).code === "ENOENT";
+
+/** lstat for a walk over a live directory: an entry that vanished since readdir listed it is skipped. */
+async function lstatOrGone(file: string): Promise<Stats | undefined> {
+  try {
+    return await lstat(file);
+  } catch (error) {
+    if (gone(error)) return undefined;
+    throw error;
+  }
+}
+
+async function listDir(dir: string): Promise<string[]> {
+  try {
+    return (await readdir(dir)).sort();
+  } catch (error) {
+    if (gone(error)) return [];
+    throw error;
+  }
+}
+
+/**
+ * Walks the data directory under the inventory rules and returns what to copy and what is left out, with a reason. The
+ * walk is asynchronous, so a large tree never holds the Host's event loop; entries that vanish while it runs are skipped.
+ */
+export async function planArchive(homeDir: string, options: { includeSecrets: boolean; includeA2a: boolean }): Promise<{ entries: PlannedEntry[]; leftOut: ArchiveLeftOut[] }> {
   const entries: PlannedEntry[] = [];
   const leftOut: ArchiveLeftOut[] = [];
-  const groups = new Map<string, { rule: ArchiveRule; relative: string }[]>();
 
-  const visit = (relative: string, absolute: string, depth: number): void => {
+  const visit = async (relative: string, absolute: string): Promise<void> => {
     if (relative === "runs" || relative.startsWith("runs/")) return;
-    const stat = lstatSync(absolute);
     if (SIDECAR.test(relative) || LEFTOVER.test(relative)) return;
-    const rule = ruleFor(stat.isDirectory() ? `${relative}/` : relative) ?? ruleFor(relative);
+    const found = await lstatOrGone(absolute);
+    if (!found) return;
+    const rule = ruleFor(found.isDirectory() ? `${relative}/` : relative) ?? ruleFor(relative);
     if (rule === undefined) {
-      if (stat.isDirectory() && ruleMentions(relative)) {
-        for (const child of readdirSync(absolute).sort()) visit(`${relative}/${child}`, path.join(absolute, child), depth + 1);
+      if (found.isDirectory() && ruleMentions(relative)) {
+        for (const child of await listDir(absolute)) await visit(`${relative}/${child}`, path.join(absolute, child));
         return;
       }
-      leftOut.push({ path: stat.isDirectory() ? `${relative}/` : relative, reason: "not in the archive inventory" });
+      leftOut.push({ path: found.isDirectory() ? `${relative}/` : relative, reason: "not in the archive inventory" });
       return;
-    }
-    if (rule.group !== undefined) {
-      const list = groups.get(rule.group) ?? [];
-      list.push({ rule, relative });
-      groups.set(rule.group, list);
     }
     const decision = describe(rule, options);
     if (decision !== "include") {
-      leftOut.push({ path: stat.isDirectory() ? `${relative}/` : relative, reason: decision.reason });
+      leftOut.push({ path: found.isDirectory() ? `${relative}/` : relative, reason: decision.reason });
       return;
     }
-    if (stat.isSymbolicLink()) {
-      entries.push({ name: relative, kind: "symlink", target: readlinkSync(absolute), mode: stat.mode, mtime: stat.mtimeMs / 1000 });
-    } else if (stat.isDirectory()) {
-      const children = readdirSync(absolute).sort();
-      if (children.length === 0) entries.push({ name: relative, kind: "directory", mode: stat.mode, mtime: stat.mtimeMs / 1000 });
-      for (const child of children) visit(`${relative}/${child}`, path.join(absolute, child), depth + 1);
-    } else if (stat.isFile()) {
+    if (found.isSymbolicLink()) {
+      entries.push({ name: relative, kind: "symlink", target: await readlink(absolute), mode: found.mode, mtime: found.mtimeMs / 1000 });
+    } else if (found.isDirectory()) {
+      const children = await listDir(absolute);
+      if (children.length === 0) entries.push({ name: relative, kind: "directory", mode: found.mode, mtime: found.mtimeMs / 1000 });
+      for (const child of children) await visit(`${relative}/${child}`, path.join(absolute, child));
+    } else if (found.isFile()) {
       if (rule.kind === "database") entries.push({ name: relative, kind: "database", source: absolute });
-      else entries.push({ name: relative, kind: "file", source: absolute, size: stat.size, mode: stat.mode, mtime: stat.mtimeMs / 1000 });
+      else entries.push({ name: relative, kind: "file", source: absolute, size: found.size, mode: found.mode, mtime: found.mtimeMs / 1000 });
     }
   };
 
-  for (const child of readdirSync(homeDir).sort()) visit(child, path.join(homeDir, child), 1);
+  for (const child of await listDir(homeDir)) await visit(child, path.join(homeDir, child));
 
   // Files of one group (the MCP sign-in store and its key) go in together or not at all.
   const pairedGroups = new Set(ARCHIVE_RULES.filter((rule) => rule.group).map((rule) => rule.group!));
   for (const group of pairedGroups) {
     const rules = ARCHIVE_RULES.filter((rule) => rule.group === group);
-    const onDisk = rules.filter((rule) => existsSync(path.join(homeDir, rule.path)));
+    const onDisk: ArchiveRule[] = [];
+    for (const rule of rules) if (await lstatOrGone(path.join(homeDir, rule.path))) onDisk.push(rule);
     if (onDisk.length === rules.length) continue;
     for (const rule of onDisk) {
       const index = entries.findIndex((entry) => entry.name === rule.path);
       if (index >= 0) {
         entries.splice(index, 1);
-        const existing = leftOut.findIndex((item) => item.path === rule.path);
-        if (existing < 0) leftOut.push({ path: rule.path, reason: "left out because its pair is missing" });
+        if (!leftOut.some((item) => item.path === rule.path)) leftOut.push({ path: rule.path, reason: "left out because its pair is missing" });
       }
     }
   }
@@ -157,24 +179,26 @@ export function planArchive(homeDir: string, options: { includeSecrets: boolean;
 async function planRuns(store: BuildArchiveOptions["store"], homeDir: string, entries: PlannedEntry[], leftOut: ArchiveLeftOut[]): Promise<void> {
   for (const run of await store.listRuns()) {
     const workspace = store.getWorkspaceDir(run.run_id);
-    if (!existsSync(workspace) || !statSync(workspace).isDirectory()) continue;
+    const root = await lstatOrGone(workspace);
+    if (!root || !root.isDirectory()) continue;
     const base = posix(path.relative(homeDir, workspace));
     if (base.startsWith("..") || path.isAbsolute(base)) continue;
-    const walk = (relative: string, absolute: string): void => {
-      const stat = lstatSync(absolute);
+    const walk = async (relative: string, absolute: string): Promise<void> => {
+      const found = await lstatOrGone(absolute);
+      if (!found) return;
       const name = `${base}/${relative}`;
       if (isDeniedRunPath(relative)) {
-        leftOut.push({ path: stat.isDirectory() ? `${name}/` : name, reason: "agent files, credentials and dependency or checkout folders are never copied from a run" });
+        leftOut.push({ path: found.isDirectory() ? `${name}/` : name, reason: "agent files, credentials and dependency or checkout folders are never copied from a run" });
         return;
       }
-      if (stat.isSymbolicLink()) entries.push({ name, kind: "symlink", target: readlinkSync(absolute), mode: stat.mode, mtime: stat.mtimeMs / 1000 });
-      else if (stat.isDirectory()) {
-        const children = readdirSync(absolute).sort();
-        if (children.length === 0) entries.push({ name, kind: "directory", mode: stat.mode, mtime: stat.mtimeMs / 1000 });
-        for (const child of children) walk(`${relative}/${child}`, path.join(absolute, child));
-      } else if (stat.isFile()) entries.push({ name, kind: "file", source: absolute, size: stat.size, mode: stat.mode, mtime: stat.mtimeMs / 1000 });
+      if (found.isSymbolicLink()) entries.push({ name, kind: "symlink", target: await readlink(absolute), mode: found.mode, mtime: found.mtimeMs / 1000 });
+      else if (found.isDirectory()) {
+        const children = await listDir(absolute);
+        if (children.length === 0) entries.push({ name, kind: "directory", mode: found.mode, mtime: found.mtimeMs / 1000 });
+        for (const child of children) await walk(`${relative}/${child}`, path.join(absolute, child));
+      } else if (found.isFile()) entries.push({ name, kind: "file", source: absolute, size: found.size, mode: found.mode, mtime: found.mtimeMs / 1000 });
     };
-    for (const child of readdirSync(workspace).sort()) walk(child, path.join(workspace, child));
+    for (const child of await listDir(workspace)) await walk(child, path.join(workspace, child));
   }
 }
 
@@ -211,10 +235,11 @@ export async function buildArchive(options: BuildArchiveOptions): Promise<Archiv
   }
   mkdirSync(path.dirname(outPath), { recursive: true });
 
-  const { entries, leftOut } = planArchive(homeDir, { includeSecrets, includeA2a });
+  const { entries, leftOut } = await planArchive(homeDir, { includeSecrets, includeA2a });
   await planRuns(options.store, homeDir, entries, leftOut);
 
-  const estimate = entries.reduce((sum, entry) => sum + (entry.kind === "file" ? entry.size : entry.kind === "database" ? statSync(entry.source).size : 0), 0);
+  let estimate = 0;
+  for (const entry of entries) estimate += entry.kind === "file" ? entry.size : entry.kind === "database" ? (await stat(entry.source)).size : 0;
   const free = await (options.freeSpace ?? readFilesystemSize)(path.dirname(outPath));
   const needed = estimate + FREE_SPACE_MARGIN_BYTES;
   if (free.freeBytes < needed) {
@@ -232,6 +257,7 @@ export async function buildArchive(options: BuildArchiveOptions): Promise<Archiv
     const files: ArchiveFileEntry[] = [];
     let schemaVersion = 0;
 
+    await tar.addBuffer(ARCHIVE_MARKER, Buffer.from(JSON.stringify({ archive_version: ARCHIVE_VERSION, stageflow_version: PACKAGE_VERSION })), { mode: 0o600, mtimeSeconds: now.getTime() / 1000 });
     for (const entry of entries) {
       if (entry.kind === "database") {
         const dest = path.join(staging, `${files.length}.db`);
@@ -243,13 +269,18 @@ export async function buildArchive(options: BuildArchiveOptions): Promise<Archiv
         } else {
           version = vacuumInto(entry.source, dest);
         }
-        const size = statSync(dest).size;
-        const result = await tar.addFile(entry.name, dest, size, { mode: 0o600, mtimeSeconds: now.getTime() / 1000 });
+        const result = await tar.addFile(entry.name, dest, { mode: 0o600, mtimeSeconds: now.getTime() / 1000 });
         files.push({ path: entry.name, kind: "file", size: result.size, sha256: result.sha256 });
         rmSync(dest, { force: true });
       } else if (entry.kind === "file") {
-        const result = await tar.addFile(entry.name, entry.source, entry.size, { mode: entry.mode, mtimeSeconds: entry.mtime });
-        files.push({ path: entry.name, kind: "file", size: result.size, sha256: result.sha256 });
+        try {
+          const result = await tar.addFile(entry.name, entry.source, { mode: entry.mode, mtimeSeconds: entry.mtime });
+          files.push({ path: entry.name, kind: "file", size: result.size, sha256: result.sha256 });
+        } catch (error) {
+          // The Host is live: a run purged or a file replaced since the walk is skipped, not fatal. Nothing was written for it.
+          if (!gone(error)) throw error;
+          leftOut.push({ path: entry.name, reason: "removed while the archive was being built" });
+        }
       } else if (entry.kind === "symlink") {
         await tar.addSymlink(entry.name, entry.target, { mode: entry.mode, mtimeSeconds: entry.mtime });
         files.push({ path: entry.name, kind: "symlink", size: 0, link: entry.target });

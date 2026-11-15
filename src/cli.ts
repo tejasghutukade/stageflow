@@ -24,6 +24,7 @@ import {
   BACKUP_USAGE,
   runBackupCommand,
 } from "./cli/backupCommand.js";
+import { ARCHIVE_USAGE, runArchiveCommand } from "./cli/archiveCommand.js";
 import {
   RESTORE_USAGE,
   runRestoreCommand,
@@ -104,6 +105,7 @@ const COMMAND_USAGE: Record<string, string> = {
   "export-run": EXPORT_RUN_USAGE,
   "debug-run": DEBUG_RUN_USAGE,
   backup: BACKUP_USAGE,
+  archive: ARCHIVE_USAGE,
   restore: RESTORE_USAGE,
   export: EXPORT_ALL_USAGE,
   runs: RUNS_USAGE,
@@ -130,6 +132,7 @@ const USAGE = `Usage:
   sf export-run --run <runId> [--from <sf-run.json>] [--out <file>]
   sf debug-run <runId> [--out <file>]
   sf backup [--out <file>] [--db-only] [--no-credentials] [--include-a2a-artifacts] [--json]
+  sf archive [--out <file>] [--include-secrets] [--include-a2a-artifacts] [--json]
   sf restore <file> [--force] [--json]
   sf export --all [--status <status>] [--since <iso>] [--pipeline <id-or-path>] [--out <file>]
   sf runs list [--status created|running|succeeded|failed] [--since <iso>] [--pipeline <id-or-path>] [--json]
@@ -251,6 +254,7 @@ function parseArgs(argv: string[]): {
     command === "export-run" ||
     command === "debug-run" ||
     command === "backup" ||
+    command === "archive" ||
     command === "restore" ||
     command === "export" ||
     command === "runs" ||
@@ -618,6 +622,10 @@ export async function main(argv: string[]): Promise<number> {
       return runBackupCommand(argv.slice(3), {
         cwd: ctx.invocationCwd,
       });
+    }
+
+    if (parsed.command === "archive") {
+      return runArchiveCommand(argv.slice(3));
     }
 
     if (parsed.command === "restore") {

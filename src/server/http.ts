@@ -214,6 +214,7 @@ import { handleIdentityRoutes } from "./identityRoutes.js";
 import { handleIdentitySetupRoutes } from "./identitySetupRoutes.js";
 import { isListableExtension, listCatalogFiles } from "../config/listCatalogFiles.js";
 import { handleA2aRoutes } from "./a2aRoutes.js";
+import { handleArchiveRoutes } from "./archiveRoutes.js";
 import { resolveHostInfo } from "./hostInfo.js";
 import { handleChannelRoutes } from "./channelRoutes.js";
 import { handleBrowserProfileRoutes } from "./browserProfileRoutes.js";
@@ -823,6 +824,19 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
             throw err;
           }
           return true;
+        }
+
+        if (pathname === "/api/archive" || pathname.startsWith("/api/archive/")) {
+          const callerId = callerIdFromRequestAuth();
+          const audit = (outcome: "ok" | "error", errorCode?: string): void =>
+            writeAudit(auditLog, {
+              caller_id: callerId,
+              surface: getRequestAuth()?.surface ?? "rest",
+              action: "archive",
+              outcome,
+              ...(errorCode !== undefined ? { error_code: errorCode } : {}),
+            });
+          if (await handleArchiveRoutes(req, method, pathname, { store, homeDir: globalStageflowHome(), audit }, res, json)) return true;
         }
 
         if (method === "POST" && pathname === "/api/restore") {

@@ -1,6 +1,6 @@
 # Setup
 
-Detail for the checklist in `SKILL.md`. Run the steps in order. Skip a step only when its check already passes. Confirm a flag with `sf <command> --help` before you rely on it. This file was checked against Stageflow 0.57.0. In this release `npm run dev -- --version` prints `0.64.1` (`npm view stageflow version` is the same once it is published).
+Detail for the checklist in `SKILL.md`. Run the steps in order. Skip a step only when its check already passes. Confirm a flag with `sf <command> --help` before you rely on it. This file was checked against Stageflow 0.57.0. In this release `npm run dev -- --version` prints `0.65.0` (`npm view stageflow version` is the same once it is published).
 
 ## Contents
 
@@ -104,11 +104,12 @@ Back up before an upgrade when the store already has runs you need, and before `
 ```bash
 sf backup [--out <file>] [--db-only] [--no-credentials] [--include-a2a-artifacts] [--json]
 sf restore <file> [--force] [--json]
+sf archive [--out <file>] [--include-secrets] [--include-a2a-artifacts] [--json]
 ```
 
 The default archive includes provider credentials, mode `0600`, and is a secret. Default `--out` is under `$STAGEFLOW_HOME/backups/`. `--no-credentials` leaves them out. `--db-only` is the database without the rest of the home.
 
-`sf export --all` is a run dump, not a backup.
+`sf archive` is the complete copy of what the Host keeps (catalog, memories, connections, MCP servers, transcripts, identity, run files), with secrets only on `--include-secrets`; `sf restore` accepts it too. `sf export --all` is a run dump, not a backup.
 
 `sf restore` refuses while a Host answers `/livez` (`restore_host_live`). It never starts a Host. It moves the previous `state.db` aside. Stop `sf ui` or `sf mcp` first, including a Host that autostart left behind. Confirm with the user before restore. It is destructive.
 

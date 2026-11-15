@@ -44,7 +44,7 @@ State what will happen in one or two lines and wait for a yes.
 | `save_trigger` with `mode: create` or `update`, or `enabled_only` | An enabled schedule or event trigger starts runs by itself. |
 | `sf a2a ...` caller, publication or enable changes | Exposes pipelines to outside callers. |
 | `decide_agent_action` with `action: approve` | Lets an agent perform the action it asked about. Show the pending action first. |
-| `sf backup`, `sf restore` | Backups can hold provider credentials; restore replaces state. |
+| `sf backup`, `sf archive`, `sf restore` | Backups can hold provider credentials, an archive can with `--include-secrets`; restore replaces state. |
 
 ## 1. Reach Stageflow
 

@@ -39,7 +39,8 @@ export type RestoreErrorCode =
   | "restore_version_mismatch"
   | "restore_unsafe_member"
   | "restore_failed"
-  | "restore_not_found";
+  | "restore_not_found"
+  | "restore_insufficient_space";
 
 export class RestoreError extends Error {
   readonly code: RestoreErrorCode;
@@ -112,6 +113,11 @@ export type RestoreMarker = {
   staged_at: string;
   drain_deadline?: string;
 };
+
+/** `path.extname` of `x.tar.gz` is `.gz`, which the restore would then read as a bare database. */
+function stagedExtension(file: string): string {
+  return /\.tar\.gz$/i.test(file) ? ".tar.gz" : path.extname(file) || ".tar.gz";
+}
 
 function majorVersion(version: string): string {
   return version.split(".")[0] ?? version;
@@ -297,12 +303,19 @@ export function withExclusiveStoreLock<T>(
   }
 }
 
-function moveAsideTriplet(homeDir: string, stamp: string): void {
+/** Moves the store aside and returns the function that moves it back. */
+function moveAsideTriplet(homeDir: string, stamp: string): () => void {
+  const moved: Array<[string, string]> = [];
   for (const name of ["state.db", "state.db-wal", "state.db-shm"] as const) {
     const from = path.join(homeDir, name);
     if (!existsSync(from)) continue;
-    renameSync(from, `${from}.pre-restore-${stamp}`);
+    const to = `${from}.pre-restore-${stamp}`;
+    renameSync(from, to);
+    moved.push([from, to]);
   }
+  return () => {
+    for (const [from, to] of moved.reverse()) renameSync(to, from);
+  };
 }
 
 function assertNoSidecars(dbPath: string): void {
@@ -323,6 +336,12 @@ export type ApplyRestoreResult = {
   schema_version: number;
   missing_a2a_artifact_rows: number;
   pre_restore_stamp: string;
+  /** Set when the file was an `sf archive` archive rather than a backup. */
+  kind?: "archive";
+  files_restored?: number;
+  links_restored?: number;
+  links_skipped?: string[];
+  secrets_restored?: number;
 };
 
 export async function applyRestoreArchive(options: {
@@ -343,6 +362,37 @@ export async function applyRestoreArchive(options: {
       throw new RestoreError(`restore_host_live: ${err.message}`, "restore_host_live");
     }
     throw err;
+  }
+
+  const archives = await import("../archive/restoreArchive.js");
+  if (await archives.detectArchive(options.archivePath)) {
+    const stagingDir = await mkdtemp(path.join(tmpdir(), "sf-restore-"));
+    try {
+      const staged = await archives.stageArchive(options.archivePath, stagingDir, { force: options.force === true });
+      const restoreSecrets = options.restoreCredentials !== false;
+      await archives.preflightStagedArchive({ homeDir, staged, restoreSecrets });
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      let applied: ReturnType<typeof archives.applyStagedArchive> | undefined;
+      withExclusiveStoreLock(homeDir, () => {
+        applied = archives.applyStagedArchive({ homeDir, staged, stamp, restoreSecrets, moveAsideStore: () => moveAsideTriplet(homeDir, stamp) });
+      });
+      try {
+        assertNoSidecars(path.join(homeDir, "state.db"));
+        const check = new Database(path.join(homeDir, "state.db"));
+        try {
+          assertStoreQuickCheck(check);
+        } finally {
+          check.close();
+        }
+      } catch (error) {
+        applied!.rollback();
+        throw error;
+      }
+      return { schema_version: staged.schemaVersion, missing_a2a_artifact_rows: 0, pre_restore_stamp: stamp, kind: "archive", ...applied!.result };
+    } finally {
+      hostLock.release();
+      await rm(stagingDir, { recursive: true, force: true });
+    }
   }
 
   const verified = await extractVerifiedArchive(options.archivePath).catch((err: unknown) => {
@@ -430,23 +480,30 @@ export async function stageRestoreForBoot(options: {
     );
   }
 
-  const verified = await extractVerifiedArchive(options.archivePath);
-  await rm(verified.stagingDir, { recursive: true, force: true });
+  const archives = await import("../archive/restoreArchive.js");
+  if (await archives.detectArchive(options.archivePath)) {
+    // One pass: versions, names and every checksum, writing nothing. The files are unpacked once, at the next boot.
+    await archives.verifyArchive(options.archivePath);
+  } else {
+    const verified = await extractVerifiedArchive(options.archivePath);
+    await rm(verified.stagingDir, { recursive: true, force: true });
 
-  if (
-    verified.manifest?.stageflow_version &&
-    majorVersion(verified.manifest.stageflow_version) !==
-      majorVersion(PACKAGE_VERSION)
-  ) {
-    throw new RestoreError(
-      `restore_version_mismatch: archive ${verified.manifest.stageflow_version} vs binary ${PACKAGE_VERSION}`,
-      "restore_version_mismatch",
-    );
+    if (
+      verified.manifest?.stageflow_version &&
+      majorVersion(verified.manifest.stageflow_version) !==
+        majorVersion(PACKAGE_VERSION)
+    ) {
+      throw new RestoreError(
+        `restore_version_mismatch: archive ${verified.manifest.stageflow_version} vs binary ${PACKAGE_VERSION}`,
+        "restore_version_mismatch",
+      );
+    }
+
   }
 
   const pending = restorePendingDir(homeDir);
   mkdirSync(pending, { recursive: true });
-  const basename = `staged-${Date.now()}${path.extname(options.archivePath) || ".tar.gz"}`;
+  const basename = `staged-${Date.now()}${stagedExtension(options.archivePath)}`;
   const stagedPath = path.join(pending, basename);
   copyFileSync(options.archivePath, stagedPath);
 

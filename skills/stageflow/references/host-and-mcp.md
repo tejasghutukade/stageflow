@@ -193,4 +193,4 @@ Use MCP or HTTP, with a drive token, when any of these is true:
 - The Host binds a non-default port and `STAGEFLOW_SERVICE_PORT` is not exported in this shell.
 - You need a tool with no `sf` verb: connections, memories, creating an agent, writing eval files, checkout diffs.
 
-CLI-only work still needs a shell or `docker exec`: `sf init`, `sf doctor`, `sf providers login`, `sf graph`, `sf migrate-yaml`, `sf backup`, `sf restore`, `sf browser`, `sf eval engine install`.
+CLI-only work still needs a shell or `docker exec`: `sf init`, `sf doctor`, `sf providers login`, `sf graph`, `sf migrate-yaml`, `sf backup`, `sf archive`, `sf restore`, `sf browser`, `sf eval engine install`.

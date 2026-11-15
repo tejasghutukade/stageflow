@@ -1,11 +1,12 @@
 # Backup, export, retention, and cost
 
-Snapshot the Host's store, copy run records out, and read what a run cost. Confirm before `sf backup` and `sf restore`. A default backup can hold provider credentials. A restore replaces the store.
+Snapshot the Host's store, copy run records out, and read what a run cost. Confirm before `sf backup`, `sf archive` and `sf restore`. A default backup can hold provider credentials, and an archive made with `--include-secrets` holds them too. A restore replaces the store.
 
 ## Contents
 
 - [Backup](#backup)
 - [Restore](#restore)
+- [Archive](#archive)
 - [Export](#export)
 - [Retention](#retention)
 - [Cost](#cost)
@@ -39,6 +40,20 @@ It probes `GET /livez`. If that returns 200 and JSON, the command exits `1` with
 With the Host still up, do not use the CLI. `POST /api/restore` with `{ "backup": "<name under backups/>" }` stages the archive, returns 202 `{ "ok": true, "staged", "drain_deadline" }`, and drains the Host. The next boot applies it. `path` is accepted as an alias of `backup`. This route does not take an arbitrary filesystem path outside the backups directory.
 
 An export stream is not a backup. `sf restore` will not apply it.
+
+## Archive
+
+`sf archive` writes one tar.gz of everything the Host keeps: the run store, settings, the workspace catalog, memories, connections, MCP servers, agent transcripts, Workshop drafts, identity and run files. `sf backup` covers only the run store, so use the archive when the person wants a complete copy they own.
+
+```
+sf archive [--out <file>] [--include-secrets] [--include-a2a-artifacts] [--json]
+```
+
+Secrets (provider credentials, channel and MCP secrets) are left out unless `--include-secrets` is passed. Do not pass it without the person's say-so, and treat an archive made with it as a secret: `contains_secrets` is `true` in the output. `manifest.json` is the last member and lists every file with its SHA-256 and every path left out with the reason. The default `--out` is under `$STAGEFLOW_HOME/backups/`, mode `0600`.
+
+REST, with the Host up and a drive token: `POST /api/archive` with optional `include_secrets` and `include_a2a_artifacts` answers `{ name, bytes, sha256, file_count, left_out_count, contains_secrets, archive_version, stageflow_version, created_at }`; `GET /api/archive/<name>` downloads it. There is no `out` field and no MCP tool.
+
+`sf restore` accepts an archive as well as a backup. It checks every file against the manifest first, keeps replaced files as `<name>.pre-restore-<ISO>`, restores secrets only if the archive has them, and refuses an archive from a newer Stageflow minor version. The result JSON adds `kind: "archive"`, `files_restored`, `links_restored`, `links_skipped` and `secrets_restored`.
 
 ## Export
 
