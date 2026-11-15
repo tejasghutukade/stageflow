@@ -50,6 +50,7 @@ describe("stageflow groups", () => {
         { name: "answer_gate", grantId: "stageflow.answer_gate", risk: "write" as const, description: "", operatorOnly: true },
       ] },
     ],
+    toolsets: [],
   };
 
   it("leaves operator-only tools and groups out of what an agent can pick", () => {

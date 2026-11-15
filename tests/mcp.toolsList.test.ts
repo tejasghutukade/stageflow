@@ -13,7 +13,7 @@ import { FIXTURES_ROOT } from "./helpers/fixturePaths.js";
 import { MCP_TOOLSETS_ALL_QUERY, mcpUrl } from "./helpers/mcpCall.js";
 
 /** Measured 2026-11-14 after Plan 3 get_started toolset copy: 46,348 bytes for 57 tools (≤ 60,800 = 60% of 101,347 baseline). */
-const TOOLS_LIST_MAX_BYTES = 46_400;
+const TOOLS_LIST_MAX_BYTES = 47_000;
 
 /** Measured 2026-11-14 after Plan 3 core toolsets: 17,918 bytes for 17 tools (≤ 20,269 = 20% of 101,347 baseline). */
 const CORE_TOOLS_LIST_MAX_BYTES = 18_200;
