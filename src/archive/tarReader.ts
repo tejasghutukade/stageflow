@@ -92,21 +92,38 @@ export async function readTarGz(
   const source = createGunzip();
   raw.on("error", (error) => source.destroy(error));
   raw.pipe(source);
-  const reader = new ChunkReader(source[Symbol.asyncIterator]() as AsyncIterator<Buffer>);
+  const iterator = source[Symbol.asyncIterator]() as AsyncIterator<Buffer>;
+  try {
+    await walkTar(new ChunkReader(iterator), onEntry);
+  } finally {
+    // A check that throws mid-archive, or a caller that stops early, must not leave the file open.
+    await iterator.return?.().catch(() => undefined);
+    source.destroy();
+    raw.destroy();
+  }
+}
+
+async function walkTar(
+  reader: ChunkReader,
+  onEntry: (entry: TarEntry, data: AsyncIterable<Buffer>) => Promise<void>,
+): Promise<void> {
   let pax: Record<string, string> = {};
   for (;;) {
     const header = await reader.read(BLOCK);
     if (header.length < BLOCK || header.every((byte) => byte === 0)) return;
     const typeflag = String.fromCharCode(header[156] || 0x30);
-    const size = parseOctal(header.subarray(124, 136));
-    const padding = (BLOCK - (size % BLOCK)) % BLOCK;
+    const headerSize = parseOctal(header.subarray(124, 136));
     if (typeflag === "x" || typeflag === "g") {
-      const body = await reader.read(size);
-      if (body.length < size) throw new Error("archive ended inside a header");
+      const padding = (BLOCK - (headerSize % BLOCK)) % BLOCK;
+      const body = await reader.read(headerSize);
+      if (body.length < headerSize) throw new Error("archive ended inside a header");
       await reader.skip(padding);
       if (typeflag === "x") pax = { ...pax, ...parsePax(body) };
       continue;
     }
+    const paxSize = pax.size !== undefined ? Number(pax.size) : undefined;
+    const size = paxSize !== undefined && Number.isSafeInteger(paxSize) && paxSize >= 0 ? paxSize : headerSize;
+    const padding = (BLOCK - (size % BLOCK)) % BLOCK;
     const prefix = cString(header.subarray(345, 500));
     const name = pax.path ?? (prefix ? `${prefix}/${cString(header.subarray(0, 100))}` : cString(header.subarray(0, 100)));
     const linkName = pax.linkpath ?? cString(header.subarray(157, 257));

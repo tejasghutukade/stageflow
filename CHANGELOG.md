@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docs and skills explain when to use `sf backup`, `sf archive` or `sf export` (a comparison table in the data-directory page), and the data-directory and Docker tables point to `sf archive` for the files `sf backup` leaves out.
 
 ### Fixed
+- Archive restore no longer risks a half-restored data directory: destinations are checked before anything moves, the store is replaced last, and a failure puts every moved file back.
+- Archives can hold files of 8 GiB or more (the size goes in a PAX record), skip files that vanish while a live Host is archived, are checked as a whole (links and folders against the manifest), and are walked without blocking the Host. Restoring unpacks an archive once instead of three to six times.
 - Staging a `.tar.gz` backup through `POST /api/restore` stored it with a `.gz` extension, so the restore at the next boot read it as a bare database and failed. It keeps `.tar.gz` now.
 
 ## [0.64.1] - 2026-11-15

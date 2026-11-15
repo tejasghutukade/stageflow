@@ -303,12 +303,19 @@ export function withExclusiveStoreLock<T>(
   }
 }
 
-function moveAsideTriplet(homeDir: string, stamp: string): void {
+/** Moves the store aside and returns the function that moves it back. */
+function moveAsideTriplet(homeDir: string, stamp: string): () => void {
+  const moved: Array<[string, string]> = [];
   for (const name of ["state.db", "state.db-wal", "state.db-shm"] as const) {
     const from = path.join(homeDir, name);
     if (!existsSync(from)) continue;
-    renameSync(from, `${from}.pre-restore-${stamp}`);
+    const to = `${from}.pre-restore-${stamp}`;
+    renameSync(from, to);
+    moved.push([from, to]);
   }
+  return () => {
+    for (const [from, to] of moved.reverse()) renameSync(to, from);
+  };
 }
 
 function assertNoSidecars(dbPath: string): void {
@@ -358,30 +365,30 @@ export async function applyRestoreArchive(options: {
   }
 
   const archives = await import("../archive/restoreArchive.js");
-  const archiveManifest = await archives.detectArchive(options.archivePath);
-  if (archiveManifest) {
+  if (await archives.detectArchive(options.archivePath)) {
     const stagingDir = await mkdtemp(path.join(tmpdir(), "sf-restore-"));
     try {
       const staged = await archives.stageArchive(options.archivePath, stagingDir, { force: options.force === true });
+      const restoreSecrets = options.restoreCredentials !== false;
+      await archives.preflightStagedArchive({ homeDir, staged, restoreSecrets });
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       let applied: ReturnType<typeof archives.applyStagedArchive> | undefined;
       withExclusiveStoreLock(homeDir, () => {
-        applied = archives.applyStagedArchive({
-          homeDir,
-          staged,
-          stamp,
-          restoreSecrets: options.restoreCredentials !== false,
-          moveAsideStore: () => moveAsideTriplet(homeDir, stamp),
-        });
+        applied = archives.applyStagedArchive({ homeDir, staged, stamp, restoreSecrets, moveAsideStore: () => moveAsideTriplet(homeDir, stamp) });
       });
-      assertNoSidecars(path.join(homeDir, "state.db"));
-      const check = new Database(path.join(homeDir, "state.db"));
       try {
-        assertStoreQuickCheck(check);
-      } finally {
-        check.close();
+        assertNoSidecars(path.join(homeDir, "state.db"));
+        const check = new Database(path.join(homeDir, "state.db"));
+        try {
+          assertStoreQuickCheck(check);
+        } finally {
+          check.close();
+        }
+      } catch (error) {
+        applied!.rollback();
+        throw error;
       }
-      return { schema_version: staged.schemaVersion, missing_a2a_artifact_rows: 0, pre_restore_stamp: stamp, kind: "archive", ...applied! };
+      return { schema_version: staged.schemaVersion, missing_a2a_artifact_rows: 0, pre_restore_stamp: stamp, kind: "archive", ...applied!.result };
     } finally {
       hostLock.release();
       await rm(stagingDir, { recursive: true, force: true });
@@ -475,39 +482,23 @@ export async function stageRestoreForBoot(options: {
 
   const archives = await import("../archive/restoreArchive.js");
   if (await archives.detectArchive(options.archivePath)) {
-    const checkDir = await mkdtemp(path.join(tmpdir(), "sf-restore-check-"));
-    try {
-      await archives.stageArchive(options.archivePath, checkDir, { force: false });
-    } finally {
-      await rm(checkDir, { recursive: true, force: true });
+    // One pass: versions, names and every checksum, writing nothing. The files are unpacked once, at the next boot.
+    await archives.verifyArchive(options.archivePath);
+  } else {
+    const verified = await extractVerifiedArchive(options.archivePath);
+    await rm(verified.stagingDir, { recursive: true, force: true });
+
+    if (
+      verified.manifest?.stageflow_version &&
+      majorVersion(verified.manifest.stageflow_version) !==
+        majorVersion(PACKAGE_VERSION)
+    ) {
+      throw new RestoreError(
+        `restore_version_mismatch: archive ${verified.manifest.stageflow_version} vs binary ${PACKAGE_VERSION}`,
+        "restore_version_mismatch",
+      );
     }
-    const pending = restorePendingDir(homeDir);
-    mkdirSync(pending, { recursive: true });
-    const basename = `staged-${Date.now()}${stagedExtension(options.archivePath)}`;
-    const stagedPath = path.join(pending, basename);
-    copyFileSync(options.archivePath, stagedPath);
-    const marker: RestoreMarker = {
-      archive: basename,
-      attempts: 0,
-      staged_at: new Date().toISOString(),
-      drain_deadline: new Date(Date.now() + (options.graceMs ?? 8000)).toISOString(),
-    };
-    writeFileSync(restoreMarkerPath(homeDir), `${JSON.stringify(marker, null, 2)}\n`);
-    return { marker, stagedPath };
-  }
 
-  const verified = await extractVerifiedArchive(options.archivePath);
-  await rm(verified.stagingDir, { recursive: true, force: true });
-
-  if (
-    verified.manifest?.stageflow_version &&
-    majorVersion(verified.manifest.stageflow_version) !==
-      majorVersion(PACKAGE_VERSION)
-  ) {
-    throw new RestoreError(
-      `restore_version_mismatch: archive ${verified.manifest.stageflow_version} vs binary ${PACKAGE_VERSION}`,
-      "restore_version_mismatch",
-    );
   }
 
   const pending = restorePendingDir(homeDir);

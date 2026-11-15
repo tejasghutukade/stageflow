@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { createReadStream } from "node:fs";
+import { open } from "node:fs/promises";
 import type { Writable } from "node:stream";
 
 const BLOCK = 512;
@@ -9,24 +9,36 @@ export type TarEntryMeta = { mode: number; mtimeSeconds: number };
 
 export type TarFileResult = { size: number; sha256: string };
 
+/** The ustar size field is 11 octal digits, so a file of 8 GiB or more carries its size in a PAX record instead. */
+export const USTAR_MAX_SIZE = 8 ** 11 - 1;
+
 function octal(value: number, width: number): string {
   return value.toString(8).padStart(width - 1, "0");
 }
 
-function paxRecord(key: string, value: string): Buffer {
+/** The PAX extended header body an entry needs (long or non-ASCII names, a size past the ustar limit), or undefined when it needs none. */
+export function paxBody(name: string, linkName: string, size: number): Buffer | undefined {
+  const records: Buffer[] = [];
+  if (size > USTAR_MAX_SIZE) records.push(paxRecord("size", String(size)));
+  if (Buffer.byteLength(name) > 100 || /[^\x20-\x7e]/.test(name)) records.push(paxRecord("path", name));
+  if (linkName && (Buffer.byteLength(linkName) > 100 || /[^\x20-\x7e]/.test(linkName))) records.push(paxRecord("linkpath", linkName));
+  return records.length === 0 ? undefined : Buffer.concat(records);
+}
+
+export function paxRecord(key: string, value: string): Buffer {
   const body = ` ${key}=${value}\n`;
   let length = Buffer.byteLength(body) + 1;
   while (Buffer.byteLength(`${length}${body}`) !== length) length = Buffer.byteLength(`${length}${body}`);
   return Buffer.from(`${length}${body}`);
 }
 
-function header(name: string, size: number, type: string, meta: TarEntryMeta, linkName = ""): Buffer {
+export function header(name: string, size: number, type: string, meta: TarEntryMeta, linkName = ""): Buffer {
   const buf = Buffer.alloc(BLOCK, 0);
   buf.write(name, 0, Math.min(100, Buffer.byteLength(name)), "utf8");
   buf.write(octal(meta.mode & 0o7777, 8), 100, 8, "ascii");
   buf.write(octal(0, 8), 108, 8, "ascii");
   buf.write(octal(0, 8), 116, 8, "ascii");
-  buf.write(octal(size, 12), 124, 12, "ascii");
+  buf.write(octal(size > USTAR_MAX_SIZE ? 0 : size, 12), 124, 12, "ascii");
   buf.write(octal(Math.max(0, Math.floor(meta.mtimeSeconds)), 12), 136, 12, "ascii");
   buf.write("        ", 148, 8, "ascii");
   buf.write(type, 156, 1, "ascii");
@@ -56,12 +68,9 @@ export class TarStream {
     if (pad > 0) await this.write(Buffer.alloc(pad, 0));
   }
 
-  private async pax(name: string, linkName: string, meta: TarEntryMeta): Promise<void> {
-    const records: Buffer[] = [];
-    if (Buffer.byteLength(name) > 100 || /[^\x20-\x7e]/.test(name)) records.push(paxRecord("path", name));
-    if (linkName && (Buffer.byteLength(linkName) > 100 || /[^\x20-\x7e]/.test(linkName))) records.push(paxRecord("linkpath", linkName));
-    if (records.length === 0) return;
-    const body = Buffer.concat(records);
+  private async pax(name: string, linkName: string, meta: TarEntryMeta, size = 0): Promise<void> {
+    const body = paxBody(name, linkName, size);
+    if (!body) return;
     await this.write(header("PaxHeader", body.length, "x", meta));
     await this.write(body);
     await this.padTo(body.length);
@@ -75,27 +84,36 @@ export class TarStream {
     return { size: data.length, sha256: createHash("sha256").update(data).digest("hex") };
   }
 
-  async addFile(name: string, filePath: string, size: number, meta: TarEntryMeta): Promise<TarFileResult> {
-    await this.pax(name, "", meta);
-    await this.write(header(name, size, "0", meta));
-    const hash = createHash("sha256");
-    let sent = 0;
-    if (size > 0) {
-      const source = createReadStream(filePath, { start: 0, end: size - 1 });
-      for await (const chunk of source) {
-        const piece = chunk as Buffer;
-        hash.update(piece);
-        sent += piece.length;
-        await this.write(piece);
+  /**
+   * Opens the file before anything is written, so a file that is gone or unreadable throws with the archive still well
+   * formed and the caller can skip it. The size is the one the open file has now, not the one seen when the walk planned it.
+   */
+  async addFile(name: string, filePath: string, meta: TarEntryMeta): Promise<TarFileResult> {
+    const handle = await open(filePath, "r");
+    try {
+      const size = (await handle.stat()).size;
+      await this.pax(name, "", meta, size);
+      await this.write(header(name, size, "0", meta));
+      const hash = createHash("sha256");
+      let sent = 0;
+      if (size > 0) {
+        for await (const chunk of handle.createReadStream({ start: 0, end: size - 1, autoClose: false })) {
+          const piece = chunk as Buffer;
+          hash.update(piece);
+          sent += piece.length;
+          await this.write(piece);
+        }
       }
+      if (sent < size) {
+        const fill = Buffer.alloc(size - sent, 0);
+        hash.update(fill);
+        await this.write(fill);
+      }
+      await this.padTo(size);
+      return { size, sha256: hash.digest("hex") };
+    } finally {
+      await handle.close();
     }
-    if (sent < size) {
-      const fill = Buffer.alloc(size - sent, 0);
-      hash.update(fill);
-      await this.write(fill);
-    }
-    await this.padTo(size);
-    return { size, sha256: hash.digest("hex") };
   }
 
   async addSymlink(name: string, target: string, meta: TarEntryMeta): Promise<void> {

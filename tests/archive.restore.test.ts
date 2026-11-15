@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -221,6 +221,8 @@ describe("restoring an sf archive", () => {
       const manifest = JSON.parse(entry.data.toString("utf8")) as ArchiveManifest;
       manifest.stageflow_version = version;
       entry.data = Buffer.from(JSON.stringify(manifest));
+      const marker = entries.find((item) => item.name === ".stageflow-archive")!;
+      marker.data = Buffer.from(JSON.stringify({ archive_version: manifest.archive_version, stageflow_version: version }));
     });
     const newer = await withVersion(`${major}.${minor + 1}.0`);
     await expect(applyRestoreArchive({ archivePath: newer, homeDir: await emptyHome(), probe: down, force: true })).rejects.toMatchObject({ code: "restore_schema_too_new" });
@@ -238,6 +240,7 @@ describe("restoring an sf archive", () => {
       const manifest = JSON.parse(entry.data.toString("utf8")) as ArchiveManifest;
       manifest.archive_version = 2;
       entry.data = Buffer.from(JSON.stringify(manifest));
+      entries.find((item) => item.name === ".stageflow-archive")!.data = Buffer.from(JSON.stringify({ archive_version: 2, stageflow_version: manifest.stageflow_version }));
     });
     await expect(applyRestoreArchive({ archivePath: badVersion, homeDir: await emptyHome(), probe: down })).rejects.toMatchObject({ code: "restore_verify_failed" });
   });
@@ -339,5 +342,129 @@ describe("staging a plain backup for the next boot", () => {
     expect(staged.stagedPath.endsWith(".tar.gz")).toBe(true);
     const outcome = await applyPendingRestoreAtBoot(target);
     expect(outcome, JSON.stringify(outcome)).toMatchObject({ status: "applied" });
+  });
+});
+
+describe("a restore that fails leaves the data directory as it was", () => {
+  async function stagedFor(archive: string): Promise<{ staged: import("../src/archive/restoreArchive.js").StagedArchive; dir: string }> {
+    const { stageArchive } = await import("../src/archive/restoreArchive.js");
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-stage-"));
+    cleanups.push(async () => rm(dir, { recursive: true, force: true }));
+    return { staged: await stageArchive(archive, dir), dir };
+  }
+
+  function existingHome(): string {
+    return "";
+  }
+  void existingHome;
+
+  async function targetWithStore(): Promise<string> {
+    const target = await emptyHome();
+    const db = new Database(path.join(target, "state.db"));
+    db.exec("CREATE TABLE keep (id INTEGER); INSERT INTO keep VALUES (42)");
+    db.close();
+    put(target, "settings.json", "original-settings");
+    put(target, "memories/m1/body.md", "original-memory");
+    return target;
+  }
+
+  const moveAside = (target: string, stamp: string) => () => {
+    renameSync(path.join(target, "state.db"), path.join(target, `state.db.pre-restore-${stamp}`));
+    return () => renameSync(path.join(target, `state.db.pre-restore-${stamp}`), path.join(target, "state.db"));
+  };
+  const keepsRow = (target: string): number => {
+    const db = new Database(path.join(target, "state.db"), { readonly: true });
+    try { return (db.prepare("SELECT id FROM keep").get() as { id: number }).id; } finally { db.close(); }
+  };
+
+  it("a destination that cannot be written stops the restore before the store is touched, and undoes what was placed", async () => {
+    const { applyStagedArchive } = await import("../src/archive/restoreArchive.js");
+    const { archive } = await archiveOf();
+    const { staged } = await stagedFor(archive);
+    const target = await targetWithStore();
+    put(target, "workspace", "a file where the archive wants a folder");
+    expect(() => applyStagedArchive({ homeDir: target, staged, stamp: "t1", restoreSecrets: false, moveAsideStore: moveAside(target, "t1") })).toThrow();
+    expect(keepsRow(target)).toBe(42);
+    expect(readFileSync(path.join(target, "settings.json"), "utf8")).toBe("original-settings");
+    expect(readFileSync(path.join(target, "memories/m1/body.md"), "utf8")).toBe("original-memory");
+    expect(existsSync(path.join(target, "agents/pi-sessions/s1.jsonl"))).toBe(false);
+    expect(existsSync(path.join(target, "connections.yaml"))).toBe(false);
+    expect(readdirSync(target).filter((name) => name.includes(".pre-restore-"))).toEqual([]);
+  });
+
+  it("a failure while the store itself is being put in place moves the old store back", async () => {
+    const { applyStagedArchive } = await import("../src/archive/restoreArchive.js");
+    const { archive } = await archiveOf();
+    const { staged, dir } = await stagedFor(archive);
+    rmSync(path.join(dir, "state.db"));
+    const target = await targetWithStore();
+    expect(() => applyStagedArchive({ homeDir: target, staged, stamp: "t2", restoreSecrets: false, moveAsideStore: moveAside(target, "t2") })).toThrow();
+    expect(keepsRow(target)).toBe(42);
+    expect(readFileSync(path.join(target, "settings.json"), "utf8")).toBe("original-settings");
+    expect(existsSync(path.join(target, "workspace"))).toBe(false);
+    expect(readdirSync(target).filter((name) => name.includes(".pre-restore-"))).toEqual([]);
+  });
+
+  it("rollback after a successful apply puts every replaced file and the old store back", async () => {
+    const { applyStagedArchive } = await import("../src/archive/restoreArchive.js");
+    const { archive } = await archiveOf();
+    const { staged } = await stagedFor(archive);
+    const target = await targetWithStore();
+    const { result, rollback } = applyStagedArchive({ homeDir: target, staged, stamp: "t3", restoreSecrets: false, moveAsideStore: moveAside(target, "t3") });
+    expect(result.files_restored).toBeGreaterThan(5);
+    expect(readFileSync(path.join(target, "settings.json"), "utf8")).toBe('{"maxConcurrent":3}');
+    rollback();
+    expect(keepsRow(target)).toBe(42);
+    expect(readFileSync(path.join(target, "settings.json"), "utf8")).toBe("original-settings");
+    expect(readFileSync(path.join(target, "memories/m1/body.md"), "utf8")).toBe("original-memory");
+    expect(existsSync(path.join(target, "connections.yaml"))).toBe(false);
+  });
+
+  it("a link that already points out of the data directory is refused up front and the existing store is left alone", async () => {
+    const { archive } = await archiveOf();
+    const target = await targetWithStore();
+    const outside = await mkdtemp(path.join(tmpdir(), "sf-restore-out-"));
+    cleanups.push(async () => rm(outside, { recursive: true, force: true }));
+    rmSync(path.join(target, "memories"), { recursive: true });
+    symlinkSync(outside, path.join(target, "memories"));
+    await expect(applyRestoreArchive({ archivePath: archive, homeDir: target, probe: down })).rejects.toMatchObject({ code: "restore_unsafe_member" });
+    expect(keepsRow(target)).toBe(42);
+    expect(readdirSync(target).filter((name) => name.includes(".pre-restore-"))).toEqual([]);
+    expect(readdirSync(outside)).toEqual([]);
+  });
+});
+
+describe("the archive is checked as a whole", () => {
+  it("refuses a symbolic link or a folder that the manifest does not list, and a link whose target was changed", async () => {
+    const { home, store } = await makeHome();
+    plant(home);
+    symlinkSync("stageflow.yaml", path.join(home, "workspace", "real-link"));
+    const built = await buildArchive({ store: runsFor(store, home), homeDir: home });
+    const extraLink = await rewrite(built.path, (entries) => { entries.push({ name: "workspace/sneaky", kind: "symlink", data: Buffer.alloc(0), linkName: "stageflow.yaml", mode: 0o777 }); });
+    await expect(applyRestoreArchive({ archivePath: extraLink, homeDir: await emptyHome(), probe: down })).rejects.toMatchObject({ code: "restore_verify_failed" });
+    const extraDir = await rewrite(built.path, (entries) => { entries.push({ name: "workspace/sneaky-dir", kind: "directory", data: Buffer.alloc(0), linkName: "", mode: 0o755 }); });
+    await expect(applyRestoreArchive({ archivePath: extraDir, homeDir: await emptyHome(), probe: down })).rejects.toMatchObject({ code: "restore_verify_failed" });
+    const moved = await rewrite(built.path, (entries) => { entries.find((entry) => entry.name === "workspace/real-link")!.linkName = "../settings.json"; });
+    const target = await emptyHome();
+    await expect(applyRestoreArchive({ archivePath: moved, homeDir: target, probe: down })).rejects.toMatchObject({ code: "restore_verify_failed" });
+    expect(existsSync(path.join(target, "state.db"))).toBe(false);
+    await expect(applyRestoreArchive({ archivePath: built.path, homeDir: await emptyHome(), probe: down })).resolves.toMatchObject({ links_restored: 1 });
+  });
+
+  it("refuses an archive from a newer version from its first member, before unpacking anything", async () => {
+    const { archive } = await archiveOf();
+    const [major, minor] = PACKAGE_VERSION.split(".").map(Number) as [number, number];
+    const newer = await rewrite(archive, (entries) => {
+      entries.find((entry) => entry.name === ".stageflow-archive")!.data = Buffer.from(JSON.stringify({ archive_version: 1, stageflow_version: `${major}.${minor + 1}.0` }));
+      entries.find((entry) => entry.name === "settings.json")!.data = Buffer.from("tampered after the marker");
+    });
+    await expect(applyRestoreArchive({ archivePath: newer, homeDir: await emptyHome(), probe: down })).rejects.toMatchObject({ code: "restore_schema_too_new" });
+    await expect(stageRestoreForBoot({ archivePath: newer, homeDir: await emptyHome() })).rejects.toMatchObject({ code: "restore_schema_too_new" });
+  });
+
+  it("refuses something that is not an archive in its first member", async () => {
+    const { archive } = await archiveOf();
+    const noMarker = await rewrite(archive, (entries) => { entries.splice(entries.findIndex((entry) => entry.name === ".stageflow-archive"), 1); });
+    expect(await detectArchive(noMarker)).toBeUndefined();
   });
 });
