@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { LuBot, LuCheck, LuKeyRound, LuLink2, LuTriangleAlert } from "react-icons/lu";
 import { IdentityApiError, identityApi, type IdentityScope, type SigningAlgorithm } from "../../api/identity";
+import { chatOrigin, useHostInfo } from "../../hostInfo";
 import { IdentityDialog } from "./identityOverlay";
 import { AgentChips, ScopePicker } from "./identityPickers";
 import { Field, GHOST, INPUT, IdentityError, MONO, PRIMARY, TILE } from "./identityParts";
@@ -127,10 +128,11 @@ export function IdentityConnectDialog({
   const [scope, setScope] = useState<IdentityScope>("assigned");
   const [resources, setResources] = useState("");
 
+  const hostInfo = useHostInfo();
   const agentOption = agents.find((entry) => entry.id === agent);
   const suggestedRedirect = useMemo(
-    () => defaultRedirectUri(typeof window === "undefined" ? "" : window.location.origin, agentOption?.webChatUrl),
-    [agentOption],
+    () => defaultRedirectUri(chatOrigin(hostInfo, typeof window === "undefined" ? "" : window.location.origin), agentOption?.webChatUrl),
+    [agentOption, hostInfo],
   );
   const redirectUri = redirect ?? suggestedRedirect;
   const idTaken = existingIds.includes(id.trim());

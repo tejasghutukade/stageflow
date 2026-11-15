@@ -1,3 +1,4 @@
+import { chatOrigin, getHostInfo } from "../../../hostInfo";
 import type { AgentDefinition, AgentIssue, AgentSummary, BuiltinToolGroup, StageflowToolCatalog, WebChatConfig } from "../../../api/agents";
 
 /**
@@ -261,7 +262,7 @@ export function modelLabel(model: AgentDefinition["model"] | null): string {
 }
 
 /** Absolute shareable link, or null until web chat has a slug. */
-export function webChatLink(agent: Pick<AgentSummary, "webChatUrl"> | null | undefined, origin = typeof window === "undefined" ? "" : window.location.origin): string | null {
+export function webChatLink(agent: Pick<AgentSummary, "webChatUrl"> | null | undefined, origin = chatOrigin(getHostInfo(), typeof window === "undefined" ? "" : window.location.origin)): string | null {
   const path = agent?.webChatUrl;
   if (!path) return null;
   if (/^https?:\/\//.test(path)) return path;

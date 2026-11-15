@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useHostInfo } from "../../../hostInfo";
 import { LuCheck, LuCircleSlash, LuCode, LuPlay, LuTrash2, LuTriangleAlert } from "react-icons/lu";
 import { AgentApiError, agentsApi, type AgentDefinition, type AgentDetail, type AgentRevisionMeta, type DiffLine } from "../../../api/agents";
 import { agentPath, agentsPath, navigate } from "../../../routes";
@@ -328,6 +329,7 @@ function EditView({ initial, onReload }: { initial: AgentDetail & { definition: 
 }
 
 export function AgentEditPage({ agentId }: { agentId: string }) {
+  useHostInfo();
   const { detail, loading, error, missing, reload } = useAgentDetail(agentId);
   if (!detail) return <AgentLoadError loading={loading} error={error} missing={missing} />;
   if (!detail.definition) return <AgentLoadError loading={false} error={null} invalid={detail} />;

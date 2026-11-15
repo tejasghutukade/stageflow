@@ -34,12 +34,16 @@ export function mcpToolsetsQuery(selected: readonly string[]): string {
 
 export function mcpEndpointUrl(
   location: LocationLike,
-  options: { viteDev?: boolean; toolsets?: readonly string[] } = {},
+  options: { viteDev?: boolean; toolsets?: readonly string[]; publicOrigin?: string | null } = {},
 ): string {
   if (options.viteDev) {
     const base = DEFAULT_MCP_URL;
     const query = options.toolsets ? mcpToolsetsQuery(options.toolsets) : "";
     return `${base}${query}`;
+  }
+  if (options.publicOrigin) {
+    const query = options.toolsets ? mcpToolsetsQuery(options.toolsets) : "";
+    return `${options.publicOrigin.replace(/\/+$/, "")}/mcp${query}`;
   }
   let host = location.hostname;
   if (host === "localhost" || host === "::1" || host === "[::1]") {
@@ -52,10 +56,11 @@ export function mcpEndpointUrl(
   return `${origin}/mcp${query}`;
 }
 
-export function cursorMcpConfigJson(url: string): string {
-  return `${JSON.stringify(
-    { mcpServers: { stageflow: { url } } },
-    null,
-    2,
-  )}\n`;
+export const MCP_API_KEY_PLACEHOLDER = "Bearer YOUR_DRIVE_API_KEY";
+
+export function cursorMcpConfigJson(url: string, options: { apiKeyHeader?: boolean } = {}): string {
+  const server = options.apiKeyHeader
+    ? { url, headers: { Authorization: MCP_API_KEY_PLACEHOLDER } }
+    : { url };
+  return `${JSON.stringify({ mcpServers: { stageflow: server } }, null, 2)}\n`;
 }

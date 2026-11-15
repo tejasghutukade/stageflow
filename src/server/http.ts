@@ -214,6 +214,7 @@ import { handleIdentityRoutes } from "./identityRoutes.js";
 import { handleIdentitySetupRoutes } from "./identitySetupRoutes.js";
 import { isListableExtension, listCatalogFiles } from "../config/listCatalogFiles.js";
 import { handleA2aRoutes } from "./a2aRoutes.js";
+import { resolveHostInfo } from "./hostInfo.js";
 import { handleChannelRoutes } from "./channelRoutes.js";
 import { handleBrowserProfileRoutes } from "./browserProfileRoutes.js";
 import { handleEvalInternalRoutes, isEvalInternalPath, type EvalServices } from "./evalInternalRoutes.js";
@@ -3773,6 +3774,11 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           const now = new Date();
           const since = new Date(now.getTime() - 2 * overviewWindowMs(rangeParam)).toISOString();
           json(res, 200, buildOverview(await store.listRunOverviewRows(since), rangeParam, now));
+          return true;
+        }
+
+        if (method === "GET" && pathname === "/api/host-info") {
+          json(res, 200, resolveHostInfo());
           return true;
         }
 

@@ -38,7 +38,7 @@ Behind a reverse proxy every visitor shares the proxy's address, so the per-IP l
 - Pass the browser's original `Host` through to Stageflow unchanged. The Host allow-list still applies on public chat; a rewritten or internal hostname is refused.
 - Add the public hostname to `STAGEFLOW_ALLOWED_HOSTS`.
 - The page works same-origin. To host the page elsewhere, list its origin in `STAGEFLOW_PUBLIC_CHAT_ORIGINS` (comma-separated) so the browser may call the API.
-- The console shows links using the address you opened it from. There is no separate "public base URL" setting; open the console through the public address (or copy the path `/chat/<slug>`) when sharing.
+- The console builds the shareable link from `STAGEFLOW_PUBLIC_CHAT_URL` when set, otherwise from `STAGEFLOW_PUBLIC_URL`, otherwise from the address you opened it from. Set `STAGEFLOW_PUBLIC_CHAT_URL` when public chat is served from its own hostname, so the copied link and the identity sign-in redirect point at that hostname.
 
 ## Safety
 

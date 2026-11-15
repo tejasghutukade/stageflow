@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `GET /api/host-info` reports the Host's public addresses. `STAGEFLOW_PUBLIC_URL` now also sets the address shown in Settings → MCP server, and the new `STAGEFLOW_PUBLIC_CHAT_URL` sets where the agent web chat link and identity sign-in redirect point.
+- On a workspace managed by a hosting platform, Settings → MCP server shows an API-key `Authorization` header in the client snippet instead of the control token field.
+
 ## [0.63.0] - 2026-11-14
 
 ### Upgrade notes

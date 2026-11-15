@@ -138,3 +138,26 @@ describe("MCP panel copy", () => {
     expect(MCP_BARE_URL_NOTES).toMatch(/reconnect/i);
   });
 });
+
+describe("hosted MCP address", () => {
+  const browser = { hostname: "127.0.0.1", port: "3847", protocol: "http:" };
+
+  it("uses the Host's public address instead of the browser's", () => {
+    expect(mcpEndpointUrl(browser, { publicOrigin: "https://acme.stage-flow.dev/" })).toBe("https://acme.stage-flow.dev/mcp");
+    expect(mcpEndpointUrl(browser, { publicOrigin: "https://acme.stage-flow.dev", toolsets: ["agents"] })).toBe(
+      "https://acme.stage-flow.dev/mcp?toolsets=agents",
+    );
+  });
+
+  it("falls back to the browser's address with no public address", () => {
+    expect(mcpEndpointUrl(browser, { publicOrigin: null })).toBe("http://127.0.0.1:3847/mcp");
+  });
+
+  it("puts an Authorization header in the client config for a hosted workspace", () => {
+    const config = JSON.parse(cursorMcpConfigJson("https://acme.stage-flow.dev/mcp", { apiKeyHeader: true }));
+    expect(config.mcpServers.stageflow).toEqual({
+      url: "https://acme.stage-flow.dev/mcp",
+      headers: { Authorization: "Bearer YOUR_DRIVE_API_KEY" },
+    });
+  });
+});
