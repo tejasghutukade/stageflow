@@ -214,7 +214,7 @@ import { handleIdentityRoutes } from "./identityRoutes.js";
 import { handleIdentitySetupRoutes } from "./identitySetupRoutes.js";
 import { isListableExtension, listCatalogFiles } from "../config/listCatalogFiles.js";
 import { handleA2aRoutes } from "./a2aRoutes.js";
-import { handleArchiveRoutes } from "./archiveRoutes.js";
+import { createArchiveSlot, handleArchiveRoutes, type ArchiveSlot } from "./archiveRoutes.js";
 import { resolveHostInfo } from "./hostInfo.js";
 import { handleChannelRoutes } from "./channelRoutes.js";
 import { handleBrowserProfileRoutes } from "./browserProfileRoutes.js";
@@ -438,6 +438,8 @@ export type OperatorRouteDeps = {
   uiDistDir?: string;
   allowedHosts?: AllowedHosts;
   controlTokens?: ControlTokens;
+  /** The one-archive-at-a-time slot. Omit it: each server makes its own. A test hands in one it holds to see the 409. */
+  archiveSlot?: ArchiveSlot;
   /** Test seams for live view (fake relay, clock, audit sink); production builds everything from persisted state. */
   liveView?: Omit<LiveViewRoutesOptions, "store" | "controlTokens">;
   /** Live shutdown controller; set after listen so restore can beginDrain. */
@@ -568,6 +570,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
   const workshopBuildStoreRoot = (): string => resolveWorkshopBuildStoreRoot();
   const allowedHosts = deps.allowedHosts ?? resolveAllowedHosts();
   const controlTokens = deps.controlTokens ?? loadControlTokens();
+  const archiveSlot = deps.archiveSlot ?? createArchiveSlot();
   const liveView = createLiveViewRoutes({ ...deps.liveView, store, controlTokens });
   liveView.attach(manager);
   const handler = async ({ req, res, url, pathname, method, boot }: HttpHostRouteContext) => {
@@ -836,7 +839,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
               outcome,
               ...(errorCode !== undefined ? { error_code: errorCode } : {}),
             });
-          if (await handleArchiveRoutes(req, method, pathname, { store, homeDir: globalStageflowHome(), audit }, res, json)) return true;
+          if (await handleArchiveRoutes(req, method, pathname, { store, homeDir: globalStageflowHome(), audit, slot: archiveSlot }, res, json)) return true;
         }
 
         if (method === "POST" && pathname === "/api/restore") {

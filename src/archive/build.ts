@@ -1,18 +1,22 @@
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream, type Stats, mkdirSync, readFileSync, renameSync, rmSync, statSync, chmodSync } from "node:fs";
-import { lstat, readdir, readlink, stat } from "node:fs/promises";
+import { lstat, readdir, readFile, readlink, stat } from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { once } from "node:events";
+import { createInterface } from "node:readline";
+import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
 import Database from "better-sqlite3";
 import { PACKAGE_VERSION } from "../package-meta.js";
 import { globalStageflowHome } from "../project/globalHome.js";
-import { assertBackupOutPathAllowed, backupsDir, verifyDbSnapshot } from "../runstore/backup.js";
+import { backupsDir, checkOutPath, verifyDbSnapshot } from "../runstore/backup.js";
 import { readFilesystemSize } from "../runstore/diskUsage.js";
 import type { RunStore } from "../runstore/port.js";
 import { ARCHIVE_RULES, isDeniedRunPath, ruleFor, ruleMentions, type ArchiveRule } from "./inventory.js";
+import { redactModelsJson } from "./redactModels.js";
 import { TarStream } from "./tarStream.js";
 
 export const ARCHIVE_VERSION = 1;
@@ -28,7 +32,7 @@ export class ArchiveError extends Error {
   }
 }
 
-export type ArchiveFileEntry = { path: string; kind: "file" | "symlink" | "directory"; size: number; sha256?: string; link?: string };
+export type ArchiveFileEntry = { path: string; kind: "file" | "symlink" | "directory"; size: number; sha256?: string; link?: string; note?: string };
 export type ArchiveLeftOut = { path: string; reason: string };
 
 export type ArchiveManifest = {
@@ -68,7 +72,8 @@ type PlannedEntry =
   | { name: string; kind: "file"; source: string; size: number; mode: number; mtime: number }
   | { name: string; kind: "symlink"; target: string; mode: number; mtime: number }
   | { name: string; kind: "directory"; mode: number; mtime: number }
-  | { name: string; kind: "database"; source: string };
+  | { name: string; kind: "database"; source: string }
+  | { name: string; kind: "redacted"; source: string; size: number; mode: number; mtime: number };
 
 const FREE_SPACE_MARGIN_BYTES = 8 * 1024 * 1024;
 
@@ -142,6 +147,15 @@ export async function planArchive(homeDir: string, options: { includeSecrets: bo
     const decision = describe(rule, options);
     if (decision !== "include") {
       leftOut.push({ path: found.isDirectory() ? `${relative}/` : relative, reason: decision.reason });
+      // A folder left out as secret can still hold a file that has its own "redacted" rule (agent/models.json): it goes in
+      // without its credentials, and the rest of the folder stays out.
+      if (found.isDirectory() && rule.kind === "secret") {
+        for (const inner of ARCHIVE_RULES) {
+          if (inner.kind !== "redacted" || !inner.path.startsWith(`${relative}/`)) continue;
+          const file = await lstatOrGone(path.join(homeDir, ...inner.path.split("/")));
+          if (file?.isFile()) entries.push({ name: inner.path, kind: "redacted", source: path.join(homeDir, ...inner.path.split("/")), size: file.size, mode: file.mode, mtime: file.mtimeMs / 1000 });
+        }
+      }
       return;
     }
     if (found.isSymbolicLink()) {
@@ -152,6 +166,7 @@ export async function planArchive(homeDir: string, options: { includeSecrets: bo
       for (const child of children) await visit(`${relative}/${child}`, path.join(absolute, child));
     } else if (found.isFile()) {
       if (rule.kind === "database") entries.push({ name: relative, kind: "database", source: absolute });
+      else if (rule.kind === "redacted" && !options.includeSecrets) entries.push({ name: relative, kind: "redacted", source: absolute, size: found.size, mode: found.mode, mtime: found.mtimeMs / 1000 });
       else entries.push({ name: relative, kind: "file", source: absolute, size: found.size, mode: found.mode, mtime: found.mtimeMs / 1000 });
     }
   };
@@ -213,6 +228,54 @@ function vacuumInto(source: string, dest: string): number {
 }
 
 /**
+ * The manifest's file list, written to disk as one JSON line per file while the archive is built. A workspace with a
+ * million files would otherwise hold a manifest entry for each (about 250 bytes) and then a second copy as the JSON text.
+ */
+class ManifestFiles {
+  count = 0;
+  hasSecretKind = false;
+  private readonly out;
+  constructor(readonly file: string) {
+    this.out = createWriteStream(file, { mode: 0o600 });
+  }
+  async add(entry: ArchiveFileEntry): Promise<void> {
+    this.count += 1;
+    if (["secret", "redacted"].includes(ruleFor(entry.path)?.kind ?? "")) this.hasSecretKind = true;
+    if (!this.out.write(`${JSON.stringify(entry)}\n`)) await once(this.out, "drain");
+  }
+  async close(): Promise<void> {
+    this.out.end();
+    await once(this.out, "close");
+  }
+}
+
+/** Writes manifest.json to `dest` in the same layout as JSON.stringify(manifest, null, 2), reading the file list line by line. */
+async function writeManifestFile(dest: string, head: Omit<ArchiveManifest, "files" | "left_out">, files: ManifestFiles, leftOut: ArchiveLeftOut[]): Promise<void> {
+  const out = createWriteStream(dest, { mode: 0o600 });
+  const write = async (text: string): Promise<void> => {
+    if (!out.write(text)) await once(out, "drain");
+  };
+  const indent = (text: string, spaces: number): string => text.replace(/^/gm, " ".repeat(spaces));
+  const headText = JSON.stringify(head, null, 2);
+  await write(`${headText.slice(0, headText.length - 2)},\n  "files": `);
+  if (files.count === 0) {
+    await write("[]");
+  } else {
+    await write("[\n");
+    let first = true;
+    for await (const line of createInterface({ input: createReadStream(files.file), crlfDelay: Infinity })) {
+      if (line === "") continue;
+      await write(`${first ? "" : ",\n"}${indent(JSON.stringify(JSON.parse(line), null, 2), 4)}`);
+      first = false;
+    }
+    await write("\n  ]");
+  }
+  await write(`,\n  "left_out": ${leftOut.length === 0 ? "[]" : indent(JSON.stringify(leftOut, null, 2), 2).trimStart()}\n}\n`);
+  out.end();
+  await once(out, "close");
+}
+
+/**
  * Builds one tar.gz of everything the owner would want to keep (see inventory.ts), with a manifest as the last member.
  * Streams to disk, so memory stays flat; secrets are left out unless asked for.
  */
@@ -223,23 +286,16 @@ export async function buildArchive(options: BuildArchiveOptions): Promise<Archiv
   const now = options.now?.() ?? new Date();
   const createdAt = now.toISOString();
 
-  const outPath = (() => {
-    try {
-      return assertBackupOutPathAllowed(options.outPath ?? defaultArchiveOutPath(homeDir, now), homeDir);
-    } catch (error) {
-      throw new ArchiveError(String((error as Error).message).replace("backup_out_denied", "archive_out_denied"), "archive_out_denied");
-    }
-  })();
-  if (isUnder(outPath, path.join(homeDir, "runs")) || isUnder(outPath, path.join(homeDir, "worktrees"))) {
-    throw new ArchiveError("archive_out_denied: refusing to write under runs/ or worktrees/", "archive_out_denied");
-  }
+  const checked = checkOutPath(options.outPath ?? defaultArchiveOutPath(homeDir, now), homeDir);
+  if (!checked.ok) throw new ArchiveError(`archive_out_denied: ${checked.reason}`, "archive_out_denied");
+  const outPath = checked.resolved;
   mkdirSync(path.dirname(outPath), { recursive: true });
 
   const { entries, leftOut } = await planArchive(homeDir, { includeSecrets, includeA2a });
   await planRuns(options.store, homeDir, entries, leftOut);
 
   let estimate = 0;
-  for (const entry of entries) estimate += entry.kind === "file" ? entry.size : entry.kind === "database" ? (await stat(entry.source)).size : 0;
+  for (const entry of entries) estimate += entry.kind === "file" || entry.kind === "redacted" ? entry.size : entry.kind === "database" ? (await stat(entry.source)).size : 0;
   const free = await (options.freeSpace ?? readFilesystemSize)(path.dirname(outPath));
   const needed = estimate + FREE_SPACE_MARGIN_BYTES;
   if (free.freeBytes < needed) {
@@ -252,15 +308,17 @@ export async function buildArchive(options: BuildArchiveOptions): Promise<Archiv
     rmSync(partial, { force: true });
     const gzip = createGzip();
     const out = createWriteStream(partial, { mode: 0o600 });
-    const writing = pipeline(gzip, out);
+    const digest = createHash("sha256");
+    const hashing = new Transform({ transform(chunk: Buffer, _encoding, done) { digest.update(chunk); done(null, chunk); } });
+    const writing = pipeline(gzip, hashing, out);
     const tar = new TarStream(gzip);
-    const files: ArchiveFileEntry[] = [];
+    const files = new ManifestFiles(path.join(staging, "manifest-files.ndjson"));
     let schemaVersion = 0;
 
     await tar.addBuffer(ARCHIVE_MARKER, Buffer.from(JSON.stringify({ archive_version: ARCHIVE_VERSION, stageflow_version: PACKAGE_VERSION })), { mode: 0o600, mtimeSeconds: now.getTime() / 1000 });
     for (const entry of entries) {
       if (entry.kind === "database") {
-        const dest = path.join(staging, `${files.length}.db`);
+        const dest = path.join(staging, `${files.count}.db`);
         let version: number;
         if (entry.name === "state.db") {
           version = (await options.store.snapshotInto(dest)).userVersion;
@@ -270,12 +328,25 @@ export async function buildArchive(options: BuildArchiveOptions): Promise<Archiv
           version = vacuumInto(entry.source, dest);
         }
         const result = await tar.addFile(entry.name, dest, { mode: 0o600, mtimeSeconds: now.getTime() / 1000 });
-        files.push({ path: entry.name, kind: "file", size: result.size, sha256: result.sha256 });
+        await files.add({ path: entry.name, kind: "file", size: result.size, sha256: result.sha256 });
         rmSync(dest, { force: true });
+      } else if (entry.kind === "redacted") {
+        try {
+          const redacted = redactModelsJson(await readFile(entry.source, "utf8"));
+          if (redacted === undefined) {
+            leftOut.push({ path: entry.name, reason: "not valid JSON or too large, so its keys could not be removed safely" });
+            continue;
+          }
+          const result = await tar.addBuffer(entry.name, Buffer.from(redacted), { mode: 0o600, mtimeSeconds: entry.mtime });
+          await files.add({ path: entry.name, kind: "file", size: result.size, sha256: result.sha256, note: "keys and headers removed" });
+        } catch (error) {
+          if (!gone(error)) throw error;
+          leftOut.push({ path: entry.name, reason: "removed while the archive was being built" });
+        }
       } else if (entry.kind === "file") {
         try {
           const result = await tar.addFile(entry.name, entry.source, { mode: entry.mode, mtimeSeconds: entry.mtime });
-          files.push({ path: entry.name, kind: "file", size: result.size, sha256: result.sha256 });
+          await files.add({ path: entry.name, kind: "file", size: result.size, sha256: result.sha256 });
         } catch (error) {
           // The Host is live: a run purged or a file replaced since the walk is skipped, not fatal. Nothing was written for it.
           if (!gone(error)) throw error;
@@ -283,24 +354,25 @@ export async function buildArchive(options: BuildArchiveOptions): Promise<Archiv
         }
       } else if (entry.kind === "symlink") {
         await tar.addSymlink(entry.name, entry.target, { mode: entry.mode, mtimeSeconds: entry.mtime });
-        files.push({ path: entry.name, kind: "symlink", size: 0, link: entry.target });
+        await files.add({ path: entry.name, kind: "symlink", size: 0, link: entry.target });
       } else {
         await tar.addDirectory(entry.name, { mode: entry.mode, mtimeSeconds: entry.mtime });
-        files.push({ path: `${entry.name}/`, kind: "directory", size: 0 });
+        await files.add({ path: `${entry.name}/`, kind: "directory", size: 0 });
       }
     }
 
-    const manifest: ArchiveManifest = {
+    await files.close();
+    const containsSecrets = includeSecrets && files.hasSecretKind;
+    const manifestFile = path.join(staging, "manifest.json");
+    await writeManifestFile(manifestFile, {
       archive_version: ARCHIVE_VERSION,
       stageflow_version: PACKAGE_VERSION,
       created_at: createdAt,
-      contains_secrets: includeSecrets && files.some((file) => ruleFor(file.path)?.kind === "secret"),
+      contains_secrets: containsSecrets,
       home_id: readHomeId(homeDir),
       store_schema_version: schemaVersion,
-      files,
-      left_out: leftOut,
-    };
-    await tar.addBuffer("manifest.json", Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`), { mode: 0o600, mtimeSeconds: now.getTime() / 1000 });
+    }, files, leftOut);
+    await tar.addFile("manifest.json", manifestFile, { mode: 0o600, mtimeSeconds: now.getTime() / 1000 });
     await tar.finish();
     gzip.end();
     await writing;
@@ -311,12 +383,12 @@ export async function buildArchive(options: BuildArchiveOptions): Promise<Archiv
     return {
       path: outPath,
       bytes: statSync(outPath).size,
-      sha256: await sha256OfFile(outPath),
+      sha256: digest.digest("hex"),
       created_at: createdAt,
       archive_version: ARCHIVE_VERSION,
       stageflow_version: PACKAGE_VERSION,
-      contains_secrets: manifest.contains_secrets,
-      file_count: files.length,
+      contains_secrets: containsSecrets,
+      file_count: files.count,
       left_out_count: leftOut.length,
     };
   } catch (error) {
@@ -325,15 +397,4 @@ export async function buildArchive(options: BuildArchiveOptions): Promise<Archiv
   } finally {
     await rm(staging, { recursive: true, force: true });
   }
-}
-
-async function sha256OfFile(file: string): Promise<string> {
-  const hash = createHash("sha256");
-  for await (const chunk of createReadStream(file)) hash.update(chunk as Buffer);
-  return hash.digest("hex");
-}
-
-function isUnder(candidate: string, folder: string): boolean {
-  const relative = path.relative(folder, candidate);
-  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }

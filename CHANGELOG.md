@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.65.1] - 2026-11-15
+
+### Fixed
+- A default `sf archive` keeps the model routing in `agent/models.json` (base URLs, provider pins, model lists) and removes keys and headers from the copy; the manifest says so. It used to drop the whole `agent/` folder, so a restore into a new workspace lost the routing silently. With secrets included the file is copied as it is. A `models.json` that is not valid JSON is left out, with the reason in the manifest.
+- Building an archive no longer reads the finished file a second time to get its SHA-256 (it is hashed as it is written), and the manifest's file list is streamed through a temporary file instead of held in memory twice. On 200,000 files the peak heap went from 167 MB to 99 MB.
+- `POST /api/archive` uses the shared JSON body reader, and the one-archive-at-a-time slot belongs to each server instead of being a module flag with a test-only export. A refused output path is reported as `archive_out_denied` from its own check, not by rewriting a backup error message.
+
 ## [0.65.0] - 2026-11-15
 
 ### Added

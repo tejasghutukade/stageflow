@@ -206,6 +206,40 @@ describe("buildArchive", () => {
     }
   });
 
+  it("words a refused output path as archive_out_denied, not as a backup error", async () => {
+    const { home, store } = await makeHome();
+    const attempt = buildArchive({ store: { snapshotInto: store.snapshotInto.bind(store), ...noRuns }, homeDir: home, outPath: path.join(home, "runs", "x.tar.gz") });
+    await expect(attempt).rejects.toMatchObject({ code: "archive_out_denied", message: "archive_out_denied: refusing to write under worktrees/ or runs/" });
+    await expect(buildArchive({ store: { snapshotInto: store.snapshotInto.bind(store), ...noRuns }, homeDir: home, outPath: `${home}/backups/../x.tar.gz` }))
+      .rejects.toMatchObject({ code: "archive_out_denied", message: "archive_out_denied: path must not contain .. segments" });
+  });
+
+  it("streams the manifest to disk in the same layout as a pretty-printed object, for a tree of thousands of files", async () => {
+    const { home, store } = await makeHome();
+    plant(home);
+    for (let i = 0; i < 2500; i++) put(home, `memories/bulk/f${i}.md`, `file ${i}`);
+    const result = await buildArchive({ store: { snapshotInto: store.snapshotInto.bind(store), ...noRuns }, homeDir: home });
+    const dir = extract(result.path);
+    const text = readFileSync(path.join(dir, "manifest.json"), "utf8");
+    const manifest = JSON.parse(text) as ArchiveManifest;
+    expect(text).toBe(`${JSON.stringify(manifest, null, 2)}\n`);
+    expect(Object.keys(manifest)).toEqual(["archive_version", "stageflow_version", "created_at", "contains_secrets", "home_id", "store_schema_version", "files", "left_out"]);
+    expect(manifest.files.length).toBe(result.file_count);
+    const bulk = manifest.files.filter((file) => file.path.startsWith("memories/bulk/"));
+    expect(bulk).toHaveLength(2500);
+    for (const file of bulk.slice(0, 50)) expect(file.sha256).toBe(createHash("sha256").update(readFileSync(path.join(dir, file.path))).digest("hex"));
+    const members = listing(result.path).filter((name) => name !== ".stageflow-archive" && name !== "manifest.json" && !name.endsWith("/"));
+    expect(new Set(manifest.files.filter((file) => file.kind === "file").map((file) => file.path))).toEqual(new Set(members));
+  });
+
+  it("reports the sha256 of the archive file it wrote", async () => {
+    const { home, store } = await makeHome();
+    plant(home);
+    const result = await buildArchive({ store: { snapshotInto: store.snapshotInto.bind(store), ...noRuns }, homeDir: home });
+    expect(result.sha256).toBe(createHash("sha256").update(readFileSync(result.path)).digest("hex"));
+    expect(result.bytes).toBe(statSync(result.path).size);
+  });
+
   it("archives a 1 GB sparse file without growing memory by anything like its size", async () => {
     const { home, store } = await makeHome();
     const big = path.join(home, "workspace", "big.bin");
@@ -222,6 +256,59 @@ describe("buildArchive", () => {
     const manifest = manifestOf(extract(result.path));
     expect(manifest.files.find((file) => file.path === "workspace/big.bin")?.size).toBe(1024 ** 3);
   }, 120_000);
+});
+
+describe("agent/models.json", () => {
+  const MODELS = {
+    providers: {
+      openrouter: {
+        baseUrl: "https://openrouter.ai/api/v1",
+        apiKey: CANARY,
+        headers: { Authorization: `Bearer ${CANARY}`, "X-Title": "Stageflow" },
+        openRouterRouting: { only: ["deepinfra"], allow_fallbacks: false },
+        models: [{ id: "deepseek/deepseek-v3", maxTokens: 8192, contextWindow: 65536, accessToken: CANARY }],
+      },
+    },
+  };
+
+  it("keeps the routing and drops keys and headers from a default archive", async () => {
+    const { home, store } = await makeHome();
+    put(home, "agent/models.json", JSON.stringify(MODELS));
+    const result = await buildArchive({ store: { snapshotInto: store.snapshotInto.bind(store), ...noRuns }, homeDir: home });
+    const dir = extract(result.path);
+    const kept = JSON.parse(readFileSync(path.join(dir, "agent", "models.json"), "utf8")) as typeof MODELS;
+    const openrouter = kept.providers.openrouter as Record<string, unknown>;
+    expect(openrouter.baseUrl).toBe("https://openrouter.ai/api/v1");
+    expect(openrouter.openRouterRouting).toEqual({ only: ["deepinfra"], allow_fallbacks: false });
+    expect(openrouter.models).toEqual([{ id: "deepseek/deepseek-v3", maxTokens: 8192, contextWindow: 65536 }]);
+    expect(openrouter).not.toHaveProperty("apiKey");
+    expect(openrouter).not.toHaveProperty("headers");
+    expect(gunzipSync(readFileSync(result.path)).includes(CANARY)).toBe(false);
+    const manifest = manifestOf(dir);
+    expect(manifest.files.find((file) => file.path === "agent/models.json")).toMatchObject({ kind: "file", note: "keys and headers removed" });
+    expect(manifest.contains_secrets).toBe(false);
+    expect(result.contains_secrets).toBe(false);
+  });
+
+  it("copies the file as it is, and marks the archive, when secrets are included", async () => {
+    const { home, store } = await makeHome();
+    put(home, "agent/models.json", JSON.stringify(MODELS));
+    const result = await buildArchive({ store: { snapshotInto: store.snapshotInto.bind(store), ...noRuns }, homeDir: home, includeSecrets: true });
+    const dir = extract(result.path);
+    expect(JSON.parse(readFileSync(path.join(dir, "agent", "models.json"), "utf8"))).toEqual(MODELS);
+    expect(result.contains_secrets).toBe(true);
+    expect(manifestOf(dir).files.find((file) => file.path === "agent/models.json")).not.toHaveProperty("note");
+  });
+
+  it("leaves out a models.json it cannot read as JSON, and says why", async () => {
+    const { home, store } = await makeHome();
+    put(home, "agent/models.json", `{ not json ${CANARY}`);
+    const result = await buildArchive({ store: { snapshotInto: store.snapshotInto.bind(store), ...noRuns }, homeDir: home });
+    expect(listing(result.path)).not.toContain("agent/models.json");
+    expect(gunzipSync(readFileSync(result.path)).includes(CANARY)).toBe(false);
+    const leftOut = manifestOf(extract(result.path)).left_out.find((item) => item.path === "agent/models.json");
+    expect(leftOut?.reason).toMatch(/not valid JSON/);
+  });
 });
 
 describe("the archive inventory and docs/data-directory.md", () => {

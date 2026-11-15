@@ -359,7 +359,9 @@ export function applyStagedArchive(options: {
 
   const place = (name: string): void => {
     const dest = path.join(homeDir, ...name.split("/"));
-    const secret = ruleFor(name)?.kind === "secret";
+    const kind = ruleFor(name)?.kind;
+    const secret = kind === "secret";
+    const private0600 = secret || kind === "redacted";
     makeDir(path.dirname(dest));
     if (existsSync(dest) || isLink(dest)) {
       const aside = `${dest}.pre-restore-${stamp}`;
@@ -376,7 +378,7 @@ export function applyStagedArchive(options: {
     }
     moveFile(path.join(staged.stagingDir, ...name.split("/")), dest);
     undo.push(() => rmSync(dest, { force: true }));
-    try { chmodSync(dest, secret ? 0o600 : (staged.staged.get(name)!.mode & 0o777) || 0o644); } catch { /* best effort */ }
+    try { chmodSync(dest, private0600 ? 0o600 : (staged.staged.get(name)!.mode & 0o777) || 0o644); } catch { /* best effort */ }
     result.files_restored += 1;
     if (secret) result.secrets_restored += 1;
   };

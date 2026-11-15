@@ -70,7 +70,7 @@ See [Architecture](docs/architecture.md) for component boundaries, execution flo
 
 ### Docker (recommended)
 
-Run Stageflow from the published image. It is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.65` is the current minor tag (`0.65.0` is that exact release).
+Run Stageflow from the published image. It is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.65` is the current minor tag (`0.65.1` is that exact release).
 
 ```bash
 docker run --rm --name stageflow \

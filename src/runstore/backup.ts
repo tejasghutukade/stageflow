@@ -111,28 +111,28 @@ export function defaultBackupOutPath(
   return path.join(backupsDir(homeDir), `stageflow-${stamp}${ext}`);
 }
 
+/** Why an output path is refused, or the resolved path when it is allowed. Shared by backups and archives so each words its own error. */
+export function checkOutPath(outPath: string, homeDir: string = globalStageflowHome()): { ok: true; resolved: string } | { ok: false; reason: string; resolved?: string } {
+  const segments = outPath.split(/[/\\]/);
+  if (segments.some((segment) => segment === "..")) return { ok: false, reason: "path must not contain .. segments" };
+  const resolved = path.resolve(outPath);
+  const worktrees = path.resolve(homeDir, "worktrees");
+  const runs = path.resolve(homeDir, "runs");
+  if (isInsideDir(resolved, worktrees) || isInsideDir(resolved, runs)) return { ok: false, reason: "refusing to write under worktrees/ or runs/", resolved };
+  return { ok: true, resolved };
+}
+
 export function assertBackupOutPathAllowed(
   outPath: string,
   homeDir: string = globalStageflowHome(),
 ): string {
-  const segments = outPath.split(/[/\\]/);
-  if (segments.some((segment) => segment === "..")) {
-    throw new BackupError(
-      "backup_out_denied: path must not contain .. segments",
-      "backup_out_denied",
-    );
-  }
-  const resolved = path.resolve(outPath);
-  const worktrees = path.resolve(homeDir, "worktrees");
-  const runs = path.resolve(homeDir, "runs");
-  if (isInsideDir(resolved, worktrees) || isInsideDir(resolved, runs)) {
-    throw new BackupError(
-      "backup_out_denied: refusing to write under worktrees/ or runs/",
-      "backup_out_denied",
-      { path: resolved },
-    );
-  }
-  return resolved;
+  const checked = checkOutPath(outPath, homeDir);
+  if (checked.ok) return checked.resolved;
+  throw new BackupError(
+    `backup_out_denied: ${checked.reason}`,
+    "backup_out_denied",
+    ...(checked.resolved !== undefined ? [{ path: checked.resolved }] : []),
+  );
 }
 
 function isCredentialRootDir(dir: string): boolean {

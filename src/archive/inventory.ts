@@ -7,6 +7,7 @@ export type ArchiveRuleKind =
   | "copy" // a file or a folder, copied as is
   | "database" // a SQLite file, copied consistently with VACUUM INTO
   | "secret" // a file or folder that holds secrets; copied only when the caller asks
+  | "redacted" // a file that mixes routing with credentials; copied without the credentials unless the caller asks for secrets
   | "never"; // disposable or rebuilt; never copied
 
 export type ArchiveRule = {
@@ -35,6 +36,7 @@ export const ARCHIVE_RULES: readonly ArchiveRule[] = [
   { path: "identity/consumer-identity.db", kind: "database", reason: "consumer identity database" },
   { path: "identity/settings.json", kind: "copy", reason: "consumer identity settings" },
   { path: "agent/auth.json", kind: "secret", reason: "provider credentials" },
+  { path: "agent/models.json", kind: "redacted", reason: "model routing and provider pins; keys and headers are removed unless secrets are included" },
   { path: "channel-secrets.json", kind: "secret", reason: "secrets typed into Connections" },
   { path: "identity-secrets.json", kind: "secret", reason: "identity credentials and signing key" },
   { path: "secrets/mcp-secrets.json", kind: "secret", reason: "values behind MCP ${NAME} references" },

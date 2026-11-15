@@ -43,6 +43,8 @@ export type McpServerOptions = {
   requestTimeoutMs?: number;
   maxConnections?: number;
   browser?: StageBrowserSupport;
+  /** Test seam: the one-archive-at-a-time slot. Omit it in production. */
+  archiveSlot?: import("./archiveRoutes.js").ArchiveSlot;
 };
 
 export async function startMcpServer(
@@ -74,6 +76,7 @@ export async function startMcpServer(
           providerAuthContext,
           allowedHosts,
           controlTokens,
+          ...(options.archiveSlot ? { archiveSlot: options.archiveSlot } : {}),
           getShutdown: () => shutdown,
           ...(boot.agentHost ? { agentHost: boot.agentHost } : {}),
           ...(boot.functionService ? { functionService: boot.functionService } : {}),

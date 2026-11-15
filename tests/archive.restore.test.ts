@@ -156,6 +156,22 @@ describe("restoring an sf archive", () => {
     expect(readFileSync(path.join(target, "channel-secrets.json"), "utf8")).toBe("target-own-secrets");
   });
 
+  it("a default archive carries the routing in agent/models.json without its keys, and restores it privately beside the target's own auth file", async () => {
+    const { home, store } = await makeHome();
+    plant(home);
+    put(home, "agent/models.json", JSON.stringify({ providers: { openrouter: { baseUrl: "https://openrouter.ai/api/v1", apiKey: CANARY, openRouterRouting: { only: ["deepinfra"] } } } }));
+    const built = await buildArchive({ store: runsFor(store, home), homeDir: home });
+    const target = await emptyHome();
+    put(target, "agent/auth.json", "target-own-auth");
+    const result = await applyRestoreArchive({ archivePath: built.path, homeDir: target, probe: down });
+    expect(result.secrets_restored).toBe(0);
+    const restored = readFileSync(path.join(target, "agent/models.json"), "utf8");
+    expect(JSON.parse(restored)).toEqual({ providers: { openrouter: { baseUrl: "https://openrouter.ai/api/v1", openRouterRouting: { only: ["deepinfra"] } } } });
+    expect(restored).not.toContain(CANARY);
+    expect(statSync(path.join(target, "agent/models.json")).mode & 0o777).toBe(0o600);
+    expect(readFileSync(path.join(target, "agent/auth.json"), "utf8")).toBe("target-own-auth");
+  });
+
   it("an archive with secrets restores them, replaced files are kept aside, and restoreCredentials false skips them", async () => {
     const { archive } = await archiveOf({ secrets: true });
     const target = await emptyHome();
