@@ -444,7 +444,7 @@ A remote harness drives the Host over MCP/REST with a control token. Some CLI co
 ### Exec-only commands
 
 ```bash
-# ASCII pipeline diagram (humans). Harnesses: MCP describe_pipeline / get_run.
+# ASCII pipeline diagram (humans). Harnesses: MCP `read_pipeline` with `view: dag` / `get_run`.
 docker exec -it stageflow sf graph --pipeline examples/hello-world/hello.pipeline.yaml
 
 # Rewrite legacy YAML keys in a checkout (authors on a laptop; not a Host API).

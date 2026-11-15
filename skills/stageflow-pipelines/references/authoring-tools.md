@@ -38,7 +38,7 @@ Always pass `model`. If you omit it, the tool writes the Host's last resolved de
 | `write_task` with `mode: create` | `path`, optional `id`, `goal`, `filename`, `body`, `allow_invalid` | Creates or replaces the task on that package. Default filename is `<id>.task.yaml`. `body` is the task object; `id` and `goal` are filled in when missing. |
 | `write_task` with `mode: update` | `path`, `task_path`, optional `id`, `goal`, `patch`, `body`, `allow_invalid` | Merges `patch` and `body` onto the task. Fails with "no task on draft" until `write_task` with `mode: create`. |
 
-`create_stage_file` and `create_task_file` are different tools. They reject an id that is not kebab case. `write_pipeline` with `mode: create`, `write_stage` with `mode: create` and `write_task` with `mode: create` do not. `write_catalog_file` overwrites an existing stage file and restores it if the new text is not valid stage YAML. `validate_catalog_draft` validates a draft and writes nothing.
+`write_stage` with `mode: create` and `no_pipeline: true` and `write_task` with `mode: create` and `no_pipeline: true` reject an id that is not kebab case. `write_pipeline` with `mode: create`, `write_stage` with `mode: create` (on a package) and `write_task` with `mode: create` do not. `write_stage` with `form: content` overwrites an existing stage file and restores it if the new text is not valid stage YAML. `validate` with `kind: draft` validates a draft and writes nothing.
 
 ## Validate
 

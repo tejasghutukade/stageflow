@@ -198,5 +198,5 @@ The [`examples/triggers-readiness/`](../examples/triggers-readiness/) bundle shi
 
 - [YAML catalog — Triggers](yaml-catalog.md#triggers-trigger-yaml) — authoritative field reference
 - [`sf trigger`](cli-reference.md#sf-trigger) — CLI fire and `--task-inline`
-- [MCP trigger tools](mcp.md) — `fire_trigger`, `create_trigger`, error codes
+- [MCP trigger tools](mcp.md) — `fire_trigger`, `save_trigger` with `mode: create`, error codes
 - [Docker and self-hosting](docker.md) — running the Host and provider secrets

@@ -1,5 +1,5 @@
 id: implement-review
-# Replace with a model id from MCP list_models or `sf providers status` before running.
+# Replace with a model id from MCP list_catalog with kind: models or `sf providers status` before running.
 model: CHANGE_ME/<provider-model>
 schemas:
   change-plan:

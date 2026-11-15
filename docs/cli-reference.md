@@ -492,7 +492,7 @@ sf trigger show <id> [--json]
 sf trigger fire <id> [--task-inline '<json>'] [--json]
 ```
 
-There is no `sf trigger create`; creating a `*.trigger.yaml` is done through `POST /api/triggers`, the `create_trigger` MCP tool, or the operator console's New Trigger panel — not the CLI.
+There is no `sf trigger create`; creating a `*.trigger.yaml` is done through `POST /api/triggers`, the `save_trigger` MCP tool with `mode: create`, or the operator console's New Trigger panel — not the CLI.
 
 | Subcommand | Role |
 |------------|------|
