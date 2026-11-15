@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sf archive`, `POST /api/archive` and `GET /api/archive/<name>` write and stream one tar.gz of everything the Host keeps, with a manifest of every file and everything left out. Secrets are excluded unless you ask.
 - `sf restore` and `POST /api/restore` accept an archive: every file is checked against the manifest, replaced files are kept as `*.pre-restore-<ISO>`, secrets come back only if the archive has them, and an archive from a newer minor version is refused.
 
+### Changed
+- Docs and skills explain when to use `sf backup`, `sf archive` or `sf export` (a comparison table in the data-directory page), and the data-directory and Docker tables point to `sf archive` for the files `sf backup` leaves out.
+
 ### Fixed
 - Staging a `.tar.gz` backup through `POST /api/restore` stored it with a `.gz` extension, so the restore at the next boot read it as a bare database and failed. It keeps `.tar.gz` now.
 

@@ -84,7 +84,7 @@ A waiting run is not a failure. Exit 2 means a human must answer: hand off to `s
 
 ## Things only one surface can do
 
-- CLI only: `sf init`, `sf graph`, `sf migrate-yaml`, `sf backup`, `sf restore`, `sf doctor`, `sf providers login`, `sf browser login`, `sf eval engine install`.
+- CLI only: `sf init`, `sf graph`, `sf migrate-yaml`, `sf backup`, `sf archive`, `sf restore`, `sf doctor`, `sf providers login`, `sf browser login`, `sf eval engine install`.
 - MCP or REST (or the console) only: creating and editing connections, memories, and project registration. There is no `sf connections` command.
 - Both: starting and answering runs, validating, listing the catalog, agents, evals. MCP is richer for live inspection; the CLI is simpler in CI.
 

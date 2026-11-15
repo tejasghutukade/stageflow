@@ -290,9 +290,9 @@ STAGEFLOW_DOCKER_SMOKE=1 npx vitest run tests/docker.containerBrowserHost.smoke.
 | `state.db` (+ `-wal`, `-shm`) | **Irreplaceable** | Every run, stage, envelope, event, verification record, and A2A rows. Only ever copy via `sf backup`. |
 | `agent/auth.json` | **Irreplaceable** | Operator auth file. The image sets `STAGEFLOW_CREDENTIAL_HOME` to this data directory. |
 | `settings.json` | **Irreplaceable** | Concurrency and credential-source choice. |
-| `connections.yaml`, `channel-secrets.json` | **Irreplaceable** | [Channel](channels.md) connections and the secrets typed into the console. Not covered by `sf backup`; copy them yourself and keep the secrets file private (`0600`). |
-| `memories/` | **Irreplaceable** | [Memory](yaml-catalog.md#memories) pages created in the console. Not covered by `sf backup`; copy the directory yourself. |
-| `mcp/.mcp.json`, `secrets/mcp-secrets.json` | **Irreplaceable** | Servers and tokens added in Settings → Project MCP. Not covered by `sf backup`; copy them yourself and keep the secrets file private (`0600`). |
+| `connections.yaml`, `channel-secrets.json` | **Irreplaceable** | [Channel](channels.md) connections and the secrets typed into the console. Not covered by `sf backup`; [`sf archive`](cli-reference.md#sf-archive) copies them (secrets only with `--include-secrets`), or copy them yourself and keep the secrets file private (`0600`). |
+| `memories/` | **Irreplaceable** | [Memory](yaml-catalog.md#memories) pages created in the console. Not covered by `sf backup`; included in [`sf archive`](cli-reference.md#sf-archive), or copy the directory yourself. |
+| `mcp/.mcp.json`, `secrets/mcp-secrets.json` | **Irreplaceable** | Servers and tokens added in Settings → Project MCP. Not covered by `sf backup`; [`sf archive`](cli-reference.md#sf-archive) copies them (secrets only with `--include-secrets`), or copy them yourself and keep the secrets file private (`0600`). |
 | `secrets/mcp-oauth.key`, `agent/mcp-oauth-encrypted` | **Irreplaceable** | OAuth sign-ins for MCP servers. Keep the key and the store **together**; one without the other is useless. Not covered by `sf backup`. |
 | `agent/mcp-cache.json` | Disposable | Tool lists cached from the last successful connect; rebuilt by Check. |
 | `agents/pi-sessions/` | Situational | Agent session transcripts; history lives in `state.db`. |
@@ -312,7 +312,7 @@ Stageflow runs SQLite in **WAL mode**. Committed transactions often live in `sta
 - Copying `state.db` + `-wal` + `-shm` as three separate operations tears consistency under multi-writer load.
 - Live `tar` / `rsync` / volume snapshots have the same problem.
 
-Use `sf backup` (`VACUUM INTO` + verified archive) while the Host is up.
+Use `sf backup` (`VACUUM INTO` + verified archive) while the Host is up. For everything else the Host keeps (catalog, memories, connections, MCP servers, transcripts, identity, run files), use `sf archive`.
 
 ## Backup / restore runbook
 
@@ -320,7 +320,10 @@ Use `sf backup` (`VACUUM INTO` + verified archive) while the Host is up.
 # Live backup (default archive includes credentials at mode 0600 — treat as a secret)
 sf backup --json
 
-# Restore requires Host down (CLI probes GET /livez; never autostarts)
+# A complete copy of everything the Host keeps; secrets only with --include-secrets
+sf archive --json
+
+# Restore (a backup or an archive) requires Host down (CLI probes GET /livez; never autostarts)
 sf restore "$STAGEFLOW_HOME/backups/stageflow-….tar.gz" --json
 ```
 

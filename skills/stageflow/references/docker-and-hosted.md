@@ -76,7 +76,7 @@ That form uses the image's default command, `sf mcp`. Add `sf ui` as the command
 
 `GITHUB_TOKEN` or `GH_TOKEN` is what the Host uses for git clone and fetch, including public repositories. Pass one of them when stages fetch from GitHub. An empty `GITHUB_TOKEN` does not blank `GITHUB_TOKEN_FILE`. Setting both a non-empty value and `_FILE` is an error.
 
-Deleting the `stageflow-data` volume deletes runs and credentials. Run `sf backup` first (`setup.md`).
+Deleting the `stageflow-data` volume deletes runs and credentials. Run `sf backup` first, or `sf archive` for everything the Host keeps (`setup.md`).
 
 ## Compose against the published image
 
