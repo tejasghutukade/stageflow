@@ -30,10 +30,10 @@ async function issue(ctx: OperatorAgentToolContext, tool: string): Promise<strin
 
 describe("guide confirmations", () => {
   it("gates destructive, external and run-starting tools only", () => {
-    for (const name of ["delete_eval_run", "remove_connection", "fire_trigger", "run_eval", "start_run", "enable_agent"]) {
+    for (const name of ["delete_eval_run", "remove_connection", "fire_trigger", "run_eval", "start_run", "set_agent_enabled"]) {
       expect(GUIDE_CONFIRMED_TOOLS.has(name)).toBe(true);
     }
-    for (const name of ["create_pipeline", "read_pipeline", "probe_project_mcp", "create_agent"]) {
+    for (const name of ["write_pipeline", "read_pipeline", "probe_project_mcp", "save_agent"]) {
       expect(GUIDE_CONFIRMED_TOOLS.has(name)).toBe(false);
     }
   });
@@ -87,7 +87,7 @@ describe("guide confirmations", () => {
       component: "choices",
       question: "Run the support eval once.",
     });
-    const no = await tool.handler({ tool: "create_pipeline", summary: "x" }, ctx);
+    const no = await tool.handler({ tool: "write_pipeline", summary: "x" }, ctx);
     expect(no.error).toBe("guide.confirmation_not_needed");
   });
 });

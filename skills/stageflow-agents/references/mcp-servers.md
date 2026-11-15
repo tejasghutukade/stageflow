@@ -21,7 +21,7 @@ Two sources, merged by name. A console-saved server wins when the name clashes.
 | The project | `<project root>/.mcp.json` | You, with the file tools. The project is the folder with `stageflow.yaml` |
 | The console | `$STAGEFLOW_HOME/mcp/.mcp.json` | Settings → Project MCP, or the REST routes below |
 
-`list_project_mcp` (MCP) and `GET /api/project-mcp` list both. Each row has `name`, `transport`, `origin` (`project` or `console`), `authStatus`, cached `tools`, and `usableByStages`. They do not connect and they do not return tokens or URLs. Read `usableByStages` and `authStatus` before you put a console server on a stage `mcp` list. `probe_project_mcp` and `POST /api/project-mcp/<name>/probe` connect and exit; that is an external call, so confirm with the user first.
+`list_catalog` with `kind: mcp_servers` (MCP) and `GET /api/project-mcp` list both. Each row has `name`, `transport`, `origin` (`project` or `console`), `authStatus`, cached `tools`, and `usableByStages`. They do not connect and they do not return tokens or URLs. Read `usableByStages` and `authStatus` before you put a console server on a stage `mcp` list. `probe_project_mcp` and `POST /api/project-mcp/<name>/probe` connect and exit; that is an external call, so confirm with the user first.
 
 MCP tools on the Host act on the Host's own project (the directory `sf ui` or `sf mcp` was started in). A server saved from the console is host-level and is visible to agents in the projects that Host serves. A `.mcp.json` edit is the file in the project you have open.
 
@@ -29,7 +29,7 @@ An agent session attaches its granted servers with lifecycle `lazy`. Probe and p
 
 ## There is no CLI and no MCP write
 
-Nothing in `sf` and nothing in the MCP tool list can add, replace, or remove a project MCP server, set an MCP secret, or run MCP OAuth. The MCP tools stop at `list_project_mcp` and `probe_project_mcp`.
+Nothing in `sf` and nothing in the MCP tool list can add, replace, or remove a project MCP server, set an MCP secret, or run MCP OAuth. The MCP tools stop at `list_catalog` with `kind: mcp_servers` and `probe_project_mcp`.
 
 Use the console, or the REST routes below. Prefer the console when a secret or a browser sign-in is involved: the user types the secret there, and it never enters the chat.
 
@@ -108,7 +108,7 @@ Give the user `authorizationUrl` and ask them to paste the resulting address int
 
 ## After it is saved
 
-1. `list_project_mcp` shows the name.
+1. `list_catalog` with `kind: mcp_servers` shows the name.
 2. Probe only with the user's go-ahead.
 3. Grant the tools the job needs in `tools.mcp`, by the tool names from `GET /api/project-mcp/<name>/tools` or from the probe. Do not invent tool names. `["*"]` is acceptable when they asked for the whole server; still list each side-effecting tool in `ask_first`.
 4. `sf agents validate` warns `agent.mcp_server_unknown` until the Host can see the server. Re-validate after the server is saved.

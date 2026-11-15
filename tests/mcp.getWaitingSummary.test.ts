@@ -28,7 +28,7 @@ async function mcpCall(
   name: string,
   args: Record<string, unknown> = {},
 ) {
-  const res = await fetch(`${base}/mcp`, {
+  const res = await fetch(`${base}/mcp?toolsets=all`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -103,7 +103,7 @@ async function startWaitingRun(
   return started.payload.runId as string;
 }
 
-describe("get_waiting_summary", () => {
+describe("list_waiting", () => {
   let projectA: { root: string; cleanup: () => Promise<void> };
   let projectB: { root: string; cleanup: () => Promise<void> };
 
@@ -167,7 +167,7 @@ describe("get_waiting_summary", () => {
     const baseB = `http://127.0.0.1:${addrB.port}`;
 
     try {
-      const emptyA = await mcpCall(baseA, "get_waiting_summary");
+      const emptyA = await mcpCall(baseA, "list_waiting", { detail: "summary" });
       expect(emptyA.isError).toBe(false);
       expect(emptyA.payload).toEqual({ count: 0, runs: [] });
 
@@ -192,7 +192,7 @@ describe("get_waiting_summary", () => {
       });
 
       // Unscoped spans every project.
-      const unscoped = await mcpCall(baseA, "get_waiting_summary");
+      const unscoped = await mcpCall(baseA, "list_waiting", { detail: "summary" });
       expect(unscoped.isError).toBe(false);
       expect(unscoped.payload.count).toBe(2);
       expect(unscoped.payload.runs).toEqual(
@@ -206,7 +206,7 @@ describe("get_waiting_summary", () => {
       }
 
       // runId scopes to just that run.
-      const byRunId = await mcpCall(baseA, "get_waiting_summary", { runId: runIdA });
+      const byRunId = await mcpCall(baseA, "list_waiting", { detail: "summary", runId: runIdA });
       expect(byRunId.isError).toBe(false);
       expect(byRunId.payload).toEqual({
         count: 1,
@@ -214,14 +214,14 @@ describe("get_waiting_summary", () => {
       });
 
       // path scopes to just that project.
-      const byPathA = await mcpCall(baseA, "get_waiting_summary", { path: projectA.root });
+      const byPathA = await mcpCall(baseA, "list_waiting", { detail: "summary", path: projectA.root });
       expect(byPathA.isError).toBe(false);
       expect(byPathA.payload).toEqual({
         count: 1,
         runs: [{ runId: runIdA, stageId: "clarify", kind: "free_text" }],
       });
 
-      const byPathB = await mcpCall(baseA, "get_waiting_summary", { path: projectB.root });
+      const byPathB = await mcpCall(baseA, "list_waiting", { detail: "summary", path: projectB.root });
       expect(byPathB.isError).toBe(false);
       expect(byPathB.payload).toEqual({
         count: 1,

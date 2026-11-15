@@ -9,13 +9,13 @@ Docker is the recommended way to run Stageflow: pull the published image and ope
 
 ## Docker (recommended)
 
-The image is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.61` is the current minor tag (`0.61.0` is that exact release). Each release is also tagged `x.y.z` and `x.y`.
+The image is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.63` is the current minor tag (`0.63.0` is that exact release). Each release is also tagged `x.y.z` and `x.y`.
 
 ```bash
 docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.61 \
+  ghcr.io/tejasghutukade/stageflow:0.63 \
   sf ui
 ```
 
@@ -31,7 +31,7 @@ docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
   -v "$PWD":/project \
-  ghcr.io/tejasghutukade/stageflow:0.61 \
+  ghcr.io/tejasghutukade/stageflow:0.63 \
   sf ui
 ```
 
@@ -188,8 +188,8 @@ If a stage calls `ask_operator`, the run pauses until you reply in the console. 
 
 1. Start a Host: `sf ui` or `sf mcp` (default `http://127.0.0.1:3847`)
 2. Ensure/register the catalog folder (`POST /api/projects` on trusted loopback, or a prior local `sf run` ensure) — or use `project_root: "workspace"` for the workspace catalog and its starters
-3. MCP: `list_pipelines` (catalog-relative paths; absolute paths → `absolute_path_not_allowed`) → `start_run` → `wait_run`
-4. Compare homes/providers with `get_health` (`stageflow_home`, `boot_providers`) and live auth via `list_providers`
+3. MCP: `list_catalog` with `kind: pipelines` (catalog-relative paths; absolute paths → `absolute_path_not_allowed`) → `start_run` → `wait_run`
+4. Compare homes/providers with `list_catalog` with `kind: health` (`stageflow_home`, `boot_providers`) and live auth via `list_catalog` with `kind: providers`
 
 Details: [MCP](mcp.md). Setup skill checklist: `skills/stageflow/SKILL.md`.
 

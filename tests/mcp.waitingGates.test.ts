@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   projectWaitingGate,
   projectWaitingGates,
-} from "../src/mcp/waitingGates.js";
+} from "../src/runread/waitingGates.js";
 import type {
   RunDetail,
   RunStore,

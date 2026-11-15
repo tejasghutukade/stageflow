@@ -62,8 +62,12 @@ vi.mock("@modelcontextprotocol/server", async (importOriginal) => {
   };
 });
 
+const { registerMcpToolsMock } = vi.hoisted(() => ({
+  registerMcpToolsMock: vi.fn(),
+}));
+
 vi.mock("../src/mcp/tools.js", () => ({
-  registerMcpTools: vi.fn(),
+  registerMcpTools: registerMcpToolsMock,
 }));
 
 vi.mock("../src/mcp/resources.js", () => ({
@@ -86,8 +90,10 @@ const initializeBody = JSON.stringify({
 
 async function postInitialize(
   handler: ReturnType<typeof createMcpHttpHandler>,
-): Promise<{ status: number; error?: unknown }> {
+  query = "",
+): Promise<{ status: number; error?: unknown; body?: unknown }> {
   const server = createServer((req, res) => {
+    req.url = `/${query}`;
     void handler.handle(req, res).catch((err: unknown) => {
       if (!res.headersSent) {
         res.writeHead(500);
@@ -110,7 +116,16 @@ async function postInitialize(
       },
       body: initializeBody,
     });
-    return { status: res.status };
+    const text = await res.text();
+    let body: unknown;
+    if (text.startsWith("{")) {
+      try {
+        body = JSON.parse(text) as unknown;
+      } catch {
+        body = text;
+      }
+    }
+    return { status: res.status, body };
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));
@@ -123,6 +138,7 @@ describe("MCP stateful initialize cleanup", () => {
     mockState.transportClose.mockClear();
     mockState.serverClose.mockClear();
     mockState.connect.mockClear();
+    registerMcpToolsMock.mockClear();
     mockState.mode = "fail-before-register";
   });
 
@@ -162,5 +178,24 @@ describe("MCP stateful initialize cleanup", () => {
     await handler.close();
     expect(mockState.transportClose).toHaveBeenCalledTimes(1);
     expect(mockState.serverClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 400 for unknown toolsets at initialize without registering a session", async () => {
+    const handler = createMcpHttpHandler({
+      manager: {} as never,
+      store: {} as never,
+      cwd: "/tmp",
+      runChangeBus: createRunChangeBus(),
+    });
+
+    const init = await postInitialize(handler, "?toolsets=nope");
+
+    expect(init.status).toBe(400);
+    expect(init.body).toMatchObject({
+      error: { message: expect.stringContaining("nope") },
+    });
+    expect(mockState.connect).not.toHaveBeenCalled();
+    expect(registerMcpToolsMock).not.toHaveBeenCalled();
+    await handler.close();
   });
 });

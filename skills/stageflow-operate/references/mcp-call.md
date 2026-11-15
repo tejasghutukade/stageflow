@@ -20,12 +20,12 @@ A Host start with no operator token writes that file and prints `Control token: 
 
 ## Session
 
-`--stateless` sends one `tools/call` and no session header. Use it for hosts the **user** started with `sf mcp --mcp-stateless`, not a skill-started process.
+`--stateless` sends one `tools/call` and no session header. Use it for hosts the **user** started with `sf mcp --mcp-stateless`, not a skill-started process. Stateless calls hit `/mcp?toolsets=all` so optional toolsets (evals, agents, …) are registered on that request.
 
-Without `--stateless`: `initialize`, capture `Mcp-Session-Id`, reuse it for `tools/call`.
+Without `--stateless`: `initialize` against `/mcp?toolsets=all` (toolsets bind at session start), capture `Mcp-Session-Id`, then `tools/call` on bare `/mcp` with that session id. Later bare requests keep the full tool list; changing the query on the same session does not add toolsets — reconnect with a new `initialize` if you need a different set.
 
 Stdout is the tool JSON. Exit `0` on success, including `wait_run` with `reason: "timeout"` (keep polling). Exit `1` on transport failure or `isError: true`. Exit `2` on usage or malformed `--args` — that parse error happens before any network call.
 
-The script's allowlist is the Host's registered MCP tool set. A name outside that set exits `2` before any network call. `node scripts/mcp-call.mjs --list-tools` asks a live Host and reports names the script does not know (`unknown_to_script`). Confirm a costly or destructive call in [SKILL.md](../SKILL.md) before you send it. `cancel_run`, `delete_run`, and `gc_runs` are allowed; `gc_runs` stays a dry run until `execute` is true.
+The script's allowlist is the Host's registered MCP tool set. A name outside that set exits `2` before any network call. `node scripts/mcp-call.mjs --list-tools` asks a live Host and reports names the script does not know (`unknown_to_script`). Confirm a costly or destructive call in [SKILL.md](../SKILL.md) before you send it. `cancel_run`, `delete_runs`, and `delete_runs` with `gc: true` are allowed; `delete_runs` with `gc: true` stays a dry run until `execute` is true.
 
 `start_run` may return `{ "runId", "queued": true }` — treat that like `{ "runId" }` (success, slower start). `busy_capacity` means the admission queue is full; `busy_checkout` is path-bound lease only; `insufficient_disk` is a hard stop (not queued).

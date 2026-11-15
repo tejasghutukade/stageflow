@@ -65,7 +65,7 @@ const envelopeRefSchema = z.object({
  * Standalone stage/pipeline call. It does not consult the
  * `publications`/`allowed_callers` allowlist that `invoke` enforces.
  * The caller must have `allow_run_stage` set; that defaults to off.
- * Mirrors run_stage's MCP call shape (src/mcp/catalogTools.ts).
+ * Mirrors start_run stage mode (src/mcp/catalogTools.ts).
  */
 const runStageDataPart = z
   .object({

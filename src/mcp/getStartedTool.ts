@@ -6,13 +6,32 @@ import { resolveCatalogRoots } from "../config/resolveCatalogRoots.js";
 import type { McpToolDeps } from "./deps.js";
 import { textResult } from "./toolResults.js";
 import { toolchainHealthMap } from "../preflight/toolchain.js";
+import { TOOLSETS } from "../toolkit/meta.js";
+
+function toolsetSections(deps: McpToolDeps) {
+  const session = deps.mcpToolsetSession;
+  if (!session) return {};
+  const loaded = new Set(session.loadedToolsetIds);
+  const loaded_toolsets = TOOLSETS.filter((entry) => loaded.has(entry.id)).map((entry) => ({
+    id: entry.id,
+    title: entry.title,
+    summary: entry.summary,
+  }));
+  const unloaded_toolsets = TOOLSETS.filter((entry) => !loaded.has(entry.id)).map((entry) => ({
+    id: entry.id,
+    title: entry.title,
+    summary: entry.summary,
+    reconnect_url: `${session.baseUrl}/mcp?toolsets=${entry.id}`,
+  }));
+  return { loaded_toolsets, unloaded_toolsets };
+}
 
 export function registerGetStartedTool(server: McpServer, deps: McpToolDeps): void {
   server.registerTool(
     "get_started",
     {
       description:
-        "First-run orientation for remote harnesses: host version, providers, toolchain hints, catalog roots with counts, and a three-call next_steps list. No arguments.",
+        "First-run orientation for remote harnesses: host version, providers, toolchain hints, catalog roots with counts, loaded and unloaded MCP toolsets (reconnect URLs), and a three-call next_steps list. No arguments.",
       inputSchema: z.object({}),
     },
     async () => {
@@ -53,22 +72,25 @@ export function registerGetStartedTool(server: McpServer, deps: McpToolDeps): vo
       return textResult({
         host: { version: PACKAGE_VERSION },
         providers: deps.providerAuthContext
-          ? { note: "Use list_providers for status" }
+          ? { note: "Use list_catalog with kind providers for status" }
           : { configured: [] },
         toolchain: toolchainHealthMap(),
         catalog_roots,
+        ...toolsetSections(deps),
         next_steps: [
           {
-            tool: "list_pipelines",
-            args: authoringRoot
-              ? { project_root: authoringRoot.project_root }
-              : {},
+            tool: "list_catalog",
+            args: {
+              kind: "pipelines",
+              ...(authoringRoot ? { project_root: authoringRoot.project_root } : {}),
+            },
           },
           {
-            tool: "list_tasks",
-            args: authoringRoot
-              ? { project_root: authoringRoot.project_root }
-              : {},
+            tool: "list_catalog",
+            args: {
+              kind: "tasks",
+              ...(authoringRoot ? { project_root: authoringRoot.project_root } : {}),
+            },
           },
           {
             tool: "start_run",

@@ -40,6 +40,35 @@ export type ToolGroup = {
   operatorOnly?: true;
 };
 
+export type ToolsetId =
+  | "core"
+  | "runs"
+  | "catalog"
+  | "agents"
+  | "evals"
+  | "functions"
+  | "triggers"
+  | "connections"
+  | "memories";
+
+export type Toolset = {
+  id: ToolsetId;
+  title: string;
+  summary: string;
+};
+
+export const TOOLSETS: readonly Toolset[] = [
+  { id: "core", title: "Core", summary: "Discover the project, author YAML, run pipelines, read outputs, and answer gates." },
+  { id: "runs", title: "Run cleanup", summary: "Abandon stages and delete or garbage-collect runs." },
+  { id: "catalog", title: "Catalog extras", summary: "Import tasks and probe project MCP servers." },
+  { id: "agents", title: "Agents", summary: "List, manage, chat with and approve project agents." },
+  { id: "evals", title: "Evals", summary: "Author, run, review and delete evals and datasets." },
+  { id: "functions", title: "Functions", summary: "Author, test and delete reusable JavaScript functions." },
+  { id: "triggers", title: "Triggers", summary: "List, configure and fire triggers." },
+  { id: "connections", title: "Connections", summary: "Manage send channels and test recipients." },
+  { id: "memories", title: "Memories", summary: "Manage host memories and their cards." },
+];
+
 export const TOOL_GROUPS: readonly ToolGroup[] = [
   { id: "discover", title: "Discover the project", summary: "List pipelines, tasks, skills, models and providers; validate and preflight." },
   { id: "runs.read", title: "Watch runs", summary: "Read runs, stage events, logs, envelopes, artifacts and checkout diffs." },
@@ -68,152 +97,95 @@ export const TOOL_GROUPS: readonly ToolGroup[] = [
 ];
 
 export type ToolMeta = {
-  group: ToolGroupId;
+  groups: ToolGroupId[];
   risk: ToolRisk;
+  toolset: ToolsetId;
   /** Not offered to agents even though its group is. */
   operatorOnly?: true;
 };
 
-const t = (group: ToolGroupId, risk: ToolRisk, operatorOnly?: true): ToolMeta => ({ group, risk, ...(operatorOnly ? { operatorOnly } : {}) });
+const t = (group: ToolGroupId, risk: ToolRisk, toolset: ToolsetId, operatorOnly?: true): ToolMeta => ({
+  groups: [group],
+  risk,
+  toolset,
+  ...(operatorOnly ? { operatorOnly } : {}),
+});
 
 export const TOOL_META: Readonly<Record<string, ToolMeta>> = {
-  get_started: t("discover", "read", true),
-  list_skills: t("discover", "read"),
-  list_pipelines: t("discover", "read"),
-  list_tasks: t("discover", "read"),
-  list_models: t("discover", "read"),
-  list_providers: t("discover", "read"),
-  get_health: t("discover", "read"),
-  preflight: t("discover", "read"),
-  validate: t("discover", "read"),
-  describe_pipeline: t("discover", "read"),
-  list_project_mcp: t("discover", "read"),
-  probe_project_mcp: t("discover", "external"),
+  get_started: t("discover", "read", "core", true),
+  list_catalog: t("discover", "read", "core"),
+  validate: {
+    groups: ["agents.read", "connections", "discover", "evals.read", "pipelines.author"],
+    risk: "read",
+    toolset: "core",
+  },
+  read_pipeline: { groups: ["discover", "pipelines.author"], risk: "read", toolset: "core" },
+  probe_project_mcp: t("discover", "external", "catalog"),
+  import_task: t("pipelines.author", "external", "catalog"),
 
-  list_runs: t("runs.read", "read"),
-  get_run: t("runs.read", "read"),
-  export_run: t("runs.read", "read"),
-  read_artifact: t("runs.read", "read"),
-  wait_run: t("runs.read", "read"),
-  list_stage_events: t("runs.read", "read"),
-  tail_stage_log: t("runs.read", "read"),
-  get_stage_verification: t("runs.read", "read"),
-  get_envelope: t("runs.read", "read"),
-  list_checkout_changes: t("runs.read", "read"),
-  get_run_diff: t("runs.read", "read"),
-  read_checkout_file: t("runs.read", "read"),
+  get_run: t("runs.read", "read", "core"),
+  get_stage: t("runs.read", "read", "core"),
+  run_files: t("runs.read", "read", "core"),
+  wait_run: t("runs.read", "read", "core"),
 
-  start_run: t("runs.control", "write"),
-  run_stage: t("runs.control", "write"),
-  rerun: t("runs.control", "write"),
-  retry_stage: t("runs.control", "write"),
-  resume_stage: t("runs.control", "write"),
-  recover_manual_stage: t("runs.control", "write"),
-  stop_manual_recovery: t("runs.control", "write"),
-  cancel_run: t("runs.cleanup", "destructive"),
-  abandon_stage: t("runs.cleanup", "destructive"),
-  delete_run: t("runs.cleanup", "destructive"),
-  gc_runs: t("runs.cleanup", "destructive"),
+  start_run: t("runs.control", "write", "core"),
+  stage_action: t("runs.control", "write", "core"),
+  cancel_run: t("runs.cleanup", "destructive", "core"),
+  abandon_stage: t("runs.cleanup", "destructive", "runs"),
+  delete_runs: t("runs.cleanup", "destructive", "runs"),
 
-  list_waiting: t("gates.read", "read"),
-  get_waiting_summary: t("gates.read", "read"),
-  answer_gate: t("gates.decide", "write", true),
-  decide_feedback_loop: t("gates.decide", "write", true),
+  list_waiting: t("gates.read", "read", "core"),
+  answer_gate: t("gates.decide", "write", "core", true),
+  decide_feedback_loop: t("gates.decide", "write", "core", true),
 
-  list_triggers: t("triggers", "read"),
-  get_trigger: t("triggers", "read"),
-  create_trigger: t("triggers", "write"),
-  update_trigger: t("triggers", "write"),
-  set_trigger_enabled: t("triggers", "write"),
-  fire_trigger: t("triggers", "external"),
+  get_trigger: t("triggers", "read", "triggers"),
+  save_trigger: t("triggers", "write", "triggers"),
+  fire_trigger: t("triggers", "external", "triggers"),
 
-  list_agents: t("agents.read", "read"),
-  get_agent: t("agents.read", "read"),
-  validate_agent: t("agents.read", "read"),
-  list_agent_revisions: t("agents.read", "read"),
-  get_agent_revision: t("agents.read", "read"),
-  diff_agent_revisions: t("agents.read", "read"),
-  get_agent_session: t("agents.read", "read"),
-  list_agent_sessions: t("agents.read", "read"),
+  get_agent: t("agents.read", "read", "agents"),
+  get_agent_session: t("agents.read", "read", "agents"),
 
-  create_agent: t("agents.manage", "write"),
-  save_agent: t("agents.manage", "write"),
-  enable_agent: t("agents.manage", "write"),
-  disable_agent: t("agents.manage", "write"),
-  restore_agent_revision: t("agents.manage", "write"),
-  archive_agent: t("agents.cleanup", "destructive"),
+  save_agent: t("agents.manage", "write", "agents"),
+  set_agent_enabled: t("agents.manage", "write", "agents"),
+  archive_agent: t("agents.cleanup", "destructive", "agents"),
 
-  agent_chat: t("agents.converse", "external"),
-  stop_agent_session: t("agents.converse", "write"),
-  approve_agent_action: t("gates.decide", "write", true),
-  deny_agent_action: t("gates.decide", "write", true),
+  agent_chat: t("agents.converse", "external", "agents"),
+  stop_agent_session: t("agents.converse", "write", "agents"),
+  decide_agent_action: t("gates.decide", "write", "agents", true),
 
-  read_pipeline: t("pipelines.author", "read"),
-  create_pipeline: t("pipelines.author", "write"),
-  edit_pipeline: t("pipelines.author", "write"),
-  create_stage: t("pipelines.author", "write"),
-  edit_stage: t("pipelines.author", "write"),
-  create_task: t("pipelines.author", "write"),
-  edit_task: t("pipelines.author", "write"),
-  create_task_file: t("pipelines.author", "write"),
-  update_task_file: t("pipelines.author", "write"),
-  import_task_file: t("pipelines.author", "external"),
-  create_stage_file: t("pipelines.author", "write"),
-  write_catalog_file: t("pipelines.author", "write"),
-  validate_catalog_draft: t("pipelines.author", "read"),
+  write_pipeline: t("pipelines.author", "write", "core"),
+  write_stage: t("pipelines.author", "write", "core"),
+  write_task: t("pipelines.author", "write", "core"),
 
-  list_connections: t("connections", "read"),
-  create_connection: t("connections", "write"),
-  update_connection: t("connections", "write"),
-  test_connection: t("connections", "external"),
-  validate_connection_target: t("connections", "read"),
-  remove_connection: t("connections.cleanup", "destructive"),
+  get_connection: t("connections", "read", "connections"),
+  save_connection: t("connections", "write", "connections"),
+  test_connection: t("connections", "external", "connections"),
+  remove_connection: t("connections.cleanup", "destructive", "connections"),
 
-  list_memories: t("memories", "read"),
-  get_memory: t("memories", "read"),
-  create_memory: t("memories", "write"),
-  write_memory: t("memories", "write"),
-  write_memory_card: t("memories", "write"),
-  delete_memory_card: t("memories.cleanup", "destructive"),
+  get_memory: t("memories", "read", "memories"),
+  save_memory: t("memories", "write", "memories"),
+  delete_memory_card: t("memories.cleanup", "destructive", "memories"),
 
-  list_evals: t("evals.read", "read"),
-  get_eval: t("evals.read", "read"),
-  validate_eval: t("evals.read", "read"),
-  get_eval_run: t("evals.read", "read"),
-  list_eval_runs: t("evals.read", "read"),
-  get_eval_results: t("evals.read", "read"),
-  get_eval_result: t("evals.read", "read"),
-  compare_eval_runs: t("evals.read", "read"),
-  get_eval_failure_suggestions: t("evals.read", "read"),
-  get_eval_failure_sort_status: t("evals.read", "read"),
-  get_eval_run_export: t("evals.read", "read"),
-  run_eval: t("evals.run", "external"),
-  sort_eval_failures: t("evals.run", "external"),
-  list_grader_calibrations: t("evals.read", "read"),
-  calibrate_eval_grader: t("evals.run", "external"),
-  cancel_eval_run: t("evals.run", "write"),
-  try_eval_case: t("evals.run", "external"),
+  get_eval: t("evals.read", "read", "evals"),
+  get_eval_run: t("evals.read", "read", "evals"),
+  get_eval_results: t("evals.read", "read", "evals"),
+  compare_eval_runs: t("evals.read", "read", "evals"),
+  get_eval_failures: t("evals.read", "read", "evals"),
+  run_eval: t("evals.run", "external", "evals"),
+  sort_eval_failures: t("evals.run", "external", "evals"),
+  calibrate_eval_grader: t("evals.run", "external", "evals"),
+  cancel_eval_run: t("evals.run", "write", "evals"),
+  try_eval_case: t("evals.run", "external", "evals"),
 
-  create_eval: t("evals.write", "write"),
-  update_eval: t("evals.write", "write"),
-  create_dataset: t("evals.write", "write"),
-  update_dataset_cases: t("evals.write", "write"),
-  convert_dataset: t("evals.write", "write"),
-  install_eval_sample: t("evals.write", "write"),
-  put_eval_review: t("evals.write", "write"),
-  accept_eval_failure_suggestions: t("evals.write", "write"),
-  dismiss_eval_failure_suggestions: t("evals.write", "write"),
-  delete_eval_run: t("evals.cleanup", "destructive"),
+  save_eval: t("evals.write", "write", "evals"),
+  save_dataset: t("evals.write", "write", "evals"),
+  review_eval_results: t("evals.write", "write", "evals"),
+  delete_eval_run: t("evals.cleanup", "destructive", "evals"),
 
-  list_functions: t("functions.read", "read"),
-  get_function: t("functions.read", "read"),
-  list_function_revisions: t("functions.read", "read"),
-  get_function_revision: t("functions.read", "read"),
-  create_function: t("functions.write", "write"),
-  save_function: t("functions.write", "write"),
-  duplicate_function: t("functions.write", "write"),
-  test_function: t("functions.test", "read"),
-  delete_function: t("functions.cleanup", "destructive"),
+  get_function: t("functions.read", "read", "functions"),
+  save_function: t("functions.write", "write", "functions"),
+  test_function: t("functions.test", "read", "functions"),
+  delete_function: t("functions.cleanup", "destructive", "functions"),
 };
 
 export type StageflowGrants = { groups: readonly string[]; tools: readonly string[] };
@@ -226,19 +198,30 @@ export function isToolGroupId(value: string): value is ToolGroupId {
   return TOOL_GROUPS.some((group) => group.id === value);
 }
 
+export function isToolsetId(value: string): value is ToolsetId {
+  return TOOLSETS.some((toolset) => toolset.id === value);
+}
+
+export function toolsInToolset(toolset: ToolsetId): string[] {
+  return Object.entries(TOOL_META)
+    .filter(([, meta]) => meta.toolset === toolset)
+    .map(([name]) => name)
+    .sort();
+}
+
 export function isOperatorOnlyGroup(group: string): boolean {
   return TOOL_GROUPS.some((entry) => entry.id === group && entry.operatorOnly === true);
 }
 
 export function isOperatorOnlyTool(name: string): boolean {
   const meta = TOOL_META[name];
-  return meta !== undefined && (meta.operatorOnly === true || isOperatorOnlyGroup(meta.group));
+  return meta !== undefined && (meta.operatorOnly === true || meta.groups.some((entry) => isOperatorOnlyGroup(entry)));
 }
 
 /** Tools of a group an agent may hold; operator-only tools are left out. */
 export function toolsInGroup(group: string): string[] {
   return Object.entries(TOOL_META)
-    .filter(([name, meta]) => meta.group === group && !isOperatorOnlyTool(name))
+    .filter(([name, meta]) => meta.groups.includes(group as ToolGroupId) && !isOperatorOnlyTool(name))
     .map(([name]) => name);
 }
 

@@ -87,6 +87,12 @@ function writeToolResult(res, id, payload, isError = false) {
   res.end(data);
 }
 
+function isMcpPost(req) {
+  if (req.method !== "POST") return false;
+  const path = (req.url ?? "").split("?")[0];
+  return path === "/mcp";
+}
+
 const HEALTH = {
   ok: true,
   activeRunIds: [],
@@ -97,15 +103,39 @@ const HEALTH = {
   maxActiveStageProcesses: null,
 };
 
-test("get_health against a mock stateless host returns health JSON, exit 0", async () => {
+test("stateless tool calls use ?toolsets=all on /mcp", async () => {
+  let sawUrl;
   const { server, baseUrl } = await listen(async (req, res) => {
-    if (req.method !== "POST" || req.url !== "/mcp") {
+    sawUrl = req.url;
+    const body = await readJsonBody(req);
+    writeToolResult(res, body.id, { ok: true });
+  });
+  try {
+    const result = await run([
+      "--base-url",
+      baseUrl,
+      "--tool",
+      "get_eval",
+      "--args",
+      "{}",
+      "--stateless",
+    ]);
+    assert.equal(result.status, 0);
+    assert.equal(sawUrl, "/mcp?toolsets=all");
+  } finally {
+    server.close();
+  }
+});
+
+test("list_catalog health against a mock stateless host returns health JSON, exit 0", async () => {
+  const { server, baseUrl } = await listen(async (req, res) => {
+    if (!isMcpPost(req)) {
       res.writeHead(404);
       res.end();
       return;
     }
     const body = await readJsonBody(req);
-    if (body?.method !== "tools/call" || body?.params?.name !== "get_health") {
+    if (body?.method !== "tools/call" || body?.params?.name !== "list_catalog") {
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "unexpected call" }));
       return;
@@ -117,9 +147,9 @@ test("get_health against a mock stateless host returns health JSON, exit 0", asy
       "--base-url",
       baseUrl,
       "--tool",
-      "get_health",
+      "list_catalog",
       "--args",
-      "{}",
+      JSON.stringify({ kind: "health" }),
       "--stateless",
     ]);
     assert.equal(result.status, 0);
@@ -206,7 +236,7 @@ test("malformed JSON args fail before any network call", async () => {
       "--base-url",
       baseUrl,
       "--tool",
-      "get_health",
+      "list_catalog",
       "--args",
       "{not-json",
       "--stateless",
@@ -261,7 +291,7 @@ test("sends Authorization Bearer when STAGEFLOW_CONTROL_TOKEN is set", async () 
         "--base-url",
         baseUrl,
         "--tool",
-        "get_health",
+        "list_catalog",
         "--args",
         "{}",
         "--stateless",
@@ -277,7 +307,7 @@ test("sends Authorization Bearer when STAGEFLOW_CONTROL_TOKEN is set", async () 
   }
 });
 
-test("allows run_stage and get_envelope tool names", async () => {
+test("allows start_run stage mode and get_stage envelope view", async () => {
   const seen = [];
   const { server, baseUrl } = await listen(async (req, res) => {
     const body = await readJsonBody(req);
@@ -285,19 +315,23 @@ test("allows run_stage and get_envelope tool names", async () => {
     writeToolResult(res, body.id, { ok: true });
   });
   try {
-    for (const tool of ["run_stage", "get_envelope"]) {
+  const calls = [
+    ["start_run", JSON.stringify({ stage: "stages/x.yaml", task: { id: "t", goal: "g" } })],
+    ["get_stage", JSON.stringify({ runId: "r1", stageId: "s1", view: "envelope" })],
+  ];
+    for (const [tool, args] of calls) {
       const result = await run([
         "--base-url",
         baseUrl,
         "--tool",
         tool,
         "--args",
-        "{}",
+        args,
         "--stateless",
       ]);
       assert.equal(result.status, 0, tool);
     }
-    assert.deepEqual(seen, ["run_stage", "get_envelope"]);
+    assert.deepEqual(seen, ["start_run", "get_stage"]);
   } finally {
     server.close();
   }
@@ -320,7 +354,7 @@ test("--stateless against a session-mode-only mock errors without hanging", asyn
         "--base-url",
         baseUrl,
         "--tool",
-        "get_health",
+        "list_catalog",
         "--args",
         "{}",
         "--stateless",
@@ -446,17 +480,16 @@ test("allows operate tools beyond the run set", async () => {
   });
   const tools = [
     "get_started",
-    "get_waiting_summary",
+    "list_waiting",
     "cancel_run",
-    "retry_stage",
-    "resume_stage",
-    "rerun",
-    "export_run",
-    "list_connections",
-    "create_connection",
+    "stage_action",
+    "get_run",
+    "start_run",
+    "get_connection",
+    "save_connection",
     "fire_trigger",
-    "list_agent_sessions",
-    "approve_agent_action",
+    "get_agent_session",
+    "decide_agent_action",
   ];
   try {
     for (const tool of tools) {
@@ -494,7 +527,7 @@ test("--timeout-ms must be a positive number", async () => {
     "--base-url",
     "http://127.0.0.1:1",
     "--tool",
-    "get_health",
+    "list_catalog",
     "--timeout-ms",
     "abc",
   ]);

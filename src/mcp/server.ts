@@ -9,6 +9,13 @@ import type { RunChangeBus } from "../runtime/runChangeBus.js";
 import type { McpHttpDeps, McpToolDeps } from "./deps.js";
 import { registerRunResources, runResourceUri } from "./resources.js";
 import { registerMcpTools } from "./tools.js";
+import {
+  resolveLoadedToolsetIds,
+  resolveToolsets,
+  toolsetsQueryFromUrl,
+  unknownToolsetsMessage,
+} from "./toolsets.js";
+import type { ToolsetId } from "../toolkit/meta.js";
 
 export type { McpHttpDeps, McpToolDeps };
 
@@ -99,7 +106,30 @@ function attachBusNotifications(
   });
 }
 
-export function createStageflowMcpServer(deps: McpToolDeps): McpServer {
+function mcpSessionBaseUrlFromRequest(req: IncomingMessage): string | undefined {
+  const host = req.headers.host;
+  if (typeof host !== "string" || host.length === 0) return undefined;
+  const encrypted = (req.socket as { encrypted?: boolean }).encrypted === true;
+  return `${encrypted ? "https" : "http"}://${host}`;
+}
+
+function toolDepsWithSession(
+  deps: McpToolDeps,
+  req: IncomingMessage,
+  loadedToolsetIds: readonly ToolsetId[],
+): McpToolDeps {
+  const baseUrl = mcpSessionBaseUrlFromRequest(req);
+  if (!baseUrl) return deps;
+  return {
+    ...deps,
+    mcpToolsetSession: { loadedToolsetIds, baseUrl },
+  };
+}
+
+export function createStageflowMcpServer(
+  deps: McpToolDeps,
+  selectedTools?: readonly string[],
+): McpServer {
   const server = new McpServer(
     {
       name: "stageflow",
@@ -114,7 +144,11 @@ export function createStageflowMcpServer(deps: McpToolDeps): McpServer {
       },
     },
   );
-  registerMcpTools(server, deps);
+  registerMcpTools(
+    server,
+    deps,
+    selectedTools !== undefined ? { selectedTools } : undefined,
+  );
   registerRunResources(server, deps);
   return server;
 }
@@ -124,7 +158,21 @@ async function handleStatelessMcpRequest(
   res: ServerResponse,
   deps: McpToolDeps,
 ): Promise<void> {
-  const server = createStageflowMcpServer(deps);
+  const rawQuery = toolsetsQueryFromUrl(req.url);
+  const resolved = resolveToolsets(rawQuery);
+  if (!resolved.ok) {
+    jsonRpcError(res, 400, -32000, unknownToolsetsMessage(resolved.unknown));
+    return;
+  }
+  const loaded = resolveLoadedToolsetIds(rawQuery);
+  if (!loaded.ok) {
+    jsonRpcError(res, 400, -32000, unknownToolsetsMessage(loaded.unknown));
+    return;
+  }
+  const server = createStageflowMcpServer(
+    toolDepsWithSession(deps, req, loaded.ids),
+    resolved.tools,
+  );
   const transport = new NodeStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
   });
@@ -202,7 +250,22 @@ export function createMcpHttpHandler(
         return;
       }
 
-      const server = createStageflowMcpServer(tools);
+      const rawQuery = toolsetsQueryFromUrl(req.url);
+      const resolved = resolveToolsets(rawQuery);
+      if (!resolved.ok) {
+        jsonRpcError(res, 400, -32000, unknownToolsetsMessage(resolved.unknown));
+        return;
+      }
+      const loaded = resolveLoadedToolsetIds(rawQuery);
+      if (!loaded.ok) {
+        jsonRpcError(res, 400, -32000, unknownToolsetsMessage(loaded.unknown));
+        return;
+      }
+
+      const server = createStageflowMcpServer(
+        toolDepsWithSession(tools, req, loaded.ids),
+        resolved.tools,
+      );
       let sessionRegistered = false;
       const transport = new NodeStreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),

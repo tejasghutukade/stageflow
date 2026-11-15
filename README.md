@@ -50,7 +50,7 @@ The same pipeline runs three ways without rewriting anything:
 - **MCP endpoint** — Streamable HTTP at `/mcp` when `sf ui` or `sf mcp` is running; clients send `Authorization: Bearer <token>` (token in `~/.stageflow/control-token`, see [MCP access control](docs/mcp.md#access-control))
 - **MCP servers for agents and stages** — add servers, secrets and OAuth sign-in from Settings → Project MCP, or in the project `.mcp.json` ([guide](docs/mcp-servers.md))
 - **Connections (experimental)** — Slack, Telegram, iMessage, WhatsApp and AgentMail channels, and email accounts, managed from one page ([guide](docs/channels.md))
-- **Standalone stage execution** — run a single stage directly with `run_stage` (MCP tool, `sf run-stage` CLI, or the A2A `run_stage` operation), no pipeline file required; chain calls with `envelope_ref` (one or many prior results) instead of a pipeline DAG
+- **Standalone stage execution** — run a single stage directly with `start_run` with `stage` (MCP tool, `sf run-stage` CLI, or the A2A `start_run` with `stage` operation), no pipeline file required; chain calls with `envelope_ref` (one or many prior results) instead of a pipeline DAG
 - **CI / headless** — `sf validate --strict --json`, `sf run --json` with exit codes `0` / `1` / `2`
 - **Parallel stages** — pipeline DAG with fan-out, join, and Clone Chains (one Clone Instance per Clone Array element; see [YAML catalog](docs/yaml-catalog.md#clone-chain))
 - **Definition-time graph view** — `sf graph --pipeline <path>` prints how a pipeline is wired before any run (terminal diagram or `--json`)
@@ -70,13 +70,13 @@ See [Architecture](docs/architecture.md) for component boundaries, execution flo
 
 ### Docker (recommended)
 
-Run Stageflow from the published image. It is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.61` is the current minor tag (`0.61.0` is that exact release).
+Run Stageflow from the published image. It is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.63` is the current minor tag (`0.63.0` is that exact release).
 
 ```bash
 docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.61 \
+  ghcr.io/tejasghutukade/stageflow:0.63 \
   sf ui
 ```
 
@@ -92,7 +92,7 @@ docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
   -v "$PWD":/project \
-  ghcr.io/tejasghutukade/stageflow:0.61 \
+  ghcr.io/tejasghutukade/stageflow:0.63 \
   sf ui
 ```
 
@@ -238,21 +238,21 @@ Runtime state (SQLite `state.db` and per-run workspaces) is **global** — `~/.s
 
 ## MCP
 
-Host MCP via `sf ui` or `sf mcp` at `http://127.0.0.1:3847/mcp` (URL printed on boot). Sessions are the default. Point a Cursor (or other) MCP client at that URL. Do not run both hosts against the same store.
+Host MCP via `sf ui` or `sf mcp` at `http://127.0.0.1:3847/mcp` (URL printed on boot). A bare `/mcp` URL loads the 17 core tools; add `?toolsets=all` (or named sets) for the full 57 — see [Toolsets](docs/mcp.md#toolsets). Sessions are the default. Point a Cursor (or other) MCP client at that URL. Do not run both hosts against the same store.
 
 Stageflow runs as **one global auto-starting service per machine** (not one process per project): `sf run`, `sf run-stage`, and `sf runs *` health-probe the well-known port and spawn the service headlessly if nothing answers, so you do not have to start `sf ui`/`sf mcp` by hand before using the CLI.
 
-HITL-aware tools include `wait_run`, `answer_gate`, `list_waiting`, and `decide_feedback_loop`. Inspect tools (`list_providers`, `list_models`, `describe_pipeline`, …) are read-only. `run_stage` runs a single stage directly, no pipeline file required — see [Standalone stages](#standalone-stages) below. Full tool list: [docs/mcp.md](docs/mcp.md).
+HITL-aware tools include `wait_run`, `answer_gate`, `list_waiting`, and `decide_feedback_loop`. Inspect tools (`list_catalog` with `kind: providers`, `list_catalog` with `kind: models`, `read_pipeline` with `view: dag`, …) are read-only. `start_run` with `stage` runs a single stage directly, no pipeline file required — see [Standalone stages](#standalone-stages) below. Full tool list: [docs/mcp.md](docs/mcp.md).
 
 Stages use project `.mcp.json` plus stage `mcp` names. See [YAML catalog — Stage MCP](docs/yaml-catalog.md#stage-mcp).
 
 ## Standalone stages
 
-Run a single stage directly, without authoring a pipeline: the MCP `run_stage` tool, the `sf run-stage` CLI command, and (over A2A, only when that caller has `allow_run_stage` — see below) the `run_stage` operation all give a calling agent (Claude Code, Cursor, Codex, Pi, ...) the same capability, so it can decide what to run next itself rather than following a pre-authored DAG. Chain calls with `envelope_ref` — a reference to a previous call's stored envelope, one or many at once — instead of copying results around by hand. Full reference: [docs/mcp.md#run_stage](docs/mcp.md#run_stage), [docs/cli-reference.md#sf-run-stage](docs/cli-reference.md#sf-run-stage).
+Run a single stage directly, without authoring a pipeline: the MCP `start_run` with `stage` tool, the `sf run-stage` CLI command, and (over A2A, only when that caller has `allow_run_stage` — see below) the `start_run` with `stage` operation all give a calling agent (Claude Code, Cursor, Codex, Pi, ...) the same capability, so it can decide what to run next itself rather than following a pre-authored DAG. Chain calls with `envelope_ref` — a reference to a previous call's stored envelope, one or many at once — instead of copying results around by hand. Full reference: [docs/mcp.md#tools](docs/mcp.md#tools), [docs/cli-reference.md#sf-run-stage](docs/cli-reference.md#sf-run-stage).
 
 ## A2A (experimental)
 
-MCP is for your own trusted, local tools. A2A's `invoke` operation is a second, gated door for other agents on the network: publish specific pipelines in a separate `a2a.yaml`, and outside callers invoke them over JSON-RPC with a bearer token, poll for results, and download frozen artifacts -- never touching your internal run IDs or unpublished pipelines. A2A `run_stage` (above) stays off until that caller has `allow_run_stage: true`. A caller without it can invoke only the pipelines published to them.
+MCP is for your own trusted, local tools. A2A's `invoke` operation is a second, gated door for other agents on the network: publish specific pipelines in a separate `a2a.yaml`, and outside callers invoke them over JSON-RPC with a bearer token, poll for results, and download frozen artifacts -- never touching your internal run IDs or unpublished pipelines. A2A `start_run` with `stage` (above) stays off until that caller has `allow_run_stage: true`. A caller without it can invoke only the pipelines published to them.
 
 Drop `a2a.yaml` next to `stageflow.yaml` and it's auto-discovered when `sf ui` starts -- no extra flag needed. `sf a2a add-caller <id>` registers a caller and generates its token. Full reference: [docs/a2a.md](docs/a2a.md).
 
@@ -305,8 +305,8 @@ Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.
 | [docs/verified-stage-execution.md](docs/verified-stage-execution.md) | After-phase `verify`, evidence, and `on_verify_fail` repair / manual recovery |
 | [docs/hitl.md](docs/hitl.md) | Gate kinds, `--skip-gates`, exit code `2` |
 | [docs/ci.md](docs/ci.md) | `--json`, env vars, GitHub Actions |
-| [docs/mcp.md](docs/mcp.md) | MCP tool reference, including standalone `run_stage` |
-| [docs/a2a.md](docs/a2a.md) | Publish pipelines for other agents to call over JSON-RPC (A2A), plus `run_stage` when that caller has `allow_run_stage` (off by default) |
+| [docs/mcp.md](docs/mcp.md) | MCP tool reference, including standalone `start_run` with `stage` |
+| [docs/a2a.md](docs/a2a.md) | Publish pipelines for other agents to call over JSON-RPC (A2A), plus `start_run` with `stage` when that caller has `allow_run_stage` (off by default) |
 | [docs/providers.md](docs/providers.md) | Pi providers, `sf providers` |
 | [docs/docker.md](docs/docker.md) | Docker Compose local try, image pull/run, backup, self-hosting |
 | [docs/operator-console.md](docs/operator-console.md) | Console navigation, command palette, shortcuts and routes; one page per area ([Inbox](docs/console-inbox.md), [Runs](docs/console-runs.md), [Agents](docs/console-agents.md), [Connections](docs/console-connections.md), [Settings](docs/console-settings.md)) |

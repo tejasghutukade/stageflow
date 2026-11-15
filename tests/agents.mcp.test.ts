@@ -39,20 +39,28 @@ describe("agent MCP tools", () => {
     if (!address || typeof address === "string") throw new Error("expected a port");
     const base = `http://127.0.0.1:${address.port}`;
 
-    const invalid = await mcpCall(base, "create_agent", { definition: { id: "research", name: "Research" } });
+    const invalid = await mcpCall(base, "save_agent", {
+      mode: "create",
+      definition: { id: "research", name: "Research" },
+    });
     expect(invalid.isError).toBe(true);
     expect(invalid.payload).toMatchObject({ code: "agent.invalid", issues: [expect.objectContaining({ path: "instructions" })] });
 
-    const created = await mcpCall(base, "create_agent", {
+    const created = await mcpCall(base, "save_agent", {
+      mode: "create",
       definition: { id: "research", name: "Research", instructions: "Answer." },
     });
     expect(created.payload?.agent).toMatchObject({ id: "research", enabled: false });
-    const listedRevision = (await mcpCall(base, "list_agent_revisions", { id: "research" })).payload?.revisions[0];
+    const listedRevision = (await mcpCall(base, "get_agent", { id: "research", view: "revisions" })).payload?.revisions[0];
     expect(listedRevision).toMatchObject({
       source: "api",
       author: "mcp",
     });
-    const revision = await mcpCall(base, "get_agent_revision", { id: "research", revision: listedRevision.revision });
+    const revision = await mcpCall(base, "get_agent", {
+      id: "research",
+      view: "revision",
+      revision: listedRevision.revision,
+    });
     expect(revision.isError).toBe(false);
     expect(revision.payload).toMatchObject({
       revision: listedRevision.revision,
@@ -61,15 +69,16 @@ describe("agent MCP tools", () => {
       definition: { id: "research", instructions: "Answer." },
     });
     expect(revision.payload.yaml).toContain("Answer.");
-    const missingRevision = await mcpCall(base, "get_agent_revision", { id: "research", revision: 99 });
+    const missingRevision = await mcpCall(base, "get_agent", { id: "research", view: "revision", revision: 99 });
     expect(missingRevision).toMatchObject({ isError: true, payload: { code: "agent.revision_not_found" } });
 
     const disabledChat = await mcpCall(base, "agent_chat", { id: "research", message: "Hi" });
     expect(disabledChat).toMatchObject({ isError: true, payload: { code: "agent.disabled" } });
 
-    await mcpCall(base, "enable_agent", { id: "research" });
-    const diff = await mcpCall(base, "diff_agent_revisions", {
+    await mcpCall(base, "set_agent_enabled", { id: "research", enabled: true });
+    const diff = await mcpCall(base, "get_agent", {
       id: "research",
+      view: "diff",
       from: listedRevision.revision,
       to: listedRevision.revision + 1,
     });
@@ -80,7 +89,7 @@ describe("agent MCP tools", () => {
         expect.objectContaining({ kind: "added", text: "enabled: true" }),
       ]),
     );
-    const missingDiff = await mcpCall(base, "diff_agent_revisions", { id: "research", from: 1, to: 99 });
+    const missingDiff = await mcpCall(base, "get_agent", { id: "research", view: "diff", from: 1, to: 99 });
     expect(missingDiff).toMatchObject({ isError: true, payload: { code: "agent.revision_not_found" } });
     const chat = await mcpCall(base, "agent_chat", { id: "research", message: "Hi" });
     expect(chat.isError).toBe(false);
@@ -90,11 +99,18 @@ describe("agent MCP tools", () => {
     const fetched = await mcpCall(base, "get_agent_session", { id: "research", sessionId: chat.payload?.session.id });
     expect(fetched.payload?.turns).toHaveLength(1);
 
-    // A session id only opens under the agent it belongs to.
     const wrong = await mcpCall(base, "get_agent_session", { id: "other", sessionId: chat.payload?.session.id });
     expect(wrong).toMatchObject({ isError: true, payload: { code: "agent.session_not_found" } });
-    for (const tool of ["approve_agent_action", "deny_agent_action", "stop_agent_session"]) {
-      const refused = await mcpCall(base, tool, { id: "other", sessionId: chat.payload?.session.id });
+    for (const tool of [
+      ["decide_agent_action", { action: "approve" }],
+      ["decide_agent_action", { action: "deny" }],
+      ["stop_agent_session", {}],
+    ] as const) {
+      const refused = await mcpCall(base, tool[0], {
+        id: "other",
+        sessionId: chat.payload?.session.id,
+        ...tool[1],
+      });
       expect(refused).toMatchObject({ isError: true, payload: { code: "agent.session_not_found" } });
     }
   });

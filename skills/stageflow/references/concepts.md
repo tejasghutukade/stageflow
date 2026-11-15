@@ -48,14 +48,14 @@ Nothing in that chain is specific to software delivery. The YAML describes the w
 | Stage | One unit of work. Runs in a fresh agent session. Declares `io` (input and output schemas), a prompt, and usually a `model`. May live in its own file and be pulled in with `uses`. |
 | Task | The input to a run: an id, a goal, and optional structured input. A pipeline without a task has nothing to do. |
 | Envelope | The typed message a stage emits for the next stage. The shape is the stage's output contract. |
-| Artifact | A file produced during a run, stored with the run, readable later with `sf artifact` or the MCP tool `read_artifact`. |
+| Artifact | A file produced during a run, stored with the run, readable later with `sf artifact` or the MCP tool `run_files` with `view: artifact`. |
 | Gate | A human checkpoint. The run stays `running`. The stage is `waiting_for_input`. `sf run` exits 2. There is no run status `waiting`. |
 | Run | One execution: a task plus a pipeline, with stage attempts and cost. Status is `created`, `queued`, `running`, `succeeded`, `failed`, or `cancelled`. A parked gate leaves the run `running`. |
 | Attempt | One try of one stage inside a run. Retry creates another attempt. Resume keeps the session. |
 | Agent (project) | A saved conversational assistant: instructions, tools, model, optional channel and schedule. Not a pipeline stage. |
 | Agent (executor) | `pi` or `claude` on the manifest or pipeline. Selects the stage backend. |
 | Session | A stage's agent conversation, or a project agent's chat. Stage sessions are not reused across stages. |
-| Connection | Host-level credentials for a send provider. Created in the console or with MCP `create_connection`. Never a YAML secret. |
+| Connection | Host-level credentials for a send provider. Created in the console or with MCP `save_connection` with `mode: create`. Never a YAML secret. |
 | Channel | One send path on a stage or a project agent, bound to a connection, with the recipient fixed in the definition. |
 | Trigger | Catalog entry that starts a pipeline on a schedule, an external event, or a manual fire. |
 | A2A | Agent-to-agent HTTP on the Host. Callers have their own tokens. Publications choose what an outside caller may invoke. |

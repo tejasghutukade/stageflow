@@ -3,7 +3,7 @@ import {
   ResourceNotFoundError,
   ResourceTemplate,
 } from "@modelcontextprotocol/server";
-import { projectRunForMcp } from "./projectRun.js";
+import { projectRun } from "../projection/projectRun.js";
 import type { McpToolDeps } from "./deps.js";
 
 export const RUN_RESOURCE_URI_TEMPLATE = "stageflow://runs/{runId}";
@@ -44,7 +44,7 @@ export function registerRunResources(
       }
       try {
         const detail = await store.readRun(runId);
-        const projected = projectRunForMcp(detail);
+        const projected = projectRun(detail);
         return {
           contents: [
             {

@@ -46,7 +46,7 @@ Under `--json`, a failure to start the Host exits 1. The document depends on the
 | `sf run-stage` | `{ "error": "<message>" }` on stdout. No reason id. |
 | `sf agents` | `{ "code": "host.unavailable", "message": "<message>", "issues": [] }` on stdout. |
 | `sf a2a` status, enable, reload, caller, publication | The message on stderr. `--json` does not wrap it. |
-| Mutating `sf runs` (`answer`, `feedback-decide`, `retry`, `resume`, `recover`, `abandon`, `cancel`, `delete`, `gc`, `rerun`) | `{ "error": "<message>", "reason": "<reason id>" }` on stdout. |
+| Mutating `sf runs` (`answer`, `feedback-decide`, `retry`, `resume`, `recover`, `abandon`, `cancel`, `delete`, `gc`, `start_run` with `from_run`) | `{ "error": "<message>", "reason": "<reason id>" }` on stdout. |
 
 `sf eval` verbs that autostart print `{ "error": "<message>", "reason": "<reason id>" }` on stdout, the same shape as mutating `sf runs`.
 
@@ -58,7 +58,7 @@ Three groups. Mutating commands appear in more than one group. `sf browser login
 
 | Group | Commands |
 |---|---|
-| Always (HTTP client of the Host) | `sf run`, `sf run-stage`, `sf trigger list`, `sf trigger show`, `sf trigger fire`, every `sf agents` subcommand, `sf eval` except `validate` and `engine status` / `engine install`, `sf a2a status`, `enable`, `reload`, `caller`, and `publication`, and the mutating `sf runs` verbs: `answer`, `feedback-decide`, `retry`, `resume`, `recover`, `abandon`, `cancel`, `delete`, `gc`, `rerun`. |
+| Always (HTTP client of the Host) | `sf run`, `sf run-stage`, `sf trigger list`, `sf trigger show`, `sf trigger fire`, every `sf agents` subcommand, `sf eval` except `validate` and `engine status` / `engine install`, `sf a2a status`, `enable`, `reload`, `caller`, and `publication`, and the mutating `sf runs` verbs: `answer`, `feedback-decide`, `retry`, `resume`, `recover`, `abandon`, `cancel`, `delete`, `gc`, `start_run` with `from_run`. |
 | Only when `$STAGEFLOW_HOME` has no `state.db`, or the schema is older than this binary | `sf runs list`, `show`, `verify`, `waiting`, `wait`; `sf artifact read`; `sf envelope get`; `sf export-run`; `sf debug-run`; `sf export --all`; `sf backup`. |
 | Never | `sf validate`, `sf graph`, `sf migrate-yaml`, `sf doctor`, `sf init`, `sf skills`, `sf providers`, `sf browser`, `sf eval validate`, `sf eval engine status`, `sf eval engine install`, `sf a2a validate`, `sf a2a list`, `sf a2a add-caller`, `sf restore`, `sf --version`, `sf --help`. |
 

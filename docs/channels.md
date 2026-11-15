@@ -66,7 +66,7 @@ Secrets are read on the host when a message is sent or a check runs. They are ne
 ## What happens at run time
 
 1. **`sf validate`** checks that every `channels:` entry points at an enabled connection, the provider supports the operation, and the target is valid. No network, no secrets.
-2. **Run start** (also the MCP `preflight` tool and `sf doctor`) makes a live check of each connection a pipeline uses. Only transient failures (network error, timeout, 5xx, rate limit) are retried, twice. Anything else blocks the run with `channel_check_failed`. See [MCP `preflight`](mcp.md#preflight).
+2. **Run start** (also MCP `validate` with `preflight: true` and `sf doctor`) makes a live check of each connection a pipeline uses. Only transient failures (network error, timeout, 5xx, rate limit) are retried, twice. Anything else blocks the run with `channel_check_failed`. See [MCP catalog discovery and validation](mcp.md#catalog-discovery-and-validation).
 3. **Sending.** The host sends with the pinned target. The agent's operation key is bound to the run, stage and channel. A repeated key with the same content returns the first result without sending again. A failure that might have reached the provider is recorded as unknown and never resent, even after a restart. A definite failure is also remembered for that key; use a new key to try again.
 
 Acceptance means the provider took the message, not that anyone read it.

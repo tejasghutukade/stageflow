@@ -88,7 +88,7 @@ Stage processes do not receive provider API keys in their environment. The Host 
 
 A missing or unreadable file is a soft failure: the Host still starts, and that provider is absent. `STAGEFLOW_REQUIRE_PROVIDERS=openrouter,anthropic` (comma-separated ids) makes a missing id fatal at boot.
 
-`GET /api/health` and the MCP tool `get_health` expose `boot_providers` (what boot env configured) and `providers_live` (what `auth.json` has now). An empty `boot_providers` does not mean the CLI login is missing. Use `sf providers status` or the MCP tool `list_providers`.
+`GET /api/health` and the MCP tool `list_catalog` with `kind: health` expose `boot_providers` (what boot env configured) and `providers_live` (what `auth.json` has now). An empty `boot_providers` does not mean the CLI login is missing. Use `sf providers status` or the MCP tool `list_catalog` with `kind: providers`.
 
 ## Choose a model
 
@@ -100,7 +100,7 @@ Resolution order is stage, then pipeline, then `model` in `stageflow.yaml`. The 
 
 `sf validate` does not check that the provider is logged in or that the model id is real. A bad id fails at run time.
 
-To see ids the Host knows about, use the MCP tool `list_models` or `GET /api/models` while a Host is up. There is no `sf models` command. The list is connected providers only, cached for a short time, and falls back to Pi's built-in list when a provider cannot be reached. A hand-written id that is not in the list still loads. The picker warns. The run uses the id as written.
+To see ids the Host knows about, use the MCP tool `list_catalog` with `kind: models` or `GET /api/models` while a Host is up. There is no `sf models` command. The list is connected providers only, cached for a short time, and falls back to Pi's built-in list when a provider cannot be reached. A hand-written id that is not in the list still loads. The picker warns. The run uses the id as written.
 
 Set the default in `stageflow.yaml`:
 

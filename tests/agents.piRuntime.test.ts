@@ -81,7 +81,7 @@ describe("Pi agent runtime", () => {
     const run = vi.fn(async () => ({ ok: true, text: "ok" }));
     const tool = (name: string) => ({ name, grantId: `stageflow.${name}`, group: "runs.read", risk: "read", description: name, parameters: { type: "object", properties: {} }, run }) as never;
     const { open, opened } = fakeOpen(async (emit) => emit(assistantEnd));
-    const runtime = createPiAgentRuntime({ cwd: "/p", agentDir: "/a", openSession: open, toolkit: () => [tool("get_run"), tool("cancel_run"), tool("list_runs")] });
+    const runtime = createPiAgentRuntime({ cwd: "/p", agentDir: "/a", openSession: open, toolkit: () => [tool("get_run"), tool("cancel_run"), tool("wait_run")] });
     await runtime.complete({
       sessionId: "s1", projectRoot: "/p", signal: new AbortController().signal, onDelta: () => undefined, hooks: hooks(),
       definition: definition({ tools: { stageflow: { groups: [], tools: ["get_run"] } } }),

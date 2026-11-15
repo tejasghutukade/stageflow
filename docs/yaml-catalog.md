@@ -323,7 +323,7 @@ Check IDs are unique within the stage. `artifact.path` is relative to the stage 
 | `repair` | `max_attempts`, `retry_safety: idempotent`, `include_failed_checks` | Stageflow starts fresh attempts until the limit, carrying failed-check evidence when configured. |
 | `manual` | `retry_safety` | An operator explicitly starts a new attempt with optional guidance or stops recovery for that run. |
 
-Use `manual` for side-effecting work such as publishing or payments. Operator commands keep their names: [`sf runs recover`](cli-reference.md#sf-runs-recover) / [`sf runs verify`](cli-reference.md#sf-runs-verify), MCP [`recover_manual_stage`](mcp.md#recover_manual_stage), HTTP `/api/runs/:id/stages/:id/recovery`. See [Verified Stage Execution](verified-stage-execution.md).
+Use `manual` for side-effecting work such as publishing or payments. Operator commands keep their names: [`sf runs recover`](cli-reference.md#sf-runs-recover) / [`sf runs verify`](cli-reference.md#sf-runs-verify), MCP [`stage_action` with `action: recover`](mcp.md#runs-files-and-control), HTTP `/api/runs/:id/stages/:id/recovery`. See [Verified Stage Execution](verified-stage-execution.md).
 
 ### Pipeline schemas {#pipeline-schemas}
 
@@ -800,7 +800,7 @@ stages:
 | 2 | `checkout` | `<checkoutRoot>/.pi/skills/<name>/` — gated by `trust_workspace_config` for repository bindings |
 | 3 | `host` | Pi agent skills dir (`agentDir/skills`) / operator image skills |
 
-Same name: run wins. Checkout-sourced skills still require trust for repository bindings; run-scoped skills bypass that gate. MCP `list_skills` (optional `runId`) reports `name`, `description`, and `origin`.
+Same name: run wins. Checkout-sourced skills still require trust for repository bindings; run-scoped skills bypass that gate. MCP `list_catalog` with `kind: skills` (optional `runId`) reports `name`, `description`, and `origin`.
 
 Ship skills with the run (harness):
 
@@ -933,7 +933,7 @@ In the Memories console the operator can list keys, open a card, correct it, and
 
 ### Stage channels {#stage-channels}
 
-> **Status: built for AgentMail, Slack, Telegram, iMessage and WhatsApp.** Connections are defined in the console or in `connections.yaml`; see [Communication channels](channels.md). `channels:` loads, merges and validates. A stage that declares a `send` channel gets a `send_message` tool on the Pi backend, delivered by the Host with the target pinned here, and the Host refuses to start the stage if the connection no longer matches. The Claude backend does not provide `send_message`, so a stage with `channels:` fails at start there (`email:` still has the older gap). Run start (and the MCP `preflight` tool and `sf doctor`) runs a live check of each declared connection and blocks the run with `channel_check_failed` if one fails, naming the connection and the reason; see [MCP `preflight`](mcp.md#preflight). The pipeline editor edits stage channels in its inspector.
+> **Status: built for AgentMail, Slack, Telegram, iMessage and WhatsApp.** Connections are defined in the console or in `connections.yaml`; see [Communication channels](channels.md). `channels:` loads, merges and validates. A stage that declares a `send` channel gets a `send_message` tool on the Pi backend, delivered by the Host with the target pinned here, and the Host refuses to start the stage if the connection no longer matches. The Claude backend does not provide `send_message`, so a stage with `channels:` fails at start there (`email:` still has the older gap). Run start (and MCP `validate` with `preflight: true` and `sf doctor`) runs a live check of each declared connection and blocks the run with `channel_check_failed` if one fails, naming the connection and the reason; see [MCP catalog discovery and validation](mcp.md#catalog-discovery-and-validation). The pipeline editor edits stage channels in its inspector.
 
 A stage declares which communication connections it may send on. Each entry points at a connection defined in [`connections.yaml`](../connections.example.yaml) and **pins the target**, so the agent can never choose a different recipient. This is separate from `email:`, which keeps working unchanged for IMAP/SMTP accounts.
 
@@ -964,7 +964,7 @@ channels:
 - **One channel per stage (for now).** A stage may use exactly one channel. A second entry is rejected wherever a stage is loaded (`sf validate`, the console, `start_run`, run start) and again when a message is sent, including a second channel that only appears after merging a pipeline default (use `channels: []` on the stage to drop the default). To use two channels, use two stages. One connection can still reach several recipients through its own target list (AgentMail `to` and `cc`). The limit is one policy constant, `MAX_CHANNELS_PER_STAGE`, and the alias, merge and per-channel idempotency logic still support several, so it can be raised later. Entry names (alias, or connection id when there is no alias) must be unique within a stage.
 - `channels` is a stage **body** key: it goes in a stage file or an inline entry. Like `email`, it is rejected on a `uses:` wrapper.
 - **Pipeline defaults.** A top-level `channels:` on the pipeline is inherited by every stage. A stage that declares its own `channels:` merges by entry name with the stage entry winning, and keeps the other defaults. `channels: []` on a stage clears every inherited entry. The merged result must still fit the one-channel limit.
-- **Live check** (run start, `preflight`, `sf doctor`): every distinct connection a pipeline's stages use is checked once, in parallel, and some providers also check the pinned targets. Only transient failures are retried (up to two retries). A failure blocks the run with `channel_check_failed`. It never sends a message.
+- **Live check** (run start, MCP `validate` with `preflight: true`, `sf doctor`): every distinct connection a pipeline's stages use is checked once, in parallel, and some providers also check the pinned targets. Only transient failures are retried (up to two retries). A failure blocks the run with `channel_check_failed`. It never sends a message.
 - **Static validation** (`sf validate`, and again at run start) fails a stage when `connections.yaml` cannot be loaded, the connection is not defined or is disabled, the provider does not support the operation, or the target is not valid for the provider. It never calls a provider and never reads a secret. A stage that declares no channels never reads `connections.yaml`.
 - Invalid shapes are reported as `stage.invalid_channels` (stage) or `pipeline.invalid_channels` (pipeline root). Connection and target problems are `stage.channel_unavailable`.
 
@@ -1074,7 +1074,7 @@ stages:
         version: ">=9.5"
 ```
 
-Preflight surfaces (`sf doctor --pipeline`, MCP `preflight`, and `start_run` before `createRun`) check against the image toolchain manifest (`/etc/stageflow/toolchain.json`, override with `STAGEFLOW_TOOLCHAIN_MANIFEST`) with live PATH fallback under the curated stage env. Statuses: `ok` | `missing_tool` | `tool_version_mismatch` | `unknown_version`. `unknown_version` passes by default; `sf doctor --strict` / MCP `preflight` with `strict: true` fails it. Stageflow never installs tools from `requires:`.
+Preflight surfaces (`sf doctor --pipeline`, MCP `validate` with `preflight: true`, and `start_run` before `createRun`) check against the image toolchain manifest (`/etc/stageflow/toolchain.json`, override with `STAGEFLOW_TOOLCHAIN_MANIFEST`) with live PATH fallback under the curated stage env. Statuses: `ok` | `missing_tool` | `tool_version_mismatch` | `unknown_version`. `unknown_version` passes by default; `sf doctor --strict` / MCP `validate` with `preflight: true` and `strict: true` fails it. Stageflow never installs tools from `requires:`.
 
 ### Stage environment and secrets {#stage-secrets}
 
@@ -1125,7 +1125,7 @@ Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixture
 
 This section is the field reference. For what a function is and how to write, attach, test and debug one, see [Functions](functions.md); for a first walkthrough, [Create your first function](guides-functions-first-function.md).
 
-A function is project-owned JavaScript. Author it as `functions/<id>.function.yaml` or `functions/<id>.function.yml` with a multiline `source` field, or as `functions/<id>.function.js` with YAML frontmatter (`---` … `---`) for metadata and an ESM body that is the executable `source`. The `id` matches the file stem in every format (`functions/score_check.function.js` has `id: score_check` in frontmatter or in the YAML file). An unmarked `*.js` or `*.ts` under `functions/` is not a definition and never appears in the catalog. TypeScript authoring is out of scope. When both `score_check.function.yaml` and `score_check.function.js` exist, `sf validate` reports `function.format_conflict` and neither file is runnable until one is removed. When the same id appears twice in one format family (for example `.function.yaml` and `.function.yml`), the code is `function.id_conflict`. The console, HTTP, and MCP share one write path. New creates default to `*.function.js`; saving an existing function keeps its format. There is no `sf functions` writer in this release: edit the file, or use the function tools while `sf ui` or `sf mcp` is running. `write_catalog_file` refuses `*.function.yaml`, `*.function.yml`, and `*.function.js`.
+A function is project-owned JavaScript. Author it as `functions/<id>.function.yaml` or `functions/<id>.function.yml` with a multiline `source` field, or as `functions/<id>.function.js` with YAML frontmatter (`---` … `---`) for metadata and an ESM body that is the executable `source`. The `id` matches the file stem in every format (`functions/score_check.function.js` has `id: score_check` in frontmatter or in the YAML file). An unmarked `*.js` or `*.ts` under `functions/` is not a definition and never appears in the catalog. TypeScript authoring is out of scope. When both `score_check.function.yaml` and `score_check.function.js` exist, `sf validate` reports `function.format_conflict` and neither file is runnable until one is removed. When the same id appears twice in one format family (for example `.function.yaml` and `.function.yml`), the code is `function.id_conflict`. The console, HTTP, and MCP share one write path. New creates default to `*.function.js`; saving an existing function keeps its format. There is no `sf functions` writer in this release: edit the file, or use the function tools while `sf ui` or `sf mcp` is running. `write_stage` with `form: content` refuses `*.function.yaml`, `*.function.yml`, and `*.function.js`.
 
 On `*.function.js`, frontmatter fields match the table below except `source`, which lives only in the body. Capabilities and bindings follow the same access-declaration rules as YAML-authored source. Issue line numbers for access and syntax refer to the executable body, not frontmatter lines.
 
@@ -1394,7 +1394,7 @@ event:
     scheme: hex
 ```
 
-See [`tests/fixtures/triggers/webhook-catalog.trigger.yaml`](../tests/fixtures/triggers/webhook-catalog.trigger.yaml) (dynamic-mode variant: [`webhook-dynamic.trigger.yaml`](../tests/fixtures/triggers/webhook-dynamic.trigger.yaml)). `event.config` is authored the same way as any other `event` field — as part of the `event` object passed to `POST /api/triggers`, `create_trigger`, or written directly into the YAML; there is no operator-console builder for it yet (the console only edits `event.source`).
+See [`tests/fixtures/triggers/webhook-catalog.trigger.yaml`](../tests/fixtures/triggers/webhook-catalog.trigger.yaml) (dynamic-mode variant: [`webhook-dynamic.trigger.yaml`](../tests/fixtures/triggers/webhook-dynamic.trigger.yaml)). `event.config` is authored the same way as any other `event` field — as part of the `event` object passed to `POST /api/triggers`, `save_trigger` with `mode: create`, or written directly into the YAML; there is no operator-console builder for it yet (the console only edits `event.source`).
 
 Reachability note, restated from the goal this adapter solves: the Host binds loopback-only by default, so this endpoint is only genuinely reachable by a real external sender behind a tunnel (ngrok/cloudflared) for testing, or in a deployment that deliberately exposes the Host.
 
@@ -1435,7 +1435,7 @@ event:
     secretRef: EMAIL_PASSWORD
 ```
 
-See [`tests/fixtures/triggers/email-match-invoice.trigger.yaml`](../tests/fixtures/triggers/email-match-invoice.trigger.yaml) (unfiltered dynamic-mode variant: [`email-dynamic.trigger.yaml`](../tests/fixtures/triggers/email-dynamic.trigger.yaml); catalog-mode variant: [`email-catalog.trigger.yaml`](../tests/fixtures/triggers/email-catalog.trigger.yaml)). `event.config` is authored the same way as any other `event` field — as part of the `event` object passed to `POST /api/triggers`, `create_trigger`, or written directly into the YAML; there is no operator-console builder for it yet (the console only edits `event.source`).
+See [`tests/fixtures/triggers/email-match-invoice.trigger.yaml`](../tests/fixtures/triggers/email-match-invoice.trigger.yaml) (unfiltered dynamic-mode variant: [`email-dynamic.trigger.yaml`](../tests/fixtures/triggers/email-dynamic.trigger.yaml); catalog-mode variant: [`email-catalog.trigger.yaml`](../tests/fixtures/triggers/email-catalog.trigger.yaml)). `event.config` is authored the same way as any other `event` field — as part of the `event` object passed to `POST /api/triggers`, `save_trigger` with `mode: create`, or written directly into the YAML; there is no operator-console builder for it yet (the console only edits `event.source`).
 
 Other `event.source` values (besides `github.*`, `webhook`, and `email.*`) still only load and validate; nothing polls or receives them yet — see [Architecture](architecture.md). The only way to use dynamic mode for one of those right now is a manual fire with a task supplied (`sf trigger fire --task-inline`, `POST .../fire` with a `task` body, or `fire_trigger`'s `task` param).
 
@@ -1652,6 +1652,8 @@ On an agent target, `field` and `reference` paths start at the conversation (for
 | `eval.conversation_not_applicable` | error | `conversation` or `defaults.user_model` on a stage target |
 | `eval.task_not_applicable` | error | `task` on an agent target |
 | `eval.grader_not_applicable` | error | A grader type that does not apply to the target kind |
+| `eval.stageflow_tool_unknown` | error | A Stageflow MCP tool name (a `stageflow.*` grant id in agent evals, or a bare tool name in Guide evals) was renamed or removed; the message names the replacement tool |
+| `eval.stageflow_tool_widened` | warning | A grant, mock or grader names a consolidated Stageflow tool that now covers additional modes absorbed from other old tool names |
 | `eval.tool_not_granted` | warning | A tool named in `tool_calls`, `read_only_tools` or a scenario's `tool_mocks` is not granted to the agent |
 | `eval.read_only_tools_not_mcp` | error | `read_only_tools` lists a built-in or Stageflow tool (`write`, `bash`, ...). Only MCP tools can be declared read-only; the entry has no effect |
 | `eval.tools_real` | warning | `tools: real`: real tools can change files and call services from this machine |

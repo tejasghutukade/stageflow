@@ -55,7 +55,7 @@ Provider API keys are **not** passed into stage process environments. Model auth
 
 **Docker Compose:** set `STAGEFLOW_PROVIDER_OPENROUTER_API_KEY` / `STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY` (or `_FILE`) in `.env` — bare `OPENROUTER_API_KEY` alone does not configure Host boot. See [Docker — Local try](docker.md#local-try-compose) and [`.env.example`](../.env.example).
 
-**Health fields:** `GET /api/health` and MCP `get_health` expose `boot_providers` (Host boot env snapshot) and `providers_live` (live summary + note). The legacy `providers` key matches `boot_providers`. Empty boot configured does **not** imply CLI is unconfigured — compare `stageflow_home` and use `list_providers` / `sf providers status` for live auth. See [MCP — get_health](mcp.md#get_health).
+**Health fields:** `GET /api/health` and MCP `list_catalog` with `kind: health` expose `boot_providers` (Host boot env snapshot) and `providers_live` (live summary + note). The legacy `providers` key matches `boot_providers`. Empty boot configured does **not** imply CLI is unconfigured — compare `stageflow_home` and use `list_catalog` with `kind: providers` / `sf providers status` for live auth. See [MCP tools](mcp.md#tools).
 
 The console **Connect** flow (`#/connect`) mirrors CLI login for browser-based setup.
 
@@ -122,7 +122,7 @@ Stageflow is a thin orchestration layer on Pi. You do **not** need Pi CLI `/logi
 
 ## Models
 
-One catalog supplies every model list and the default model: the stage, pipeline, Workshop, Settings and agent pickers, `GET /api/models` and MCP `list_models`.
+One catalog supplies every model list and the default model: the stage, pipeline, Workshop, Settings and agent pickers, `GET /api/models` and MCP `list_catalog` with `kind: models`.
 
 - **Connected providers only.** A provider appears once it has credentials (stored, or from `STAGEFLOW_PROVIDER_<ID>_API_KEY` at boot). Cursor models appear only when Cursor is connected.
 - **Live, with a fallback.** The Host asks each connected provider for its current model list through Pi's model registry (OpenRouter's free models, for example), caches it for 30 seconds and in Pi's `models-store.json`, and falls back to Pi's built-in list when a provider is unreachable (that provider shows "built-in list"). `POST /api/models/refresh`, or the refresh button in a picker, forces Pi to refetch.

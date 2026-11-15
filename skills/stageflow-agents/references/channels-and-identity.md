@@ -15,7 +15,7 @@ How people reach an agent outside the console: a connection, `allow_from`, webho
 
 ## Web chat on a new agent
 
-A new agent created through MCP `create_agent`, REST `POST /api/agents`, or the console, with `web_chat` left out, is saved as `{ enabled: true }` and given a public link. The link is `/chat/<slug>`.
+A new agent created through MCP `save_agent` with `mode: create`, REST `POST /api/agents`, or the console, with `web_chat` left out, is saved as `{ enabled: true }` and given a public link. The link is `/chat/<slug>`.
 
 Public chat is refused for any agent that has tools. The page answers `identity.setup_required` (HTTP 503, "This chat requires administrator setup"). The same refusal covers `project_context`, memories, skills, the browser, Stageflow tools, a non-`pi` backend, and any MCP grant other than exactly `orders: [status]`. Sub-agents are refused on a public agent. Validation does not warn about this. `sf agents validate` can return no issues for a public agent that will not chat.
 
@@ -33,7 +33,7 @@ A connection is host-level (`$STAGEFLOW_HOME/connections.yaml`, a project `conne
 
 There is no `sf` command for connections. Create them in the console (Connections, `#/connections`) or with MCP / REST. Secret values travel in on create and are never returned. Never put a secret in YAML, a file, a log, or chat. Prefer the console so the user types the secret. A hand-written `connections.yaml` may use `env:NAME` only (the user exports `NAME`, or `NAME_FILE`); inline values are rejected, and a hand edit needs a Host restart. Console, MCP, and REST edits apply live and store the value as `store:`.
 
-MCP (secret values are tool arguments; do not echo them): `list_connections`, `create_connection`, `update_connection`, `test_connection`, `validate_connection_target`, `remove_connection`. `test_connection` makes a live provider call. Confirm first. Checking a connection already saved, by id, is REST only: `POST /api/connections/<id>/check`. MCP cannot do that.
+MCP (secret values are tool arguments; do not echo them): `get_connection`, `save_connection` with `mode: create`, `save_connection` with `mode: update`, `test_connection`, `validate` with `kind: connection_recipient`, `remove_connection`. `test_connection` makes a live provider call. Confirm first. Checking a connection already saved, by id, is REST only: `POST /api/connections/<id>/check`. MCP cannot do that.
 
 REST writes need `Origin: http://127.0.0.1:${STAGEFLOW_SERVICE_PORT:-3847}` (the same host). Bearer rules are in [control-surface.md](control-surface.md#http). Bodies are at most 64 KiB. Errors are codes, never the request body.
 
@@ -53,7 +53,7 @@ After the connection exists, set:
 
 ```yaml
 channel:
-  connection_id: <id from list_connections>
+  connection_id: <id from get_connection with list: true>
   allow_from:
     - <one specific sender>
 web_chat:

@@ -132,7 +132,7 @@ function makeTestContext(runtime: ProviderAuthRuntime): ProviderAuthContext {
 }
 
 async function mcpListTools(base: string) {
-  const res = await fetch(`${base}/mcp`, {
+  const res = await fetch(`${base}/mcp?toolsets=all`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -202,7 +202,7 @@ describe("MCP list_providers", () => {
         cwd,
         makeTestContext(runtime),
       );
-      const result = await mcpCall(base, "list_providers");
+      const result = await mcpCall(base, "list_catalog", { kind: "providers" });
       expect(result.isError).toBe(false);
       expect(result.payload).toEqual(expected);
       expect(expected.providers.map((p) => p.id)).toEqual([
@@ -225,7 +225,7 @@ describe("MCP list_providers", () => {
         cwd,
         makeTestContext(runtime),
       );
-      const result = await mcpCall(base, "list_providers");
+      const result = await mcpCall(base, "list_catalog", { kind: "providers" });
       expect(result.isError).toBe(false);
       expect(result.payload).toEqual(expected);
       expect(
@@ -244,7 +244,7 @@ describe("MCP list_providers", () => {
         cwd,
         makeTestContext(runtime),
       );
-      const result = await mcpCall(base, "list_providers");
+      const result = await mcpCall(base, "list_catalog", { kind: "providers" });
       expect(result.isError).toBe(false);
       expect(result.payload).toEqual(expected);
       expect(typeof result.payload.detect.authConfigured).toBe("boolean");
@@ -263,7 +263,7 @@ describe("MCP list_providers", () => {
         cwd,
         makeTestContext(runtime),
       );
-      const result = await mcpCall(base, "list_providers");
+      const result = await mcpCall(base, "list_catalog", { kind: "providers" });
       expect(result.isError).toBe(false);
       expect(result.payload).toEqual(expected);
       expect(JSON.stringify(result.payload)).not.toMatch(SECRET_RE);
@@ -274,7 +274,7 @@ describe("MCP list_providers", () => {
     const runtime = createFakeRuntime();
     await withProvidersMcp(runtime, async (base) => {
       const names = (await mcpListTools(base)).map((t) => t.name);
-      expect(names).toContain("list_providers");
+      expect(names).toContain("list_catalog");
       expect(names.some((n) => /login|logout|oauth/i.test(n))).toBe(false);
     });
   });

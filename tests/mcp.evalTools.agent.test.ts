@@ -19,7 +19,7 @@ const REAL = realEvalYaml("real-ok", "  mode: script\n  tools: real\n  allow_rea
 const MOCKED = realEvalYaml("mocked-deny", "  mode: script\n  tools: mocked\n  approvals: deny\n");
 
 async function listTools(base: string): Promise<Array<{ name: string; description: string; inputSchema: any }>> {
-  const res = await fetch(`${base}/mcp`, {
+  const res = await fetch(`${base}/mcp?toolsets=all`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
@@ -46,36 +46,26 @@ describe("MCP eval tools with agent targets", () => {
     const evalTools = tools.filter((t) => /eval/.test(t.name)).map((t) => t.name).sort();
     expect(evalTools).toEqual(
       [
-        "accept_eval_failure_suggestions",
         "calibrate_eval_grader",
         "cancel_eval_run",
         "compare_eval_runs",
-        "create_eval",
         "delete_eval_run",
-        "dismiss_eval_failure_suggestions",
         "get_eval",
-        "get_eval_failure_sort_status",
-        "get_eval_failure_suggestions",
-        "get_eval_result",
+        "get_eval_failures",
         "get_eval_results",
         "get_eval_run",
-        "get_eval_run_export",
-        "install_eval_sample",
-        "list_eval_runs",
-        "list_evals",
-        "put_eval_review",
+        "review_eval_results",
         "run_eval",
+        "save_eval",
         "sort_eval_failures",
         "try_eval_case",
-        "update_eval",
-        "validate_eval",
       ].sort(),
     );
   });
 
-  it("returns agent targets from list_evals and get_eval exactly as the API does", async () => {
+  it("returns agent targets from get_eval list and definition exactly as the API does", async () => {
     const h = await setup();
-    const listed = await h.tool("list_evals", { project_root: h.root });
+    const listed = await h.tool("get_eval", { project_root: h.root });
     expect(listed.isError).toBe(false);
     const api = await h.get(`/api/evals?${h.q}`);
     expect(listed.payload.items).toEqual(api.body.items);
@@ -93,12 +83,12 @@ describe("MCP eval tools with agent targets", () => {
   it("validates agent eval yaml with the agent catalog and writes no files", async () => {
     const h = await setup();
     const yaml = await readFile(path.join(h.root, "evals", "script-basics.eval.yaml"), "utf8");
-    const ok = await h.tool("validate_eval", { yaml, project_root: h.root });
+    const ok = await h.tool("validate", { kind: "eval", yaml, project_root: h.root });
     expect(ok.isError).toBe(false);
     expect(ok.payload.findings.filter((f: any) => f.severity === "error")).toEqual([]);
-    const ghost = await h.tool("validate_eval", { yaml: yaml.replace("agent: support", "agent: ghost"), project_root: h.root });
+    const ghost = await h.tool("validate", { kind: "eval", yaml: yaml.replace("agent: support", "agent: ghost"), project_root: h.root });
     expect(ghost.payload.findings.map((f: any) => f.code)).toContain("eval.agent_not_found");
-    const real = await h.tool("validate_eval", { yaml: yaml.replace("tools: read_only", "tools: real"), project_root: h.root });
+    const real = await h.tool("validate", { kind: "eval", yaml: yaml.replace("tools: read_only", "tools: real"), project_root: h.root });
     expect(real.payload.findings.map((f: any) => f.code)).toContain("eval.real_tools_not_allowed");
   });
 
@@ -111,7 +101,7 @@ describe("MCP eval tools with agent targets", () => {
     expect(res.payload).toEqual((await h.get(`/api/eval-runs/${res.payload.eval_run_id}`)).body);
     expect((await h.store.getEvalRun(res.payload.eval_run_id))?.startedVia).toBe("mcp");
 
-    const result = await h.tool("get_eval_result", { eval_run_id: res.payload.eval_run_id, case_id: "t1" });
+    const result = await h.tool("get_eval_results", { eval_run_id: res.payload.eval_run_id, case_id: "t1" });
     expect(result.isError).toBe(false);
     expect(result.payload.repeats[0].output.kind).toBe("conversation");
     expect(result.payload).toEqual((await h.get(`/api/eval-runs/${res.payload.eval_run_id}/results/t1`)).body);

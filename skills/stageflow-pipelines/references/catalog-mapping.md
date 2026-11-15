@@ -205,7 +205,7 @@ secrets:
 
 ## Models
 
-Set the model once on the pipeline (or rely on `stageflow.yaml`), and override per stage only for a reason. Take ids from MCP `list_models` or the configured providers in `sf providers status`; when none is known, write `CHANGE_ME/<provider-model>` and tell the person. Siblings after a fan-out share a model family unless the person asks otherwise. Prefer a reliable model on stages with side effects.
+Set the model once on the pipeline (or rely on `stageflow.yaml`), and override per stage only for a reason. Take ids from MCP `list_catalog` with `kind: models` or the configured providers in `sf providers status`; when none is known, write `CHANGE_ME/<provider-model>` and tell the person. Siblings after a fan-out share a model family unless the person asks otherwise. Prefer a reliable model on stages with side effects.
 
 ## Worked examples
 

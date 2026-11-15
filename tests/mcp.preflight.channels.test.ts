@@ -67,7 +67,7 @@ describe("preflight and start_run with channels", () => {
   it("preflight reports a failed connection as channel_check_failed without creating a Run", async () => {
     provider.health = "failed";
     const before = await store.listRuns();
-    const result = await mcpCall(base, "preflight", { pipeline: inline() });
+    const result = await mcpCall(base, "validate", { kind: "pipeline", preflight: true, pipeline: inline() });
     expect(result.isError).toBe(false);
     expect(result.payload.ok).toBe(false);
     expect(result.payload.code).toBe("channel_check_failed");
@@ -79,7 +79,7 @@ describe("preflight and start_run with channels", () => {
   });
 
   it("preflight passes when the connection is healthy", async () => {
-    const result = await mcpCall(base, "preflight", { pipeline: inline() });
+    const result = await mcpCall(base, "validate", { kind: "pipeline", preflight: true, pipeline: inline() });
     expect(result.payload.ok).toBe(true);
     expect(result.payload.code).toBeUndefined();
     expect(provider.checkCalls).toBe(1);
@@ -105,7 +105,7 @@ describe("preflight and start_run with channels", () => {
   });
 
   it("accepts pipeline-level channels on an inline pipeline", async () => {
-    const result = await mcpCall(base, "preflight", { pipeline: {
+    const result = await mcpCall(base, "validate", { kind: "pipeline", preflight: true, pipeline: {
       id: "inline-defaults", channels: [{ connection: "ops", to: "#general", operations: ["send"] }],
       stages: [{ id: "a", system_prompt: "hi", model: "anthropic/claude-sonnet-4-5", ...IO }],
     } });

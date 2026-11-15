@@ -85,24 +85,24 @@ describe("function MCP tools", () => {
 
   it("creates, conflicts, duplicates, refuses a referenced delete, and tests the saved revision", async () => {
     const { project, tools } = await open();
-    expect(tools.map((tool) => tool.name)).toEqual([
-      "list_functions",
-      "get_function",
-      "list_function_revisions",
-      "get_function_revision",
-      "create_function",
-      "save_function",
-      "duplicate_function",
-      "test_function",
-      "delete_function",
-    ]);
+    expect(tools.map((tool) => tool.name)).toEqual(["get_function", "save_function", "test_function", "delete_function"]);
 
-    const created = await call(tools, "create_function", { definition: definition("score") });
+    const created = await call(tools, "save_function", { mode: "create", definition: definition("score") });
     expect(created.isError).toBe(false);
     expect(created.payload).toMatchObject({ id: "score", revision: 1 });
 
-    const first = call(tools, "save_function", { id: "score", baseRevision: 1, definition: definition("score", "one") });
-    const second = call(tools, "save_function", { id: "score", baseRevision: 1, definition: definition("score", "two") });
+    const first = call(tools, "save_function", {
+      mode: "update",
+      id: "score",
+      baseRevision: 1,
+      definition: definition("score", "one"),
+    });
+    const second = call(tools, "save_function", {
+      mode: "update",
+      id: "score",
+      baseRevision: 1,
+      definition: definition("score", "two"),
+    });
     const settled = await Promise.all([first, second]);
     const failed = settled.filter((result) => result.isError);
     const saved = settled.filter((result) => !result.isError);
@@ -110,7 +110,7 @@ describe("function MCP tools", () => {
     expect(failed).toHaveLength(1);
     expect(failed[0]?.payload).toMatchObject({ code: "function.conflict", current_revision: 2 });
 
-    const copy = await call(tools, "duplicate_function", { id: "score", newId: "score_copy" });
+    const copy = await call(tools, "save_function", { mode: "create", copy_from: "score", id: "score_copy" });
     expect(copy.isError).toBe(false);
     expect(copy.payload).toMatchObject({ id: "score_copy", revision: 1 });
 
@@ -211,7 +211,7 @@ describe("function MCP tools", () => {
     }
 
     async function toolCall(base: string, name: string) {
-      const res = await fetch(`${base}/`, {
+      const res = await fetch(`${base}/mcp?toolsets=all`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -247,7 +247,7 @@ describe("function MCP tools", () => {
 
     const wired = await listen(withServices);
     try {
-      const listed = await toolCall(wired.base, "list_functions");
+      const listed = await toolCall(wired.base, "get_function");
       expect(listed.payload).toMatchObject({
         functions: expect.arrayContaining([expect.objectContaining({ id: "score" })]),
       });
@@ -257,7 +257,7 @@ describe("function MCP tools", () => {
 
     const missing = await listen(withoutServices);
     try {
-      const listed = await toolCall(missing.base, "list_functions");
+      const listed = await toolCall(missing.base, "get_function");
       expect(listed.text).toMatch(/functionService/i);
     } finally {
       await missing.close();
@@ -267,7 +267,8 @@ describe("function MCP tools", () => {
   it("derives capabilities from a declared source and rejects a conflicting list", async () => {
     const { tools } = await open();
     const source = 'export const access = { artifacts: "read", env: ["MIN_SCORE"], network: [] };\nexport default function execute(){ return { passed: true }; }\n';
-    const created = await call(tools, "create_function", {
+    const created = await call(tools, "save_function", {
+      mode: "create",
       definition: { id: "declared", name: "Declared", kind: "verification", source },
     });
     expect(created.isError).toBe(false);
@@ -282,7 +283,8 @@ describe("function MCP tools", () => {
         bindings: [{ alias: "MIN_SCORE", required: true }],
       },
     });
-    const conflict = await call(tools, "create_function", {
+    const conflict = await call(tools, "save_function", {
+      mode: "create",
       definition: {
         id: "wide",
         name: "Wide",
@@ -314,11 +316,11 @@ describe("function MCP tools", () => {
     await service.create(repoB, definition("remote_only"), { source: "api", author: "test" });
     const tools = record({ cwd: nested, store, functionService: service, functionInvoker } as McpToolDeps);
 
-    const local = await call(tools, "create_function", { definition: definition("local_only") });
+    const local = await call(tools, "save_function", { mode: "create", definition: definition("local_only") });
     expect(local.isError).toBe(false);
 
     const defaultRoot = defaultAgentProjectRoot(nested);
-    const defaulted = await call(tools, "list_functions", {});
+    const defaulted = await call(tools, "get_function", {});
     expect(defaulted.isError).toBe(false);
     expect(defaulted.payload.functions).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "local_only" })]),
@@ -328,7 +330,7 @@ describe("function MCP tools", () => {
     );
     expect(defaultRoot).toBe(nested);
 
-    const remote = await call(tools, "list_functions", { project_root: repoB });
+    const remote = await call(tools, "get_function", { project_root: repoB });
     expect(remote.isError).toBe(false);
     expect(remote.payload.functions).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "remote_only" })]),
@@ -337,13 +339,14 @@ describe("function MCP tools", () => {
       expect.arrayContaining([expect.objectContaining({ id: "local_only" })]),
     );
 
-    const unknown = await call(tools, "list_functions", {
+    const unknown = await call(tools, "get_function", {
       project_root: "/tmp/stageflow-function-mcp-unknown-root",
     });
     expect(unknown.isError).toBe(true);
     expect(unknown.payload).toMatchObject({ code: "unknown_project_root" });
 
-    const examples = await call(tools, "create_function", {
+    const examples = await call(tools, "save_function", {
+      mode: "create",
       project_root: "examples",
       definition: definition("examples_refuse"),
     });

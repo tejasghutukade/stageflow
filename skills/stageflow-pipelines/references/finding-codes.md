@@ -21,7 +21,7 @@ How to repair a finding from `scripts/check-catalog-keys.mjs` or `sf validate`. 
 | Task `input` does not satisfy the entry stage's `io.input.schema` | Not checked. Run start fails with `task.invalid_shape` ("Task input does not match entry stage …"). Omitted `input` is `{}`. | `lint.task_input_mismatch`. Supply every required field, or loosen the entry input. |
 | Id is not kebab case | `sf validate` accepts `Stage_A`. | `lint.id_format`. Rename to `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`. |
 | `checkout_context: true` and the task binds no checkout | Run start only: `stage.checkout_context_unbound`. | Bind `checkout`, or `repository` plus `ref`. |
-| Tool, secret value, MCP connect, channel connection | Names and shapes only. | `sf doctor --pipeline <path> --json` or MCP `preflight`. |
+| Tool, secret value, MCP connect, channel connection | Names and shapes only. | `sf doctor --pipeline <path> --json` or MCP `validate` with `preflight: true`. |
 
 `task.entry_input_unmet` is declared and never emitted. Do not look for it. The run-start code is `task.invalid_shape`. `catalog.path_case_mismatch` is declared and its checker is never called, so a `uses` path that differs only in letter case produces no finding. Match the filename on disk anyway.
 

@@ -17,7 +17,7 @@ tools:
   builtin: [read]
 ```
 
-**CLI / API / MCP.** There is no `sf agents create`. Use the [`create_agent` MCP tool](mcp.md#agent-tools) or the REST API.
+**CLI / API / MCP.** There is no `sf agents create`. Use the [`save_agent` with `mode: create` MCP tool](mcp.md#agent-tools) or the REST API.
 
 Every new agent is **disabled**. Nothing runs until you enable it.
 

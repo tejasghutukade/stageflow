@@ -53,7 +53,7 @@ describe("catalog surface parity", () => {
 
       // REST and MCP share one multi-project catalog path; both tag entries with project_root.
       const httpPipelines = await jsonFetch(`${base}/api/pipelines`);
-      const mcpPipelines = await mcpCall(base, "list_pipelines");
+      const mcpPipelines = await mcpCall(base, "list_catalog", { kind: "pipelines" });
       expect(mcpPipelines.payload.pipelines).toEqual(
         httpPipelines.body.pipelines,
       );
@@ -68,7 +68,7 @@ describe("catalog surface parity", () => {
       );
 
       const httpTasks = await jsonFetch(`${base}/api/tasks`);
-      const mcpTasks = await mcpCall(base, "list_tasks");
+      const mcpTasks = await mcpCall(base, "list_catalog", { kind: "tasks" });
       expect(mcpTasks.payload.tasks).toEqual(httpTasks.body.tasks);
 
       const pipelinePath = "pipelines/demo.pipeline.yaml";
@@ -127,7 +127,8 @@ describe("catalog surface parity", () => {
       const httpPipelines = await jsonFetch(
         `${base}/api/pipelines?project_root=${encodeURIComponent(normalized)}`,
       );
-      const mcpPipelines = await mcpCall(base, "list_pipelines", {
+      const mcpPipelines = await mcpCall(base, "list_catalog", {
+        kind: "pipelines",
         project_root: normalized,
       });
       expect(mcpPipelines.payload.pipelines).toEqual(httpPipelines.body.pipelines);

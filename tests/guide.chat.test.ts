@@ -53,7 +53,7 @@ describe("stageflow guide", () => {
     expect(profile.playbook).toContain("The plan card is the approval");
     expect(profile.playbook).toContain("a few seconds");
     expect(profile.playbook).toContain("pipelines/<id>/<id>.pipeline.yaml");
-    const createPipeline = profile.tools.find((tool) => tool.name === "create_pipeline");
+    const createPipeline = profile.tools.find((tool) => tool.name === "write_pipeline");
     expect(createPipeline?.description).toContain("pipelines/<id>/");
     expect(profile.playbook).toContain("Do not create stand-in documents");
     expect(profile.playbook).not.toContain("Read what already exists in the project before you suggest anything new");
@@ -65,7 +65,7 @@ describe("stageflow guide", () => {
     const host = createWorkshopOperatorHost([{ type: "echo" }]);
     const profile = host.getProfile(STAGEFLOW_GUIDE_PROFILE_ID);
     expect(profile?.tools).toEqual([]);
-    expect(STAGEFLOW_GUIDE_TOOL_NAMES).toContain("create_pipeline");
+    expect(STAGEFLOW_GUIDE_TOOL_NAMES).toContain("write_pipeline");
     expect(STAGEFLOW_GUIDE_TOOL_NAMES).not.toContain("answer_gate");
 
     const thread = createGuideThread(storeRoot);
@@ -111,10 +111,10 @@ describe("stageflow guide", () => {
 
   it("streams tool frames and stores ordered parts", async () => {
     storeRoot = await mkdtemp(path.join(tmpdir(), "sf-guide-"));
-    const host = createWorkshopOperatorHost([{ type: "call_tool", name: "list_pipelines", args: { project_root: "demo" }, message: "You have one pipeline." }]);
+    const host = createWorkshopOperatorHost([{ type: "call_tool", name: "list_catalog", args: { project_root: "demo" }, message: "You have one pipeline." }]);
     host.registerProfile({
       ...createStageflowGuideProfile(),
-      tools: [{ name: "list_pipelines", description: "", handler: () => ({ ok: true, content: { pipelines: ["release"] } }) }],
+      tools: [{ name: "list_catalog", description: "", handler: () => ({ ok: true, content: { pipelines: ["release"] } }) }],
     });
     const thread = createGuideThread(storeRoot);
     const frames = [];
@@ -122,10 +122,10 @@ describe("stageflow guide", () => {
       frames.push(frame);
     }
     expect(frames.map((frame) => frame.type)).toEqual(["tool", "tool", "delta", "done"]);
-    expect(frames[0]).toEqual({ type: "tool", id: expect.any(String), name: "list_pipelines", status: "running", args: { project_root: "demo" } });
-    expect(frames[1]).toEqual({ type: "tool", id: (frames[0] as { id: string }).id, name: "list_pipelines", status: "complete", result: { pipelines: ["release"] } });
+    expect(frames[0]).toEqual({ type: "tool", id: expect.any(String), name: "list_catalog", status: "running", args: { project_root: "demo" } });
+    expect(frames[1]).toEqual({ type: "tool", id: (frames[0] as { id: string }).id, name: "list_catalog", status: "complete", result: { pipelines: ["release"] } });
     const parts = [
-      { type: "tool", id: (frames[0] as { id: string }).id, name: "list_pipelines", status: "complete", args: { project_root: "demo" }, result: { pipelines: ["release"] } },
+      { type: "tool", id: (frames[0] as { id: string }).id, name: "list_catalog", status: "complete", args: { project_root: "demo" }, result: { pipelines: ["release"] } },
       { type: "text", text: "You have one pipeline." },
     ];
     expect(frames[3]).toMatchObject({ type: "done", message: { role: "assistant", text: "You have one pipeline.", parts } });
@@ -138,11 +138,11 @@ describe("stageflow guide", () => {
     storeRoot = await mkdtemp(path.join(tmpdir(), "sf-guide-"));
     const secret = "test-bot-token-not-a-real-credential";
     const host = createWorkshopOperatorHost([
-      { type: "call_tool", name: "create_connection", args: { provider: "slack", secrets: { botToken: secret } }, message: "That did not work." },
+      { type: "call_tool", name: "save_connection", args: { provider: "slack", secrets: { botToken: secret } }, message: "That did not work." },
     ]);
     host.registerProfile({
       ...createStageflowGuideProfile(),
-      tools: [{ name: "create_connection", description: "", handler: () => ({ ok: false, content: { error: "CHANNEL_INVALID_INPUT" }, error: "CHANNEL_INVALID_INPUT" }) }],
+      tools: [{ name: "save_connection", description: "", handler: () => ({ ok: false, content: { error: "CHANNEL_INVALID_INPUT" }, error: "CHANNEL_INVALID_INPUT" }) }],
     });
     const thread = createGuideThread(storeRoot);
     const frames = [];
@@ -167,8 +167,8 @@ describe("stageflow guide", () => {
         onDelta?.("Let me look. ");
         onActivity?.({ id: "c1", name: "show_ui", status: "running", args: { component: "plan" } });
         onActivity?.({ id: "c1", name: "show_ui", status: "complete", result: bigUi });
-        onActivity?.({ id: "c2", name: "list_runs", status: "running", args: {} });
-        onActivity?.({ id: "c2", name: "list_runs", status: "complete", result: bigList });
+        onActivity?.({ id: "c2", name: "get_run", status: "running", args: {} });
+        onActivity?.({ id: "c2", name: "get_run", status: "complete", result: bigList });
         onDelta?.("Done.");
         return { events: [{ type: "message", role: "assistant", text: "Let me look. Done." }] };
       },
@@ -191,7 +191,7 @@ describe("stageflow guide", () => {
     const expected = [
       { type: "text", text: "Let me look. " },
       { type: "tool", id: "c1", name: "show_ui", status: "complete", args: { component: "plan" }, result: bigUi },
-      { type: "tool", id: "c2", name: "list_runs", status: "complete", args: {}, result: { truncated: true } },
+      { type: "tool", id: "c2", name: "get_run", status: "complete", args: {}, result: { truncated: true } },
       { type: "text", text: "Done." },
     ];
     const done = frames.at(-1);
@@ -291,7 +291,7 @@ describe("stageflow guide", () => {
     const model: OperatorAgentModel = {
       async complete({ onDelta, onActivity }) {
         onDelta?.("partial");
-        onActivity?.({ id: "t1", name: "list_pipelines", status: "running", args: {} });
+        onActivity?.({ id: "t1", name: "list_catalog", status: "running", args: {} });
         markEntered();
         await sendGate;
         return { events: [{ type: "message", role: "assistant", text: "partial" }] };
@@ -348,7 +348,7 @@ describe("stageflow guide", () => {
       text: "partial",
       parts: [
         { type: "text", text: "partial" },
-        { type: "tool", id: "t1", name: "list_pipelines", status: "error", error: "guide.tool_interrupted", args: {} },
+        { type: "tool", id: "t1", name: "list_catalog", status: "error", error: "guide.tool_interrupted", args: {} },
       ],
     });
   });

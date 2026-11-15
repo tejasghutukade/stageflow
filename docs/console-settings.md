@@ -34,6 +34,8 @@ Connect and inspect Pi model providers. **Connect** opens the API key field when
 
 The address a client points at to use this console process as an MCP server (`<console-origin>/mcp` while `sf ui` is running). The client sends `Authorization: Bearer <token>`; the token is in `~/.stageflow/control-token` (Docker: `docker exec <container> cat /data/control-token`). See [MCP](mcp.md).
 
+**Toolsets.** A bare URL loads only the core tools (author, run, watch, gates). Use the checkboxes to add toolsets for agents, evals, connections, memories, and the rest; the panel copies the matching URL and a `.cursor/mcp.json` snippet. Core is always included. Reconnect the client after changing the URL — the tool list is fixed for the session. Choices are not saved on the Host. Names and parse rules: [MCP — Toolsets](mcp.md#toolsets).
+
 ## Project MCP
 
 The tool servers agents and stages can use. The panel has two parts. Full reference (formats, secret rules, OAuth, security): [MCP servers](mcp-servers.md).

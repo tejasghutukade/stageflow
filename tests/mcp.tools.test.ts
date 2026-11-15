@@ -66,7 +66,7 @@ afterAll(async () => {
 
 async function waitUntilIdleHealth(base: string): Promise<void> {
   await waitFor(
-    async () => (await mcpCall(base, "get_health")).payload?.activeCount === 0,
+    async () => (await mcpCall(base, "list_catalog", { kind: "health" })).payload?.activeCount === 0,
     { intervalMs: 25, message: "timeout waiting for idle health" },
   );
 }
@@ -74,7 +74,7 @@ async function waitUntilIdleHealth(base: string): Promise<void> {
 async function waitForActive(base: string, runId: string): Promise<void> {
   await waitFor(
     async () =>
-      (await mcpCall(base, "get_health")).payload.activeRunIds?.includes(runId) === true,
+      (await mcpCall(base, "list_catalog", { kind: "health" })).payload.activeRunIds?.includes(runId) === true,
     { intervalMs: 25, message: `timeout waiting for ${runId} to be active` },
   );
 }
@@ -181,14 +181,14 @@ describe("MCP tools and HTTP inline task", () => {
     await withMcp(successAgent(), async ({ base, mcpUrl }) => {
       expect(mcpUrl).toBe(`${base}/mcp`);
 
-      const pipelines = await mcpCall(base, "list_pipelines");
+      const pipelines = await mcpCall(base, "list_catalog", { kind: "pipelines" });
       expect(pipelines.status).toBe(200);
       expect(pipelines.isError).toBe(false);
       expect(
         pipelines.payload.pipelines.map((p: { path: string }) => p.path),
       ).toContain("pipelines/docs-only.pipeline.yaml");
 
-      const tasks = await mcpCall(base, "list_tasks");
+      const tasks = await mcpCall(base, "list_catalog", { kind: "tasks" });
       expect(tasks.isError).toBe(false);
       expect(tasks.payload.tasks.map((t: { path: string }) => t.path)).toContain(
         "tasks/sample.task.yaml",
@@ -257,7 +257,7 @@ describe("MCP tools and HTTP inline task", () => {
         await waitUntilIdleHealth(base);
       }
 
-      const pipelines = await mcpCall(base, "list_pipelines");
+      const pipelines = await mcpCall(base, "list_catalog", { kind: "pipelines" });
       expect(pipelines.isError).toBe(false);
       const roots = new Set(
         pipelines.payload.pipelines.map((p: { project_root: string }) => p.project_root),
@@ -265,7 +265,7 @@ describe("MCP tools and HTTP inline task", () => {
       expect(roots.has(realRepoA)).toBe(true);
       expect(roots.has(realRepoB)).toBe(true);
 
-      const tasks = await mcpCall(base, "list_tasks");
+      const tasks = await mcpCall(base, "list_catalog", { kind: "tasks" });
       expect(tasks.isError).toBe(false);
       const taskRoots = new Set(
         tasks.payload.tasks.map((t: { project_root: string }) => t.project_root),
@@ -282,7 +282,7 @@ describe("MCP tools and HTTP inline task", () => {
 
   it("get_health reports idle capacity, version, and provider boot state without the removed inFlight field", async () => {
     await withMcp(scriptedFakeAgent([]), async ({ base }) => {
-      const health = await mcpCall(base, "get_health");
+      const health = await mcpCall(base, "list_catalog", { kind: "health" });
       expect(health.isError).toBe(false);
       expect(health.payload).toMatchObject({
         ok: true,
@@ -295,7 +295,7 @@ describe("MCP tools and HTTP inline task", () => {
           configured: expect.any(Array),
           failures: expect.any(Array),
         },
-        providers_live: { note: expect.stringMatching(/list_providers/) },
+        providers_live: { note: expect.stringMatching(/list_catalog/) },
       });
       expect(health.payload).not.toHaveProperty("inFlight");
       expect(health.payload.maxConcurrent).toBeGreaterThan(0);
@@ -335,7 +335,7 @@ describe("MCP tools and HTTP inline task", () => {
           const secondId = second.payload.runId as string;
           await waitForActive(base, secondId);
 
-          const health = await mcpCall(base, "get_health");
+          const health = await mcpCall(base, "list_catalog", { kind: "health" });
           expect(health.payload).toMatchObject({
             ok: true,
             activeCount: 2,
@@ -523,10 +523,8 @@ describe("MCP Tier 1 operator parity", () => {
         return detail.status === "succeeded";
       });
 
-      const clarifyEvents = await mcpCall(base, "list_stage_events", {
-        runId,
-        stageId: "clarify",
-      });
+      const clarifyEvents = await mcpCall(base, "get_stage", { view: "events", runId,
+        stageId: "clarify", });
       expect(clarifyEvents.isError).toBe(false);
       const hitlEvents = clarifyEvents.payload.events as Array<{
         event: string;
@@ -630,10 +628,8 @@ describe("MCP Tier 1 operator parity", () => {
         return detail.status === "succeeded";
       });
 
-      const listedEvents = await mcpCall(base, "list_stage_events", {
-        runId,
-        stageId: "review",
-      });
+      const listedEvents = await mcpCall(base, "get_stage", { view: "events", runId,
+        stageId: "review", });
       expect(listedEvents.isError).toBe(false);
       const events = listedEvents.payload.events as Array<{
         event: string;
@@ -851,44 +847,34 @@ describe("MCP Tier 1 operator parity", () => {
           status: "passed",
           evidence: { kind: "payload_schema", schema_declared: true },
         });
-        const verification = await mcpCall(base, "get_stage_verification", {
-          runId,
-          stageId: "clarify",
-        });
+        const verification = await mcpCall(base, "get_stage", { view: "verification", runId,
+          stageId: "clarify", });
         expect(verification.isError).toBe(false);
         expect(verification.payload.attempts[0].checks).toEqual([
           expect.objectContaining({ check_id: "handoff", status: "passed" }),
         ]);
 
-        const events = await mcpCall(base, "list_stage_events", {
-          runId,
-          stageId: "clarify",
-        });
+        const events = await mcpCall(base, "get_stage", { view: "events", runId,
+          stageId: "clarify", });
         expect(events.isError).toBe(false);
         expect(events.payload.events.map((e: { event: string }) => e.event)).toContain(
           "succeeded",
         );
 
-        const envelope = await mcpCall(base, "get_envelope", {
-          runId,
-          stageId: "clarify",
-        });
+        const envelope = await mcpCall(base, "get_stage", { view: "envelope", runId,
+          stageId: "clarify", });
         expect(envelope.isError).toBe(false);
         expect(envelope.payload.envelope.summary).toBe("clarify-ok");
         expect(envelope.payload.envelope.payload).toEqual({ n: 1 });
         expect(envelope.payload).not.toHaveProperty("attempt");
 
-        const missingRun = await mcpCall(base, "list_stage_events", {
-          runId: "missing",
-          stageId: "clarify",
-        });
+        const missingRun = await mcpCall(base, "get_stage", { view: "events", runId: "missing",
+          stageId: "clarify", });
         expect(missingRun.isError).toBe(true);
         expect(missingRun.payload.status).toBe(404);
 
-        const missingStage = await mcpCall(base, "get_envelope", {
-          runId,
-          stageId: "nope",
-        });
+        const missingStage = await mcpCall(base, "get_stage", { view: "envelope", runId,
+          stageId: "nope", });
         expect(missingStage.isError).toBe(true);
         expect(missingStage.payload.status).toBe(404);
       },
@@ -925,28 +911,22 @@ describe("MCP Tier 1 operator parity", () => {
           { attempt: 2 },
         );
 
-        const latest = await mcpCall(base, "get_envelope", {
-          runId,
-          stageId: "clarify",
-        });
+        const latest = await mcpCall(base, "get_stage", { view: "envelope", runId,
+          stageId: "clarify", });
         expect(latest.isError).toBe(false);
         expect(latest.payload.envelope.summary).toBe("attempt-2-latest");
         expect(latest.payload).not.toHaveProperty("attempt");
 
-        const prior = await mcpCall(base, "get_envelope", {
-          runId,
+        const prior = await mcpCall(base, "get_stage", { view: "envelope", runId,
           stageId: "clarify",
-          attempt: 1,
-        });
+          attempt: 1, });
         expect(prior.isError).toBe(false);
         expect(prior.payload.attempt).toBe(1);
         expect(prior.payload.envelope.summary).toBe("attempt-1-prior");
 
-        const missingAttempt = await mcpCall(base, "get_envelope", {
-          runId,
+        const missingAttempt = await mcpCall(base, "get_stage", { view: "envelope", runId,
           stageId: "clarify",
-          attempt: 99,
-        });
+          attempt: 99, });
         expect(missingAttempt.isError).toBe(true);
         expect(missingAttempt.payload.status).toBe(404);
       },
@@ -982,14 +962,16 @@ describe("MCP Tier 1 operator parity", () => {
         const runId = started.payload.runId as string;
         await waitFor(async () => (await store.readRunMeta(runId)).status === "failed");
 
-        const missingRetry = await mcpCall(base, "retry_stage", {
+        const missingRetry = await mcpCall(base, "stage_action", {
+          action: "retry",
           runId: "missing",
           stageId: "design-doc",
         });
         expect(missingRetry.isError).toBe(true);
         expect(missingRetry.payload.status).toBe(404);
 
-        const retried = await mcpCall(base, "retry_stage", {
+        const retried = await mcpCall(base, "stage_action", {
+          action: "retry",
           runId,
           stageId: "design-doc",
         });
@@ -1017,7 +999,7 @@ describe("MCP Tier 1 operator parity", () => {
       const runId = started.payload.runId as string;
       await waitFor(async () => (await store.readRunMeta(runId)).status === "succeeded");
 
-      const rerun = await mcpCall(base, "rerun", { runId });
+      const rerun = await mcpCall(base, "start_run", { from_run: runId });
       expect(rerun.isError).toBe(false);
       const rerunId = rerun.payload.runId as string;
       expect(rerunId).not.toBe(runId);
@@ -1076,7 +1058,7 @@ describe("MCP Tier 1 operator parity", () => {
 
   it("validate reports catalog findings and scopes to a broken pipeline", async () => {
     await withMcp(scriptedFakeAgent([]), async ({ base }) => {
-      const full = await mcpCall(base, "validate", {});
+      const full = await mcpCall(base, "validate", { kind: "catalog" });
       expect(full.isError).toBe(false);
       expect(full.payload).toMatchObject({
         ok: expect.any(Boolean),
@@ -1088,6 +1070,7 @@ describe("MCP Tier 1 operator parity", () => {
       });
 
       const scoped = await mcpCall(base, "validate", {
+        kind: "pipeline",
         pipeline: netPipeline("broken"),
       });
       expect(scoped.isError).toBe(false);
@@ -1096,10 +1079,11 @@ describe("MCP Tier 1 operator parity", () => {
     });
   });
 
-  it("describe_pipeline returns the pipeline DAG and errors for a missing pipeline", async () => {
+  it("read_pipeline view dag returns the pipeline DAG and errors for a missing pipeline", async () => {
     await withMcp(scriptedFakeAgent([]), async ({ base }) => {
-      const described = await mcpCall(base, "describe_pipeline", {
-        pipeline: netPipeline("diamond-fan-in"),
+      const described = await mcpCall(base, "read_pipeline", {
+        path: netPipeline("diamond-fan-in"),
+        view: "dag",
       });
       expect(described.isError).toBe(false);
       expect(described.payload.id).toBe("diamond-fan-in");
@@ -1116,8 +1100,9 @@ describe("MCP Tier 1 operator parity", () => {
         }),
       ]);
 
-      const missing = await mcpCall(base, "describe_pipeline", {
-        pipeline: "pipelines/does-not-exist.pipeline.yaml",
+      const missing = await mcpCall(base, "read_pipeline", {
+        path: "pipelines/does-not-exist.pipeline.yaml",
+        view: "dag",
       });
       expect(missing.isError).toBe(true);
       expect(missing.payload.error).toBeTruthy();
@@ -1128,7 +1113,7 @@ describe("MCP Tier 1 operator parity", () => {
     await withMcp(
       scriptedFakeAgent([]),
       async ({ base, seeded }) => {
-        const detail = await mcpCall(base, "get_run", { runId: seeded });
+        const detail = await mcpCall(base, "get_run", { runId: seeded, view: "export" });
         expect(detail.isError).toBe(false);
         expect(
           detail.payload.pipeline_track.edges.filter(
@@ -1157,7 +1142,7 @@ describe("MCP Tier 1 operator parity", () => {
     await withMcp(
       scriptedFakeAgent([]),
       async ({ base, seeded }) => {
-        const detail = await mcpCall(base, "get_run", { runId: seeded });
+        const detail = await mcpCall(base, "get_run", { runId: seeded, view: "export" });
         expect(detail.isError).toBe(false);
         expect(detail.payload.status).toBe("succeeded");
         expect(
@@ -1184,7 +1169,7 @@ describe("MCP Tier 1 operator parity", () => {
     );
   });
 
-  it("start_run and describe_pipeline reject an empty or whitespace pipeline", async () => {
+  it("start_run and read_pipeline reject an empty or whitespace pipeline path", async () => {
     await withMcp(scriptedFakeAgent([]), async ({ base }) => {
       for (const blank of ["", "   "]) {
         const start = await mcpCall(base, "start_run", {
@@ -1194,10 +1179,15 @@ describe("MCP Tier 1 operator parity", () => {
         expect(start.isError).toBe(true);
         expect(start.payload.error).toBe("pipeline is required");
 
-        const describe = await mcpCall(base, "describe_pipeline", { pipeline: blank });
+        const describe = await mcpCall(base, "read_pipeline", { path: blank, view: "dag" });
         expect(describe.isError).toBe(true);
-        expect(describe.payload.error).toBe("pipeline is required");
-        expect(describe.payload.status).toBe(400);
+        if (blank.trim() === "") {
+          const detail = describe.payload?.error ?? describe.content.map((block) => block.text ?? "").join("\n");
+          expect(detail).toMatch(/path|Too small|required|character/i);
+        } else {
+          expect(describe.payload.error).toBe("path is required");
+          expect(describe.payload.status).toBe(400);
+        }
       }
     });
   });
@@ -1209,7 +1199,7 @@ describe("MCP Tier 1 operator parity", () => {
     await withMcp(
       scriptedFakeAgent([]),
       async ({ base, seeded }) => {
-        const missingRun = await mcpCall(base, "read_artifact", {
+        const missingRun = await mcpCall(base, "run_files", { view: "artifact",
           runId: "does-not-exist",
           path: "stages/clarify/attempts/1/artifacts/note.txt",
         });
@@ -1217,7 +1207,7 @@ describe("MCP Tier 1 operator parity", () => {
         expect(missingRun.payload.status).toBe(404);
         expect(missingRun.payload.error).toBeTruthy();
 
-        const missingArtifact = await mcpCall(base, "read_artifact", {
+        const missingArtifact = await mcpCall(base, "run_files", { view: "artifact",
           runId: seeded,
           path: "stages/clarify/attempts/1/artifacts/missing.txt",
         });
@@ -1226,7 +1216,7 @@ describe("MCP Tier 1 operator parity", () => {
         expect(String(missingArtifact.payload.error)).toMatch(/Artifact not found/);
 
         for (const denied of [deniedAuth, deniedPng]) {
-          const result = await mcpCall(base, "read_artifact", {
+          const result = await mcpCall(base, "run_files", { view: "artifact",
             runId: seeded,
             path: denied,
           });
@@ -1236,7 +1226,7 @@ describe("MCP Tier 1 operator parity", () => {
           expect(result.content.map((c) => c.type)).not.toContain("image");
         }
 
-        const escaped = await mcpCall(base, "read_artifact", {
+        const escaped = await mcpCall(base, "run_files", { view: "artifact",
           runId: seeded,
           path: "../outside.txt",
         });
@@ -1261,7 +1251,7 @@ describe("MCP Tier 1 operator parity", () => {
     await withMcp(
       scriptedFakeAgent([]),
       async ({ base, seeded }) => {
-        const result = await mcpCall(base, "read_artifact", {
+        const result = await mcpCall(base, "run_files", { view: "artifact",
           runId: seeded,
           path: rel,
         });
@@ -1286,7 +1276,7 @@ describe("MCP Tier 1 operator parity", () => {
     await withMcp(
       scriptedFakeAgent([]),
       async ({ base, seeded }) => {
-        const result = await mcpCall(base, "read_artifact", {
+        const result = await mcpCall(base, "run_files", { view: "artifact",
           runId: seeded,
           path: rel,
         });
@@ -1315,7 +1305,7 @@ describe("MCP Tier 1 operator parity", () => {
     await withMcp(
       scriptedFakeAgent([]),
       async ({ base, seeded }) => {
-        const result = await mcpCall(base, "read_artifact", {
+        const result = await mcpCall(base, "run_files", { view: "artifact",
           runId: seeded,
           path: rel,
         });
@@ -1338,21 +1328,21 @@ describe("MCP Tier 1 operator parity", () => {
         const ids = (res: Awaited<ReturnType<typeof mcpCall>>) =>
           res.payload.runs.map((r: { run_id: string }) => r.run_id);
 
-        const all = await mcpCall(base, "list_runs", {});
+        const all = await mcpCall(base, "get_run", {});
         expect(all.isError).toBe(false);
         expect(ids(all)).toEqual([seeded.b, seeded.a]);
 
-        expect(ids(await mcpCall(base, "list_runs", { status: "failed" }))).toEqual([
+        expect(ids(await mcpCall(base, "get_run", { status: "failed" }))).toEqual([
           seeded.b,
         ]);
         expect(
-          ids(await mcpCall(base, "list_runs", { since: seeded.cutoff })),
+          ids(await mcpCall(base, "get_run", { since: seeded.cutoff })),
         ).toEqual([seeded.b]);
         expect(
-          ids(await mcpCall(base, "list_runs", { pipeline: "docs-only" })),
+          ids(await mcpCall(base, "get_run", { pipeline: "docs-only" })),
         ).toEqual([seeded.a]);
 
-        const bad = await mcpCall(base, "list_runs", { since: "not-a-date" });
+        const bad = await mcpCall(base, "get_run", { since: "not-a-date" });
         expect(bad.isError).toBe(true);
         expect(bad.payload.status).toBe(400);
         expect(bad.payload.error).toBe("since must be a valid date");
@@ -1599,7 +1589,7 @@ describe("MCP lean run projection fields", () => {
 
     const { server, base } = await withMcpServer(root, scriptedFakeAgent([]), store);
     try {
-      const getWithCost = await mcpCall(base, "get_run", { runId: withCost.runId });
+      const getWithCost = await mcpCall(base, "get_run", { runId: withCost.runId, view: "export" });
       const waitWithCost = await mcpCall(base, "wait_run", {
         runId: withCost.runId,
         until: "terminal",
@@ -1635,7 +1625,7 @@ describe("MCP lean run projection fields", () => {
       expect(waitWithCost.payload.run.task_yaml).toBeUndefined();
       expect(resourceWithCost.task_yaml).toBeUndefined();
 
-      const getUnused = await mcpCall(base, "get_run", { runId: unused.runId });
+      const getUnused = await mcpCall(base, "get_run", { runId: unused.runId, view: "export" });
       const waitUnused = await mcpCall(base, "wait_run", {
         runId: unused.runId,
         until: "terminal",

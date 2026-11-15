@@ -83,7 +83,7 @@ Under `--json`, a failure to start the Host exits 1. The document depends on the
 | `sf run-stage` | `{ "error": "<message>" }` on stdout. No reason id. |
 | `sf agents` | `{ "code": "host.unavailable", "message": "<message>", "issues": [] }` on stdout. |
 | `sf a2a` status, enable, reload, caller, publication | The message on stderr. `--json` does not wrap it. |
-| Mutating `sf runs` (`answer`, `feedback-decide`, `retry`, `resume`, `recover`, `abandon`, `cancel`, `delete`, `gc`, `rerun`) | `{ "error": "<message>", "reason": "<reason id>" }` on stdout. |
+| Mutating `sf runs` (`answer`, `feedback-decide`, `retry`, `resume`, `recover`, `abandon`, `cancel`, `delete`, `gc`, `start_run` with `from_run`) | `{ "error": "<message>", "reason": "<reason id>" }` on stdout. |
 
 `sf eval` verbs that autostart print `{ "error": "<message>", "reason": "<reason id>" }` on stdout, the same shape as mutating `sf runs`.
 
@@ -146,7 +146,7 @@ Validate does not check provider credentials, that the model id exists, that a t
 | Provider error about a tool call written as plain text | The model did not return a tool call. | Run again only if the user agrees to spend again, or pick another model. Pinning OpenRouter upstreams is a Host `models.json` edit, not a pipeline key. |
 | Judge rejected | Judge providers are only `anthropic`, `openai`, and `openrouter`. | The `stageflow-evals` skill covers judge setup. |
 
-`list_models` and `GET /api/models` show connected providers. An id absent from that list can still be written into YAML. The failure, if any, is at run time.
+`list_catalog` with `kind: models` and `GET /api/models` show connected providers. An id absent from that list can still be written into YAML. The failure, if any, is at run time.
 
 ## Runs that did not start
 

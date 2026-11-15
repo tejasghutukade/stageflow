@@ -184,31 +184,31 @@ Extra codes: `identity.verification_required` (401, the proof or bearer is missi
 
 | Operation | REST | CLI (`sf agents`) | MCP tool |
 |-----------|------|-------------------|----------|
-| List | `GET /api/agents` | `list` | `list_agents` |
+| List | `GET /api/agents` | `list` | `get_agent` with `list: true` |
 | Read one | `GET /api/agents/:id` | `get` | `get_agent` |
-| Validate | `POST …/validate` | `validate <file>` | `validate_agent` |
-| Create | `POST /api/agents` | | `create_agent` |
+| Validate | `POST …/validate` | `validate <file>` | `validate` with `kind: agent` |
+| Create | `POST /api/agents` | | `save_agent` with `mode: create` |
 | Save | `POST …/:id/save` | | `save_agent` |
-| Enable, disable | `POST …/enable`, `…/disable` | `enable`, `disable` | `enable_agent`, `disable_agent` |
+| Enable, disable | `POST …/enable`, `…/disable` | `enable`, `disable` | `set_agent_enabled` with `enabled: true`, `set_agent_enabled` with `enabled: false` |
 | Archive | `POST …/archive` | | `archive_agent` |
-| Revisions | `GET …/revisions` | `history` | `list_agent_revisions` |
-| One revision, diff | `GET …/revisions/:n`, `…/diff/:to` | | |
-| Restore | `POST …/revisions/:n/restore` | `restore --base` | `restore_agent_revision` |
-| Sessions of one agent | `GET …/:id/sessions` | `sessions` | `list_agent_sessions` |
+| Revisions | `GET …/revisions` | `history` | `get_agent` with `view: revisions` |
+| One revision, diff | `GET …/revisions/:n`, `…/diff/:to` | | `get_agent` with `view: revision` or `diff` |
+| Restore | `POST …/revisions/:n/restore` | `restore --base` | `save_agent` with `from_revision: true` |
+| Sessions of one agent | `GET …/:id/sessions` | `sessions` | `get_agent_session` with `list: true` |
 | Sessions of all agents | `GET …/sessions` | | |
 | One session | `GET …/sessions/:sid` | `session` | `get_agent_session` |
 | Chat | `POST …/chat` (JSON or NDJSON) | `chat` (streams) | `agent_chat` (waits for the whole turn) |
 | Stop a turn | `POST …/chat/stop` | | `stop_agent_session` |
 | Pending approvals | `GET /api/agents/approvals` | | |
-| Approve, deny | `POST …/approval/approve`, `…/deny` | `approve`, `deny` | `approve_agent_action`, `deny_agent_action` |
+| Approve, deny | `POST …/approval/approve`, `…/deny` | `approve`, `deny` | `decide_agent_action` with `action: approve` or `deny` |
 | OTLP export, channel status, delivery resend, tool registry | REST only | | |
 
 Differences worth knowing:
 
 - **Who it is recorded as.** REST (and so the CLI) saves revisions as source `console`; MCP saves them as source `api` with author `mcp`. Chat turns are tagged `console` or `mcp` the same way.
-- **Errors.** REST answers `{ code, message?, issues? }` with an HTTP status. MCP returns a tool result with `isError: true` and the same object as its text. The CLI prints the message (and issues) and exits `1`; with `--json` it prints the object.
+- **Errors.** REST answers `{ code, message?, issues? }` with an HTTP status. MCP returns a tool result with `isError: true` and the same object as its text — including `invalid_arguments` (`status: 400`) when a merged tool rejects `kind` / `view` / `action` / `mode` before the handler runs. The CLI prints the message (and issues) and exits `1`; with `--json` it prints the object.
 - **Session scoping.** Every session call takes the agent id and refuses a session of another agent as `agent.session_not_found`, on all three surfaces.
-- **No MCP/CLI create-from-prose.** The agent author chat is a console feature (`/api/agent-author/chat`); scripts send a full definition to `create_agent` or `POST /api/agents`.
-- **Approvals through MCP.** `approve_agent_action` and `deny_agent_action` are operator actions. They sit in the `gates.decide` group, which cannot be granted to an agent, so one agent can never decide another's approval. An agent also cannot touch approvals on its own sessions.
+- **No MCP/CLI create-from-prose.** The agent author chat is a console feature (`/api/agent-author/chat`); scripts send a full definition to `save_agent` with `mode: create` or `POST /api/agents`.
+- **Approvals through MCP.** `decide_agent_action` is operator-only. It sits in the `gates.decide` group, which cannot be granted to an agent, so one agent can never decide another's approval. An agent also cannot touch approvals on its own sessions.
 
 See [MCP — Agent tools](mcp.md#agent-tools) for the tool inputs and outputs and [CLI reference — `sf agents`](cli-reference.md#sf-agents) for flags and exit codes.

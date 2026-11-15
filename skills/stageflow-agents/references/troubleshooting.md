@@ -31,11 +31,11 @@ What a code means and the change that clears it. Run `sf agents validate <file> 
 | `agent.ask_first_not_granted` | The entry is not a granted tool, or it uses the model-facing name. Use `write`, `helpdesk.create_ticket`, `stageflow.start_run`, or `agent:<id>`. A `["*"]` MCP grant accepts `<server>.<tool>` for real tool names, not `<server>.*` as a pause-all |
 | `agent.stageflow_group_unknown` | Use a group id from [tools-and-approvals.md](tools-and-approvals.md#stageflow-tools) |
 | `agent.stageflow_tool_unknown` | Use a tool name from that same table, without the `stageflow_` prefix in YAML |
-| `agent.stageflow_operator_only` | Remove `gates.decide`, `get_started`, `answer_gate`, `decide_feedback_loop`, `approve_agent_action`, or `deny_agent_action`. A person decides those |
+| `agent.stageflow_operator_only` | Remove `gates.decide`, `get_started`, `answer_gate`, `decide_feedback_loop`, or `decide_agent_action`. A person decides those |
 | `agent.mcp_name_reserved` | Rename the MCP server. `stageflow` is Stageflow's own tools |
 | `agent.sub_agent_self` | Remove the agent's own id from `sub_agents` |
 | `agent.channel_in_use` | That connection, or another connection on the same inbox or Photon project, already belongs to an agent. Use one connection for one agent |
-| `agent.memory_unavailable` | Create the memory first (`create_memory` or `POST /api/memories`), or remove the id. See [memories-and-schedules.md](memories-and-schedules.md) |
+| `agent.memory_unavailable` | Create the memory first (`save_memory` with `mode: create` or `POST /api/memories`), or remove the id. See [memories-and-schedules.md](memories-and-schedules.md) |
 | `agent.id_mismatch` | `id` must equal the file name `agents/<id>.agent.yaml`. Validate of a definition object does not check the file name; the Host reports this when it loads the folder |
 | `agent.id_immutable` | Keep the original id. A new id is a new agent |
 | `agent.exists` | Pick another id, or edit the existing agent |
@@ -60,7 +60,7 @@ Warnings do not block save. They do predict a session that will fail or a link t
 | `agent.channel_nobody_allowed` | `allow_from` is empty, so every inbound message is dropped. Add senders |
 | `agent.channel_open_to_anyone` | `allow_from` contains `*`. Replace it with specific senders for anything outsiders can reach |
 | `agent.shell_not_path_confined` | `bash` is granted. Every command asks first, and the shell is not limited to the project. Remove it unless the user accepted that |
-| `agent.web_chat_reads_conversations` | Web chat is on and the agent can call `get_agent_session` or `list_agent_sessions`. Turn web chat off or drop those tools |
+| `agent.web_chat_reads_conversations` | Web chat is on and the agent can call `get_agent_session` (including `list: true`). Turn web chat off or drop those tools |
 | `agent.web_chat_slug_missing` | Web chat is on in a hand-written file and has no slug. Save through MCP, REST, or the console to mint one, or set `enabled: false` |
 | `agent.backend_unavailable` | `model.backend: claude`. Sessions fail. Leave the backend unset |
 | `agent.sandbox_unavailable` | `execution: sandbox`. Sessions fail. Leave `execution` unset |
@@ -145,7 +145,7 @@ Work around these. They are not flags you can turn on.
 - No CLI for create, save, or archive. Write, edit, or delete the file, or use MCP.
 - No CLI for one revision, a revision diff, or stopping a turn. MCP and REST have them. Diff the file with git when that is enough.
 - No CLI for memories, connections, delivery resend, OTLP export, the all-agent session list, the pending-approvals list, or `GET /api/agents/stageflow-tools`.
-- `create_agent` and the console turn public web chat on. Public chat then refuses any agent that has tools, and validate does not warn.
+- `save_agent` with `mode: create` and the console turn public web chat on. Public chat then refuses any agent that has tools, and validate does not warn.
 - `tools.browser`, `execution: sandbox`, and `model.backend: claude` are stored and do not run.
 - `approvals.approvers.channel_ids` is ignored. Channels cannot approve.
 - `bash` is not path-confined. The path guard covers path arguments on other tools.

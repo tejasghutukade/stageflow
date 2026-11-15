@@ -10,7 +10,7 @@ import { registerEvalTools } from "./evalTools.js";
 import { registerTriggerTools } from "./triggerTools.js";
 import type { McpToolDeps } from "./deps.js";
 import { textResult } from "./toolResults.js";
-import { DEFAULT_TIMEOUT_MS, waitRun } from "./waitRun.js";
+import { DEFAULT_TIMEOUT_MS, waitRun } from "../runread/waitRun.js";
 
 import { registerAgentTools } from "./agentTools.js";
 import { registerFunctionTools } from "./functionTools.js";
@@ -18,10 +18,38 @@ import { registerCatalogWriteTools } from "./catalogWriteTools.js";
 import { registerConnectionTools } from "./connectionTools.js";
 import { registerGetStartedTool } from "./getStartedTool.js";
 import { registerMemoryHostTools } from "./memoryHostTools.js";
+import { withToolDefaults } from "./defineTool.js";
 
 export type { McpToolDeps };
 
-export function registerMcpTools(server: McpServer, deps: McpToolDeps): void {
+export type RegisterMcpToolsOptions = {
+  selectedTools?: readonly string[];
+};
+
+function serverWithToolSelection(rawServer: McpServer, selectedTools: readonly string[]): McpServer {
+  const allowed = new Set(selectedTools);
+  return new Proxy(rawServer, {
+    get(target, prop, receiver) {
+      if (prop === "registerTool") {
+        return (name: string, config: unknown, handler: unknown) => {
+          if (!allowed.has(name)) return undefined;
+          return (target.registerTool as (n: string, c: unknown, h: unknown) => unknown)(name, config, handler);
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as McpServer;
+}
+
+export function registerMcpTools(
+  rawServer: McpServer,
+  deps: McpToolDeps,
+  options?: RegisterMcpToolsOptions,
+): void {
+  const base =
+    options?.selectedTools !== undefined ? serverWithToolSelection(rawServer, options.selectedTools) : rawServer;
+  const server = withToolDefaults(base);
   const { store } = deps;
 
   registerGetStartedTool(server, deps);

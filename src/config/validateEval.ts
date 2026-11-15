@@ -1,5 +1,15 @@
 import { internalAgentsVisible } from "../operatorAgent/internalAgents.js";
+import { STAGEFLOW_GRANT_PREFIX } from "../toolkit/meta.js";
 import { PROFILE_GRANTS } from "../toolkit/profiles.js";
+import {
+  isKnownGuideEvalTool,
+  staleBareStageflowTool,
+  staleBareToolMessage,
+  staleGrantMessage,
+  staleStageflowGrantId,
+  widenedStageflowGrantMessage,
+  widenedStageflowToolMessage,
+} from "../toolkit/stageflowToolNames.js";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { isFloatingModelId, mapJudge } from "../evals/judgeProviders.js";
@@ -152,7 +162,9 @@ export async function validateEval(
     return validateAgentEval(loaded, ctx, findings);
   }
   if (file.target.kind === "internal_agent") {
-    return validateInternalAgentEval(loaded, findings);
+    validateInternalAgentEval(loaded, findings);
+    validateGuideEvalToolNames(loaded, ctx, findings);
+    return findings;
   }
 
   const target = await resolveEvalTarget(file, loaded.path, ctx.projectRoot);
@@ -336,6 +348,41 @@ function nameList(names: readonly string[]): string {
   return names.slice(0, 5).join(", ") + (names.length > 5 ? ", ..." : "");
 }
 
+type EvalFindingAdder = (severity: ValidationSeverity, code: string, message: string) => void;
+
+function inspectBareGuideTool(add: EvalFindingAdder, name: string, where: string): boolean {
+  if (isKnownGuideEvalTool(name)) {
+    const widened = widenedStageflowToolMessage(name);
+    if (widened) add("warning", "eval.stageflow_tool_widened", `${where}: ${widened}`);
+    return true;
+  }
+  if (staleBareStageflowTool(name)) {
+    add("error", "eval.stageflow_tool_unknown", `${where}: ${staleBareToolMessage(name)}`);
+    return false;
+  }
+  return true;
+}
+
+function inspectGrantTool(add: EvalFindingAdder, name: string, where: string): boolean {
+  if (!name.startsWith(STAGEFLOW_GRANT_PREFIX)) return true;
+  if (staleStageflowGrantId(name)) {
+    add("error", "eval.stageflow_tool_unknown", `${where}: ${staleGrantMessage(name)}`);
+    return false;
+  }
+  const widened = widenedStageflowGrantMessage(name);
+  if (widened) add("warning", "eval.stageflow_tool_widened", `${where}: ${widened}`);
+  return true;
+}
+
+function toolNamesFromExpected(expected: unknown): string[] {
+  if (typeof expected !== "object" || expected === null) return [];
+  const record = expected as Record<string, unknown>;
+  const names: string[] = [];
+  if (Array.isArray(record.tools)) names.push(...record.tools.filter((v): v is string => typeof v === "string"));
+  if (Array.isArray(record.forbidden_tools)) names.push(...record.forbidden_tools.filter((v): v is string => typeof v === "string"));
+  return names;
+}
+
 function hasExpectedTools(c: { expected?: unknown }): boolean {
   const expected = c.expected;
   if (typeof expected !== "object" || expected === null) return false;
@@ -373,13 +420,41 @@ function validateInternalAgentEval(loaded: LoadedEval, findings: ValidationFindi
         ...(grader.mustAskFirst ?? []),
         ...grader.args.map((arg) => arg.tool),
       ];
-      const missing = [...new Set(mentioned)].filter((name) => !names.has(name));
+      for (const name of [...new Set(mentioned)]) {
+        inspectBareGuideTool(add, name, `Grader "${grader.id}"`);
+      }
+      const missing = [...new Set(mentioned)].filter((name) => !names.has(name) && isKnownGuideEvalTool(name));
       if (missing.length > 0) {
         add("warning", "eval.tool_not_granted", `Grader "${grader.id}" names tool(s) ${profile} does not have: ${missing.join(", ")}`);
       }
     }
   }
   return findings;
+}
+
+function validateGuideEvalToolNames(loaded: LoadedEval, ctx: ValidateEvalContext, findings: ValidationFinding[]): void {
+  const add: EvalFindingAdder = (severity, code, message) => {
+    findings.push(evalFinding(loaded.relPath, severity, code, message));
+  };
+  const report = ctx.datasetReport;
+  if (!report) return;
+  for (const grader of loaded.graders) {
+    if (grader.type !== "tool_calls") continue;
+    const mentioned = [
+      ...(grader.mustCall ?? []),
+      ...(grader.mustNotCall ?? []),
+      ...(grader.mustAskFirst ?? []),
+      ...grader.args.map((arg) => arg.tool),
+    ];
+    for (const name of [...new Set(mentioned)]) inspectBareGuideTool(add, name, `Grader "${grader.id}"`);
+  }
+  for (const c of report.cases) {
+    const where = `case ${c.id}`;
+    for (const name of toolNamesFromExpected(c.expected)) inspectBareGuideTool(add, name, where);
+    const mocks =
+      typeof c.input.tool_mocks === "object" && c.input.tool_mocks !== null ? Object.keys(c.input.tool_mocks) : [];
+    for (const name of mocks) inspectBareGuideTool(add, name, `${where} tool_mocks`);
+  }
 }
 
 async function validateAgentEval(
@@ -461,7 +536,12 @@ async function validateAgentEval(
 
   if (resolved) {
     const grantWarn = (names: readonly string[], where: string): void => {
-      const missing = [...new Set(names)].filter((name) => !toolGranted(resolved, name));
+      const eligible: string[] = [];
+      for (const name of [...new Set(names)]) {
+        if (!inspectGrantTool(add, name, where)) continue;
+        eligible.push(name);
+      }
+      const missing = eligible.filter((name) => !toolGranted(resolved, name));
       if (missing.length > 0) {
         add("warning", "eval.tool_not_granted", `${where} names tool(s) the agent is not granted: ${nameList(missing)}`);
       }
@@ -605,9 +685,33 @@ async function validateAgentEval(
         ? Object.keys(c.input.tool_mocks)
         : [],
     );
-    const missing = [...new Set(mockNames)].filter((name) => !toolGranted(resolved, name));
+    const eligible: string[] = [];
+    for (const name of [...new Set(mockNames)]) {
+      if (name.startsWith(STAGEFLOW_GRANT_PREFIX)) {
+        if (!inspectGrantTool(add, name, "Case tool_mocks")) continue;
+      } else if (staleBareStageflowTool(name)) {
+        add("error", "eval.stageflow_tool_unknown", `Case tool_mocks: ${staleBareToolMessage(name)}`);
+        continue;
+      } else {
+        const widened = widenedStageflowToolMessage(name);
+        if (widened) add("warning", "eval.stageflow_tool_widened", `Case tool_mocks: ${widened}`);
+      }
+      eligible.push(name);
+    }
+    const missing = eligible.filter((name) => !toolGranted(resolved, name));
     if (missing.length > 0) {
       add("warning", "eval.tool_not_granted", `Case tool_mocks name tool(s) the agent is not granted: ${nameList(missing)}`);
+    }
+    for (const c of runnable) {
+      const where = `case ${c.id}`;
+      for (const name of toolNamesFromExpected(c.expected)) {
+        if (name.startsWith(STAGEFLOW_GRANT_PREFIX)) inspectGrantTool(add, name, where);
+        else if (staleBareStageflowTool(name)) add("error", "eval.stageflow_tool_unknown", `${where}: ${staleBareToolMessage(name)}`);
+        else {
+          const widened = widenedStageflowToolMessage(name);
+          if (widened) add("warning", "eval.stageflow_tool_widened", `${where}: ${widened}`);
+        }
+      }
     }
   }
 

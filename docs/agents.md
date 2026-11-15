@@ -20,7 +20,7 @@ Project-owned agents live under `agents/<id>.agent.yaml`. An agent is a configur
   - Approvals waiting on a person appear in the **Inbox**; with desktop notifications on (Settings → Notifications) the console also raises one when an agent asks.
 - REST: `/api/agents` — definitions, validate, revisions/diff/restore, sessions, approvals, chat (NDJSON), OTLP export.
 - CLI: `sf agents` — [CLI reference](cli-reference.md#sf-agents).
-- MCP: [Agent tools](mcp.md#agent-tools). Deciding an approval (`approve_agent_action`, `deny_agent_action`) is for people only and cannot be granted to an agent.
+- MCP: [Agent tools](mcp.md#agent-tools). Deciding an approval (`decide_agent_action` with `action: approve` or `deny`) is for people only and cannot be granted to an agent.
 
 ## Storage
 

@@ -4,7 +4,7 @@ When the user describes a request they repeat, match it to a catalog pipeline be
 
 ## Match
 
-List what the catalog already has. MCP `list_pipelines` and `list_tasks` when the Host is this project, otherwise read `stageflow.yaml` `catalog.pipelines` and `catalog.tasks` and glob `**/*.pipeline.yaml` and `**/*.task.yaml` under those roots. Files outside the roots still validate by path and do not show in the console.
+List what the catalog already has. MCP `list_catalog` with `kind: pipelines` and `list_catalog` with `kind: tasks` when the Host is this project, otherwise read `stageflow.yaml` `catalog.pipelines` and `catalog.tasks` and glob `**/*.pipeline.yaml` and `**/*.task.yaml` under those roots. Files outside the roots still validate by path and do not show in the console.
 
 Compare the request to each pipeline's stages, entry input and gates, not to its title alone. Read the pipeline and its `uses:` files, or MCP `read_pipeline`.
 
@@ -29,7 +29,7 @@ sf validate --task <task-path> --json
 
 Fix every error with [finding-codes.md](finding-codes.md). A previous successful run is not a substitute. `pipeline.model_applies` and an exhaustive `pipeline.route_all_gated` can stay.
 
-When the pipeline uses `requires`, `secrets`, `mcp` or `channels`, also run `sf doctor --pipeline <pipeline-path> --json` or MCP `preflight` with `{ pipeline }`. A saved login and `browser.check` are not covered by `sf doctor` or `preflight`. Validate does not prove a tool is installed, a secret has a value, or a server connects. Tell the user any gap. Do not paper over it by deleting the field.
+When the pipeline uses `requires`, `secrets`, `mcp` or `channels`, also run `sf doctor --pipeline <pipeline-path> --json` or MCP `validate` with `preflight: true` and `{ pipeline }`. A saved login and `browser.check` are not covered by `sf doctor` or live preflight checks. Shape-only `validate` does not prove a tool is installed, a secret has a value, or a server connects. Tell the user any gap. Do not paper over it by deleting the field.
 
 Confirm the task `input` still satisfies the entry stage. The validator does not. The self-check script does, when you pass `--task`.
 

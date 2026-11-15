@@ -28,6 +28,9 @@ export type RunStageEnvelopeRef = {
   attempt?: number;
 };
 
+export const RUN_STAGE_HOST_RESTART_MESSAGE =
+  "This CLI expects start_run with a stage field. Restart the Stageflow Host (sf ui) so it loads the consolidated MCP tools, then try again.";
+
 export type RunStageToolArgs = {
   stage: string | Record<string, unknown>;
   project_root?: string;
@@ -295,15 +298,32 @@ async function mcpToolCall(
   }
   const message = JSON.parse(dataLine.slice("data: ".length)) as {
     result?: { content?: Array<{ type: string; text: string }>; isError?: boolean };
-    error?: { message?: string };
+    error?: { message?: string; code?: number; data?: unknown };
   };
   if (message.error) {
-    throw new Error(message.error.message ?? "MCP tool call failed");
+    const errText = message.error.message ?? "";
+    if (/tool not found|unknown tool|method not found/i.test(errText)) {
+      throw new Error(RUN_STAGE_HOST_RESTART_MESSAGE);
+    }
+    throw new Error(errText || "MCP tool call failed");
   }
   const contentText = message.result?.content?.[0]?.text ?? "";
+  if (!contentText) {
+    throw new Error(
+      `Unexpected empty MCP tool result from ${base}/mcp (status ${res.status}): ${text.slice(0, 200)}`,
+    );
+  }
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(contentText) as Record<string, unknown>;
+  } catch {
+    throw new Error(
+      `Unexpected non-JSON MCP tool result from ${base}/mcp (status ${res.status}): ${contentText.slice(0, 200)}`,
+    );
+  }
   return {
     isError: Boolean(message.result?.isError),
-    payload: contentText ? (JSON.parse(contentText) as Record<string, unknown>) : null,
+    payload,
   };
 }
 
@@ -329,7 +349,7 @@ function defaultCallTool(
       return await mcpToolCall(
         base,
         sessionId,
-        "run_stage",
+        "start_run",
         toolArgs as unknown as Record<string, unknown>,
       );
     } finally {

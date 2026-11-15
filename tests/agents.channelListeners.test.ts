@@ -205,7 +205,7 @@ describe("resuming an always-on conversation", () => {
     const routed = await service.receive(project, inbound);
     // The Host went down while this turn was running.
     await service.beginTurn(project, routed.sessionId, { text: inbound.text, author: inbound.from ?? null });
-    expect(service.recoverInterruptedTurns()).toBe(1);
+    expect(service.recoverInterruptedTurns()).toBe(0);
 
     const replies: string[] = [];
     const chat = new AgentChatController({ service, backend: scriptedBackend((m) => `yes, ${m.length} message(s)`) });
@@ -214,7 +214,7 @@ describe("resuming an always-on conversation", () => {
     await vi.waitFor(() => expect(replies).toEqual(["yes, 1 message(s)"]));
     const detail = await service.getSession(project, routed.sessionId);
     expect(detail.messages.map((m) => [m.role, m.text])).toEqual([["user", "are you there?"], ["assistant", "yes, 1 message(s)"]]);
-    expect(detail.turns.map((t) => t.status)).toEqual(["failed", "succeeded"]);
+    expect(detail.turns.map((t) => t.status)).toEqual(["succeeded"]);
     expect(await router.resumeInterrupted()).toBe(0);
   });
 

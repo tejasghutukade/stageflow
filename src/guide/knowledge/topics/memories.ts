@@ -16,9 +16,9 @@ A memory also has an \`id\` (\`[a-z][a-z0-9_-]{0,63}\`) and a \`description\` (1
 
 ## Create and attach
 
-1. Create the memory first: console **Memories**, or \`create_memory\` with \`id\` and \`description\`. The cover starts empty.
+1. Create the memory first: console **Memories**, or \`save_memory\` with \`mode: create\`, \`id\`, and \`description\`. The cover starts empty.
 2. Attach it:
-   - to a **pipeline** with the top-level \`memories: [id]\` list (tool: \`edit_pipeline\` with \`patch: { memories: [...] }\`; an empty list removes it). Every stage in that pipeline gets it. A stage cannot list memories of its own (\`pipeline.invalid_shape\`).
+   - to a **pipeline** with the top-level \`memories: [id]\` list (tool: \`write_pipeline\` with \`mode: update\` and \`patch: { memories: [...] }\`; an empty list removes it). Every stage in that pipeline gets it. A stage cannot list memories of its own (\`pipeline.invalid_shape\`).
    - to an **agent** with its \`memories: [id]\` field (tool: \`save_agent\`). Sub-agents do not inherit it.
 3. A missing, unreadable or mismatched id blocks validation and run start (\`pipeline.memory_unavailable\`) or agent save and enable (\`agent.memory_unavailable\`). A duplicate id in the list is \`pipeline.invalid_memories\`.
 
@@ -42,11 +42,11 @@ The prompt lists only the memory ids and descriptions, not the cover or card tex
 
 | Action | Session (stage or agent) | Operator in console | Guide / operator tools |
 |---|---|---|---|
-| Create a memory | no | yes | \`create_memory\` |
-| Read cover and card keys | yes | yes | \`get_memory\`, \`list_memories\` |
-| Replace the cover | yes | yes | \`write_memory\` |
+| Create a memory | no | yes | \`save_memory\` with \`mode: create\` |
+| Read cover and card keys | yes | yes | \`get_memory\` (list or by id) |
+| Replace the cover | yes | yes | \`save_memory\` with \`mode: update\` |
 | Add a new card | yes | no | no |
-| Replace an existing card | yes | yes | \`write_memory_card\` (refuses a missing card) |
+| Replace an existing card | yes | yes | \`save_memory\` with \`mode: update\` and \`card: true\` (refuses a missing card) |
 | Delete a card | no | yes (also removes its previous copy; cannot be undone) | \`delete_memory_card\` (destructive) |
 | Change the description | no | no | no |
 | Delete a whole memory | no | no | no |

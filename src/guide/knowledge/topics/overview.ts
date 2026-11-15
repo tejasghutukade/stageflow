@@ -55,5 +55,9 @@ A trigger points at a pipeline and (usually) a task. The pipeline's stages may l
 ## Who can do what
 
 Guide and other agents can create and edit almost everything with tools. Only a person can answer a pipeline gate, decide a feedback loop at its limit, or approve or deny an agent's ask-first action (tool group \`gates.decide\` is operator-only).
+
+## Host MCP vs Workshop tool names
+
+The Workshop Author profile keeps short names such as \`create_pipeline\`, \`edit_stage\`, \`create_stage\`, and \`create_task\`. Those are Workshop-only tools: they are not Host MCP tools. Host MCP and Stageflow Guide use the consolidated names instead — for example \`write_pipeline\` with \`mode: create\` or \`mode: update\`, \`write_stage\` with \`mode: create\` or \`patch: true\`, and \`write_task\` with \`mode: create\` or \`mode: update\`. A single grant id on a merged Host tool covers every mode of that tool.
 `,
 };

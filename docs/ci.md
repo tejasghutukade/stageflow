@@ -439,7 +439,7 @@ Adjust task, pipeline, and secrets for your project. Dogfood release automation 
 | `STAGEFLOW_LOG_LEVEL` | `debug` \| `info` \| `warn` \| `error` (default `info`) |
 | `STAGEFLOW_NO_AUTOSTART` | When set (truthy, not `0`/`false`), CLI verbs that would spawn a detached Host refuse with `autostart_disabled` instead — required for container images where the entrypoint already runs the Host |
 | `STAGEFLOW_AUTO_RESUME_INTERRUPTED` | Opt-in boot auto-resume of `interrupted` stages (default off). Reconciliation still writes `interrupted` unconditionally |
-| `STAGEFLOW_MAX_AUTO_RESUMES` | Cap on automatic resumes per stage attempt (default `3`). Past the cap the stage stays `interrupted` with reason `auto_resume_capped`; explicit `resume_stage` / `sf runs resume` still works and resets the counter |
+| `STAGEFLOW_MAX_AUTO_RESUMES` | Cap on automatic resumes per stage attempt (default `3`). Past the cap the stage stays `interrupted` with reason `auto_resume_capped`; explicit `stage_action` with `action: resume` / `sf runs resume` still works and resets the counter |
 
 ## State in CI
 

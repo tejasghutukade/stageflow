@@ -24,7 +24,8 @@ Stageflow is a local-first runtime for configurable multi-stage agent workflows.
 | Agent service | Agent definitions, revisions, sessions, turns, approvals, channels and schedules; one turn-lifecycle module owns every transition | `src/agents/` |
 | MCP resolver | Merges the project `.mcp.json` with servers and secrets saved from the console; fills `${VAR}` by caller scope (stage, agent, probe, validate) | `src/config/resolveStageMcpServers.ts`, `src/config/mcpHostCatalog.ts` |
 | Persistence | Store run metadata, DAG snapshots, attempts, events, envelopes, artifacts, and projections | `src/runstore/` |
-| Operator surfaces | Drive and inspect the same runtime through CLI, browser console, or MCP | `src/cli/`, `src/server/`, `src/mcp/`, `ui/` |
+| Run inspection | Poll runs, artifacts, waiting gates, tail logs, and checkout views shared by MCP, HTTP, CLI, and A2A | `src/runread/` |
+| Operator surfaces | Drive and inspect the same runtime through CLI, browser console, or MCP | `src/cli/`, `src/server/`, `src/mcp/`, `src/runread/`, `ui/` |
 
 ## Execution flow
 
@@ -115,7 +116,7 @@ A `TriggerDefinition` (catalog `*.trigger.yaml`, see [YAML catalog — Triggers]
 
 ### Single global auto-starting service
 
-There is one Stageflow background service per machine, not one per project. Where the Host process was started does not define the project set. `sf ui` and `sf mcp` start it explicitly; `sf run` and mutating `sf runs` verbs (`answer`, `retry`, `resume`, `abandon`, `rerun`, `recover`) are HTTP clients that probe the well-known local port and auto-start the service headlessly (`<entry> mcp`, detached) the first time anything needs it. Before `start_run`, `sf run` registers its resolved project folder with the Host (`POST /api/projects` on trusted loopback). This replaced an earlier one-process-per-project model that collided on port binding whenever more than one project or git worktree tried to run `sf ui`/`sf mcp` at once. Read-only `sf runs` verbs (`list`, `show`, `verify`, `waiting`) read the global store directly and don't require the service to be running.
+There is one Stageflow background service per machine, not one per project. Where the Host process was started does not define the project set. `sf ui` and `sf mcp` start it explicitly; `sf run` and mutating `sf runs` verbs (`answer`, `retry`, `resume`, `abandon`, `start_run` with `from_run`, `recover`) are HTTP clients that probe the well-known local port and auto-start the service headlessly (`<entry> mcp`, detached) the first time anything needs it. Before `start_run`, `sf run` registers its resolved project folder with the Host (`POST /api/projects` on trusted loopback). This replaced an earlier one-process-per-project model that collided on port binding whenever more than one project or git worktree tried to run `sf ui`/`sf mcp` at once. Read-only `sf runs` verbs (`list`, `show`, `verify`, `waiting`) read the global store directly and don't require the service to be running.
 
 ## Runtime invariants
 

@@ -41,7 +41,7 @@ channels:
 ## Secrets
 
 - A secret is never a value in YAML. In \`connections.yaml\` it is \`env:NAME\` (read from the Host environment or \`NAME_FILE\`) or \`store:...\` (written by the console or tools into \`channel-secrets.json\`, mode 0600).
-- \`create_connection\` and \`update_connection\` store secret values; no tool, API or screen ever returns them. Secrets never reach run state, logs, envelopes, artifacts or the stage worker.
+- \`save_connection\` store secret values; no tool, API or screen ever returns them. Secrets never reach run state, logs, envelopes, artifacts or the stage worker.
 - Do not repeat a secret back to the user.
 
 ## Where connections live
@@ -51,7 +51,7 @@ Host-level: \`$STAGEFLOW_HOME/connections.yaml\` (default \`~/.stageflow/connect
 ## Checks
 
 1. \`validate\`: the connection exists and is enabled, the provider supports the operation, the target is valid. No network, no secret read.
-2. Run start (also \`preflight\` and \`sf doctor\`): a live check of each connection. Failure blocks the run with \`channel_check_failed\`. It never sends a message.
+2. Run start (also \`validate\` with \`preflight: true\` and \`sf doctor\`): a live check of each connection. Failure blocks the run with \`channel_check_failed\`. It never sends a message.
 3. The Host re-checks enabled connections every 5 minutes; \`test_connection\` checks values without saving.
 
 ## Sending and retries
@@ -62,7 +62,7 @@ Host-level: \`$STAGEFLOW_HOME/connections.yaml\` (default \`~/.stageflow/connect
 
 ## Tools
 
-\`list_connections\` (secret fields show only \`env\` or \`store\`), \`create_connection\`, \`update_connection\` (enable, rename, config, replace secrets), \`test_connection\`, \`validate_connection_target\` (checks a recipient against provider rules, no network), \`remove_connection\` (removes the entry and its stored secrets; destructive).
+\`get_connection\` (lists connections; secret fields show only \`env\` or \`store\`), \`save_connection\` (\`mode: create\` or \`mode: update\`), \`test_connection\`, \`validate\` with \`kind: connection_recipient\`, \`remove_connection\` (destructive).
 
 Email accounts (\`email.yaml\`, IMAP/SMTP, used by email triggers and the stage \`email\` permissions) are separate from connections. An IMAP account cannot be an agent channel; AgentMail can.
 `,

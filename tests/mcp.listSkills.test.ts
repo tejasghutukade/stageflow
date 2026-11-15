@@ -123,7 +123,7 @@ describe("mcp list_skills", () => {
     const url = `http://127.0.0.1:${address.port}`;
 
     try {
-      const hostList = await mcpCall(url, "list_skills", {});
+      const hostList = await mcpCall(url, "list_catalog", { kind: "skills" });
       expect(hostList.isError).toBe(false);
       const hostSkills = hostList.payload.skills as Array<{
         name: string;
@@ -158,7 +158,7 @@ describe("mcp list_skills", () => {
       expect(start.isError).toBe(false);
       const runId = start.payload.runId as string;
 
-      const runList = await mcpCall(url, "list_skills", { runId });
+      const runList = await mcpCall(url, "list_catalog", { kind: "skills", runId });
       expect(runList.isError).toBe(false);
       const runListed = runList.payload.skills as Array<{
         name: string;
@@ -175,7 +175,7 @@ describe("mcp list_skills", () => {
       expect(skillsPath).toContain(path.join("runs", runId, "skills"));
 
       await manager!.deleteRun(runId, { force: true, channel: "rest" });
-      const gone = await mcpCall(url, "list_skills", { runId });
+      const gone = await mcpCall(url, "list_catalog", { kind: "skills", runId });
       expect(gone.isError).toBe(true);
     } finally {
       await new Promise<void>((resolve, reject) => {

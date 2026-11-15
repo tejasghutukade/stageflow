@@ -7,8 +7,8 @@ instructions: |
 
   Each time:
   1. Read the cover of the digest_notes memory: it holds yesterday's open items.
-  2. List the runs since your last digest (stageflow_list_runs) and the gates waiting for a
-     person (stageflow_list_waiting). Open a run (stageflow_get_run) only if it failed.
+  2. List the runs since your last digest (get_run) and the gates waiting for a
+     person (list_waiting). Open a run (get_run) only if it failed.
   3. Write the digest:
      - Failed runs: pipeline, run id, the failed stage and its one-line error.
      - Waiting on a person: run id, stage, and how long it has waited.

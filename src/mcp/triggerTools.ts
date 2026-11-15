@@ -18,44 +18,22 @@ import {
   callerIdFromRequestAuth,
   getRequestAuth,
 } from "../server/requestAuthContext.js";
+import {
+  fireTriggerTaskFileSchema,
+  getTriggerFlatSchema,
+  saveTriggerCreateSchema,
+  saveTriggerEnabledOnlySchema,
+  saveTriggerFlatSchema,
+  saveTriggerUpdateFullSchema,
+} from "../toolkit/triggerConnectionMemoryToolModes.js";
 import type { McpToolDeps } from "./deps.js";
 import { textResult } from "./toolResults.js";
 
 const auditLog = rootLogger.child({ component: "audit" });
 
-const triggerScheduleSchema = z.object({
-  cron: z.string(),
-  timezone: z.string().optional(),
-});
-
-const gitIdentitySchema = z.object({
-  name: z.string().optional(),
-  email: z.string().optional(),
-});
-
-/**
- * Same shape as TaskFile (src/types/task.ts), duplicated locally the same way
- * src/mcp/catalogTools.ts's own taskFileSchema is: deliberately not shared
- * across module boundaries for a schema this small.
- */
-const taskFileSchema = z.object({
-  id: z.string(),
-  goal: z.string(),
-  context: z.string().optional(),
-  constraints: z.string().optional(),
-  checkout: z.string().optional(),
-  repository: z.string().optional(),
-  ref: z.string().optional(),
-  run_branch_template: z.string().optional(),
-  git_identity: gitIdentitySchema.optional(),
-  input: z.record(z.string(), z.unknown()).optional(),
-});
-
-const triggerEventSchema = z.object({
-  source: z.string(),
-  match: z.record(z.string(), z.unknown()).optional(),
-  config: z.record(z.string(), z.unknown()).optional(),
-});
+function schemaError(message: string) {
+  return textResult({ code: "invalid_arguments", message, status: 400 }, true);
+}
 
 function findListedTrigger(
   items: TriggerListItem[],
@@ -81,90 +59,44 @@ function findListedTrigger(
   return matches[0]!;
 }
 
-const triggerProjectRoot = z
-  .string()
-  .optional()
-  .describe(
-    "Catalog project root to write into; required when multiple catalog roots are configured and no sole non-seeded root exists",
-  );
-
-const triggerTask = z
-  .string()
-  .optional()
-  .describe(
-    "Catalog task id; omit to create a dynamic-mode trigger whose task is supplied at fire time",
-  );
-
-const createTriggerBase = {
-  project_root: triggerProjectRoot,
-  directory: z.string(),
-  id: z.string(),
-  pipeline: z.string(),
-  task: triggerTask,
-  enabled: z.boolean().optional(),
-};
-
-const createTriggerSchema = z.discriminatedUnion("kind", [
-  z.object({ ...createTriggerBase, kind: z.literal("manual") }),
-  z.object({ ...createTriggerBase, kind: z.literal("schedule"), schedule: triggerScheduleSchema }),
-  z.object({ ...createTriggerBase, kind: z.literal("event"), event: triggerEventSchema }),
-]);
-
-const updateTriggerBase = {
-  id: z.string(),
-  project_root: z.string().optional(),
-  pipeline: z.string(),
-  task: z.string().optional(),
-  enabled: z.boolean(),
-};
-
-const updateTriggerSchema = z.discriminatedUnion("kind", [
-  z.object({ ...updateTriggerBase, kind: z.literal("manual") }),
-  z.object({ ...updateTriggerBase, kind: z.literal("schedule"), schedule: triggerScheduleSchema }),
-  z.object({ ...updateTriggerBase, kind: z.literal("event"), event: triggerEventSchema }),
-]);
+function isEnabledOnlyUpdate(args: Record<string, unknown>): boolean {
+  const keys = Object.keys(args).filter((key) => key !== "mode" && args[key] !== undefined);
+  return keys.every((key) => key === "id" || key === "enabled" || key === "project_root");
+}
 
 export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void {
   const { store, cwd, manager } = deps;
 
   server.registerTool(
-    "list_triggers",
-    {
-      description:
-        "List catalog-declared triggers (same source as GET /api/triggers): manual/schedule/event kind, enabled, and store-recorded last_fired_at/last_run_id/next_run_at when present.",
-      inputSchema: z.object({}),
-    },
-    async () => {
-      const items = await loadCatalogTriggers({ store, bootCwd: cwd });
-      const triggers = await Promise.all(
-        items.map(async (item) => ({
-          ...item,
-          adapter_status: await readTriggerAdapterStatus(item, store),
-        })),
-      );
-      return textResult({ triggers });
-    },
-  );
-
-  server.registerTool(
     "get_trigger",
     {
       description:
-        "Look up one catalog trigger by id (same source as GET /api/triggers/:id).",
-      inputSchema: z.object({
-        id: z.string(),
-        project_root: z
-          .string()
-          .optional()
-          .describe("Catalog project root; required when the same trigger id exists in more than one root"),
-      }),
+        "List catalog triggers without id, or look up one trigger by id. Unknown ids return not_found, never a list.",
+      inputSchema: getTriggerFlatSchema,
+      annotations: { readOnlyHint: true },
     },
-    async ({ id, project_root }) => {
+    async (args) => {
+      const parsed = getTriggerFlatSchema.safeParse(args);
+      if (!parsed.success) return schemaError(parsed.error.issues[0]?.message ?? "Invalid arguments");
       const items = await loadCatalogTriggers({ store, bootCwd: cwd });
+      if (parsed.data.id === undefined) {
+        const triggers = await Promise.all(
+          items.map(async (item) => ({
+            ...item,
+            adapter_status: await readTriggerAdapterStatus(item, store),
+          })),
+        );
+        return textResult({ triggers });
+      }
+      const { id, project_root } = parsed.data;
       const found = findListedTrigger(items, id, project_root);
       if ("error" in found) {
         return textResult(
-          { error: found.error, status: found.status, ...(found.project_roots ? { project_roots: found.project_roots } : {}) },
+          {
+            error: found.error,
+            status: found.status,
+            ...(found.project_roots ? { project_roots: found.project_roots } : {}),
+          },
           true,
         );
       }
@@ -179,14 +111,14 @@ export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void
     "fire_trigger",
     {
       description:
-        "Fire a catalog trigger by id: resolves its pipeline/task refs and starts a run through the same RunManager.startRun path as start_run (same as POST /api/triggers/:id/fire). Returns { runId } or { runId, queued: true, queuePosition }. Fails not_found (404) for an unknown id, or 409 when the trigger is disabled.",
+        "Fire a catalog trigger by id: resolves its pipeline/task refs and starts a run through the same RunManager.startRun path as start_run. Returns { runId } or { runId, queued: true, queuePosition }. Fails not_found (404) for an unknown id, or 409 when the trigger is disabled.",
       inputSchema: z.object({
         id: z.string(),
         project_root: z
           .string()
           .optional()
           .describe("Catalog project root; required when the same trigger id exists in more than one root"),
-        task: taskFileSchema
+        task: fireTriggerTaskFileSchema
           .optional()
           .describe(
             "Inline TaskFile, required to fire a dynamic-mode trigger (no catalog task) and rejected for a catalog-mode trigger",
@@ -239,86 +171,108 @@ export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void
   );
 
   server.registerTool(
-    "create_trigger",
+    "save_trigger",
     {
       description:
-        "Create a new *.trigger.yaml in the catalog (same validation/write path as POST /api/triggers): validates id format/uniqueness, pipeline/task refs, and kind-specific shape (schedule.cron parses via croner; event.source is required), writes the file, and re-loads it to confirm it round-trips. Returns the created trigger.",
-      inputSchema: createTriggerSchema,
+        "Create or update a catalog trigger. mode create writes a new *.trigger.yaml. mode update replaces the definition or changes only enabled.",
+      inputSchema: saveTriggerFlatSchema,
     },
-    async ({ project_root, ...body }) => {
-      const callerId = callerIdFromRequestAuth();
-      let wireRoot;
-      try {
-        ({ wireRoot } = await resolveWritableCatalogRoot({ store, bootCwd: cwd }, project_root));
-      } catch (err) {
-        if (err instanceof CatalogPathError) {
-          return textResult(catalogPathErrorBody(err), true);
+    async (args) => {
+      const parsed = saveTriggerFlatSchema.safeParse(args);
+      if (!parsed.success) return schemaError(parsed.error.issues[0]?.message ?? "Invalid arguments");
+      const { mode, ...rest } = args;
+      if (mode === "create") {
+        const body = saveTriggerCreateSchema.safeParse(rest);
+        if (!body.success) return schemaError(body.error.issues[0]?.message ?? "Invalid arguments");
+        const { project_root, ...createBody } = body.data;
+        const callerId = callerIdFromRequestAuth();
+        let wireRoot;
+        try {
+          ({ wireRoot } = await resolveWritableCatalogRoot({ store, bootCwd: cwd }, project_root));
+        } catch (err) {
+          if (err instanceof CatalogPathError) {
+            return textResult(catalogPathErrorBody(err), true);
+          }
+          throw err;
         }
-        throw err;
-      }
 
-      const parsed = parseCreateTriggerBody(body);
-      if ("ok" in parsed) {
-        return textResult({ error: parsed.error, status: parsed.status }, true);
-      }
+        const createParsed = parseCreateTriggerBody({
+          ...createBody,
+          enabled: createBody.enabled ?? false,
+        });
+        if ("ok" in createParsed) {
+          return textResult({ error: createParsed.error, status: createParsed.status }, true);
+        }
 
-      const stageflowCtx = await resolveStageflowContext(wireRoot.path);
-      if (stageflowCtx.manifestStatus !== "ok") {
-        return textResult(
-          {
-            error: "Project root not found; initialize stageflow.yaml",
-            status: 400,
-          },
-          true,
-        );
-      }
+        const stageflowCtx = await resolveStageflowContext(wireRoot.path);
+        if (stageflowCtx.manifestStatus !== "ok") {
+          return textResult(
+            {
+              error: "Project root not found; initialize stageflow.yaml",
+              status: 400,
+            },
+            true,
+          );
+        }
 
-      const result = await createTrigger(stageflowCtx.projectRoot, parsed);
-      if (!result.ok) {
+        const result = await createTrigger(stageflowCtx.projectRoot, createParsed);
+        if (!result.ok) {
+          writeAudit(auditLog, {
+            caller_id: callerId,
+            surface: getRequestAuth()?.surface ?? "mcp",
+            action: "trigger_create",
+            outcome: "error",
+          });
+          return textResult(
+            {
+              error: result.error,
+              status: result.status,
+              ...(result.status === 409 ? { code: "trigger_EXISTS" } : {}),
+            },
+            true,
+          );
+        }
         writeAudit(auditLog, {
           caller_id: callerId,
           surface: getRequestAuth()?.surface ?? "mcp",
           action: "trigger_create",
-          outcome: "error",
+          outcome: "ok",
         });
-        return textResult({ error: result.error, status: result.status }, true);
+        return textResult(result.trigger);
       }
+
+      if (isEnabledOnlyUpdate(args)) {
+        const patchBody = saveTriggerEnabledOnlySchema.safeParse(rest);
+        if (!patchBody.success) return schemaError(patchBody.error.issues[0]?.message ?? "Invalid arguments");
+        const { id, enabled, project_root } = patchBody.data;
+        const patchParsed = parsePatchTriggerBody({ enabled });
+        if ("ok" in patchParsed) return textResult({ error: patchParsed.error, status: patchParsed.status }, true);
+        const result = await updateTriggerEnabled(cwd, store, id, patchParsed.enabled, {
+          projectRootFilter: project_root,
+        });
+        writeAudit(auditLog, {
+          caller_id: callerIdFromRequestAuth(),
+          surface: getRequestAuth()?.surface ?? "mcp",
+          action: "trigger_patch",
+          outcome: result.ok ? "ok" : "error",
+        });
+        return result.ok
+          ? textResult(result.trigger)
+          : textResult({ error: result.error, status: result.status }, true);
+      }
+
+      const updateBody = saveTriggerUpdateFullSchema.safeParse(rest);
+      if (!updateBody.success) return schemaError(updateBody.error.issues[0]?.message ?? "Invalid arguments");
+      const { id, project_root, ...putBody } = updateBody.data;
+      const putParsed = parsePutTriggerBody(putBody, id);
+      if ("ok" in putParsed) return textResult({ error: putParsed.error, status: putParsed.status }, true);
+      const result = await updateTriggerDefinition(cwd, store, id, putParsed, { projectRootFilter: project_root });
       writeAudit(auditLog, {
-        caller_id: callerId,
+        caller_id: callerIdFromRequestAuth(),
         surface: getRequestAuth()?.surface ?? "mcp",
-        action: "trigger_create",
-        outcome: "ok",
+        action: "trigger_update",
+        outcome: result.ok ? "ok" : "error",
       });
-      return textResult(result.trigger);
-    },
-  );
-
-  server.registerTool(
-    "update_trigger",
-    {
-      description: "Replace a trigger's definition (pipeline, task, kind, schedule or event, enabled). Same validation and write path as PUT /api/triggers/:id; the id cannot change.",
-      inputSchema: updateTriggerSchema,
-    },
-    async ({ id, project_root, ...body }) => {
-      const parsed = parsePutTriggerBody(body, id);
-      if ("ok" in parsed) return textResult({ error: parsed.error, status: parsed.status }, true);
-      const result = await updateTriggerDefinition(cwd, store, id, parsed, { projectRootFilter: project_root });
-      writeAudit(auditLog, { caller_id: callerIdFromRequestAuth(), surface: getRequestAuth()?.surface ?? "mcp", action: "trigger_update", outcome: result.ok ? "ok" : "error" });
-      return result.ok ? textResult(result.trigger) : textResult({ error: result.error, status: result.status }, true);
-    },
-  );
-
-  server.registerTool(
-    "set_trigger_enabled",
-    {
-      description: "Enable or disable a trigger. Same write path as PATCH /api/triggers/:id.",
-      inputSchema: z.object({ id: z.string(), enabled: z.boolean(), project_root: z.string().optional() }),
-    },
-    async ({ id, enabled, project_root }) => {
-      const parsed = parsePatchTriggerBody({ enabled });
-      if ("ok" in parsed) return textResult({ error: parsed.error, status: parsed.status }, true);
-      const result = await updateTriggerEnabled(cwd, store, id, parsed.enabled, { projectRootFilter: project_root });
-      writeAudit(auditLog, { caller_id: callerIdFromRequestAuth(), surface: getRequestAuth()?.surface ?? "mcp", action: "trigger_patch", outcome: result.ok ? "ok" : "error" });
       return result.ok ? textResult(result.trigger) : textResult({ error: result.error, status: result.status }, true);
     },
   );

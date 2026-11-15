@@ -3,10 +3,14 @@ import { z } from "zod";
 import type { McpToolDeps } from "../mcp/deps.js";
 import { defaultAgentProjectRoot } from "../agents/projectRoot.js";
 import { checkAgentCaller, type ToolCaller } from "./guard.js";
-import { isOperatorOnlyTool, stageflowGrantId, TOOL_GROUPS, TOOL_META, type ToolMeta } from "./meta.js";
+import { isOperatorOnlyTool, stageflowGrantId, TOOL_GROUPS, TOOL_META, TOOLSETS, toolsInToolset, type ToolMeta } from "./meta.js";
 import { recordMcpTools } from "./record.js";
 
 export * from "./meta.js";
+export * from "./modePolicy.js";
+export * from "./modes.js";
+export * from "./toolRenames.js";
+export * from "./stageflowToolNames.js";
 export { grantsBeyond, type ToolCaller } from "./guard.js";
 
 export type ToolkitResult = { ok: boolean; text: string };
@@ -61,15 +65,18 @@ export function buildToolkit(deps: McpToolDeps): ToolkitTool[] {
       description: plainDescription(tool.description),
       parameters: jsonSchema(tool.inputSchema),
       async run(args, ctx) {
-        const parsed = tool.inputSchema ? tool.inputSchema.safeParse(args) : { success: true as const, data: args };
-        if (!parsed.success) return { ok: false, text: JSON.stringify({ error: "Invalid arguments", issues: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) }) };
+        const raw = args as Record<string, unknown>;
         if (ctx.caller) {
-          const refused = await checkAgentCaller(tool.name, parsed.data as Record<string, unknown>, ctx.caller, deps.agentService, root());
+          const refused = await checkAgentCaller(tool.name, raw, ctx.caller, deps.agentService, root());
           if (refused) return { ok: false, text: JSON.stringify({ error: refused.message }) };
         }
+        const parsed = tool.inputSchema ? tool.inputSchema.safeParse(args) : { success: true as const, data: args };
+        if (!parsed.success) return { ok: false, text: JSON.stringify({ error: "Invalid arguments", issues: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) }) };
         const mcpCtx = { mcpReq: { signal: ctx.signal, _meta: undefined, notify: async () => undefined } };
-        const raw = tool.inputSchema ? await tool.handler(parsed.data as Record<string, unknown>, mcpCtx) : await (tool.handler as unknown as (c: unknown) => unknown)(mcpCtx);
-        return toResult(raw);
+        const handlerResult = tool.inputSchema
+          ? await tool.handler(parsed.data as Record<string, unknown>, mcpCtx)
+          : await (tool.handler as unknown as (c: unknown) => unknown)(mcpCtx);
+        return toResult(handlerResult);
       },
     };
   });
@@ -88,6 +95,7 @@ export type ToolkitCatalog = {
     operatorOnly: boolean;
     tools: Array<{ name: string; grantId: string; risk: ToolMeta["risk"]; description: string; operatorOnly: boolean }>;
   }>;
+  toolsets: Array<{ id: string; title: string; summary: string; tools: string[] }>;
 };
 
 let catalogCache: ToolkitCatalog | undefined;
@@ -104,8 +112,14 @@ export function describeToolkit(): ToolkitCatalog {
       summary: group.summary,
       operatorOnly: group.operatorOnly === true,
       tools: Object.entries(TOOL_META)
-        .filter(([, meta]) => meta.group === group.id)
+        .filter(([, meta]) => meta.groups.includes(group.id))
         .map(([name, meta]) => ({ name, grantId: stageflowGrantId(name), risk: meta.risk, description: plainDescription(byName.get(name) ?? ""), operatorOnly: isOperatorOnlyTool(name) })),
+    })),
+    toolsets: TOOLSETS.map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      summary: entry.summary,
+      tools: toolsInToolset(entry.id),
     })),
   };
   return catalogCache;

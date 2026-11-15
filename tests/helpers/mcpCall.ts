@@ -5,9 +5,18 @@ export type McpToolContentBlock = {
   data?: string;
 };
 
+export const MCP_TOOLSETS_ALL_QUERY = "?toolsets=all";
+
+export function mcpUrl(base: string, query: string = MCP_TOOLSETS_ALL_QUERY): string {
+  const trimmed = base.replace(/\/$/, "");
+  if (!query) return `${trimmed}/mcp`;
+  return `${trimmed}/mcp${query.startsWith("?") ? query : `?${query}`}`;
+}
+
 export type McpCallOptions = {
   signal?: AbortSignal;
   meta?: Record<string, unknown>;
+  query?: string;
 };
 
 export type McpCallResult = {
@@ -44,7 +53,7 @@ export async function mcpCall(
   if (opts.meta !== undefined) {
     params._meta = opts.meta;
   }
-  const res = await fetch(`${base}/mcp`, {
+  const res = await fetch(mcpUrl(base, opts.query ?? MCP_TOOLSETS_ALL_QUERY), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

@@ -34,9 +34,11 @@ describe("readGuideUi", () => {
 
 describe("toolActivityLabel", () => {
   it("maps tool names to plain verbs", () => {
-    expect(toolActivityLabel("create_pipeline", false)).toBe("Created pipeline");
-    expect(toolActivityLabel("create_pipeline", true)).toBe("Creating pipeline");
-    expect(toolActivityLabel("list_runs", false)).toBe("Listed runs");
+    expect(toolActivityLabel("write_pipeline", false)).toBe("Saved the pipeline");
+    expect(toolActivityLabel("write_pipeline", true)).toBe("Saving the pipeline");
+    expect(toolActivityLabel("get_run", false)).toBe("Read the run");
+    expect(toolActivityLabel("stage_action", false)).toBe("Changed the stage");
+    expect(toolActivityLabel("delete_runs", false)).toBe("Deleted runs");
     expect(toolActivityLabel("get_eval_run", false)).toBe("Read eval run");
     expect(toolActivityLabel("start_run", false)).toBe("Started a run");
     expect(toolActivityLabel("validate", false)).toBe("validate");

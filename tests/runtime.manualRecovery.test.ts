@@ -443,7 +443,7 @@ describe("manual completion recovery", () => {
     });
   });
 
-  it("HTTP /recovery and MCP recover_manual_stage recover a target-dialect stage", async () => {
+  it("HTTP /recovery and MCP stage_action recover a target-dialect stage", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-manual-http-mcp-"));
     const pipeline = await writeTargetManualRecoveryCatalog(root);
     const store = createRunStore({ rootDir: root });
@@ -525,10 +525,11 @@ describe("manual completion recovery", () => {
     }
     const mcpBase = `http://127.0.0.1:${mcpAddress.port}`;
     try {
-      const recovered = await mcpCall(mcpBase, "recover_manual_stage", {
+      const recovered = await mcpCall(mcpBase, "stage_action", {
+        action: "recover",
         runId: parked.runId,
         stageId: "implement",
-        guidance: "Fix via MCP recover_manual_stage.",
+        guidance: "Fix via MCP stage_action recover.",
       });
       expect(recovered.isError).toBe(false);
       expect(recovered.payload).toMatchObject({

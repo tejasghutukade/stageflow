@@ -2,8 +2,8 @@ import path from "node:path";
 import { isStageTimeoutReason } from "../../agent/stageTimeout.js";
 import { loadPipelineOutcome } from "../../config/loadPipeline.js";
 import { readYamlObject } from "../../config/readYamlObject.js";
-import { projectRunForMcp } from "../../mcp/projectRun.js";
-import { isWaitingProjection } from "../../mcp/waitRun.js";
+import { projectRun } from "../../projection/projectRun.js";
+import { isWaitingProjection } from "../../runread/waitRun.js";
 import type { RunStore, StageSnapshot } from "../../runstore/port.js";
 import { PipelineValidationError } from "../../runtime/pipelineValidationError.js";
 import type { RunManager } from "../../runtime/runManager.js";
@@ -236,7 +236,7 @@ export function createStageCaseRunner(deps: StageCaseRunnerDeps): StageCaseRunne
         if (stop) break;
         try {
           const detail = await store.readRun(runId);
-          if (detail.status === "running" && isWaitingProjection(projectRunForMcp(detail))) return "waiting";
+          if (detail.status === "running" && isWaitingProjection(projectRun(detail))) return "waiting";
         } catch {
           /* run row not readable yet; retry on next tick */
         }

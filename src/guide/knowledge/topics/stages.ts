@@ -32,7 +32,7 @@ Pipeline-entry wiring (not body): \`route\`, \`entry\`, \`on_verify_fail\`, \`re
 
 \`emit_stage_envelope\` (ends the stage), \`write_stage_artifact\` (durable files under the attempt artifacts folder — the only durable handoff write) and, when \`gate_kinds\` is non-empty, \`ask_operator\`. On Pi, stages also have the Pi coding agent's own file and shell tools (for example \`read\` and \`bash\`). With memories attached, Pi stages get \`read_memory\`, \`replace_memory\`, \`add_memory_card\`, \`update_memory_card\`, \`read_memory_card\`, \`search_memory_cards\`. With a channel, Pi stages get \`send_message\`.
 
-Artifact handoff: list paths from \`write_stage_artifact\` on emit (non-empty lists must exist on disk). Under a stage sandbox, a later stage reads each prior file at the sandbox path in its assignment (a file grant is the file itself, under \`/workspace/grants/<stage>/…\`) or takes facts from \`payload\` — not host \`stages/…/artifacts\` paths and not \`/workspace/work\`. \`create_stage\` does not auto-add after-phase artifact \`verify\`; add that only when you need hard proof of a named file.
+Artifact handoff: list paths from \`write_stage_artifact\` on emit (non-empty lists must exist on disk). Under a stage sandbox, a later stage reads each prior file at the sandbox path in its assignment (a file grant is the file itself, under \`/workspace/grants/<stage>/…\`) or takes facts from \`payload\` — not host \`stages/…/artifacts\` paths and not \`/workspace/work\`. \`write_stage\` create mode does not auto-add after-phase artifact \`verify\`; add that only when you need hard proof of a named file.
 
 ## Stage environment
 
@@ -44,14 +44,14 @@ The default backend is Pi. The Claude backend (pipeline or manifest \`agent\`) d
 
 ## Creating stages with tools
 
-- \`create_stage\` adds a file-backed stage (\`uses: ./<id>.yaml\`) to a pipeline. If you pass no \`model\`, it writes the Host's current default model into the stage file. If you pass no \`io\`, it writes a minimal object/object \`io\`.
-- \`edit_stage\` changes body fields (via \`patch\`, \`body\`, \`system_prompt\`, \`model\`, \`io\`) and/or the pipeline entry (\`route\`, \`entry\`, \`uses\`, \`pipeline_entry\`).
-- \`create_stage_file\` writes a standalone stage file that is not wired into any pipeline (\`id\`, \`system_prompt\`, optional \`model\`, \`gate_kinds\`, \`skill\`).
-- \`write_catalog_file\` overwrites an existing stage file; an invalid write is restored.
+- \`write_stage\` with \`mode: create\` adds a file-backed stage (\`uses: ./<id>.yaml\`) to a pipeline. If you pass no \`model\`, it writes the Host's current default model into the stage file. If you pass no \`io\`, it writes a minimal object/object \`io\`.
+- \`write_stage\` with \`patch: true\` changes body fields (via \`patch\`, \`body\`, \`system_prompt\`, \`model\`, \`io\`) and/or the pipeline entry (\`route\`, \`entry\`, \`uses\`, \`pipeline_entry\`).
+- \`write_stage\` with \`mode: create\` and \`no_pipeline: true\` writes a standalone stage file that is not wired into any pipeline.
+- \`write_stage\` with \`mode: update\`, \`form: content\` overwrites an existing stage file; an invalid write is restored.
 - Each pipeline tool validates and writes nothing when invalid, unless \`allow_invalid\` is set to build up step by step.
 
 ## Recovering a stage in a run
 
-Retry (new attempt), Resume (same session, for interrupted or timed-out attempts), Abandon (stop a running stage), and for manual recovery Retry with guidance or Stop recovery. Tools: \`retry_stage\`, \`resume_stage\`, \`abandon_stage\`, \`recover_manual_stage\`, \`stop_manual_recovery\`.
+Retry (new attempt), Resume (same session, for interrupted or timed-out attempts), Abandon (stop a running stage), and for manual recovery Retry with guidance or Stop recovery. Tools: \`stage_action\` (\`action: retry\`, \`resume\`, \`recover\`, \`stop_recovery\`) and \`abandon_stage\`.
 `,
 };

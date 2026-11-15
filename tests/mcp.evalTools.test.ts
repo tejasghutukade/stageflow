@@ -24,14 +24,11 @@ afterEach(async () => {
 });
 
 const EVAL_TOOLS = [
-  "list_evals",
   "get_eval",
-  "validate_eval",
+  "validate",
   "run_eval",
   "get_eval_run",
-  "list_eval_runs",
   "get_eval_results",
-  "get_eval_result",
   "cancel_eval_run",
   "compare_eval_runs",
 ];
@@ -203,9 +200,9 @@ async function setup(opts: { withManager?: boolean } = {}) {
 }
 
 describe("MCP eval tools", () => {
-  it("registers all ten tools with descriptions that state cost", async () => {
+  it("registers eval read tools with descriptions that state cost", async () => {
     const h = await setup();
-    const res = await fetch(`${h.base}/mcp`, {
+    const res = await fetch(`${h.base}/mcp?toolsets=all`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
@@ -279,14 +276,14 @@ describe("MCP eval tools", () => {
     const idA = a.payload.eval_run_id as string;
     const idB = b.payload.eval_run_id as string;
 
-    const list = await h.tool("list_evals", { project_root: h.root });
+    const list = await h.tool("get_eval", { project_root: h.root });
     expect(list.payload).toEqual({ items: (await h.api(`/api/evals?${h.q}`)).items });
     expect(list.payload.items[0].id).toBe("review");
 
     const detail = await h.tool("get_eval", { eval_id: "review", project_root: h.root });
     expect(detail.payload).toEqual(await h.api(`/api/evals/review?${h.q}`));
 
-    const runs = await h.tool("list_eval_runs", { eval_id: "review", status: "completed", limit: 10 });
+    const runs = await h.tool("get_eval_run", { eval_id: "review", status: "completed", limit: 10 });
     const apiRuns = await h.api(`/api/eval-runs?eval_id=review&status=completed&limit=10`);
     expect(runs.payload).toEqual({ items: apiRuns.items });
     expect(runs.payload.items).toHaveLength(2);
@@ -298,7 +295,7 @@ describe("MCP eval tools", () => {
     const page2 = await h.tool("get_eval_results", { eval_run_id: idA, limit: 2, cursor: results.payload.next_cursor });
     expect(page2.payload.items).toHaveLength(1);
 
-    const one = await h.tool("get_eval_result", { eval_run_id: idA, case_id: "c1" });
+    const one = await h.tool("get_eval_results", { eval_run_id: idA, case_id: "c1" });
     expect(one.payload).toEqual(await h.api(`/api/eval-runs/${idA}/results/c1`));
     expect(one.payload.repeats).toHaveLength(2);
 
@@ -307,20 +304,24 @@ describe("MCP eval tools", () => {
     expect(compare.payload).toEqual(await h.api(`/api/eval-compare?a=${idA}&b=${idB}`));
   });
 
-  it("validate_eval by id and by yaml returns findings and writes no files", async () => {
+  it("validate kind eval by id and by yaml returns findings and writes no files", async () => {
     const h = await setup();
     const before = await readdir(path.join(h.root, "evals"));
-    const byId = await h.tool("validate_eval", { eval_id: "review", project_root: h.root });
+    const byId = await h.tool("validate", { kind: "eval", eval_id: "review", project_root: h.root });
     expect(byId.isError).toBe(false);
     expect(byId.payload.findings.every((f: any) => f.severity !== "error")).toBe(true);
-    const bad = await h.tool("validate_eval", { yaml: "version: 1\nid: nope\n", project_root: h.root });
+    const bad = await h.tool("validate", { kind: "eval", yaml: "version: 1\nid: nope\n", project_root: h.root });
     expect(bad.isError).toBe(false);
     expect(bad.payload.findings.length).toBeGreaterThan(0);
-    const good = await h.tool("validate_eval", { yaml: await readFile(path.join(h.root, "evals", "review.eval.yaml"), "utf8"), project_root: h.root });
+    const good = await h.tool("validate", {
+      kind: "eval",
+      yaml: await readFile(path.join(h.root, "evals", "review.eval.yaml"), "utf8"),
+      project_root: h.root,
+    });
     expect(good.payload).toEqual(byId.payload);
-    const neither = await h.tool("validate_eval", { project_root: h.root });
+    const neither = await h.tool("validate", { kind: "eval", project_root: h.root });
     expect(neither.isError).toBe(true);
-    expect(neither.content.map((block) => block.text ?? "").join("\n")).toMatch(/Invalid input/);
+    expect(neither.content.map((block) => block.text ?? "").join("\n")).toMatch(/eval_id|yaml/);
     expect(await readdir(path.join(h.root, "evals"))).toEqual(before);
   });
 
@@ -328,11 +329,11 @@ describe("MCP eval tools", () => {
     const h = await setup();
     for (const [name, args, code] of [
       ["get_eval", { eval_id: "nope", project_root: h.root }, "EVAL_NOT_FOUND"],
-      ["validate_eval", { eval_id: "nope", project_root: h.root }, "EVAL_NOT_FOUND"],
+      ["validate", { kind: "eval", eval_id: "nope", project_root: h.root }, "EVAL_NOT_FOUND"],
       ["run_eval", { eval_id: "nope", project_root: h.root }, "EVAL_NOT_FOUND"],
       ["get_eval_run", { eval_run_id: "er_nope" }, "EVAL_RUN_NOT_FOUND"],
       ["get_eval_results", { eval_run_id: "er_nope" }, "EVAL_RUN_NOT_FOUND"],
-      ["get_eval_result", { eval_run_id: "er_nope", case_id: "c1" }, "EVAL_RUN_NOT_FOUND"],
+      ["get_eval_results", { eval_run_id: "er_nope", case_id: "c1" }, "EVAL_RUN_NOT_FOUND"],
       ["cancel_eval_run", { eval_run_id: "er_nope" }, "EVAL_RUN_NOT_FOUND"],
       ["compare_eval_runs", { a: "er_nope", b: "er_nope2" }, "EVAL_RUN_NOT_FOUND"],
     ] as const) {
@@ -344,7 +345,7 @@ describe("MCP eval tools", () => {
 
   it("answers EVAL_ENGINE_UNAVAILABLE when the host has no eval manager", async () => {
     const h = await setup({ withManager: false });
-    const res = await h.tool("list_evals", { project_root: h.root });
+    const res = await h.tool("get_eval", { project_root: h.root });
     expect(res.isError).toBe(true);
     expect(res.payload.code).toBe("EVAL_ENGINE_UNAVAILABLE");
   });

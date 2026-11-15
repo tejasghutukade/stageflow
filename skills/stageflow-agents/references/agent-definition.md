@@ -73,7 +73,7 @@ The older `channels: [{ connection_id }]` list still loads as `channel`; more th
 | `skills` | list of skill names, `[]` | A skill the Host cannot find warns `agent.skill_unknown`, and sessions fail to start |
 | `browser` | boolean, `false` | Stored but wired to nothing. Do not set |
 | `stageflow.groups` | list of group ids, `[]` | Stageflow's own tools by group. Unknown group `agent.stageflow_group_unknown`; `gates.decide` is `agent.stageflow_operator_only` |
-| `stageflow.tools` | list of tool names, `[]` | Single Stageflow tools. Unknown `agent.stageflow_tool_unknown`; `get_started`, `answer_gate`, `decide_feedback_loop`, `approve_agent_action`, `deny_agent_action` are operator-only |
+| `stageflow.tools` | list of tool names, `[]` | Single Stageflow tools. Unknown `agent.stageflow_tool_unknown`; `get_started`, `answer_gate`, `decide_feedback_loop`, `decide_agent_action` are operator-only |
 
 Grant ids (used in `approvals.ask_first`): builtin tool name (`write`, `bash`), `<server>.<tool>` for MCP, `stageflow.<tool>` for Stageflow tools, `agent:<id>` for sub-agents. Groups and tool lists: [tools-and-approvals.md](tools-and-approvals.md).
 

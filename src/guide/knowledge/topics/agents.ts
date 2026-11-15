@@ -15,7 +15,7 @@ Minimum: \`id\`, \`name\`, \`instructions\`. Unknown keys are rejected (\`agent.
 
 - \`id\`: \`^[a-z][a-z0-9_]{0,63}$\`, must match the file name, fixed after create. Made from \`name\` when omitted. \`sessions\`, \`approvals\`, \`new\` are reserved.
 - \`name\` (1–120), \`description\` (≤ 500), \`greeting\` (≤ 500, shown on web chat), \`instructions\` (the system prompt).
-- \`enabled\`: default \`false\`. **A new agent is always created disabled**; enabling is a separate step (\`enable_agent\`) and its own revision. Enabling is refused while the file has issues.
+- \`enabled\`: default \`false\`. **A new agent is always created disabled**; enabling is a separate step (\`set_agent_enabled\` with \`enabled: true\`) and its own revision. Enabling is refused while the file has issues.
 - \`project_context\`: adds the project's \`AGENTS.md\` (or \`CLAUDE.md\`) to the prompt, first 20,000 characters.
 - \`model\`: \`{ backend: pi|claude, id?, thinking: off|low|medium|high }\`. Only \`pi\` runs; \`claude\` saves with a warning and sessions fail. \`id\` defaults to the project default model.
 - \`execution\`: \`trusted-local\` (default). \`sandbox\` is not installed yet; sessions fail.
@@ -42,7 +42,7 @@ A call to an ask-first tool pauses the turn until a person decides in the Inbox,
 
 ## Rules for agents that manage agents
 
-- An agent cannot hand out more than it holds: \`create_agent\`, \`save_agent\`, \`restore_agent_revision\` and \`enable_agent\` called by an agent refuse any tool, MCP tool, MCP wildcard, skill or browser grant the caller does not hold, and refuse a definition that drops an ask-first the caller itself must obey.
+- An agent cannot hand out more than it holds: \`save_agent\` (modes create, update, and from_revision) and \`set_agent_enabled\` called by an agent refuse any tool, MCP tool, MCP wildcard, skill or browser grant the caller does not hold, and refuse a definition that drops an ask-first the caller itself must obey.
 - An agent cannot edit, restore or archive its own definition.
 - An agent cannot decide approvals on its own sessions, and no agent can decide approvals at all.
 
@@ -56,6 +56,6 @@ Console only by default, plus web chat for agents created through tools. Inbound
 
 ## Tools for agents
 
-\`list_agents\`, \`get_agent\`, \`validate_agent\`, \`create_agent\` (always disabled), \`save_agent\`, \`enable_agent\`, \`disable_agent\`, \`restore_agent_revision\`, \`list_agent_revisions\`, \`diff_agent_revisions\`, \`archive_agent\`, \`agent_chat\`, \`get_agent_session\`, \`list_agent_sessions\`, \`stop_agent_session\`.
+\`get_agent\` (list or \`view: definition\`, \`revisions\`, \`revision\`, \`diff\`), \`validate\` with \`kind: agent\`, \`save_agent\` (\`mode: create\` always disabled; \`mode: update\`; \`from_revision: true\`), \`set_agent_enabled\`, \`archive_agent\`, \`agent_chat\`, \`get_agent_session\` (list or by id), \`stop_agent_session\`, \`decide_agent_action\` is operator-only.
 `,
 };

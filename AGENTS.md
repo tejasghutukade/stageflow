@@ -35,9 +35,10 @@ Stageflow is a runtime for **configurable multi-stage agent workflows**, with a 
 | `config/` | YAML load/validate, pipeline DAG resolution; eval and dataset loaders, write path and sample install |
 | `runtime/` | Pipeline runner, stage worker, HITL, scheduling |
 | `runstore/` | SQLite run state under `$STAGEFLOW_HOME` (default `~/.stageflow/`) |
+| `runread/` | Shared run inspection helpers (`waitRun`, `readArtifact`, `waitingGates`, `tailStreamLog`, checkout views); used by MCP, HTTP, CLI, A2A, eval stage runner, debug bundle |
 | `agent/` | Pi coding agent adapter |
 | `agents/` | Project-owned conversational agents: service (definitions, revisions, sessions), chat turns, tool gate, approvals. Eval sessions (`source: "eval"`, `evalSession.ts`, `evalGate.ts`, `toolRisk.ts`) are agent sessions run for evals |
-| `mcp/` | MCP server and tools |
+| `mcp/` | Host MCP server and tools; registration goes through `withToolDefaults` in `defineTool.ts` (annotations from `src/toolkit/meta.ts` `TOOL_META`, listed schemas omit `$schema`, descriptions must not contain `/api/`) |
 | `server/` | HTTP routes for the operator console API |
 | `browser/` | Browser sessions: profile store, lock, host, login check, teardown (see `docs/browser.md`) |
 | `tools/` | Pi tools (`ask_operator`, `emit_stage_envelope`, …) |

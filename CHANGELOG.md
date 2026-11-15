@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.63.0] - 2026-11-14
+
+### Upgrade notes
+
+- **Host MCP tool names break.** The previous 124 tools are gone with no aliases. Clients, agent grants, eval mocks, and skills must use the 57 consolidated names and `kind` / `view` / `action` / `mode` fields. See [MCP — Toolsets](docs/mcp.md#toolsets) and `src/toolkit/toolRenames.ts`.
+- **Bare `/mcp` is core-only (17 tools).** Add `?toolsets=` (or `all`) at session `initialize`, or reconnect from `get_started.unloaded_toolsets`. Changing the query on an existing session id does not upgrade the tool list.
+
+### Added
+
+- **MCP connect-time toolsets.** A bare `/mcp` URL registers the 17-tool core set; add `?toolsets=` (or `all`) to load agents, evals, connections, and other areas. Console **Settings → MCP server** builds the URL and client config from checkboxes. `get_started` lists unloaded toolsets and reconnect URLs. See [MCP — Toolsets](docs/mcp.md#toolsets).
+
+### Changed
+
+- **Host MCP tools consolidate to 57 names.** Merged tools pick behavior with `kind`, `view`, `action`, or `mode` fields. A grant or eval reference to a surviving name now covers every mode of that tool (for example `start_run` also grants stage reruns). Guide confirmation binds multi-mode tools (including `delete_runs` dry-run vs execute, and `save_trigger` enable vs full update). The full old→new map is `src/toolkit/toolRenames.ts` and the Appendix of `docs/plans/2026-11-14-1206-refactor-mcp-tool-consolidation-plan.md`. Agent eval dataset fingerprints change when they referenced renamed tools.
+
+## [0.62.0] - 2026-11-14
+
+### Changed
+
+- **Host MCP `tools/list` annotations follow `TOOL_META.risk`.** Every tool gets `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` from its risk class (`read` / `write` / `destructive` / `external`), so `test_connection` is external/open-world, not hand-marked read-only. Listed input schemas omit `$schema`; tool descriptions no longer cite REST routes. See [Tool list shape](docs/mcp.md#tool-list-shape).
+
 ## [0.61.0] - 2026-11-14
 
 ### Added

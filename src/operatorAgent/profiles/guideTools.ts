@@ -7,16 +7,13 @@ import type { McpToolDeps } from "../../mcp/deps.js";
 import { buildToolkit } from "../../toolkit/index.js";
 import { isOperatorOnlyTool } from "../../toolkit/meta.js";
 import type { OperatorAgentTool, OperatorAgentToolResult } from "../types.js";
-import { checkGuideConfirmation, GUIDE_CONFIRMED_TOOLS } from "./guideConfirm.js";
+import { guideConfirmationOutcome, guideToolMayNeedConfirmation } from "../../toolkit/modePolicy.js";
+import { checkGuideConfirmation } from "./guideConfirm.js";
 
 const PLACED_TOOLS = new Set([
-  "create_pipeline",
-  "create_stage",
-  "create_stage_file",
-  "edit_pipeline",
-  "edit_stage",
-  "create_task",
-  "edit_task",
+  "write_pipeline",
+  "write_stage",
+  "write_task",
   "read_pipeline",
 ]);
 
@@ -27,34 +24,29 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function withConfirmationId(schema: Record<string, unknown>): Record<string, unknown> {
+function withOptionalConfirmationId(schema: Record<string, unknown>): Record<string, unknown> {
   if (Array.isArray(schema.anyOf)) {
     return {
       ...schema,
-      anyOf: schema.anyOf.map((branch) => withConfirmationId(isRecord(branch) ? branch : {})),
+      anyOf: schema.anyOf.map((branch) => withOptionalConfirmationId(isRecord(branch) ? branch : {})),
     };
   }
   if (Array.isArray(schema.oneOf)) {
     return {
       ...schema,
-      oneOf: schema.oneOf.map((branch) => withConfirmationId(isRecord(branch) ? branch : {})),
+      oneOf: schema.oneOf.map((branch) => withOptionalConfirmationId(isRecord(branch) ? branch : {})),
     };
   }
   const properties = {
     ...(isRecord(schema.properties) ? schema.properties : {}),
     confirmation_id: { type: "string", minLength: 1 },
   };
-  const required = [
-    ...(Array.isArray(schema.required)
-      ? schema.required.filter((item) => item !== "confirmation_id")
-      : []),
-    "confirmation_id",
-  ];
+  const required = Array.isArray(schema.required) ? schema.required.filter((item) => item !== "confirmation_id") : [];
   return { ...schema, type: "object", properties, required };
 }
 
 function modelParameters(schema: Record<string, unknown>, confirmed: boolean): TSchema {
-  const parameters = confirmed ? withConfirmationId(schema) : schema;
+  const parameters = confirmed ? withOptionalConfirmationId(schema) : schema;
   return Type.Unsafe(parameters as TSchema);
 }
 
@@ -74,7 +66,11 @@ function errorOf(content: unknown): string {
   return "tool_failed";
 }
 
-function placeArgs(name: string, args: Record<string, unknown>, deps: McpToolDeps): Record<string, unknown> {
+function placeArgs(
+  name: string,
+  args: Record<string, unknown>,
+  deps: McpToolDeps,
+): { ok: true; args: Record<string, unknown> } | { ok: false; message: string } {
   const root = deps.projectRoot ?? deps.cwd;
   return placeGuideWriteArgs(name, args, (rel) => {
     const abs = path.resolve(root, rel);
@@ -94,12 +90,12 @@ function wrapCatalogTool(
   deps: McpToolDeps,
   signal: AbortSignal,
 ): OperatorAgentTool {
-  const confirmed = GUIDE_CONFIRMED_TOOLS.has(tool.name);
+  const confirmed = guideToolMayNeedConfirmation(tool.name);
   const placed = PLACED_TOOLS.has(tool.name);
   const description = [
     tool.description,
     placed ? PLACE_NOTE : "",
-    confirmed ? "Needs confirmation_id from confirm_action, issued before the person's latest message." : "",
+    confirmed ? "May need confirmation_id from confirm_action when the resolved mode requires it." : "",
   ]
     .filter((part) => part.length > 0)
     .join(" ");
@@ -109,13 +105,20 @@ function wrapCatalogTool(
     parameters: modelParameters(tool.parameters, confirmed),
     handler: async (args, ctx): Promise<OperatorAgentToolResult> => {
       let input = args;
-      if (confirmed) {
+      const outcome = guideConfirmationOutcome(tool.name, args);
+      if (outcome !== "none") {
         const refused = checkGuideConfirmation(tool.name, args, ctx);
         if (refused) return refused;
         const { confirmation_id: _, ...rest } = args;
         input = rest;
       }
-      if (placed) input = placeArgs(tool.name, input, deps);
+      if (placed) {
+        const placed = placeArgs(tool.name, input, deps);
+        if (!placed.ok) {
+          return { ok: false, error: "guide.placement_refused", content: { error: "guide.placement_refused", message: placed.message } };
+        }
+        input = placed.args;
+      }
       const result = await tool.run(input, { signal });
       const content = contentOf(result.text);
       return result.ok ? { ok: true, content } : { ok: false, content, error: errorOf(content) };

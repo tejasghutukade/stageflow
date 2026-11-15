@@ -11,6 +11,7 @@ import { EvalRunManager } from "../src/evals/manager.js";
 import type { StageCaseRunner } from "../src/evals/runner/stageCaseRunner.js";
 import type { EvalPlan, RunCaseResult } from "../src/evals/types.js";
 import type { SuggestionInput } from "../src/evals/triage/types.js";
+import { registerCatalogTools } from "../src/mcp/catalogTools.js";
 import { registerEvalTools } from "../src/mcp/evalTools.js";
 import type { McpToolDeps } from "../src/mcp/deps.js";
 import { createRunStore } from "../src/runstore/createStore.js";
@@ -26,17 +27,10 @@ afterEach(async () => {
 });
 
 const NEW_TOOLS = [
-  "create_eval",
-  "update_eval",
-  "create_dataset",
-  "update_dataset_cases",
-  "convert_dataset",
-  "install_eval_sample",
+  "save_eval",
+  "save_dataset",
   "try_eval_case",
-  "get_eval_run_export",
-  "put_eval_review",
-  "accept_eval_failure_suggestions",
-  "dismiss_eval_failure_suggestions",
+  "review_eval_results",
   "delete_eval_run",
 ];
 
@@ -191,14 +185,13 @@ async function setup(opts: { withManager?: boolean; agents?: AgentService } = {}
     ...(opts.agents !== undefined ? { agentService: opts.agents } : {}),
   };
   const tools: Array<{ name: string; inputSchema?: ZodType; handler: (args: unknown) => Promise<{ content?: Array<{ text?: string }>; isError?: boolean }> }> = [];
-  registerEvalTools(
-    {
-      registerTool(name: string, config: { inputSchema?: ZodType }, handler: (args: unknown) => Promise<{ content?: Array<{ text?: string }>; isError?: boolean }>) {
-        tools.push({ name, inputSchema: config.inputSchema, handler });
-      },
-    } as never,
-    deps,
-  );
+  const recorder = {
+    registerTool(name: string, config: { inputSchema?: ZodType }, handler: (args: unknown) => Promise<{ content?: Array<{ text?: string }>; isError?: boolean }>) {
+      tools.push({ name, inputSchema: config.inputSchema, handler });
+    },
+  } as never;
+  registerCatalogTools(recorder, deps);
+  registerEvalTools(recorder, deps);
   cleanups.push(async () => {
     await store.close();
     await rm(root, { recursive: true, force: true });
@@ -207,8 +200,14 @@ async function setup(opts: { withManager?: boolean; agents?: AgentService } = {}
   const call = async (name: string, args: Record<string, unknown> = {}) => {
     const tool = tools.find((t) => t.name === name);
     if (tool === undefined) throw new Error(`missing tool ${name}`);
-    const parsed = tool.inputSchema ? tool.inputSchema.parse(args) : args;
-    const result = await tool.handler(parsed);
+    const parsed = tool.inputSchema ? tool.inputSchema.safeParse(args) : { success: true as const, data: args };
+    if (!parsed.success) {
+      return {
+        isError: true,
+        payload: { code: "invalid_request", error: parsed.error.issues[0]?.message ?? "Invalid arguments" },
+      };
+    }
+    const result = await tool.handler(parsed.data);
     const text = result.content?.[0]?.text ?? "{}";
     return { isError: result.isError === true, payload: JSON.parse(text) as any };
   };
@@ -225,7 +224,8 @@ describe("MCP eval write tools", () => {
   it("creates an eval, refuses a duplicate, and rejects an invalid definition without writing it", async () => {
     const h = await setup();
     const detail = await h.call("get_eval", { eval_id: "review", project_root: h.root });
-    const created = await h.call("create_eval", {
+    const created = await h.call("save_eval", {
+      mode: "create",
       project_root: h.root,
       definition: { ...detail.payload.definition, id: "second" },
     });
@@ -233,14 +233,16 @@ describe("MCP eval write tools", () => {
     expect(created.payload).toMatchObject({ id: "second", path: "evals/second.eval.yaml" });
     expect(await readFile(path.join(h.root, "evals", "second.eval.yaml"), "utf8")).toContain("id: second");
 
-    const dup = await h.call("create_eval", {
+    const dup = await h.call("save_eval", {
+      mode: "create",
       project_root: h.root,
       definition: { ...detail.payload.definition, id: "second" },
     });
     expect(dup.isError).toBe(true);
     expect(dup.payload.code).toBe("EVAL_EXISTS");
 
-    const invalid = await h.call("create_eval", {
+    const invalid = await h.call("save_eval", {
+      mode: "create",
       project_root: h.root,
       definition: { ...detail.payload.definition, id: "third", dataset: "../datasets/missing.dataset.jsonl" },
     });
@@ -255,7 +257,8 @@ describe("MCP eval write tools", () => {
     const h = await setup();
     const detail = await h.call("get_eval", { eval_id: "review", project_root: h.root });
     const definition = { ...detail.payload.definition, description: "Edited" };
-    const updated = await h.call("update_eval", {
+    const updated = await h.call("save_eval", {
+      mode: "update",
       eval_id: "review",
       project_root: h.root,
       base_hash: detail.payload.file_hash,
@@ -264,7 +267,8 @@ describe("MCP eval write tools", () => {
     expect(updated.isError).toBe(false);
     expect(updated.payload.yaml).toContain("description: Edited");
 
-    const stale = await h.call("update_eval", {
+    const stale = await h.call("save_eval", {
+      mode: "update",
       eval_id: "review",
       project_root: h.root,
       base_hash: detail.payload.file_hash,
@@ -272,17 +276,19 @@ describe("MCP eval write tools", () => {
     });
     expect(stale.payload).toMatchObject({ code: "FILE_CHANGED", current_hash: updated.payload.file_hash });
 
-    await expect(
-      h.call("update_eval", {
-        eval_id: "review",
-        project_root: h.root,
-        base_hash: updated.payload.file_hash,
-        definition,
-        yaml: "version: 1\nid: review\n",
-      }),
-    ).rejects.toThrow(/yaml|definition/);
+    const both = await h.call("save_eval", {
+      mode: "update",
+      eval_id: "review",
+      project_root: h.root,
+      base_hash: updated.payload.file_hash,
+      definition,
+      yaml: "version: 1\nid: review\n",
+    });
+    expect(both.isError).toBe(true);
+    expect(both.payload.error).toMatch(/yaml|definition/);
 
-    const badYaml = await h.call("update_eval", {
+    const badYaml = await h.call("save_eval", {
+      mode: "update",
       eval_id: "review",
       project_root: h.root,
       base_hash: updated.payload.file_hash,
@@ -299,10 +305,11 @@ describe("MCP eval write tools", () => {
       "id: review",
       "id: draft",
     ).replace("dataset: ../datasets/review.dataset.jsonl", "dataset: ../datasets/not-written-yet.dataset.jsonl");
-    const missing = await h.call("validate_eval", { yaml, path: "evals/draft.eval.yaml", project_root: h.root });
+    const missing = await h.call("validate", { kind: "eval", yaml, path: "evals/draft.eval.yaml", project_root: h.root });
     expect(missing.payload.findings.map((f: { code: string }) => f.code)).toContain("eval.dataset_unresolved");
 
-    const inline = await h.call("validate_eval", {
+    const inline = await h.call("validate", {
+      kind: "eval",
       yaml,
       path: "evals/draft.eval.yaml",
       project_root: h.root,
@@ -315,7 +322,8 @@ describe("MCP eval write tools", () => {
     expect(codes).not.toContain("eval.dataset_unresolved");
     expect(codes).toContain("eval.cases_skipped");
 
-    const byId = await h.call("validate_eval", {
+    const byId = await h.call("validate", {
+      kind: "eval",
       eval_id: "review",
       project_root: h.root,
       dataset_cases: [{ id: "bad", input: { other: 1 } }],
@@ -323,12 +331,12 @@ describe("MCP eval write tools", () => {
     expect(byId.payload.findings.map((f: { code: string }) => f.code)).toContain("eval.no_valid_cases");
 
     const reviewYaml = await readFile(path.join(h.root, "evals", "review.eval.yaml"), "utf8");
-    const atHome = await h.call("validate_eval", { yaml: reviewYaml, path: "evals/review.eval.yaml", project_root: h.root });
+    const atHome = await h.call("validate", { kind: "eval", yaml: reviewYaml, path: "evals/review.eval.yaml", project_root: h.root });
     expect(atHome.payload.findings.filter((f: { severity: string }) => f.severity === "error")).toEqual([]);
-    const moved = await h.call("validate_eval", { yaml: reviewYaml, path: "a/b/review.eval.yaml", project_root: h.root });
+    const moved = await h.call("validate", { kind: "eval", yaml: reviewYaml, path: "a/b/review.eval.yaml", project_root: h.root });
     expect(moved.payload.findings.map((f: { code: string }) => f.code)).toContain("eval.dataset_unresolved");
 
-    const outside = await h.call("validate_eval", { yaml: reviewYaml, path: "../outside.eval.yaml", project_root: h.root });
+    const outside = await h.call("validate", { kind: "eval", yaml: reviewYaml, path: "../outside.eval.yaml", project_root: h.root });
     expect(outside.payload.code).toBe("path_outside_project_root");
     expect(await readdir(path.join(h.root, "evals"))).toEqual(before);
     expect(await readFile(path.join(h.root, "datasets", "review.dataset.jsonl"), "utf8")).toContain("diff c1");
@@ -360,10 +368,25 @@ describe("MCP eval write tools", () => {
     expect(unknown.payload.code).toBe("EVAL_INVALID");
   });
 
+  it("save_dataset rejects mixed create and update fields", async () => {
+    const h = await setup();
+    const res = await h.call("save_dataset", {
+      mode: "create",
+      name: "mixed",
+      dataset_id: "review",
+      action: "ops",
+      project_root: h.root,
+      cases: [{ input: { diff: "x" } }],
+    });
+    expect(res.isError).toBe(true);
+    expect(res.payload.error).toMatch(/dataset_id|action|ops/);
+  });
+
   it("creates, appends, replaces, and edits dataset cases through the write functions", async () => {
     const h = await setup();
     const target = { pipeline_path: "pipelines/feature-ship.pipeline.yaml", stage_id: "review" };
-    const created = await h.call("create_dataset", {
+    const created = await h.call("save_dataset", {
+      mode: "create",
       project_root: h.root,
       name: "mine",
       cases: [{ input: { diff: "a" } }, { input: { diff: "b" }, tags: ["t"] }],
@@ -372,37 +395,41 @@ describe("MCP eval write tools", () => {
     expect(created.payload).toMatchObject({ id: "mine", path: "datasets/mine.dataset.jsonl", cases_total: 2, editable: true });
     expect(created.payload.cases.map((c: { id: string }) => c.id)).toEqual(["c001", "c002"]);
 
-    const dup = await h.call("create_dataset", { project_root: h.root, name: "mine", cases: [{ input: { diff: "a" } }] });
+    const dup = await h.call("save_dataset", { mode: "create", project_root: h.root, name: "mine", cases: [{ input: { diff: "a" } }] });
     expect(dup.payload.code).toBe("DATASET_EXISTS");
 
-    const appended = await h.call("create_dataset", {
+    const appended = await h.call("save_dataset", {
+      mode: "update",
+      action: "append",
       project_root: h.root,
       dataset_id: "mine",
-      mode: "append",
       base_hash: created.payload.hash,
       cases: [{ input: { diff: "c" } }],
     });
     expect(appended.payload.cases.map((c: { id: string }) => c.id)).toEqual(["c001", "c002", "c003"]);
 
-    const stale = await h.call("create_dataset", {
+    const stale = await h.call("save_dataset", {
+      mode: "update",
+      action: "replace",
       project_root: h.root,
       dataset_id: "mine",
-      mode: "replace",
       base_hash: created.payload.hash,
       cases: [{ input: { diff: "z" } }],
     });
     expect(stale.payload.code).toBe("FILE_CHANGED");
 
-    const replaced = await h.call("create_dataset", {
+    const replaced = await h.call("save_dataset", {
+      mode: "update",
+      action: "replace",
       project_root: h.root,
       dataset_id: "mine",
-      mode: "replace",
       base_hash: appended.payload.hash,
       cases: [{ input: { diff: "z" } }],
     });
     expect(replaced.payload.cases_total).toBe(1);
 
-    const sampleMismatch = await h.call("create_dataset", {
+    const sampleMismatch = await h.call("save_dataset", {
+      mode: "create",
       project_root: h.root,
       name: "sample-copy",
       source: "sample",
@@ -411,7 +438,8 @@ describe("MCP eval write tools", () => {
     expect(sampleMismatch.payload.code).toBe("DATASET_INVALID");
     expect((await readdir(path.join(h.root, "datasets"))).includes("sample-copy.dataset.jsonl")).toBe(false);
 
-    const noRuns = await h.call("create_dataset", {
+    const noRuns = await h.call("save_dataset", {
+      mode: "create",
       project_root: h.root,
       name: "from-runs",
       source: "runs",
@@ -420,7 +448,8 @@ describe("MCP eval write tools", () => {
     });
     expect(noRuns.payload.code).toBe("DATASET_CASE_OP_INVALID");
 
-    const sessions = await h.call("create_dataset", {
+    const sessions = await h.call("save_dataset", {
+      mode: "create",
       project_root: h.root,
       name: "from-sessions",
       source: "sessions",
@@ -430,7 +459,9 @@ describe("MCP eval write tools", () => {
     expect(sessions.payload.code).toBe("EVAL_ENGINE_UNAVAILABLE");
 
     const loaded = await loadDatasetFile(path.join(h.root, "datasets", "review.dataset.jsonl"), { root: h.root });
-    const patched = await h.call("update_dataset_cases", {
+    const patched = await h.call("save_dataset", {
+      mode: "update",
+      action: "ops",
       project_root: h.root,
       dataset_id: "review",
       base_hash: loaded.contentHash,
@@ -446,7 +477,9 @@ describe("MCP eval write tools", () => {
     expect(patched.payload.cases.find((c: { id: string }) => c.id === "c3").tags).toEqual(["wip"]);
     expect(patched.payload.cases.some((c: { id: string }) => c.id === "c1")).toBe(false);
 
-    const atomic = await h.call("update_dataset_cases", {
+    const atomic = await h.call("save_dataset", {
+      mode: "update",
+      action: "ops",
       project_root: h.root,
       dataset_id: "review",
       base_hash: patched.payload.hash,
@@ -459,7 +492,9 @@ describe("MCP eval write tools", () => {
 
     await writeFile(path.join(h.root, "datasets", "solo.dataset.csv"), "id,input.diff:json\nc001,1\n");
     const csv = await loadDatasetFile(path.join(h.root, "datasets", "solo.dataset.csv"), { root: h.root });
-    const converted = await h.call("convert_dataset", {
+    const converted = await h.call("save_dataset", {
+      mode: "update",
+      action: "convert",
       project_root: h.root,
       dataset_id: "solo",
       base_hash: csv.contentHash,
@@ -471,13 +506,14 @@ describe("MCP eval write tools", () => {
 
   it("installs the stage sample, copies its cases, and refuses an agent sample without the agent service", async () => {
     const h = await setup();
-    const first = await h.call("install_eval_sample", { project_root: h.root });
+    const first = await h.call("save_eval", { mode: "create", source: "sample", project_root: h.root });
     expect(first.isError, JSON.stringify(first.payload)).toBe(false);
     expect(first.payload.eval_id).toBe("critique-sample");
-    const again = await h.call("install_eval_sample", { project_root: h.root });
+    const again = await h.call("save_eval", { mode: "create", source: "sample", project_root: h.root });
     expect(again.payload.code).toBe("SAMPLE_EXISTS");
 
-    const copied = await h.call("create_dataset", {
+    const copied = await h.call("save_dataset", {
+      mode: "create",
       project_root: h.root,
       name: "sample-copy",
       source: "sample",
@@ -486,7 +522,7 @@ describe("MCP eval write tools", () => {
     expect(copied.isError, JSON.stringify(copied.payload)).toBe(false);
     expect(copied.payload.cases_total).toBeGreaterThan(0);
 
-    const agent = await h.call("install_eval_sample", { project_root: h.root, kind: "agent" });
+    const agent = await h.call("save_eval", { mode: "create", source: "sample", project_root: h.root, kind: "agent" });
     expect(agent.payload.code).toBe("SAMPLE_AGENTS_UNAVAILABLE");
   });
 
@@ -510,7 +546,7 @@ describe("MCP eval write tools", () => {
       path.join(h.root, "stageflow.yaml"),
       "version: 1\nmodel: anthropic/claude-sonnet-4-5\ncatalog:\n  pipelines:\n    - pipelines\n  tasks: []\n",
     );
-    const installed = await h.call("install_eval_sample", { project_root: h.root, kind: "agent" });
+    const installed = await h.call("save_eval", { mode: "create", source: "sample", project_root: h.root, kind: "agent" });
     expect(installed.isError, JSON.stringify(installed.payload)).toBe(false);
     expect(installed.payload.eval_id).toBe("support-sample");
     expect(calls).toEqual(["create:false", "enable"]);
@@ -552,7 +588,9 @@ describe("MCP eval write tools", () => {
     expect(inline.payload.result.case_id).toBe("c002");
     expect(seen.at(-1)).toMatchObject({ allowRealTools: true });
 
-    await expect(h.call("try_eval_case", { project_root: h.root, eval_id: "review" })).rejects.toThrow(/case_id|case/);
+    const missingCase = await h.call("try_eval_case", { project_root: h.root, eval_id: "review" });
+    expect(missingCase.isError).toBe(true);
+    expect(missingCase.payload.error).toMatch(/case_id|case/);
     expect((await h.store.listEvalRuns({ limit: 10 })).items).toEqual([]);
   });
 
@@ -570,16 +608,17 @@ describe("MCP eval write tools", () => {
     const run = await h.call("run_eval", { eval_id: "review", project_root: h.root, wait: true, repeats: 1 });
     const id = run.payload.eval_run_id as string;
     const row = await h.store.getEvalRun(id);
-    const exported = await h.call("get_eval_run_export", { eval_run_id: id });
+    const exported = await h.call("get_eval_run", { eval_run_id: id, view: "export" });
     expect(exported.isError).toBe(false);
     expect(exported.payload).toEqual(await buildExport({ store: h.store, row: row!, what: "results" }));
     expect(exported.payload.filename).toBe("review-run-1-results.json");
     expect(exported.payload.body.results).toHaveLength(3);
-    const config = await h.call("get_eval_run_export", { eval_run_id: id, what: "config" });
+    const config = await h.call("get_eval_run", { eval_run_id: id, view: "export", what: "config" });
     expect(config.payload).toEqual(await buildExport({ store: h.store, row: row!, what: "config" }));
     expect(JSON.stringify(exported.payload) + JSON.stringify(config.payload)).not.toMatch(/api_key|sk-|authorization/i);
 
-    const tagged = await h.call("put_eval_review", {
+    const tagged = await h.call("review_eval_results", {
+      action: "label",
       eval_run_id: id,
       case_id: "c2",
       repeat_index: 0,
@@ -588,7 +627,8 @@ describe("MCP eval write tools", () => {
       tags: ["Missed issue"],
     });
     expect(tagged.payload).toEqual({ label: "fail", note: "wrong verdict", tags: ["Missed issue"] });
-    const onPassed = await h.call("put_eval_review", {
+    const onPassed = await h.call("review_eval_results", {
+      action: "label",
       eval_run_id: id,
       case_id: "c1",
       repeat_index: 0,
@@ -596,22 +636,28 @@ describe("MCP eval write tools", () => {
       tags: ["x"],
     });
     expect(onPassed.payload.code).toBe("EVAL_TAGS_ON_PASSED_RESULT");
-    const badLabel = await h.call("put_eval_review", { eval_run_id: id, case_id: "c1", repeat_index: 0, label: "maybe" });
+    const badLabel = await h.call("review_eval_results", {
+      action: "label",
+      eval_run_id: id,
+      case_id: "c1",
+      repeat_index: 0,
+      label: "maybe",
+    });
     expect(badLabel.payload.code).toBe("invalid_request");
 
     const rows = await h.store.upsertEvalSuggestions(id, [
       suggestion("c2"),
       suggestion("c3", { bucket: "unclear", failureType: null, confidence: 0.4 }),
     ]);
-    const low = await h.call("accept_eval_failure_suggestions", { eval_run_id: id, min_confidence: 2 });
+    const low = await h.call("review_eval_results", { action: "accept", eval_run_id: id, min_confidence: 2 });
     expect(low.payload.code).toBe("invalid_request");
-    const dismissed = await h.call("dismiss_eval_failure_suggestions", { eval_run_id: id, ids: [rows[1]!.id] });
+    const dismissed = await h.call("review_eval_results", { action: "dismiss", eval_run_id: id, ids: [rows[1]!.id] });
     expect(dismissed.payload).toEqual({ dismissed: 1 });
-    const accepted = await h.call("accept_eval_failure_suggestions", { eval_run_id: id, ids: [rows[0]!.id] });
+    const accepted = await h.call("review_eval_results", { action: "accept", eval_run_id: id, ids: [rows[0]!.id] });
     expect(accepted.payload).toEqual({ accepted: 1, tagged: 1 });
-    const detail = await h.call("get_eval_result", { eval_run_id: id, case_id: "c2" });
+    const detail = await h.call("get_eval_results", { eval_run_id: id, case_id: "c2" });
     expect(detail.payload.repeats[0].tags).toEqual(expect.arrayContaining(["Missed issue", "tone"]));
-    const listed = await h.call("get_eval_failure_suggestions", { eval_run_id: id });
+    const listed = await h.call("get_eval_failures", { eval_run_id: id });
     expect(listed.payload.items.map((s: { status: string }) => s.status).sort()).toEqual(["accepted", "dismissed"]);
   });
 

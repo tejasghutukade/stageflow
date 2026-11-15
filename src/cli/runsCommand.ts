@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { projectRun } from "../projection/projectRun.js";
-import { waitRun, type WaitUntil } from "../mcp/waitRun.js";
-import { projectWaitingGates } from "../mcp/waitingGates.js";
+import { waitRun, type WaitUntil } from "../runread/waitRun.js";
+import { projectWaitingGates } from "../runread/waitingGates.js";
 import { completeCliRun } from "./runCommand.js";
 import { cliProgressColor } from "./runProgress.js";
 import { formatRunListLine, formatRunShow, formatWaitingEntry } from "./runShow.js";

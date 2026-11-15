@@ -28,7 +28,7 @@ Other work belongs to sibling skills. Name them; do not do their job here:
 - Starting pipeline runs, answering gates, connections: `stageflow-operate`.
 - Installing `sf`, provider login, `sf doctor`: `stageflow`.
 
-When the Host MCP tools are in your list, they are equivalent to the CLI commands in this skill (`run_eval`, `try_eval_case`, `create_eval`, `accept_eval_failure_suggestions`, and the rest). Confirm cost the same way.
+When the Host MCP tools are in your list, they are equivalent to the CLI commands in this skill (`run_eval`, `try_eval_case`, `save_eval`, `review_eval_results` with `action: accept`, and the rest). Confirm cost the same way. Point the client at `/mcp?toolsets=evals` (or `?toolsets=all`); a bare `/mcp` URL does not register eval tools.
 
 ## Rules that always apply
 
@@ -153,7 +153,7 @@ The first id is the baseline. Quote `verdict`, `ci`, `shared_cases`, `warnings`,
 
 Calibration checks a `rubric` or `goal_reached` grader against labels the user has already given. It re-judges stored outputs. It does not run the stage or the agent. It still calls the judge, once per label (three times with `--stability`), capped by `--max-cost` (default 1). Confirm that spend.
 
-Labels are per grader, stored from the console (**Label results** on the Graders tab). There is no CLI and no MCP tool that writes them. The HTTP label route exists too; it records the user's verdict, so never call it. The result review (`put_eval_review`, pass or fail on the whole result) is a different store and is not read by calibration. Do not label results yourself, and do not send a review in place of a grader label.
+Labels are per grader, stored from the console (**Label results** on the Graders tab). There is no CLI and no MCP tool that writes them. The HTTP label route exists too; it records the user's verdict, so never call it. The result review (`review_eval_results` with `action: label`, pass or fail on the whole result) is a different store and is not read by calibration. Do not label results yourself, and do not send a review in place of a grader label.
 
 ```bash
 sf eval calibrate <evalId> <graderId> --json

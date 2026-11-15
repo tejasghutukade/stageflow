@@ -62,7 +62,7 @@ async function jsonFetch(url: string, init?: RequestInit) {
 }
 
 async function mcpListTools(base: string) {
-  const res = await fetch(`${base}/mcp`, {
+  const res = await fetch(`${base}/mcp?toolsets=all`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

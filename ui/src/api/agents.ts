@@ -195,6 +195,7 @@ export type StageflowToolCatalog = {
     operatorOnly: boolean;
     tools: Array<{ name: string; grantId: string; risk: StageflowToolRisk; description: string; operatorOnly: boolean }>;
   }>;
+  toolsets: Array<{ id: string; title: string; summary: string; tools: string[] }>;
 };
 
 export type AgentSpan = {

@@ -32,10 +32,10 @@ Do not set both \`checkout\` and \`repository\`. The loader also accepts \`check
 
 ## Standalone task vs pipeline task
 
-- \`create_task_file\` writes a standalone catalog task (\`directory\`, \`id\`, \`goal\`, optional \`context\`, \`constraints\`, \`checkout\`, \`repository\`, \`ref\`). It is not tied to a pipeline; any pipeline can run with it. \`update_task_file\` replaces it by id (\`goal\` required; pass \`null\` or empty to drop an optional field).
-- \`create_task\` / \`edit_task\` write the task that sits beside a pipeline package (same folder).
-- \`import_task_file\` turns a GitHub issue into a task (title becomes goal and id). It calls GitHub.
-- Neither tool set writes \`input\` as a named argument on standalone tasks; to set \`input\` on a pipeline task pass it inside \`body\` of \`create_task\` / \`edit_task\`.
+- \`write_task\` with \`no_pipeline: true\` and \`mode: create\` writes a standalone catalog task. \`mode: update\` with \`no_pipeline: true\` replaces it by id (\`goal\` required; pass \`null\` or empty to drop an optional field).
+- \`write_task\` with \`mode: create\` or \`mode: update\` (no \`no_pipeline\`) writes the task that sits beside a pipeline package (same folder).
+- \`import_task\` turns a GitHub issue into a task (title becomes goal and id). It calls GitHub.
+- Standalone task writes have no \`input\` argument; to set \`input\` on a pipeline task pass it inside \`body\` of \`write_task\`.
 
 ## Tasks and triggers
 
@@ -50,6 +50,6 @@ With \`repository\` + \`ref\`, the stage works in a Host-owned worktree. Reposit
 
 ## Starting a run
 
-The console's Start a run picks a task and a pipeline (\`#/new\`). Tools: \`start_run\` (pipeline and task), \`run_stage\` (one stage), \`rerun\`. The CLI is \`sf run --pipeline <path> --task <path>\` (paths, not ids).
+The console's Start a run picks a task and a pipeline (\`#/new\`). Tools: \`start_run\` with \`pipeline\` and task fields (full run), with \`stage\` (one stage), or with \`from_run\` (replay from a prior run). The CLI is \`sf run --pipeline <path> --task <path>\` (paths, not ids).
 `,
 };

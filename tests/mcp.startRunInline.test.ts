@@ -28,7 +28,7 @@ async function mcpCall(
   name: string,
   args: Record<string, unknown> = {},
 ) {
-  const res = await fetch(`${base}/mcp`, {
+  const res = await fetch(`${base}/mcp?toolsets=all`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -155,7 +155,7 @@ describe("start_run — inline pipeline (MCP)", () => {
       expect(detail.payload.pipeline_path).toBeUndefined();
       expect(detail.payload.stages[0]?.envelope.summary).toBe("checked");
 
-      const listed = await mcpCall(base, "list_runs", {});
+      const listed = await mcpCall(base, "get_run", {});
       expect(listed.isError).toBe(false);
       expect(listed.payload.runs.some((r: { run_id: string }) => r.run_id === runId)).toBe(
         true,
@@ -285,7 +285,7 @@ describe("start_run — inline pipeline (MCP)", () => {
         return detail.status === "succeeded";
       });
 
-      const rerun = await mcpCall(base, "rerun", { runId });
+      const rerun = await mcpCall(base, "start_run", { from_run: runId });
       expect(rerun.isError).toBe(false);
       expect(typeof rerun.payload.runId).toBe("string");
       expect(rerun.payload.runId).not.toBe(runId);
@@ -317,7 +317,7 @@ describe("start_run — inline pipeline (MCP)", () => {
     const base = `http://127.0.0.1:${address.port}`;
 
     try {
-      const before = await mcpCall(base, "list_pipelines");
+      const before = await mcpCall(base, "list_catalog", { kind: "pipelines" });
       expect(before.isError).toBe(false);
 
       const started = await mcpCall(base, "start_run", {
@@ -341,7 +341,7 @@ describe("start_run — inline pipeline (MCP)", () => {
         return detail.status === "succeeded";
       });
 
-      const after = await mcpCall(base, "list_pipelines");
+      const after = await mcpCall(base, "list_catalog", { kind: "pipelines" });
       expect(after.isError).toBe(false);
       // Not a strict equality: fanning out over every known project root can
       // list the same on-disk directory twice under distinct path spellings
@@ -360,8 +360,9 @@ describe("start_run — inline pipeline (MCP)", () => {
         ),
       ).toBe(false);
 
-      const describeResult = await mcpCall(base, "describe_pipeline", {
-        pipeline: "pipelines/docs-only.pipeline.yaml",
+      const describeResult = await mcpCall(base, "read_pipeline", {
+        path: "pipelines/docs-only.pipeline.yaml",
+        view: "dag",
       });
       expect(describeResult.isError).toBe(false);
       expect(describeResult.payload.id).toBe("docs-only");

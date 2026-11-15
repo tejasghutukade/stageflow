@@ -29,6 +29,8 @@ SIGTERM and SIGINT drain in-flight work for `STAGEFLOW_SHUTDOWN_GRACE_MS` millis
 
 MCP is Streamable HTTP at `/mcp` only. There is no stdio server. Sessions are on by default. `--mcp-stateless` or `STAGEFLOW_MCP_STATELESS=1` turns them off for a client that cannot send session headers. Leave sessions on for Cursor, Claude Code, Codex, and OpenCode.
 
+`tools/list` carries safety annotations from tool risk and omits `/api/` from tool descriptions. HTTP parity for the same operations is in [docs/mcp.md](../../../docs/mcp.md), not in the wire text.
+
 Which CLI verbs start a Host, and the autostart error `reason` values, are in `control-surface.md`.
 
 ## Port and bind
@@ -86,13 +88,13 @@ The probe prints `bearer` when `STAGEFLOW_CONTROL_TOKEN` or `STAGEFLOW_CONTROL_T
 
 `GET /readyz` returns 200 only when the store opens, the home is writable, migrations are complete, and `git` is on PATH. Otherwise 503 with `ready: false` and a `checks` object. A live process can still be unready. Doctor runs these checks in its own process. It does not HTTP-call `/readyz`.
 
-`GET /api/health` is the rich view: version, `build_sha`, capacity, `stageflow_home`, `boot_providers`, `providers_live`, disk, and an `activity` block. It needs a read bearer when tokens are on. The MCP tool `get_health` is the same family and omits that `activity` block. `get_started` is the orientation tool: version, providers, toolchain, catalog roots, and `next_steps`. The MCP checklist in `SKILL.md` is done when `get_started` returns the Host version.
+`GET /api/health` is the rich view: version, `build_sha`, capacity, `stageflow_home`, `boot_providers`, `providers_live`, disk, and an `activity` block. It needs a read bearer when tokens are on. The MCP tool `list_catalog` with `kind: health` is the same family and omits that `activity` block. `get_started` is the orientation tool: version, providers, toolchain, catalog roots, `unloaded_toolsets`, and `next_steps`. The MCP checklist in `SKILL.md` is done when `get_started` returns the Host version and, if `unloaded_toolsets` is non-empty, you reconnect with a URL that adds the toolsets you need (or tell the operator to).
 
 `sf doctor` is not a health check for containers. A 200 from `/livez` is not an authenticated MCP session.
 
 ## Connect a harness
 
-Do this when the user needs tools the CLI does not have (connections, memories, live inspection, agent and eval authoring), or the Host is in a container or on another machine. The URL is `http://127.0.0.1:3847/mcp` on this machine. From another machine, use the Host's reachable URL and a drive token. Add the Host's public name to `STAGEFLOW_ALLOWED_HOSTS`.
+Do this when the user needs tools the CLI does not have (connections, memories, live inspection, agent and eval authoring), or the Host is in a container or on another machine. The URL is `http://127.0.0.1:3847/mcp` on this machine (core tools only). Add `?toolsets=` for evals, agents, connections, memories, or `?toolsets=all` for every Host tool. The console **Settings → MCP server** panel builds the URL from checkboxes. From another machine, use the Host's reachable URL and a drive token. Add the Host's public name to `STAGEFLOW_ALLOWED_HOSTS`. Reconnect the client after changing `toolsets`; the list is fixed for the session. Full rules: [docs/mcp.md](../../../docs/mcp.md#toolsets).
 
 Omit the `Authorization` header only when the Host started with `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1`. A normal start writes `$STAGEFLOW_HOME/control-token`; set `Authorization: Bearer <token>` from that file. Prefer an environment substitution over a literal token in a file that will be committed.
 
@@ -106,7 +108,7 @@ Project file `.cursor/mcp.json`, or user file `~/.cursor/mcp.json`. A remote ser
 {
   "mcpServers": {
     "stageflow": {
-      "url": "http://127.0.0.1:3847/mcp",
+      "url": "http://127.0.0.1:3847/mcp?toolsets=all",
       "headers": {
         "Authorization": "Bearer ${env:STAGEFLOW_CONTROL_TOKEN}"
       }
@@ -126,7 +128,7 @@ Drop `headers` only when the Host runs with `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIN
   "mcpServers": {
     "stageflow": {
       "type": "http",
-      "url": "http://127.0.0.1:3847/mcp",
+      "url": "http://127.0.0.1:3847/mcp?toolsets=all",
       "headers": {
         "Authorization": "Bearer ${STAGEFLOW_CONTROL_TOKEN}"
       }
@@ -143,7 +145,7 @@ User file `~/.codex/config.toml`. A project file `.codex/config.toml` is loaded 
 
 ```toml
 [mcp_servers.stageflow]
-url = "http://127.0.0.1:3847/mcp"
+url = "http://127.0.0.1:3847/mcp?toolsets=all"
 bearer_token_env_var = "STAGEFLOW_CONTROL_TOKEN"
 ```
 
@@ -158,7 +160,7 @@ Omit `bearer_token_env_var` only when the Host runs with `STAGEFLOW_ALLOW_UNAUTH
   "mcp": {
     "stageflow": {
       "type": "remote",
-      "url": "http://127.0.0.1:3847/mcp",
+      "url": "http://127.0.0.1:3847/mcp?toolsets=all",
       "oauth": false,
       "headers": {
         "Authorization": "Bearer {env:STAGEFLOW_CONTROL_TOKEN}"

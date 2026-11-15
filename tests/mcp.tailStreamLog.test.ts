@@ -6,7 +6,7 @@ import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { attemptStreamLogPath } from "../src/runstore/workspaceLayout.js";
 import { encodeStreamLogHeader } from "../src/runtime/stageStreamLog.js";
-import { readStreamLogTail } from "../src/mcp/tailStreamLog.js";
+import { readStreamLogTail } from "../src/runread/tailStreamLog.js";
 import { startUiServer } from "../src/server/http.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
 
@@ -75,7 +75,7 @@ async function mcpCall(
   name: string,
   args: Record<string, unknown> = {},
 ) {
-  const res = await fetch(`${base}/mcp`, {
+  const res = await fetch(`${base}/mcp?toolsets=all`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -158,7 +158,7 @@ describe("tail_stage_log (MCP)", () => {
     const base = `http://127.0.0.1:${address.port}`;
 
     try {
-      const first = await mcpCall(base, "tail_stage_log", { runId: run.runId, stageId: "work" });
+      const first = await mcpCall(base, "get_stage", { view: "log", runId: run.runId, stageId: "work" });
       expect(first.isError).toBe(false);
       expect(first.payload).toEqual({
         text: "hello from the stage",
@@ -166,11 +166,9 @@ describe("tail_stage_log (MCP)", () => {
         attempt_complete: false,
       });
 
-      const second = await mcpCall(base, "tail_stage_log", {
-        runId: run.runId,
+      const second = await mcpCall(base, "get_stage", { view: "log", runId: run.runId,
         stageId: "work",
-        since_offset: first.payload.next_offset,
-      });
+        since_offset: first.payload.next_offset, });
       expect(second.isError).toBe(false);
       expect(second.payload).toEqual({
         text: "",
@@ -207,11 +205,9 @@ describe("tail_stage_log (MCP)", () => {
     const base = `http://127.0.0.1:${address.port}`;
 
     try {
-      const result = await mcpCall(base, "tail_stage_log", {
-        runId: run.runId,
+      const result = await mcpCall(base, "get_stage", { view: "log", runId: run.runId,
         stageId: "work",
-        since_offset: 10,
-      });
+        since_offset: 10, });
       expect(result.isError).toBe(false);
       expect(result.payload.truncated).toBe(true);
       expect(result.payload.earliest_offset).toBe(1000);
@@ -242,7 +238,7 @@ describe("tail_stage_log (MCP)", () => {
     const base = `http://127.0.0.1:${address.port}`;
 
     try {
-      const result = await mcpCall(base, "tail_stage_log", { runId: run.runId, stageId: "work" });
+      const result = await mcpCall(base, "get_stage", { view: "log", runId: run.runId, stageId: "work" });
       expect(result.isError).toBe(false);
       expect(result.payload).toEqual({ text: "", next_offset: 0, attempt_complete: false });
     } finally {
@@ -269,10 +265,8 @@ describe("tail_stage_log (MCP)", () => {
     const base = `http://127.0.0.1:${address.port}`;
 
     try {
-      const result = await mcpCall(base, "tail_stage_log", {
-        runId: "does-not-exist",
-        stageId: "work",
-      });
+      const result = await mcpCall(base, "get_stage", { view: "log", runId: "does-not-exist",
+        stageId: "work", });
       expect(result.isError).toBe(true);
       expect(result.payload.status).toBe(404);
     } finally {
@@ -300,10 +294,8 @@ describe("tail_stage_log (MCP)", () => {
     const base = `http://127.0.0.1:${address.port}`;
 
     try {
-      const result = await mcpCall(base, "tail_stage_log", {
-        runId: run.runId,
-        stageId: "does-not-exist",
-      });
+      const result = await mcpCall(base, "get_stage", { view: "log", runId: run.runId,
+        stageId: "does-not-exist", });
       expect(result.isError).toBe(true);
       expect(result.payload.status).toBe(404);
     } finally {

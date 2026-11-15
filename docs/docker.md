@@ -126,7 +126,7 @@ Mandatory bar: `GET /livez` → 200. Optional stretch flags: `--readyz`, `--chec
 
 ## Pull and run (GHCR) {#pull-and-run-ghcr}
 
-Published image: **`ghcr.io/tejasghutukade/stageflow`**. This is the recommended way to run Stageflow. Tags per release: semver `x.y.z` and major.minor `x.y` (same digest). The current minor tag is `0.61` (`0.61.0` is that exact release).
+Published image: **`ghcr.io/tejasghutukade/stageflow`**. This is the recommended way to run Stageflow. Tags per release: semver `x.y.z` and major.minor `x.y` (same digest). The current minor tag is `0.63` (`0.63.0` is that exact release).
 
 This starts the console on this machine. The `stageflow-data` volume keeps providers and pipelines you save in the console. Pass `sf ui` because the image command is `sf mcp`. This command does not mount the Docker socket, so stage file tools run in the Stageflow container. [Compose from a checkout](#local-try-compose) is what turns the stage sandbox on.
 
@@ -134,7 +134,7 @@ This starts the console on this machine. The `stageflow-data` volume keeps provi
 docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.61 \
+  ghcr.io/tejasghutukade/stageflow:0.63 \
   sf ui
 ```
 
@@ -366,11 +366,11 @@ Stdout is lifecycle-oriented. Per-line bytes are capped (`STAGEFLOW_LOG_MAX_LINE
 | `org.opencontainers.image.title` | `Stageflow` |
 | `org.opencontainers.image.base.name` / `.base.digest` | pinned base |
 
-`BUILD_SHA` is `process.env.STAGEFLOW_BUILD_SHA ?? "unknown"` and appears on `/api/health`, MCP `get_health`, and `sf --version --json`.
+`BUILD_SHA` is `process.env.STAGEFLOW_BUILD_SHA ?? "unknown"` and appears on `/api/health`, MCP `list_catalog` with `kind: health`, and `sf --version --json`.
 
 Publish sets build-arg `STAGEFLOW_BUILD_SHA=${{ github.sha }}` so `revision`, the baked SHA, and health `build_sha` agree.
 
-`/api/health` also carries `activity` (HTTP only; MCP `get_health` does not): `evals` (1 while an eval run is planned or running, a case is tried, or a judge is calibrated), `agent_turns` (project agent turns in progress, including one waiting on an ask-first approval), `author_turns` (Workshop Author, Agent Author and Guide turns in progress) and `next_agent_schedule_at` (the next agent schedule, or `null` when there is none or schedules do not tick). A platform that stops idle containers or VMs should treat any non-zero count as busy and wake the Host before `next_agent_schedule_at`. Pipeline runs are counted by `activeCount`.
+`/api/health` also carries `activity` (HTTP only; MCP `list_catalog` with `kind: health` does not): `evals` (1 while an eval run is planned or running, a case is tried, or a judge is calibrated), `agent_turns` (project agent turns in progress, including one waiting on an ask-first approval), `author_turns` (Workshop Author, Agent Author and Guide turns in progress) and `next_agent_schedule_at` (the next agent schedule, or `null` when there is none or schedules do not tick). A platform that stops idle containers or VMs should treat any non-zero count as busy and wake the Host before `next_agent_schedule_at`. Pipeline runs are counted by `activeCount`.
 
 Buildx also emits provenance and SBOM (`--provenance=true --sbom=true`). Cosign keyless-signs the **manifest-list digest** after push (not tag-only).
 
@@ -444,7 +444,7 @@ A remote harness drives the Host over MCP/REST with a control token. Some CLI co
 ### Exec-only commands
 
 ```bash
-# ASCII pipeline diagram (humans). Harnesses: MCP describe_pipeline / get_run.
+# ASCII pipeline diagram (humans). Harnesses: MCP `read_pipeline` with `view: dag` / `get_run`.
 docker exec -it stageflow sf graph --pipeline examples/hello-world/hello.pipeline.yaml
 
 # Rewrite legacy YAML keys in a checkout (authors on a laptop; not a Host API).

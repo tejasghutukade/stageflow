@@ -105,4 +105,4 @@ Each row comes from runs that failed after hours of real work.
 | Keep one browser profile per site | Check, login and work stages share `profile` and the same `check`. |
 | Build per-item work as a Clone Chain | Never `clonable` or `clone_forks`. |
 | Add after-phase artifact checks only where needed | Not on every stage. |
-| Use kebab-case ids | `sf validate` does not check. The console create APIs and MCP `create_stage_file` and `create_task_file` reject other ids. `create_pipeline`, `create_stage` and `create_task` do not. |
+| Use kebab-case ids | `sf validate` does not check. The console create APIs and MCP `write_stage` with `mode: create` and `no_pipeline: true` and `write_task` with `mode: create` and `no_pipeline: true` reject other ids. `write_pipeline` with `mode: create`, `write_stage` with `mode: create` and `write_task` with `mode: create` do not. |

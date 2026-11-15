@@ -2,7 +2,7 @@
 
 MCP-first walkthrough: **HITL**, an ungated **fan-out/join**, a small **Clone
 Chain**, a **guaranteed feedback loop** that parks for `decide_feedback_loop`,
-and **artifacts** you can read back with `read_artifact`.
+and **artifacts** you can read back with `run_files` with `view: artifact`.
 
 Domain-neutral — it writes a short brief. Use it to see how an operator-host
 MCP client starts a run, asks the operator at each HITL gate, inspects a
@@ -16,7 +16,7 @@ both arms always run; `polish` waits for two successes, not a skip.
 start_run → wait_run → answer_gate (intake) → wait_run
          → review send_back → polish replay → review send_back
          → decide_feedback_loop → wait_run until terminal
-         → get_run / list_stage_events / get_envelope / read_artifact
+         → get_run / get_stage / run_files with view: artifact
 ```
 
 ## What it exercises
@@ -31,7 +31,7 @@ start_run → wait_run → answer_gate (intake) → wait_run
 | `review` | Always `send_back` polish. `{ type: loop }`, `max_replays: 1`, `on_max_replays: wait_for_human` — one replay, then operator HITL. |
 | `ship` | `replay_safe: false`. Writes `ship.md`. |
 
-`describe_pipeline` should show `entry`, clone fields, `feedback_loop`,
+`read_pipeline` with `view: dag` should show `entry`, clone fields, `feedback_loop`,
 `gate_kinds` on intake, and `replay_safe` on ship. It should **not** show
 inbound `if` on the intake children.
 
@@ -47,7 +47,7 @@ intake (free_text HITL)
 - Provider auth connected
 - An MCP client (Cursor on **another** project is fine) pointed at `http://127.0.0.1:3847/mcp`, sending `Authorization: Bearer <token>`. The token is in `~/.stageflow/control-token`. For Docker, run `docker exec <container> cat /data/control-token`.
 
-Host the catalog from **this git root** so `list_pipelines` includes this example:
+Host the catalog from **this git root** so `list_catalog` with `kind: pipelines` includes this example:
 
 ```bash
 cd /path/to/stageflow
@@ -58,7 +58,7 @@ node dist/cli.js ui
 
 From a consumer Cursor chat with Stageflow MCP loaded:
 
-1. `describe_pipeline` `{ "pipeline": "examples/mcp-hitl-tour/mcp-hitl-tour.pipeline.yaml" }`
+1. `read_pipeline` with `view: dag` `{ "pipeline": "examples/mcp-hitl-tour/mcp-hitl-tour.pipeline.yaml" }`
 2. `start_run` with
    - `pipeline`: `examples/mcp-hitl-tour/mcp-hitl-tour.pipeline.yaml`
    - `task_path`: `examples/mcp-hitl-tour/mcp-hitl-tour.task.yaml`
@@ -73,10 +73,10 @@ From a consumer Cursor chat with Stageflow MCP loaded:
    `decision: "continue"` (or `extend` / `abandon`)
 7. `wait_run` `{ "runId": "…", "until": "terminal" }`
 8. `get_run` — artifact paths, `total_cost_usd` when the store has it
-9. `read_artifact` `intake.md` / `short.md` / `angles-brief.md` / `brief.md` /
+9. `run_files` with `view: artifact` `intake.md` / `short.md` / `angles-brief.md` / `brief.md` /
    `ship.md` (use the paths `get_run` returned)
-10. `list_stage_events` `{ "runId": "…", "stageId": "intake" }`
-11. `get_envelope` `{ "runId": "…", "stageId": "intake" }` — `payload.audience`
+10. `get_stage` with `view: events` `{ "runId": "…", "stageId": "intake" }`
+11. `get_stage` with `view: envelope` `{ "runId": "…", "stageId": "intake" }` — `payload.audience`
     matches the gate reply
 
 The exhaust task (`mcp-hitl-tour-exhaust.task.yaml`) is the same walkthrough.

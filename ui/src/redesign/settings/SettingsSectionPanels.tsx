@@ -4,7 +4,8 @@ import type { CapacityHealth } from "../../api";
 import { getControlToken, setControlToken } from "../../api/controlToken";
 import type { CatalogSnapshot } from "../../catalog/source";
 import { heldWaitingCount } from "../../catalog/views";
-import { cursorMcpConfigJson, mcpEndpointUrl } from "../../mcpConnect";
+import { agentsApi, type StageflowToolCatalog } from "../../api/agents";
+import { MCP_BARE_URL_NOTES, cursorMcpConfigJson, mcpEndpointUrl } from "../../mcpConnect";
 import type { NotifyPreference } from "../../useWaitingNotifications";
 import { computeConcurrencySlots } from "./settingsConcurrency";
 import {
@@ -267,8 +268,13 @@ async function copyText(text: string) {
 }
 
 export function SettingsMcpPanel() {
+  const [catalog, setCatalog] = useState<StageflowToolCatalog | null>(null);
+  const [catalogError, setCatalogError] = useState(false);
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
+  const [openToolsets, setOpenToolsets] = useState<ReadonlySet<string>>(() => new Set());
   const url = mcpEndpointUrl(window.location, {
     viteDev: import.meta.env.DEV,
+    toolsets: [...selected],
   });
   const snippet = cursorMcpConfigJson(url);
   const [token, setToken] = useState(() => getControlToken());
@@ -276,8 +282,40 @@ export function SettingsMcpPanel() {
   const [copiedConfig, setCopiedConfig] = useState(false);
 
   useEffect(() => {
+    let live = true;
+    agentsApi
+      .stageflowTools()
+      .then((value) => live && setCatalog(value))
+      .catch(() => live && setCatalogError(true));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  useEffect(() => {
     setControlToken(token);
   }, [token]);
+
+  const optionalToolsets = catalog?.toolsets.filter((row) => row.id !== "core") ?? [];
+  const coreToolset = catalog?.toolsets.find((row) => row.id === "core");
+
+  const toggleToolset = (id: string, on: boolean) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+
+  const toggleOpen = (id: string) => {
+    setOpenToolsets((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   return (
     <div className="flex h-full flex-col gap-3 overflow-clip rounded-xl border border-[#ffffff12] bg-[var(--sf-panel)] p-4">
@@ -292,6 +330,93 @@ export function SettingsMcpPanel() {
               Listening
             </span>
           </span>
+        </div>
+        <div className="flex flex-col gap-2 rounded-[10px] border border-[#ffffff12] bg-[var(--sf-ground)]">
+          <div className="border-b border-b-[#ffffff12] px-3 py-2">
+            <span className="font-sans text-[13px] font-medium text-[var(--sf-text-1)]">
+              Toolsets
+            </span>
+            <p className="mt-0.5 font-sans text-xs text-[var(--sf-text-3)]">
+              Core is always included. Add toolsets for agents, evals, connections,
+              and the rest. Choices update the URL below; nothing is saved on the Host.
+            </p>
+          </div>
+          {catalogError ? (
+            <p className="px-3 py-2 font-sans text-xs text-[var(--sf-fail)]">
+              Could not load toolsets from the Host.
+            </p>
+          ) : !catalog ? (
+            <p className="px-3 py-2 font-sans text-xs text-[var(--sf-text-3)]">Loading toolsets…</p>
+          ) : (
+            <div className="flex flex-col">
+              <div className="flex items-start gap-2.5 border-b border-b-[#ffffff12] px-3 py-2.5">
+                <input
+                  type="checkbox"
+                  checked
+                  disabled
+                  readOnly
+                  aria-label="Core toolset"
+                  className="mt-0.5 size-4 shrink-0 accent-[var(--sf-text-1)]"
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                    <span className="font-sans text-[13px] font-medium text-[var(--sf-text-1)]">
+                      {coreToolset?.title ?? "Core"}
+                    </span>
+                    <span className="font-sans text-xs text-[var(--sf-text-3)]">
+                      {coreToolset?.tools.length ?? 0} tools · always on
+                    </span>
+                  </div>
+                  {coreToolset ? (
+                    <p className="mt-0.5 font-sans text-xs text-[var(--sf-text-3)]">{coreToolset.summary}</p>
+                  ) : null}
+                </div>
+              </div>
+              {optionalToolsets.map((row, index) => {
+                const on = selected.has(row.id);
+                const open = openToolsets.has(row.id);
+                return (
+                  <div
+                    key={row.id}
+                    className={`px-3 py-2.5${index < optionalToolsets.length - 1 ? " border-b border-b-[#ffffff12]" : ""}`}
+                  >
+                    <div className="flex items-start gap-2.5">
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        aria-label={`${row.title} toolset`}
+                        className="mt-0.5 size-4 shrink-0 accent-[var(--sf-text-1)]"
+                        onChange={(event) => toggleToolset(row.id, event.target.checked)}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                          <span className="font-sans text-[13px] font-medium text-[var(--sf-text-1)]">
+                            {row.title}
+                          </span>
+                          <span className="font-sans text-xs text-[var(--sf-text-3)]">
+                            {row.tools.length} tools
+                          </span>
+                          <button
+                            type="button"
+                            className="font-sans text-xs text-[var(--sf-text-3)] underline-offset-2 hover:underline"
+                            onClick={() => toggleOpen(row.id)}
+                          >
+                            {open ? "Hide tools" : "Show tools"}
+                          </button>
+                        </div>
+                        <p className="mt-0.5 font-sans text-xs text-[var(--sf-text-3)]">{row.summary}</p>
+                        {open ? (
+                          <p className="mt-1.5 font-['Geist_Mono',monospace] text-[11px] leading-relaxed text-[var(--sf-text-2)]">
+                            {row.tools.join(", ")}
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
         <div className="flex h-8 items-center gap-2 rounded-lg border border-[#ffffff1a] bg-[var(--sf-raised)] py-0 pl-2.5 pr-1">
           <code className="min-w-0 flex-1 truncate font-['Geist_Mono',monospace] text-[13px] text-[var(--sf-text-1)]">
@@ -313,6 +438,9 @@ export function SettingsMcpPanel() {
             </span>
           </button>
         </div>
+        <p className="font-sans text-xs text-[var(--sf-text-3)]" data-testid="mcp-url-notes">
+          {MCP_BARE_URL_NOTES}
+        </p>
         <div className="flex flex-col overflow-clip rounded-[10px] border border-[#ffffff12] bg-[var(--sf-ground)]">
           <div className="flex h-[30px] items-center justify-between border-b border-b-[#ffffff12] px-3 py-0">
             <span className="font-['Geist_Mono',monospace] text-xs text-[var(--sf-text-3)]">

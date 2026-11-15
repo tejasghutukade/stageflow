@@ -17,7 +17,7 @@ Pick the row that matches the user's goal and read that skill next. If two rows 
 | The user wants to | Use |
 |---|---|
 | Write, change, validate or explain a pipeline, stage, task, trigger or the catalog; turn a chat into a pipeline | `stageflow-pipelines` |
-| Create or change a project agent: instructions, tools, `approvals.ask_first`, the agent's own channel, memories (`list_memories`, `create_memory`), schedules, chat | `stageflow-agents` |
+| Create or change a project agent: instructions, tools, `approvals.ask_first`, the agent's own channel, memories (`get_memory` with `list: true`, `save_memory` with `mode: create`), schedules, chat | `stageflow-agents` |
 | Start, watch, answer, retry, cancel or inspect runs; connect Slack, email or another provider for a pipeline stage send; Inbox approval decisions; read artifacts; run in CI | `stageflow-operate` |
 | Measure quality: eval files, datasets, graders, compare runs, sort failures | `stageflow-evals` |
 | Install, log in to a provider, run `sf init`, start or connect to the Host, Docker, fix a setup problem, learn a term | this skill |
@@ -27,7 +27,7 @@ Common crossings:
 
 - "Run my pipeline" is `stageflow-operate`. "Why does it not validate" is `stageflow-pipelines`. "It will not start" is usually setup: read `references/troubleshooting.md`.
 - A pipeline stage and a project agent are different things. A stage runs once inside a run. An agent holds conversations and is not part of a pipeline. See `references/concepts.md`.
-- An agent's own channel, `approvals.ask_first`, and memories (`list_memories`, `create_memory`) are `stageflow-agents`. Pipeline-stage connections and Inbox approval decisions are `stageflow-operate`. Both are set up through MCP or the console, not YAML secrets.
+- An agent's own channel, `approvals.ask_first`, and memories (`get_memory`, `save_memory`) are `stageflow-agents`. Pipeline-stage connections and Inbox approval decisions are `stageflow-operate`. Both are set up through MCP or the console, not YAML secrets.
 - If a sibling skill is not installed, say so, and use `sf --help` for the command list and the `get_started` MCP tool's `next_steps`.
 
 ## Ground rules
@@ -49,7 +49,7 @@ Run the steps in order. Each ends with a check you can observe. Skip a step only
 - [ ] **4. Initialize the project.** In the project root (a git repo is best) run `sf init`. It creates `stageflow.yaml`, `pipelines/hello.pipeline.yaml` and `tasks/hello.task.yaml` and skips files that exist. If the hello model reads `CHANGE_ME/...`, replace it with a real `provider/model` id. Then run `sf validate --strict --json`. Done when the output has `"ok": true` and the exit code is 0.
 - [ ] **5. Check the machine.** `sf doctor`. Done when no line is `[fail]`. Read the `[warn]` lines to the user; the `credentials` warning is a known false alarm for stored logins (see `references/troubleshooting.md`).
 - [ ] **6. Start or find the Host.** Local use needs no step: the first command that needs a Host starts one on `127.0.0.1:3847`. To open the console, run `sf ui` in a separate terminal. For a headless Host, run `sf mcp`. Never run either in the foreground of your own shell. Done when `detect-host.mjs` prints `up`. See `references/host-and-mcp.md`.
-- [ ] **7. Connect this harness to MCP (optional).** Do this when the user needs tools the CLI lacks (connections, memories, live run inspection, agent and eval authoring), or the Host is in a container or remote. Add the `/mcp` URL to the harness MCP config, with a bearer token if the Host has one. Done when a call to the `get_started` tool returns the Host version. Config snippets per harness are in `references/host-and-mcp.md`.
+- [ ] **7. Connect this harness to MCP (optional).** Do this when the user needs tools the CLI lacks (connections, memories, live run inspection, agent and eval authoring), or the Host is in a container or remote. Add the `/mcp` URL to the harness MCP config (bare URL = core only; add `?toolsets=all` or the toolsets you need — see `references/host-and-mcp.md`), with a bearer token if the Host has one. Done when a call to the `get_started` tool returns the Host version. If `unloaded_toolsets` is non-empty, read each `reconnect_url` and reconnect (or add those toolsets to the URL) before assuming agents, evals, or other optional tools are missing. Config snippets per harness are in `references/host-and-mcp.md`.
 - [ ] **8. Report.** Tell the user what is ready (CLI version, provider, project root, Host URL, MCP connected or not) and what is blocked and what they must do. Offer the next skill from the router table. Do not start a real run unless they ask and confirm.
 
 Docker and hosted users replace steps 2 and 6 with `references/docker-and-hosted.md`.

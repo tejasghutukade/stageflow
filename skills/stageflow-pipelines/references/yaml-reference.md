@@ -29,7 +29,7 @@ Exact keys, where each one may sit, and what the loader does with it. Every rule
 | Trigger | `<id>.trigger.yaml` | Under a `catalog.triggers` root. See [capabilities.md](capabilities.md#triggers). |
 | Project MCP | `.mcp.json` at the project root | Server names that stage `mcp:` lists refer to. |
 
-Ids: lowercase kebab case, `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`. `sf validate` accepts `Stage_A`. The console create APIs and MCP `create_stage_file` and `create_task_file` reject it. `create_pipeline`, `create_stage` and `create_task` do not. Always use kebab case.
+Ids: lowercase kebab case, `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`. `sf validate` accepts `Stage_A`. The console create APIs and MCP `write_stage` with `mode: create` and `no_pipeline: true` and `write_task` with `mode: create` and `no_pipeline: true` reject it. `write_pipeline` with `mode: create`, `write_stage` with `mode: create` and `write_task` with `mode: create` do not. Always use kebab case.
 
 ## Manifest: stageflow.yaml
 

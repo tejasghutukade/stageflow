@@ -39,7 +39,7 @@ Sessions enable run **resource subscribe** and `notifications/resources/updated`
 Backup and whole-store restore stay on the HTTP API (drive token). Per-run export is available over MCP and HTTP; whole-instance export remains HTTP-only:
 
 - `POST /api/backup` / `GET /api/backup/<name>` — drive scope (archives may contain credentials)
-- MCP `export_run` / `GET /api/runs/<id>/export` — read scope (single-run `projectRun` + `run_manifest`)
+- MCP `get_run` with `view: export` / `GET /api/runs/<id>/export` — read scope (single-run `projectRun` + `run_manifest`)
 - `GET /api/runs/<id>/debug-bundle` — read scope (capped redacted post-mortem; CLI `sf debug-run`; no MCP tool)
 - `GET /api/export` — read scope (NDJSON whole-instance export)
 - `POST /api/restore` — drive scope; stages a restore and drains the Host
@@ -71,7 +71,7 @@ callers:
 
 When a caller is at its quota but the Host still has global slots, the start is **queued** and success may include `queuedCode: "busy_caller_quota"`. If the admission queue (`STAGEFLOW_MAX_QUEUED`) is also full, start fails with `code: "busy_caller_quota"` (≠ `busy_capacity`). Per-project caps still **reject** with `busy_capacity` + `scope: "project"` and never queue. Global queue-full remains `busy_capacity`.
 
-CLI starts are unattributed (`surface: cli`, null `caller_id`). MCP/REST stamp `caller_id` from the authenticated bearer only — never from body, query, or tool args. `list_runs` / `GET /api/runs?caller_id=` filter by stored attribution.
+CLI starts are unattributed (`surface: cli`, null `caller_id`). MCP/REST stamp `caller_id` from the authenticated bearer only — never from body, query, or tool args. `get_run` (omit `runId`) / `GET /api/runs?caller_id=` filter by stored attribution.
 
 | Surface | Scope |
 |---------|-------|
@@ -121,15 +121,15 @@ Both use the same **global durable-root** run store (`$STAGEFLOW_HOME`, default 
 
 MCP tools browse pipelines/tasks under those catalog roots and persist runs in the global durable root — not the Host process boot cwd.
 
-Implementation: `src/mcp/tools.ts`, `src/mcp/resources.ts`, `src/mcp/server.ts`.
+Implementation: `src/mcp/server.ts`, `src/mcp/tools.ts`, `src/mcp/resources.ts`, and domain `*Tools.ts` modules. Every Host tool registers through `withToolDefaults` (`defineTool.ts`): annotations come from `TOOL_META` risk; `tools/list` input schemas omit `$schema`; descriptions must not name REST routes (registration throws if a description contains `/api/`). Run polling, artifacts, checkout, and tail helpers live in `src/runread/` (also used by HTTP, CLI, A2A, and evals).
 
-> **Breaking change (pipeline-owned catalog):** `list_pipelines` returns manifest filesystem path listings (objects with `path`, `id`, …), not bare pipeline ids. `start_run` requires a `pipeline` path and exactly one of `task_path` or inline `task`. Update MCP clients that passed ids like `"hello"`.
+> **Breaking change (pipeline-owned catalog):** `list_catalog` with `kind: pipelines` returns manifest filesystem path listings (objects with `path`, `id`, …), not bare pipeline ids. `start_run` requires a `pipeline` path and exactly one of `task_path` or inline `task`. Update MCP clients that passed ids like `"hello"`.
 
 ## Resources
 
 ### `stageflow://runs/{runId}`
 
-Runs-only resource template. Catalog discovery stays on `list_pipelines` / `list_tasks` tools — there is **no** `stageflow://catalog/pipelines` resource in v1.
+Runs-only resource template. Catalog discovery stays on `list_catalog` with `kind: pipelines` / `list_catalog` with `kind: tasks` tools — there is **no** `stageflow://catalog/pipelines` resource in v1.
 
 | Operation | Notes |
 |-----------|-------|
@@ -182,7 +182,7 @@ There is **no** mandatory `boot` catalog root from Host cwd. Cold Host with an e
 
 **Registration:** Trusted local clients (CLI / loopback + control token) call `POST /api/projects` with `{ "project_root": "/abs/path" }` to ensure a folder into the registry. Remote MCP and non-loopback HTTP cannot ensure arbitrary paths (`ensure_project_not_allowed`). After ensure, remotes may `start_run` with that absolute `project_root` and catalog-relative paths. Local `sf run` ensure-then-starts automatically — see [CLI reference](cli-reference.md#sf-run).
 
-**Browse requirements:** `list_pipelines` / `list_tasks` need a **registered or seeded** root with a readable `stageflow.yaml` at that root. Git is **not** required for discovery — a non-git folder with a manifest browses the same way after ensure.
+**Browse requirements:** `list_catalog` with `kind: pipelines` / `list_catalog` with `kind: tasks` need a **registered or seeded** root with a readable `stageflow.yaml` at that root. Git is **not** required for discovery — a non-git folder with a manifest browses the same way after ensure.
 
 ### Skills cwd vs catalog `project_root` {#skills-cwd-vs-catalog-project-root}
 
@@ -190,1001 +190,152 @@ There is **no** mandatory `boot` catalog root from Host cwd. Cold Host with an e
 
 ## Tools
 
+The Host exposes **57** MCP tools. The previous 124 per-endpoint names are removed with no aliases. Merged tools pick behavior with flat fields:
+
+### Toolsets {#toolsets}
+
+Each tool belongs to one **toolset**. A client that connects to `/mcp` with no `toolsets` query receives only the **core** toolset (17 tools: discover, author pipelines and tasks, start and watch runs, read outputs, wait, answer gates, cancel a runaway run, and decide a feedback-loop wait). Add named toolsets with a `toolsets` query on the MCP URL; **core is always included**.
+
+| Toolset | Role |
+|---------|------|
+| `core` | Always loaded (see above) |
+| `runs` | Abandon stages, delete runs, garbage-collect |
+| `catalog` | Import tasks, probe project MCP servers |
+| `agents` | Project agent CRUD, chat, approvals |
+| `evals` | Eval and dataset authoring, runs, review, triage |
+| `functions` | Reusable JavaScript functions |
+| `triggers` | Trigger CRUD and fire |
+| `connections` | Host send channels |
+| `memories` | Host memories and cards |
+
+**Parse rules.** `toolsets` is comma-separated; names are trimmed and lowercased; duplicates collapse. An empty or missing value means core only. `all` anywhere selects every toolset (all 57 tools). Repeated `toolsets` parameters merge. Any unknown name fails the whole request with HTTP **400** and a JSON-RPC error body `{ "jsonrpc": "2.0", "error": { "code": -32000, "message": "…" }, "id": null }` listing valid names (`core`, the table above, and `all`).
+
+**Session binding.** The selection is fixed when a **stateful** session starts at `initialize`. Later requests on that session ignore their query string — sending `?toolsets=all` on a follow-up `tools/list` or `tools/call` does **not** upgrade a core-only session. Open a **new** session (new `initialize` against a URL that includes the toolsets you need), or use the reconnect URL from `get_started`. In **stateless** mode (`sf mcp --mcp-stateless`), each request is parsed again. Toolsets are not permissions: they only change what the external MCP endpoint registers for that session. The toolkit recorder, agent grants, Guide, and eval gates still see the full registry.
+
+**Discovery.** On a partial session, `get_started` lists unloaded toolsets with titles and a reconnect URL that adds each toolset. Call `get_started` after connect when the client only loaded core.
+
+**Console.** Settings → **MCP server** lists toolsets from the same catalog the agent permissions picker uses. Core is always on; check optional toolsets to build the URL and `.cursor/mcp.json` snippet. The URL is not persisted — copy it into the client and reconnect to apply.
+
+The 17 core tool names are: `get_started`, `list_catalog`, `validate`, `read_pipeline`, `write_pipeline`, `write_stage`, `write_task`, `start_run`, `get_run`, `get_stage`, `run_files`, `wait_run`, `stage_action`, `cancel_run`, `list_waiting`, `answer_gate`, `decide_feedback_loop`.
+
+| Field | Role |
+|-------|------|
+| `kind` | Catalog listing or validation target (`list_catalog`, `validate`) |
+| `view` | Read projection on a resource (`get_run`, `get_stage`, `run_files`, `read_pipeline`, agent/function/eval reads) |
+| `action` | Operation on a merged write tool (`stage_action`, `save_dataset`, `review_eval_results`, `decide_agent_action`) |
+| `mode` | `create` or `update` on every `save_*` and `write_*` tool |
+
+A **grant** or eval reference to a tool name covers **every mode** of that tool (for example `start_run` includes pipeline start, stage start, and rerun). The old→new map is `src/toolkit/toolRenames.ts`.
+
+### Tool list shape (MCP clients) {#tool-list-shape}
+
+`tools/list` annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) come from `TOOL_META.risk` (`read` / `write` / `destructive` / `external`). Listed `inputSchema` values have no `$schema` key. Tool descriptions say what the tool does; they do not cite `/api/*`. Size and shape are guarded by `tests/mcp.toolsList.test.ts`.
+
 ### Agent tools {#agent-tools}
 
-Project agents (`agents/*.agent.yaml`) use the same service as the REST routes in [Agent API](agent-api.md#routes). The agent id is `id` (`^[a-z][a-z0-9_]{0,63}$`). Revisions saved here are recorded as source `api`, author `mcp`.
-
-**Errors.** A refused call returns a tool result with `isError: true` whose text is `{ "code", "message", "issues"? }`: the stable `agent.*` code ([codes and meanings](agent-api.md#conventions)) and, for validation, field `issues` (`{ path, message }`). Branch on `code`.
-
-| Tool | Input | Output |
-|------|-------|--------|
-| `list_agents` | `{}` | `{ agents: [summary] }` (id, name, enabled, revision, issues, tools, askFirst, channelConnection, scheduleCron, stats, pendingApprovals, …) |
-| `get_agent` | `{ id }` | `{ agent, definition, yaml, warnings }` ("detail"). `definition` is `null` when the file is invalid |
-| `validate_agent` | `{ definition }` | `{ definition, issues, warnings, yaml }`. Nothing is saved |
-| `create_agent` | `{ definition }` | Detail. Always disabled; `id` may be omitted and is made from `name` |
-| `save_agent` | `{ id, baseRevision, definition, summary? }` | Detail. `baseRevision` must be the current revision, else `agent.conflict`. `summary` up to 200 characters |
-| `enable_agent`, `disable_agent` | `{ id }` | Detail. Disabling refuses new sessions and turns; a running turn finishes |
-| `list_agent_revisions` | `{ id }` | `{ revisions: [{ revision, source, author, summary, restoredFrom, createdAt }] }`, newest first |
-| `restore_agent_revision` | `{ id, revision, baseRevision }` | Detail. Saves that revision as the newest |
-| `agent_chat` | `{ id, message, sessionId? }` | The whole session after one turn (`session`, `messages`, `turns`, `approvals`, …). Waits for the reply; omit `sessionId` to open a session (source `mcp`). |
-| `get_agent_session` | `{ id, sessionId }` | The session: transcript, turns, spans, approvals, deliveries |
-| `list_agent_sessions` | `{ id, status?, search?, limit?, cursor? }` | `{ sessions, nextCursor, stats }`. `status` is one of `open`, `running`, `waiting`, `held`, `closed`; `limit` 1–100 (default 25) |
-| `stop_agent_session` | `{ id, sessionId }` | `{ stopped: boolean }`. Stops the running turn; the session stays open |
-| `approve_agent_action`, `deny_agent_action` | `{ id, sessionId }` | The decided approval (`id`, `tool`, `status`, `actor`, …). Approving a disabled agent is `agent.disabled` |
-| `archive_agent` | `{ id }` | `{ archived: true }`. Sessions are kept; new ones are refused |
-
-A session id only opens under the agent it belongs to: `get_agent_session`, `stop_agent_session`, `approve_agent_action` and `deny_agent_action` answer `agent.session_not_found` for another agent's session.
-
-**Approvals are operator-only.** `approve_agent_action` and `deny_agent_action` are both in the `gates.decide` group, which cannot be granted to an agent (validation error `agent.stageflow_operator_only`), so an agent can never decide another agent's approval, and it cannot act on its own sessions. The other agent tools sit in `agents.read`, `agents.manage`, `agents.cleanup` and `agents.converse`; an agent granted `agents.converse` can chat with agents and stop sessions but not decide approvals. See [Agents](agents.md).
-
-See [Agents](agents.md). The REST, CLI and MCP surfaces side by side are in [Agent API](agent-api.md#cli-mcp-and-rest-side-by-side).
-
-### Function tools {#function-tools}
-
-What a function is: [Functions](functions.md). The same operations over REST: [Functions API](function-api.md).
-
-Project functions live under `functions/` as `*.function.yaml`, `*.function.yml`, or `*.function.js` (YAML frontmatter plus ESM body). They use the same service as `GET` and `POST /api/functions`. The id is `id` (`^[a-z][a-z0-9_]{0,63}$`). Revisions saved here are recorded as source `api`, author `mcp`. `create_function` writes `functions/<id>.function.js` by default unless the caller requests YAML; `save_function` rewrites the on-disk path the function was loaded from. A source that starts with `export const access` derives `capabilities` and `bindings`; the file omits those fields, and a payload that repeats a different list is refused with `function.invalid` and `function.access_conflict` on each mismatched issue field. A source with no declaration still carries explicit `capabilities` and `bindings`. Attaching a function to a stage, pipeline, or agent still goes through `edit_stage`, `edit_pipeline`, and `save_agent`. `write_catalog_file` rejects marked function files (`*.function.yaml`, `*.function.yml`, `*.function.js`). Unmarked `*.js` / `*.ts` are never function definitions.
-
-Every tool takes an optional `project_root` where it reads or writes the catalog (omit it to use the Host default; see [Catalog roots](#catalog-roots-and-project_root)).
-
-**Errors.** A refused call returns a tool result with `isError: true` whose text is `{ "code", "message", "issues"?, "current_revision"?, "usages"? }`. Branch on `code`: `function.invalid`, `function.conflict` (the current revision is in `current_revision`; the file is not overwritten), `function.in_use` (`usages` lists the pipeline, stage, or agent paths), `function.not_found`, `function.exists`, `function.kind_immutable`, `function.id_immutable`, `function.catalog_unreadable`, and the catalog path codes `unknown_project_root` and `catalog_root_read_only` in [Error codes](#error-codes).
-
-| Tool | Grant | Input | Output |
-|------|-------|-------|--------|
-| `list_functions` | `functions.read` | `{ project_root? }` | `{ functions }` |
-| `get_function` | `functions.read` | `{ id, project_root? }` | The current definition, revision, issues, and source hash |
-| `list_function_revisions` | `functions.read` | `{ id, project_root? }` | `{ revisions }` |
-| `get_function_revision` | `functions.read` | `{ id, revision, project_root? }` | That stored revision |
-| `create_function` | `functions.write` | `{ definition, project_root? }` | The created definition |
-| `save_function` | `functions.write` | `{ id, baseRevision, definition, summary?, project_root? }` | The saved definition. `baseRevision` must be the current revision |
-| `duplicate_function` | `functions.write` | `{ id, newId, project_root? }` | The copy, with its own revision history. Grants on existing attachments are not copied onto new attachments |
-| `test_function` | `functions.test` | `{ id, source?, input?, mocks?, real?, timeoutMs?, memoryLimitBytes?, project_root? }` | The validated result, duration, sanitized logs, and source hash. `real: true` is the only way the test reads real files, environment, or APIs, and it cannot widen grants. Omit `real` to stay on mocks. A guest execution failure returns a tool result with `isError: false` and a body that includes `ok: false` and a diagnostic `code`, the same shape as `POST /api/functions/:id/test` on HTTP 200 |
-| `delete_function` | `functions.cleanup` | `{ id, project_root? }` | `{ deleted: true }`. Refuses while a pipeline, reusable stage, or agent references the id |
-
-`functions.read` lists and fetches metadata. `functions.write` creates, edits, and duplicates. `functions.test` runs the production executor. `functions.cleanup` deletes. A test without `real: true` uses the mocks in the request and fails when a mock the source needs is missing. There is no `sf functions` create, edit, or delete command; the file and these tools are the authoring pair.
-
-`POST /api/functions/:id/test` and `test_function` treat a finished guest run that did not succeed as a success response whose body has `ok: false`. Stage- and agent-attached function tools still throw on that body.
-
-`sf validate` fails closed when an attachment names a missing function, attaches a function of the wrong kind, leaves a declared capability without a matching grant, or the catalog has duplicate ids (`function.missing`, `function.kind_mismatch`, `function.under_granted`, `function.grant_not_requested`, `function.invalid`, `function.format_conflict`, `function.id_conflict`, `function.routing_requires_route`, `function.routing_conflicts_with_if`). See [YAML catalog: Functions](yaml-catalog.md#functions).
-
-### Eval tools {#eval-tools}
-
-Ten tools cover [evals](evals.md). They use the same service as the REST routes in [Evals: HTTP API](evals.md#http-api). Every tool takes an optional `project_root` where it names an eval (omit it to use the Host default; see [Catalog roots](#catalog-roots-and-project_root)).
-
-**Errors.** A refused call returns a tool result with `isError: true` whose text is `{ "error", "code", "findings"? }`. Branch on `code`: `EVAL_NOT_FOUND`, `EVAL_RUN_NOT_FOUND`, `EVAL_INVALID` (with `findings`), `EVAL_RUN_ACTIVE`, `EVAL_REAL_TOOLS_NOT_CONFIRMED`, `EVAL_CALIBRATION_NO_LABELS`, `EVAL_ENGINE_UNAVAILABLE`, `EVAL_NODE_TOO_OLD`, `invalid_request`, and the catalog path codes in [Error codes](#error-codes). A Host that does not run evals answers `EVAL_ENGINE_UNAVAILABLE`.
-
-| Tool | Input | Output |
-|------|-------|--------|
-| `list_evals` | `{ project_root? }` | `{ items }`: one per eval with target, dataset size, validity, status, last-run headline and trend |
-| `get_eval` | `{ eval_id, project_root? }` | Parsed definition, raw YAML, file hash, validation findings, run count and last run |
-| `validate_eval` | `{ eval_id?, yaml?, project_root? }` | `{ findings }`. Exactly one of `eval_id` (a file in the catalog) or `yaml` (unsaved text). Calls no model and writes no files |
-| `run_eval` | `{ eval_id, repeats?, judge?, model?, user_model?, allow_real_tools?, allow_host_login?, tools?, approvals?, max_cost_usd?, case_ids?, tags?, label?, wait?, timeout_ms?, project_root? }` | `{ eval_run_id }`, or with `wait: true` the finished run detail, or `{ eval_run_id, status: "timeout" }` |
-| `get_eval_run` | `{ eval_run_id }` | Status, progress, stats, cost, config snapshot and per-grader summary |
-| `list_eval_runs` | `{ eval_id?, status?, limit? }` | `{ items }`: run headlines (status, pass rate, cost), newest first |
-| `get_eval_results` | `{ eval_run_id, status?, grader?, limit?, cursor? }` | `{ items, next_cursor }`: one row per case with pass state, score and failing graders |
-| `get_eval_result` | `{ eval_run_id, case_id }` | One case in full: input, expected, and every repeat's output, grades, cost and review |
-| `cancel_eval_run` | `{ eval_run_id }` | The run detail once it has stopped (waits up to 5 seconds) |
-| `compare_eval_runs` | `{ a, b }` | The comparison: verdict, per-grader and per-case changes, stage diff, warnings. `a` is the baseline |
-| `sort_eval_failures` | `{ eval_run_id, classifier?, only_unsorted?, limit? }` | `{ batch_id, classifier, model, sorted, skipped, failed, triage_cost_usd, suggestions }`. External and costs money; see below |
-| `get_eval_failure_suggestions` | `{ eval_run_id, status? }` | `{ items, summary }`: suggested bucket and failure type per failed result, with counts |
-| `list_grader_calibrations` | `{ eval_id, grader_id, include_candidates?, project_root? }` | `{ items }`: how well the judge agreed with the author's Pass/Fail labels, newest first. Read-only and free |
-| `calibrate_eval_grader` | `{ eval_id, grader_id, split?, stability?, max_cost_usd?, project_root? }` | The calibration: labels, agreement, kappa, recall, confusion, disagreements. Re-judges stored outputs; calls the judge and costs money; fails `EVAL_CALIBRATION_NO_LABELS` when nothing is labeled |
-| `get_eval_failure_sort_status` | `{ eval_run_id }` | Which classifiers can run (`jev`, `judge`), the names (never values) of the key sources, and the `auto` default |
-
-`sort_eval_failures` is an **external, manual-only action** like `run_eval`: it sends each failed result's case, output and grader reasons to TypeSafe Jev (about $0.04 per million input tokens, needs a TypeSafe key) or to the run's judge model (real model cost). It tags nothing; suggestions are accepted by the author in the console or API. It fails `EVAL_RUN_ACTIVE` while the run is running and `EVAL_CLASSIFIER_UNAVAILABLE` when neither classifier is available. See [Evals: Sort failures automatically](evals.md#sort-failures).
-
-`run_eval` **calls models and may cost real money** (stage calls plus judge calls), bounded by `max_cost_usd` (default 2). Only one eval run is active per Host; a second start fails `EVAL_RUN_ACTIVE`. `repeats` is 1 to 10, `label` up to 80 characters, `timeout_ms` up to 1,800,000 (default 600,000). With `wait: false` (the default) poll `get_eval_run` until `status` is `completed`, `failed`, `cancelled` or `budget_stopped`. A run that finished is passed when `passed` is true; for a CI-style verdict read `stats.pass_rate` against `config.settings.pass_threshold`. `list_evals`, `get_eval`, `validate_eval`, `get_eval_run`, `list_eval_runs`, `get_eval_results`, `get_eval_result` and `compare_eval_runs` are read-only and free; `run_eval` and `cancel_eval_run` change state. Installing the eval engine is CLI-only (see [CLI-only capabilities](#cli-only-capabilities-decision-table)).
-
-**Agent evals.** The same ten tools take an eval whose target is an agent; `list_evals` and `get_eval` return the agent variant of the target (`agent_id`, name, model, revision) and the conversation settings, `get_eval_run` carries `mean_turns` and `mean_tool_calls` in its stats, and `get_eval_result` returns the stored conversation (messages, tool calls with their outcome, final reply, stop reason, usage). For an agent eval `model` replaces the agent's model. `run_eval` adds four inputs: `user_model` (the model that plays the user), `allow_real_tools` (your consent, per run, to `conversation.tools: real`; the eval file must also carry `allow_real_tools: true`, else `EVAL_REAL_TOOLS_NOT_CONFIRMED` or `EVAL_INVALID`), and the safer-only `tools` (`read_only` or `mocked`) and `approvals` (`deny` or `record_only`); an override that would be less safe than the file is `EVAL_INVALID`. An agent run calls the agent's model, a simulator model and the judge, so it can cost much more than a stage run, and tools are read-only by default. Agents that run inside an eval are never granted `run_eval`. See [Evals: Evals for agents](evals.md#evals-for-agents).
-
-**Authoring.** `create_eval` and `update_eval` write the eval file through the same path as the console (`definition` or, on update, `yaml`, with `base_hash`). `create_dataset`, `update_dataset_cases`, and `convert_dataset` write datasets the same way. `install_eval_sample` installs the stage or agent sample. `try_eval_case` runs one case and does not start a full eval run. `get_eval_run_export` returns the results or config export. `put_eval_review` records a pass, fail, note, or failure tags. `accept_eval_failure_suggestions` and `dismiss_eval_failure_suggestions` accept or dismiss sort suggestions. `delete_eval_run` deletes one run. `run_eval` also accepts `only_failed_from`. `validate_eval` also accepts `dataset_cases` and `path`.
-
-**Toolkit groups.** For [agent tool grants](agent-runtime.md#stageflow-tools): `evals.read` (the read-only tools, including `get_eval_failure_suggestions`, `get_eval_failure_sort_status`, and `get_eval_run_export`), `evals.run` (`run_eval`, `try_eval_case`, `sort_eval_failures`, `cancel_eval_run`), `evals.write` (create and edit evals and datasets, install a sample, review, accept or dismiss suggestions), and `evals.cleanup` (`delete_eval_run`). Granting `evals.run` lets an agent spend money, so it is separate from reading. Granting `evals.write` does not include deleting a run.
-
-### Pipeline authoring tools {#pipeline-authoring-tools}
-
-Edit pipelines and tasks straight on disk, with the Workshop's builders and validation: the tool loads the package, applies the same builder the Workshop uses, and writes it back through the Workshop's publish path. Nothing is written when validation fails unless `allow_invalid` is set. Paths are relative to the Host's project root and POSIX style (for example `workshop/release/release.pipeline.yaml`).
-
-**Success:** `{ "pipelinePath", "stagePaths", "taskPath" }` (`taskPath` is `null` without a task). **Failure:** a tool error `{ "error", "status"? }`; a failed validation lists the findings in `error`. `allow_invalid` (boolean, default `false`) writes anyway so a pipeline can be built step by step.
+Project agents use the same service as [Agent API](agent-api.md#routes). Errors return `{ "code", "message", "issues"? }` with stable `agent.*` codes.
 
 | Tool | Input | Notes |
 |------|-------|-------|
-| `read_pipeline` | `{ path, task_path? }` | Returns `{ draft, destination, validation }`: the package (pipeline, stage files, optional task) and its validation result. Use before editing |
-| `create_pipeline` | `{ directory, id, model?, agent?, stages?, pipeline?, allow_invalid? }` | Writes `<directory>/<id>.pipeline.yaml`; fails if it exists (use `edit_pipeline`). `pipeline` passes a whole object instead of `id`/`model`/`stages`. A pipeline needs at least one stage to validate, so pass stages or `allow_invalid` and then `create_stage` |
-| `edit_pipeline` | `{ path, patch, allow_invalid? }` | `patch` holds the fields to change: id, model, agent, stage wiring, schemas, `requires` |
-| `create_stage` | `{ path, id?, summary?, system_prompt?, model?, entry?, route?, io?, body?, allow_invalid? }` | Adds a file-backed stage (`uses: ./<id>.yaml` plus its body). `body` carries extra stage fields |
-| `edit_stage` | `{ path, id, …fields, allow_invalid? }` | Edits an existing stage by id: its body and/or its pipeline entry (`route`, `entry`, `uses`). Extra fields are the changes |
-| `create_task` | `{ path, id?, goal?, filename?, body?, allow_invalid? }` | Creates or replaces the task beside the pipeline |
-| `edit_task` | `{ path, task_path, id?, goal?, patch?, body?, allow_invalid? }` | Edits an existing task file (`task_path`) |
-
-### `update_trigger`
-
-Replace a trigger's definition. Same validation and write path as `PUT /api/triggers/:id`; the id cannot change.
-
-**Input:** `{ id, project_root?, pipeline, task?, kind: "manual" | "schedule" | "event", schedule?: { cron, timezone? }, event?: { source, match?, config? }, enabled? }`. It is a full replacement, so omit `task` only for a dynamic-mode trigger. **Output:** the trigger, same shape as `list_triggers`. **Errors:** `{ "error", "status" }` with `isError: true` (the same statuses as `PUT /api/triggers/:id`).
-
-### `set_trigger_enabled`
-
-Enable or disable a trigger. Same write path as `PATCH /api/triggers/:id`.
-
-**Input:** `{ id, enabled, project_root? }`. **Output:** the trigger. **Errors:** `{ "error", "status" }`, the same statuses as `PATCH /api/triggers/:id`.
-
-### `get_started`
-
-No-argument first-run orientation for remote harnesses. Returns host version, provider/toolchain hints, catalog roots with pipeline/task counts, and a three-call `next_steps` list (`list_pipelines` → `list_tasks` → `start_run`) using catalog-relative paths and symbolic seeded `project_root` ids when applicable.
-
-### `list_pipelines`
-
-List manifest-declared pipeline paths across every catalog root this Host knows (registered store roots and the workspace root). Each entry includes `project_root`. Optional `project_root` filter; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors` with `catalog_root_unreadable`.
-
-**Input:** `{ "project_root": "string (optional)" }`
-
-**Output:**
-
-```json
-{
-  "pipelines": [
-    {
-      "path": "examples/hello-world/hello.pipeline.yaml",
-      "id": "hello",
-      "project_root": "examples",
-      "stages": [
-        { "id": "research", "uses_path": "examples/hello-world/research.yaml" }
-      ]
-    },
-    {
-      "path": "examples/plan-review/plan-review.pipeline.yaml",
-      "id": "plan-review",
-      "project_root": "examples",
-      "stages": [{ "id": "plan-review" }]
-    }
-  ],
-  "root_errors": [
-    {
-      "project_root": "/abs/unreadable",
-      "code": "catalog_root_unreadable",
-      "message": "Catalog root is not readable"
-    }
-  ]
-}
-```
-
-Paths are relative to the catalog root (registered folder or seeded path) as declared in that root's `stageflow.yaml`. Each listing always includes `stages: PipelineStageListing[]` (`id`, optional `gate_kinds`, `uses_path`, `inline`). `root_errors` is always present (possibly empty). When `pipelines` is empty and there is no `unknown_project_root` error, the response may include an additive `tip` string pointing at registration / `stageflow.yaml`.
-
-### `list_tasks`
-
-List manifest-declared task paths across every catalog root this Host knows (registered store roots and the workspace root). Each entry includes `project_root`. Optional `project_root` filter; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors` with `catalog_root_unreadable`.
-
-**Input:** `{ "project_root": "string (optional)" }`
-
-**Output:**
-
-```json
-{
-  "tasks": [
-    {
-      "path": "examples/hello-world/my-task.task.yaml",
-      "id": "my-task",
-      "project_root": "examples"
-    },
-    {
-      "path": "examples/plan-review/my-task.task.yaml",
-      "id": "my-task",
-      "project_root": "examples"
-    }
-  ],
-  "root_errors": []
-}
-```
-
-### `list_models`
-
-List model ids from the providers connected on this host plus ids pipelines already use, from the same source as `GET /api/models` (see [Providers — Models](providers.md#models)). Optional `project_root` filter narrows the pipeline-used ids; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors`.
-
-**Input:** `{ "project_root": "string (optional)" }`
-
-**Output:**
-
-```json
-{
-  "models": ["anthropic/claude-sonnet-4-5", "openrouter/nvidia/nemotron-3.5-lightning:free"],
-  "providers": [
-    {
-      "id": "openrouter",
-      "name": "OpenRouter",
-      "source": "live",
-      "models": [{ "id": "openrouter/nvidia/nemotron-3.5-lightning:free", "provider": "openrouter", "name": "Nemotron", "free": true, "nativeTools": false }]
-    }
-  ],
-  "default": "openrouter/nvidia/nemotron-3.5-lightning:free",
-  "fetchedAt": "2026-10-16T00:00:00.000Z",
-  "unlisted": [],
-  "entries": [{ "id": "anthropic/claude-sonnet-4-5", "project_root": "/abs/registered" }],
-  "root_errors": []
-}
-```
-
-`models` is the deduped id list (catalog plus ids in use); `providers` groups the connected providers' models; `unlisted` are ids in use that no connected provider lists; `entries` tags pipeline-used ids with the `project_root` they came from. There is no model-write or provider-login tool.
-
-### `list_skills`
-
-List skills with `name`, `description`, and `origin` (`run` | `checkout` | `host`). Optional `runId` scopes to that run's resolution view (run-tier skills first, then checkout `.pi/skills`, then host).
-
-**Input:** `{ "runId": "string (optional)" }`
-
-**Output:** `{ "skills": […], "diagnostics": […] }`
-
-### `list_project_mcp`
-
-List the project `.mcp.json` servers and the servers saved from the console (same helper as `GET /api/project-mcp`). Each row has `name`, `transport` (`stdio` or `http`), `origin` (`project` or `console`), `tools` (cached tool names; empty when nothing has been cached), and `usableByStages`. A URL server also has `authStatus`: `authenticated`, `expired`, or `not_authenticated`. List reads that stored status. It does not interpolate, spawn, connect, refresh a token, or start sign-in, and it does not return env, headers, args, command, URLs, tokens, or authorization codes.
-
-`usableByStages` is computed on the server. It is true only for a console-origin server whose stored status is `authenticated`. It is false for `expired`, `not_authenticated`, and any server from the project file. A successful Check is not that signal.
-
-**Input:** `{}`
-
-**Output:**
-
-```json
-{
-  "status": "ok",
-  "servers": [
-    { "name": "local", "transport": "stdio", "origin": "project", "tools": [], "usableByStages": false },
-    { "name": "github", "transport": "http", "origin": "console", "authStatus": "authenticated", "tools": ["list_issues"], "usableByStages": true }
-  ]
-}
-```
-
-`status` is `ok`, `missing_catalog`, or `invalid_config`. A reserved `stageflow` entry fails the whole catalog (`invalid_config`, empty `servers`), matching HTTP.
-
-Inspect is not attach. Stage MCP YAML `mcp:` still allowlists what a stage receives — see [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp).
-
-### Adding servers without a `.mcp.json`
-
-The console (Settings → Project MCP) and HTTP can add servers, so a Host does not need a `.mcp.json` file (for example the Docker image):
-
-| Route | Does |
-|---|---|
-| `PUT /api/project-mcp/:name` body `{ "config": { "command"/"args"/"env" \| "url"/"headers" } }` | Add or replace one server |
-| `GET /api/project-mcp/:name` | Read back a console-added server |
-| `DELETE /api/project-mcp/:name` | Remove a console-added server (`409` if it is defined in the project file) |
-| `POST /api/project-mcp/import` body `{ "json": { "mcpServers": { … } } }` | Add several from pasted JSON |
-
-Remote servers take `url` plus optional `headers` and `httpTransport: "sse"` (streamable HTTP is the default and falls back to SSE). Pasted snippets using `serverUrl`, `httpUrl` or `type: sse | http | stdio` are mapped onto this shape.
-
-These servers are saved in `$STAGEFLOW_HOME/mcp/.mcp.json` and merged over the project `.mcp.json` (console wins on a name clash; list rows carry `origin`). A stage bound to a repository checkout never sees console servers or console secrets, and a checkout's own `.mcp.json` never sees them either. With a console server saved, `sf validate` no longer needs a `.mcp.json` file for a stage's `mcp:` list to resolve.
-
-**OAuth sign-in.** A URL server that answers `401` with OAuth metadata shows `needs_auth` on probe. `POST /api/project-mcp/:name/oauth/start` returns `{ authorizationUrl }`; after approval the browser lands on a `localhost` callback. A local Host receives it itself; otherwise send the full address with `POST .../oauth/complete` body `{ "input": "http://localhost:…/callback?code=…&state=…" }`. `GET .../oauth` returns `authenticated`, `expired` or `not_authenticated`; `DELETE .../oauth` signs out. Tokens are AES-256-GCM encrypted in `$STAGEFLOW_HOME/agent/mcp-oauth-encrypted` (key: `$STAGEFLOW_HOME/secrets/mcp-oauth.key`, mode 0600, or `PI_MCP_ADAPTER_OAUTH_FILE_KEY`). A console-origin server whose stored status is `authenticated` is usable by stages (`usableByStages: true` on the list). `expired`, `not_authenticated`, and a project-file server are not. After the operator signs in, retry can use the server. A bearer token in `headers` is still a separate, non-OAuth way to authorize a URL server.
-
-**Secrets.** Never put a token in the file. Write `${NAME}` and store the value with `PUT /api/mcp-secrets/:name` body `{ "value": "…" }`. A literal token in `env`, `headers`, the `url` (query parameters or `user:password@`) or an arg (`--token=…`, `--api-key <value>`) is moved there for you and the file keeps `${NAME}`. `GET /api/project-mcp/:name` returns the config with any remaining literal secret masked as `••••`. Who may fill `${NAME}`: a **stage** gets console servers but only the console secrets whose names the stage declared in `secrets:` (plus its curated environment); **agents and Check (probe)** fill from console secrets and from Host env names listed in `STAGEFLOW_MCP_ENV_ALLOW` (comma-separated), never from arbitrary Host env, so a probe and an agent run resolve one config identically. A stored console secret is not shadowed by Host env. Stored values are never returned (`GET /api/mcp-secrets` lists names, `usedBy` and `set`; `set` means a console secret exists or an allow-listed Host variable is present) and live in `$STAGEFLOW_HOME/secrets/mcp-secrets.json` (directory `0700`, file `0600`, written atomically). A server entry cannot use `${NAME}` for a forever-denied name (control tokens, `PI_MCP_ADAPTER_OAUTH_FILE_KEY`) or a provider/cloud credential name (`ANTHROPIC_API_KEY`, `AWS_*`, `GITHUB_TOKEN`, …) unless that name is in `STAGEFLOW_MCP_ENV_ALLOW`; an auto-created secret for such a key gets a `GH_`-style prefixed name instead. Error text from Check and sign-in has secret values (6+ characters) replaced with `[redacted]`.
-
-**URL policy.** `url` servers may not point at link-local or cloud-metadata addresses (`169.254.0.0/16`, `fe80::/10`, `fd00:ec2::254`, `metadata.google.internal`). Loopback and private LAN addresses are allowed. The check runs at save, when a project `.mcp.json` entry is resolved (after `${…}` is filled), for Check and for OAuth sign-in. Project entries are also shape-checked (`command` xor `url`, string `args`, string maps for `env`/`headers`).
-
-**Corrupt state.** If `mcp/.mcp.json` or `secrets/mcp-secrets.json` is unreadable or not the expected shape, it is never treated as empty or overwritten: the API answers `409` (`host_state_corrupt`) and resolve/Check report `invalid_config` with the file name. Fix or remove the file. Saving a server writes the secrets file first and restores it if the catalog write fails.
-
-### `probe_project_mcp`
-
-Probe one named server (from the project `.mcp.json` or saved from the console) with isolated connect-and-exit (same helper as `POST /api/project-mcp/:name/probe`). Aborting the MCP request maps to helper `cancelled`, not `wait_run` `aborted`. Probe does not attach servers to a stage.
-
-**Input:** `{ "name": "github" }`
-
-**Output:** `{ "name": "github", "status": "connected" }`
-
-`status` is one of `connected`, `needs_auth`, `connect_failed`, `unresolved_var`, `invalid_config`, `missing_catalog`, `cancelled`. Helper statuses stay in the success payload (`isError` only if the tool itself fails).
-
-### `list_triggers`
-
-List catalog-declared triggers (same source as `GET /api/triggers`): manifest fields plus store-recorded `last_fired_at` / `last_run_id` / `next_run_at` when a trigger has fired before.
-
-**Input:** `{}`
-
-**Output:**
-
-```json
-{
-  "triggers": [
-    {
-      "id": "manual-hello-world",
-      "pipeline": "hello",
-      "task": "my-task",
-      "kind": "manual",
-      "enabled": true,
-      "definition_ref": "triggers/manual-hello-world.trigger.yaml"
-    }
-  ]
-}
-```
-
-Returns `{ "error": "No Stageflow catalog found", "status": 404 }` when no catalog is registered for `cwd`.
-
-### `get_trigger`
-
-Look up one catalog trigger by id (same source as `GET /api/triggers/:id`).
-
-**Input:** `{ "id": "manual-hello-world" }`
-
-**Output:** the same per-trigger shape as `list_triggers`. Unknown id: `{ "error": "Trigger not found: …", "status": 404 }`.
-
-### `fire_trigger`
-
-Fire a catalog trigger by id: resolves its `pipeline` ref (and, in catalog mode, its `task` ref) and starts a run through the same `RunManager.startRun` path as `start_run` (same as `POST /api/triggers/:id/fire`), then records the fire on the trigger's store row.
-
-**Input:** `{ "id": "manual-hello-world", "task"?: TaskFile }`. `task` is a structured inline task (`{ id, goal, context?, constraints?, checkout?, repository?, ref?, run_branch_template?, git_identity?, input? }`, matching `TaskFile`) — required to fire a dynamic-mode trigger (no catalog `task` on its `*.trigger.yaml`) and rejected for a catalog-mode trigger (`task` set).
-
-**Success:** `{ "runId": "…" }`, or `{ "runId": "…", "queued": true, "queuePosition": … }` when admitted to the queue (same shapes as `start_run`).
-
-Fails `404` for an unknown trigger id, `409` when the trigger is disabled, or `400` when it references an unknown pipeline/task. May also return the same busy / disk codes as `start_run` (`busy_capacity`, `busy_checkout`, `insufficient_disk`).
-
-**Catalog vs. dynamic mode rejections** (`422`, see [YAML catalog — Triggers](yaml-catalog.md#triggers-trigger-yaml)):
-
-| Code | When |
-|------|------|
-| `trigger.task_override_not_allowed` | A catalog-mode trigger (`task` set) is fired with a `task` param supplied |
-| `trigger.task_required` | A dynamic-mode trigger (`task` absent) is fired with no `task` param |
-
-Both come back as `{ "error": "…", "code": "trigger.task_override_not_allowed" | "trigger.task_required", "status": 422 }` with `isError: true`.
-
-### `create_trigger`
-
-Create a new `*.trigger.yaml` in the catalog: same validation/write path as `POST /api/triggers` (`src/config/createTrigger.ts`), called in-process rather than over HTTP. Validates `id` format/uniqueness, that `pipeline` (and `task`, when supplied) resolve to real catalog ids, and kind-specific shape (`schedule.cron` must parse via `croner`; `event.source` is required), writes `<directory>/<id>.trigger.yaml`, then re-loads it to confirm it round-trips before returning.
-
-**Input:** `{ project_root?, directory, id, pipeline, task?, kind: "manual" | "schedule" | "event", schedule?: { cron, timezone? }, event?: { source, match?, config? }, enabled? }` (`enabled` defaults to `true`). `project_root` selects the catalog root to write into, same as `start_run`; required when multiple writable roots are configured. `event.config` is passed through opaquely — it's how an `event`-kind trigger carries adapter-specific settings (the GitHub poller's `repo`/`secretRef`, the webhook adapter's `secretRef`/`header`/`scheme`, the email adapter's `host`/`port`/`user`/`secretRef` — see [YAML catalog — Triggers](yaml-catalog.md#triggers-trigger-yaml)); this tool doesn't validate its contents beyond requiring an object.
-
-`task` is now optional: set it to create a catalog-mode trigger (always runs that task); omit it to create a dynamic-mode trigger, whose task must instead be supplied when it's fired (`fire_trigger`'s `task` param, `sf trigger fire --task-inline`, or `POST .../fire` with a `task` body).
-
-**Success:** the created trigger, same per-trigger shape as `list_triggers`.
-
-Fails `400` for a malformed body or a read-only/unknown `project_root` (`catalog_root_read_only` / `unknown_project_root`), `409` when `id` already exists, `422` when `pipeline` or a supplied `task` reference unknown catalog ids or `schedule.cron` fails to parse.
-
-Note: `POST /api/triggers/:id/webhook` (the inbound endpoint for a `webhook`-sourced `event`-kind trigger — see [YAML catalog — Webhook adapter](yaml-catalog.md#webhook-adapter-eventsource-webhook)) has no MCP tool. It's invoked by whatever external service sends the webhook, not by an MCP client, and authenticates via the trigger's own HMAC signature rather than MCP's bearer token.
-
-### `list_runs`
-
-List known pipeline runs from the SQLite store.
-
-**Input:**
-
-```json
-{
-  "status": "running",
-  "since": "2026-08-31T00:00:00.000Z",
-  "pipeline": "docs-only"
-}
-```
-
-All fields optional. Omit filters for all runs, newest first.
-
-| Field | Meaning |
-|-------|---------|
-| `status` | `created` \| `running` \| `succeeded` \| `failed` |
-| `since` | ISO timestamp; keep runs with `created_at >= since` |
-| `pipeline` | Match `pipeline_id` or `pipeline_path` |
-
-**Output:** `{ "runs": [ … ] }` (`RunSummary` rows)
-
-### `list_waiting`
-
-List stages currently in `waiting_for_input`.
-
-**Input:** `{ "runId": "…" }` — `runId` optional; omit to scan all runs.
-
-**Output:** `{ "waiting": [ { "runId", "stageId", "waiting_kind?", "waiting_summary?", "waiting_prompt_id?", "pending_prompt?", "waiting_artifacts?", "waiting_questions?", "feedback_loop_id?", "deferred_target?" } ] }`
-
-For `waiting_kind: "feedback_loop_decision"`, `feedback_loop_id` and `deferred_target` identify the exhausted loop.
-
-### `get_waiting_summary`
-
-Lightweight count and identity of waiting stages — no `pending_prompt`, `waiting_artifacts`, or `waiting_questions`. Use this for a status-bar badge or a small waiting-items list; use `list_waiting` when you need the full prompt detail.
-
-**Input:** `{ "runId": "…", "path": "…" }` — both optional. `runId` scopes to one run (same as `list_waiting`). `path` scopes to one project, derived via the same `findProjectRoot` walk-up used everywhere else in this service. Omitting both spans every project the store knows about.
-
-**Output:** `{ "count": number, "runs": [ { "runId", "stageId", "kind?" } ] }` — `kind` mirrors `list_waiting`'s `waiting_kind`.
-
-### `list_providers`
-
-List login-capable model providers with per-row auth readiness and a Pi-home detect summary (same helpers as HTTP `GET /api/providers`, `GET /api/providers/:id/auth`, and `GET /api/providers/detect`). Read-only: it does not log in, log out, or start OAuth.
-
-**Input:** `{}`
-
-**Output:**
-
-```json
-{
-  "authShell": "pi",
-  "via": "pi",
-  "detect": {
-    "piHomeUsable": true,
-    "credentialSource": "sf_owned",
-    "provisional": false,
-    "source": "sf_owned"
-  },
-  "providers": [
-    {
-      "id": "anthropic",
-      "name": "Anthropic",
-      "supportsApiKey": true,
-      "supportsOauth": true,
-      "oauthLabel": "Claude Pro/Max",
-      "configured": true,
-      "authKind": "oauth",
-      "source": "stored"
-    }
-  ]
-}
-```
-
-Env-only providers are omitted (same membership as `GET /api/providers`). An unconfigured provider is still a successful result with `configured: false`. Responses never include API keys, tokens, `authPath`, or credential file contents.
-
-### `answer_gate`
-
-Deliver an operator answer for a waiting stage (same semantics as `POST /api/runs/:id/stages/:stageId/answer`).
-
-**Input:**
-
-```json
-{
-  "runId": "…",
-  "stageId": "clarify",
-  "answer": {
-    "promptId": "prompt-1",
-    "kind": "free_text",
-    "text": "payments"
-  }
-}
-```
-
-`answer` must match `AskOperatorAnswer` for the pending prompt kind (`free_text`, `confirm`, `artifact_backed`, `multi_question`).
-
-**Success:** `{ "ok": true }`. When the answer made after-phase verification fail but the stage `on_verify_fail` repair policy will retry it (for example a human-login confirm while still logged out), the response is `{ "ok": true, "verification": "failed_retrying" }` and the stage re-gates as a new attempt. A final failure (repair exhausted or none configured) is an error.
-
-**Errors (`isError: true`):** `400` malformed/mismatched answer; `404` unknown run/stage; `409` stage not waiting.
-
-### `decide_feedback_loop` {#decide_feedback_loop}
-
-Resolve a feedback-loop `wait_for_human` decision (same semantics as `POST /api/runs/:runId/stages/:stageId/feedback-decision` and CLI `sf runs feedback-decide`).
-
-**Input:**
-
-```json
-{
-  "runId": "…",
-  "stageId": "review",
-  "decision": "continue",
-  "loopId": "…",
-  "reason": "optional reason"
-}
-```
-
-`decision` is `extend`, `continue`, or `abandon`. `loopId` and `reason` are optional. `stageId` is the feedback-loop **source** stage.
-
-| Decision | Effect |
-|----------|--------|
-| `extend` | Increase `max_replays` by one and accept the deferred `send_back`. Optional `reason` is persisted on `feedback_loop_decided`. |
-| `continue` | Mark the source succeeded and release the loop hold so successors can run. Optional `reason` is persisted on `feedback_loop_decided`. |
-| `abandon` | Fail the source (run typically fails). Optional `reason` is persisted on `feedback_loop_decided` and on `{ event: "failed", reason }`. |
-
-**Success:** `{ "ok": true, "effect": "extended"|"continued"|"abandoned", "loopId": "…" }`
-
-**Errors (`isError: true`):** `404` unknown run/stage/loop; `409` no waiting feedback loop / wrong stage.
-
-**Compose with `wait_run`**
-
-```
-start_run → wait_run (until waiting/any)
-         → if waiting_kind is feedback_loop_decision: decide_feedback_loop
-         → else: answer_gate
-         → wait_run (until terminal)
-```
-
-Use `list_waiting` / nested `get_run` fields (`waiting_kind`, `feedback_loop_id`, `deferred_target`, `active_feedback_loop`) to distinguish HITL gates from exhausted feedback loops.
-
-### `get_health`
-
-Server health, soft-max run capacity, toolchain map (from the image manifest with PATH fallback), and on-demand durable-root disk breakdown.
-
-**Input:** `{}`
-
-**Output:** includes capacity fields, `version`, `build_sha`, `stageflow_home` (`~/…` when inside the user's home folder, else the folder name; never an absolute path), `cache.root` (shown the same way, or under the Stageflow home as `<home>/cache`), `toolchain` (map of tool → version string), `disk` breakdown, plus:
-
-| Field | Meaning |
-|-------|---------|
-| `boot_providers` | Host boot snapshot (`STAGEFLOW_PROVIDER_*` env/file at process start): `{ configured, failures }` |
-| `providers_live` | Live auth summary (`configured` ids) plus a `note` — prefer `list_providers` / `sf providers status` for full readiness |
-| `providers` | Same shape as `boot_providers` (kept for older clients; prefer `boot_providers`) |
-
-Empty `boot_providers.configured` does **not** mean the CLI has no credentials — compare `stageflow_home` and use `list_providers` for live auth.
-
-### `preflight`
-
-Check a pipeline's `requires:`, declared `secrets:`, and stage MCP `${VAR}` resolution **before** `start_run`. Does not create a Run.
-
-**Input:**
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `pipeline` | string \| object | Catalog-relative path or inline `{ id, stages, … }` (same union as `start_run`) |
-| `project_root` | string | Optional catalog root |
-| `strict` | boolean | When true, `unknown_version` fails (default: pass) |
-
-**Output:** `{ ok, checks: [{ kind, status, tool?, required?, found?, … }], code? }` where toolchain `status` is `ok` \| `missing_tool` \| `tool_version_mismatch` \| `unknown_version`. `start_run` runs the same gate and fails with those codes before `createRun`. A host-login server (a console URL server with no `Authorization` header) adds a `kind: "mcp"` check from the stored sign-in only: `authenticated` is `ok`, `expired` and `not_authenticated` are `needs_auth`, and a store that cannot be read is `connect_failed`. That check does not connect and does not refresh. `insufficient_scope` stays its own status when a stage later reports it; it is not folded into `connect_failed` or `needs_auth`. Stages that declare [`channels:`](yaml-catalog.md#stage-channels) add one `kind: "channel"` check per connection: `{ kind, status, connection, channelCode?, retryable? }` with `status` `ok` \| `channel_check_failed`, where `channelCode` is the provider-neutral reason (for example `CHANNEL_AUTH_FAILED`). A failed channel check yields `code: "channel_check_failed"`. The check is live but never sends a message, retries only transient failures (at most twice, a few seconds in total) and fails immediately on authentication, configuration, permission or target problems.
-
-`version` on `get_health` is the running server's npm package version — compare it against the version you built your integration against to detect a behavior change that isn't visible as a tool being added or removed.
-
-`disk` is computed on demand: category byte totals under the durable root plus free space on that filesystem. When the walk fails, the Host still returns capacity fields and may omit or zero the breakdown.
-
-Default `maxConcurrent` is 3 (override via `STAGEFLOW_MAX_CONCURRENT_RUNS` or console settings). `maxActiveStageProcesses` is `null` when unlimited.
-
-When `slotsAvailable` is `0`, further starts are admitted to the **admission queue** (see `start_run`) until `STAGEFLOW_MAX_QUEUED` is also full.
-
-### `start_run`
-
-Start a pipeline run using a **filesystem pipeline path**, or an **inline
-pipeline definition** authored directly in the call, and either a catalog
-task file or an inline task object.
-
-**Input (task file):**
-
-```json
-{
-  "pipeline": "pipelines/hello.pipeline.yaml",
-  "task_path": "tasks/hello.task.yaml"
-}
-```
-
-**Input (inline task):**
-
-```json
-{
-  "pipeline": "pipelines/hello.pipeline.yaml",
-  "task": {
-    "id": "inline-task",
-    "goal": "…",
-    "context": "optional",
-    "constraints": "optional",
-    "checkout": "optional",
-    "input": { "ticket_id": "OSS-123" }
-  }
-}
-```
-
-**Input (inline pipeline):**
-
-```json
-{
-  "pipeline": {
-    "id": "quick-check",
-    "stages": [
-      {
-        "id": "check",
-        "system_prompt": "Review the diff for obvious bugs.",
-        "io": {
-          "input": { "schema": { "type": "object" } },
-          "output": { "schema": { "type": "object" } }
-        }
-      }
-    ]
-  },
-  "task": { "id": "t", "goal": "Check this change" }
-}
-```
-
-An inline `pipeline` is the same pipeline model as a file — `id`, `stages: [...]`,
-each stage the same shape as a YAML stage body (`system_prompt`, `io.input.schema`/
-`io.output.schema`, optional `model`/`gate_kinds`/`mcp`/`verify`/`timeout_ms`/
-`route`) — validated and executed through the exact same path a file-based
-pipeline uses, so the same errors (missing `io`, bad DAG shape, duplicate
-stage id) come back the same way. The one thing an inline pipeline can't do
-is reference an external stage file (`uses:`) — every stage body must be
-inline, since the whole point is nothing saved to disk. A run started from
-an inline pipeline has no `pipeline_path` and cannot later be `rerun` — see
-below.
-
-Exactly one of `task_path` or `task` is required. Accepted start params:
-
-| Param | Notes |
-|-------|--------|
-| `pipeline` | Catalog-relative path **or** inline `{ id, stages: [...] }` (MCP only — see REST asymmetry below) |
-| `task_path` / `task` | Exactly one; inline `task` may carry `repository`/`ref` or `checkout` |
-| `project_root` | Optional catalog root selector — absolute **registered** path or symbolic **seeded** id. Unknown absolute roots are refused (`unknown_project_root`); remotes cannot invent a new root. Wire root is persisted on the run when present. |
-| `checkout` | Catalog-relative path-checkout; maps to REST `checkoutOverride`. Absolute paths → `absolute_path_not_allowed` (not bare ENOENT) |
-| `checkout_override` | Temporary alias of `checkout` |
-| `skip_gates` | Skip HITL gates for unattended starts |
-| `git_sha` / `ci_pr_url` / `ci_job_url` | CI provenance metadata |
-| `skills` | Run-scoped skills: `name → { relativePath: utf-8 contents }`. Requires `SKILL.md` per name; materialised under the run workspace skills dir (never the worktree). See `list_skills`. |
-
-`repository`/`ref` on the task XOR `checkout` / `checkout_override` (and REST `checkoutOverride`) share code `task.binding_conflict` with REST and the CLI.
-
-**REST asymmetry:** `POST /api/runs` accepts **path pipelines only** (`pipeline` must be a string). Inline pipeline definitions are MCP-only (mount-free harness path). REST still accepts `checkoutOverride`, `skipGates`, `gitSha`, `ciPrUrl`, `ciJobUrl`, and path or inline `task`.
-
-**Success output:** `{ "runId": "…" }` when a concurrency slot is free, or `{ "runId": "…", "queued": true, "queuePosition": N }` when slots are full but the admission queue still has room. Queued is still a success — poll with `wait_run` / `get_run` until the run leaves `queued` and reaches waiting or terminal.
-
-**Error output** (`isError: true`):
-
-| Reason | Code | Meaning |
-|--------|------|---------|
-| Admission queue full | `busy_capacity` | Includes `activeCount`, `maxConcurrent`, `activeRunIds`. Fired when `STAGEFLOW_MAX_QUEUED` cannot accept another queued run (not merely when active slots are full) |
-| Caller concurrency quota | `busy_caller_quota` | Queues while the admission queue has room (`queuedCode` on success); rejects with this code when the queue is full. Distinct from per-project `busy_capacity` |
-| Checkout lease conflict | `busy_checkout` | Includes `conflictingRunId`, `conflictingCheckout`. Never queued |
-| Free disk below floor | `insufficient_disk` | Includes `freeBytes`, `minFreeBytes`. Distinct from `busy_capacity`; the run is not created or queued |
-| Absolute checkout/path | `absolute_path_not_allowed` | Network path contract; includes `registered_roots` |
-| Unknown catalog root | `unknown_project_root` | Absolute or symbolic `project_root` not in registered ∪ seeded |
-| Repository + checkout | `task.binding_conflict` | Same named code on MCP, REST, and CLI |
-
-Task schema matches `TaskFile` (`id`, `goal`, optional `context`, `constraints`, `checkout`, `repository`, `ref`, `input`). Optional `input` on the inline `task` object (or on a catalog task file) can satisfy an entry stage's `io.input`. If an entry declares `io.input` and the task has no `input`, start-run treats it as `{}` and fails with `task.invalid_shape` when that does not match.
-
-### `run_stage`
-
-Run a single stage directly, without authoring a pipeline. Internally this synthesizes a one-stage pipeline and executes it through the exact same run path `start_run` uses — the resulting run shows up in `list_runs`/`get_run` and is polled with `wait_run`/`get_envelope` like any other run, and gets the same persistence, `verify`/retry, and HITL behavior a pipeline stage gets. `sf run-stage` (see [CLI reference](cli-reference.md#sf-run-stage)) gives a shell/script caller the same capability.
-
-**Input:**
-
-```json
-{
-  "stage": "stages/check.yaml",
-  "task": { "id": "t", "goal": "Check this change" }
-}
-```
-
-`stage` is a filesystem path to a stage YAML file, or a bare inline stage body authored directly in the call (`{ id, system_prompt, io, model?, gate_kinds?, mcp?, verify?, timeout_ms? }` — no `uses:`/`route:`/pipeline wrapper). Exactly one of `task_path`, an inline `task`, or `envelope_ref` is required.
-
-**Chaining with `envelope_ref`:** instead of a task, resolve a previously stored `StageEnvelope` and use it as this call's input:
-
-```json
-{
-  "stage": "stages/summarize.yaml",
-  "envelope_ref": { "runId": "…", "stageId": "research" }
-}
-```
-
-The referenced envelope's `summary` becomes `goal`, its `payload` becomes `input`. A reference can point at the envelope of another `run_stage` call or at any stage inside a full pipeline run. There is no browse/enumerate endpoint — a reference only resolves for a caller that already holds the `{ runId, stageId }` pair.
-
-`envelope_ref` also accepts an **array** of references, to combine more than one prior result in a single call:
-
-```json
-{
-  "stage": "stages/combine.yaml",
-  "envelope_ref": [
-    { "runId": "…", "stageId": "research" },
-    { "runId": "…", "stageId": "titleize" }
-  ]
-}
-```
-
-Each resolved payload is namespaced under its `stageId` in `input` (disambiguated by `runId` only if two references share a `stageId`), and summaries are combined into `goal`.
-
-**Other fields:**
-
-| Field | Meaning |
-|-------|---------|
-| `checkout` | Optional working directory to use with `envelope_ref` (`task`/`task_path` carry their own `checkout`; resolving a reference never implies one on its own) |
-| `model` | Overrides the stage's own declared model (and the global default) for this call only |
-| `blocking` | When `true`, wait for the run to reach a terminal or waiting state and return the result in this same call, instead of `{ runId, stageId }` |
-| `timeout_ms` | Wait budget in ms when `blocking` is `true` (same bounds as `wait_run`) |
-
-**Success output (async, default):** `{ "runId": "…", "stageId": "…" }`
-
-**Success output (`blocking: true`):**
-
-```json
-{
-  "runId": "…",
-  "stageId": "…",
-  "status": "completed",
-  "envelope": { "status": "success", "summary": "…", "artifacts": [], "payload": {} }
-}
-```
-
-`status` is one of:
-
-| `status` | Meaning |
-|----------|---------|
-| `completed` | Terminal. `envelope` is the stage's final envelope, `null` if the stage failed without ever emitting one |
-| `needs_input` | The stage parked on a human-in-the-loop gate. `pending_prompt`/`waiting_kind`/`waiting_prompt_id`/`waiting_summary` are included — answer with the existing `answer_gate` tool, same as a pipeline stage, then poll with `wait_run` |
-| `timeout` | The wait budget elapsed; the run is still going — poll with `wait_run`/`get_run` |
-
-**Error output** (`isError: true`): the same `Pipeline validation failed` shape `start_run` returns for a structurally invalid stage body (reported as `Stage validation failed`), plus the same `404`-style errors `get_envelope` returns when an `envelope_ref` doesn't resolve.
-
-Access is deliberately unrestricted for this tool: any authenticated caller of this host can run any catalog or inline stage/pipeline through `run_stage` — there is no publish/allowlist step the way A2A's `invoke` operation has. This is a temporary trade-off for proving out standalone stage execution, not a hardened access-control surface.
-
-### `get_run`
-
-Poll run status without loading the full event stream.
-
-**Input:** `{ "runId": "…" }`
-
-**Output:** Projected run detail — status, stage statuses, envelope summary/payload/artifact paths (**no events**), and `pipeline_track` when present. A diamond join has two inbound track edges; a blocked join lists every unresolved parent in `blocked_by`. When a stage is waiting, includes run-level `waiting_*` fields and per-stage `pending_prompt`. When present on the run record, includes `pipeline_path` and `task_path`. Includes `binding` (`kind`, optional `repository` / `ref` / `resolved_sha`, and on detail `checkout_root` / `run_branch` when bound) — use `binding.checkout_root` to locate the run worktree for a `docker exec` escape hatch ([Docker](docker.md#worktree-escape-hatch)). Feedback-loop runs also expose `active_feedback_loop` (when a loop is `active` or `waiting_for_human`) and `feedback_loops` (history with replays and stage passes). On `on_max_replays: wait_for_human`, the loop **source** pass in `feedback_loops[].replays[].stage_passes` is `waiting` while parked, then `succeeded` after `extend`/`continue` or `failed` after `abandon`. The projection includes `total_cost_usd` and per-stage `cost_usd` / `definition_id` when the store has them.
-
-Use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detailed
-stage records.
-
-Returns `404`-style error JSON when the run is not found.
-
-### `export_run`
-
-Export a single run as the `projectRun` projection plus `run_manifest`. Works for running, cancelled, and terminal runs. Prefer this over CLI `sf export-run` when the Host is reachable. Same payload as `GET /api/runs/<id>/export` (read scope).
-
-**Input:** `{ "runId": "…" }`
-
-Returns `404`-style error JSON when the run is not found.
-
-### `wait_run`
-
-Long-poll until a run reaches a HITL waiting point and/or a terminal status, or until `timeout_ms` elapses. Holds one MCP `tools/call` HTTP request. Uses **poll-inside-wait** against the store (ignores the resource change bus). Works in session mode and with `--mcp-stateless`.
-
-**Input:**
-
-```json
-{
-  "runId": "…",
-  "timeout_ms": 60000,
-  "until": "any"
-}
-```
-
-| Field | Meaning |
-|-------|---------|
-| `runId` | Required |
-| `timeout_ms` | Optional wait budget in ms. Default `60000`. Must be in `(0, 240000]`. |
-| `until` | Optional wake predicate: `"any"` (default), `"waiting"`, or `"terminal"` |
-
-**Wake predicates**
-
-| `until` | Wakes when |
-|---------|------------|
-| `waiting` | Any stage is `waiting_for_input` / non-empty `waiting_stage_ids` (run `status` stays `"running"` during HITL). A terminal run also ends the wait. |
-| `terminal` | Run `status` is `succeeded`, `failed`, or `cancelled` |
-| `any` | Waiting **or** terminal |
-
-Already-satisfied predicates return immediately with `reason: "already"` (not an error).
-
-**Success output:**
-
-```json
-{
-  "reason": "waiting",
-  "elapsed_ms": 1234,
-  "until": "any",
-  "run": { }
-}
-```
-
-`reason` is one of `waiting` | `terminal` | `timeout` | `already`. Nested `run` matches lean `get_run` (no events; includes `waiting_*` / `pending_prompt` when waiting).
-
-**Timeout is success:** when the budget elapses without a matching wake, the tool returns `reason: "timeout"` with the latest snapshot and `isError: false`.
-
-**Abort ≠ cancel run:** cancelling the MCP request / aborting the handler signal ends only the wait (`isError` with `code: "aborted"`). The pipeline run continues. Use `cancel_run` to cancel the run itself.
-
-**Optional progress:** if the client supplies `_meta.progressToken` on `tools/call`, the server may emit sparse `notifications/progress` during the poll loop. Progress is never required for correctness. Many clients default tool timeouts to ~60s; only clients that honor progress and `resetTimeoutOnProgress` benefit. Cursor behavior is unverified — pass a shorter `timeout_ms` when unsure.
-
-**Node `requestTimeout`:** both `sf ui` and `sf mcp` disable Node’s default 300s `requestTimeout` so a max `timeout_ms` of 240s is not cut off by the socket layer.
-
-**Compose with HITL**
-
-```
-start_run → wait_run (until waiting/any)
-         → answer_gate
-         → wait_run (until terminal)
-```
-
-**Compose with feedback-loop decisions**
-
-```
-start_run → wait_run (until waiting/any)
-         → decide_feedback_loop   # when waiting_kind is feedback_loop_decision
-         → wait_run (until terminal)
-```
-
-Prefer `wait_run` over chatty `get_run` loops when waiting for the next interaction point. Prefer resource subscribe when the client already holds a session GET listen stream. A coding-agent host may present the pending prompt on its native question UI; the submit path is still `answer_gate` (HITL) or `decide_feedback_loop` (exhausted feedback loop).
-
-**Errors (`isError: true`):** `404` unknown run; `400` invalid `timeout_ms`; `code: "aborted"` when the client aborts the wait.
-
-### `list_stage_events`
-
-List persisted stage log events (lifecycle/activity). Optional `attempt` scopes to one attempt.
-
-**Input:** `{ "runId", "stageId", "attempt?" }`
-
-**Output:** `{ "runId", "stageId", "attempt?", "events": [ … ] }`
-
-Lifecycle events include `{ event: "feedback_loop_decided", decision, loopId, reason? }` after a `decide_feedback_loop` CAS succeeds and before the source is marked `succeeded` or `failed`.
-
-### `tail_stage_log`
-
-Poll for new live assistant text a stage attempt has produced, since a byte-offset cursor. Separate from `list_stage_events` — no milestones, no prompt/artifact/question detail, just the raw text as it streamed out of the model, batched every ~300ms and redacted for secret-shaped substrings before it's ever written to disk. Every stage gets this by default; there's no pipeline flag to turn it on. Poll-only — no push/SSE delivery.
-
-**Input:** `{ "runId", "stageId", "attempt?", "since_offset?" }` — `attempt` defaults to the stage's current/latest attempt. Omit `since_offset` on the first call to catch up on everything currently retained; pass back the previous response's `next_offset` on each subsequent call.
-
-**Output:** `{ "text", "next_offset", "attempt_complete", "truncated?", "earliest_offset?" }`
-
-- `attempt_complete`: `true` once that attempt is no longer the stage's actively-running one — poll until this flips, then stop.
-- `truncated` + `earliest_offset`: only present when `since_offset` predated the retained window (the log is capped at 256 KB per attempt; the oldest half is dropped when it fills up). The response still serves everything currently retained (from `earliest_offset` onward) in the same call — no need to re-request first.
-
-**Errors (`isError: true`):** `404` unknown run/stage.
-
-### `get_stage_verification`
-
-Read the after-phase verify history for one stage. Each attempt contains its verification
-disposition, check statuses, and persisted evidence, including command output where
-configured.
-
-**Input:** `{ "runId", "stageId" }`
-
-**Output:** `{ "run_id", "stage_id", "attempts": [{ "attempt", "status", "verification_outcome", "checks" }], "manual_recovery?" }`
-
-Use this to understand an automatic repair: the failed attempt and the successful
-repair are returned as separate records. It returns `404` when the run or stage is
-unknown.
-
-### `recover_manual_stage`
-
-Explicitly authorize a new attempt after an `on_verify_fail.mode: manual` after-phase
-verification failure. Optional `guidance` (up to 4,000 characters) is persisted and
-supplied to the agent along with the failed-check capsule.
-
-**Input:** `{ "runId", "stageId", "guidance?" }`
-
-### `stop_manual_recovery`
-
-Record the operator decision to leave a manual-recovery stage failed. It cannot be
-recovered again in that run.
-
-**Input:** `{ "runId", "stageId" }`
-
-### `get_envelope`
-
-Read the full `StageEnvelope` for a stage. Optional `attempt` (omit = latest). A provided attempt reads that execution's stored envelope.
-
-**Input:** `{ "runId", "stageId", "attempt?" }`
-
-**Output:** `{ "runId", "stageId", "attempt?", "envelope": { … } }`
-
-Returns `404` when the run, stage, or envelope is missing. MCP does **not** synthesize an envelope for fork-skipped stages. CLI `envelope get` synthesizes `{ status: "skipped", summary: "stage was fork-skipped", artifacts: [], fork_choice: null }` when the stage is skipped and no envelope is stored.
-
-### `read_artifact`
-
-Read a run-workspace artifact by relative path.
-
-**Input:**
-
-```json
-{
-  "runId": "…",
-  "path": "stages/clarify/attempts/1/artifacts/plan.md"
-}
-```
-
-**Output** depends on the file:
-
-- Known image extensions (`png`, `jpeg`/`jpg`, `gif`, `webp`) — mime is by extension, not magic bytes. Primary content is an MCP image block `{ "type": "image", "mimeType", "data" }` (`data` is standard base64). A second JSON text block may include `{ "runId", "path", "mimeType" }` identity and does not repeat file bytes.
-- Valid UTF-8 non-image files — JSON text `{ "runId", "path", "content" }`.
-- Non-image files that are not valid UTF-8 — `isError` with `{ "error", "status": 400 }`.
-
-Path must be relative, with no `..`, and contained under the run workspace. Denied: any `.pi-agent` path segment, and files named `auth.json` (same rules as CLI `sf artifact read`). Returns `404` for missing run or artifact.
-
-Note: `stages/<stageId>/attempts/…` paths are **run workspace** layout, not catalog directories.
-
-### `validate`
-
-Validate the project catalog, a pipeline path, or a task path (same authority as `sf validate`).
-
-**Input:** `{ "pipeline?", "task?", "strict?" }`
-
-Scope is inferred: `pipeline` set → pipeline scope; else `task` set → task scope; else full catalog (pipelines **and** tasks). If both `pipeline` and `task` are set, **pipeline wins** (CLI `sf validate` rejects both).
-
-**Output:** `ValidationResult` — `{ "scope", "ok", "summary": { "errors", "warnings" }, "findings": [ … ] }` (findings include severity, code, `path`, message, category, and optional pipeline/stage ids). MCP keeps `path`; CLI `--json` remaps that field to `file`.
-
-### `describe_pipeline`
-
-Describe a pipeline DAG from a filesystem pipeline path (same locator style as `start_run`).
-
-**Input:** `{ "pipeline": "pipelines/diamond-fan-in.pipeline.yaml" }`
-
-**Output:**
-
-```json
-{
-  "id": "diamond-fan-in",
-  "path": "…",
-  "stages": [
-    { "id": "clarify", "needs": null, "gate_kinds": ["free_text"] },
-    { "id": "research", "needs": "clarify" },
-    { "id": "validation", "needs": "clarify" },
-    {
-      "id": "synthesize",
-      "needs": [
-        { "id": "research", "on": ["succeeded"] },
-        { "id": "validation", "on": ["succeeded"] }
-      ]
-    }
-  ]
-}
-```
-
-Catalog YAML authors outbound `route`; `describe_pipeline` still returns the **resolved** inbound snapshot as `needs` from `loadPipeline` (inverted from `route`). It is JSON, not `sf graph` ASCII.
-
-Scalar `needs` stays a string or `null` when the stage has one parent, default `on: ["succeeded"]`, and no `if`. A single parent becomes a one-element structured array `{ id, on, if? }` when that edge has `if` or a non-default `on`. A multi-parent join exposes the structured array (each item `{ id, on }`, plus `if` when present), including default `on: ["succeeded"]` for string YAML items. Omit `if` when the predicate is absent. See [`diamond-fan-in.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml).
-
-Stage objects also include optional `clone_cap` and `clone_mode` on a Clone Chain emitter, plus `feedback_loop`, `entry`, and `replay_safe` when those fields are set on the resolved node.
-
-`sf run --json --include stages` does not include this graph — use `get_run` or `sf runs show --json` for `pipeline_track`.
-
-### `retry_stage`
-
-Retry a **failed** stage (same as HTTP `POST .../retry`).
-
-**Input:** `{ "runId", "stageId" }`
-
-**Success:** `{ "runId", "stageId", "attemptIndex" }`
-
-Waiting stages are not retryable (`409`, often `code: "hitl_not_retriable"`) — use `answer_gate` instead.
-
-### `resume_stage`
-
-Resume an **interrupted** stage or a stage that **timed out**, continuing the same attempt/session (same as HTTP `POST .../resume`). Does not start a new attempt — use `retry_stage` to start over.
-
-**Input:** `{ "runId", "stageId" }`
-
-**Success:** `{ "runId", "stageId", "attemptIndex" }` (same attempt as the interrupted or timed-out pass)
-
-Fails with `409` if the stage is neither `interrupted` nor a timeout-shaped `failed`, or if the session file is missing (use `retry_stage` to start a new attempt).
-
-### `abandon_stage`
-
-Abandon a **running** stage (marks it failed). Does **not** dismiss HITL waiting gates (`409` if waiting) — answer those with `answer_gate`. Prefer `cancel_run` to stop an entire run.
-
-**Input:** `{ "runId", "stageId" }`
-
-**Success:** `{ "ok": true, "runId", "stageId" }`
-
-### `cancel_run`
-
-Cancel a non-terminal run (`created` / `queued` / `running`). Marks the run `cancelled`, terminalizes pending/running/waiting stages, and releases the checkout lease. Required free-text `reason` is stored as `cancel_reason`.
-
-**Input:** `{ "runId": "…", "reason": "…" }`
-
-**Success:** `{ "ok": true, "runId": "…" }`
-
-Cancel signals live stage workers via process-group kill (SIGTERM, then SIGKILL escalation) so agent grandchildren are included in the tree.
-
-Until Slot 5 authentication, this mutating tool (and the matching `POST /api/runs/:runId/cancel` REST route) relies on the Host's existing `isMutatingApi` loopback `Host` / `Origin` gate and local bind assumptions — not a bearer token.
-
-### `delete_run`
-
-Hard-delete a terminal run (store rows, workspace, worktree, run branch, and A2A tasks/artifacts). Irreversible. Active runs (`created` / `queued` / `running`) require `force: true`, which cancels first then deletes.
-
-**Input:** `{ "runId": "…", "force"?: boolean }`
-
-**Success:** `{ "ok": true, "runId": "…" }`
-
-Same Slot 5 note as `cancel_run`: until auth lands, destructive MCP/REST (`delete_run`, `DELETE /api/runs/:runId`) rely on `isMutatingApi` + local bind only.
-
-### `gc_runs`
-
-Run retention GC (SLIM, then PURGE, then bare-cache eviction). Default `execute: false` is dry-run (report candidates only). `execute: true` is irreversible bulk reclaim.
-
-**Input:** `{ "execute"?: boolean }`
-
-**Success:** `{ "slimmed": […], "purged": […], "bareCachesEvicted": […] }`
-
-Matching REST: `POST /api/runs/gc` with the same body. Same Slot 5 auth caveat as other destructive verbs. There is no operator-console GC button in this release — CLI/MCP are primary.
-
-### `rerun`
-
-Start a new run from a stored run’s `pipeline_path` plus task YAML (`RunManager.rerun`). Does **not** require the source run to be completed or failed (unlike CLI `sf export-run`, which requires `succeeded` or `failed`).
-
-**Input:** `{ "runId": "…" }`
-
-**Success:** `{ "runId": "…" }` (new run id)
-
-Fails if catalog locators are missing (`400` / `404`). May return the same busy / disk codes as `start_run` (`busy_capacity`, `busy_checkout`, `insufficient_disk`), including a queued success shape when admitted to the queue.
-
-A run started from an inline pipeline (see `start_run`) has no `pipeline_path`
-to replay from, so `rerun` fails with this same "missing pipeline_path" error
-— there's no special-cased error for inline runs. If you want a run to be
-replayable later, save the pipeline to a file.
+| `get_agent` | `list: true` **or** `id` + optional `view` (`definition`, `revisions`, `revision`, `diff`) | List agents or read one |
+| `validate` | `kind: agent`, `definition` or `eval_id` path | Does not save |
+| `save_agent` | `mode: create` **or** `mode: update` (+ `baseRevision`, `from_revision` to restore) | Create is always disabled |
+| `set_agent_enabled` | `id`, `enabled: true` \| `false` | |
+| `archive_agent` | `{ id }` | |
+| `agent_chat` | `{ id, message, sessionId? }` | External; waits for the reply |
+| `get_agent_session` | `list: true` **or** `id` + `sessionId` / list filters | Transcript and approvals |
+| `stop_agent_session` | `{ id, sessionId }` | |
+| `decide_agent_action` | `action: approve` \| `deny`, `id`, `sessionId` | Operator-only (`gates.decide`) |
+
+See [Agents](agents.md) and [Agent API — CLI, MCP and REST](agent-api.md#cli-mcp-and-rest-side-by-side).
+
+### Function tools {#function-tools}
+
+| Tool | Grant | Notes |
+|------|-------|-------|
+| `get_function` | `functions.read` | `list: true` or `id`; optional `view: revisions` \| `revision` |
+| `save_function` | `functions.write` | `mode: create` \| `update`; `copy_from` duplicates |
+| `test_function` | `functions.test` | Mock by default; `real: true` for live resources |
+| `delete_function` | `functions.cleanup` | Refuses while referenced |
+
+Attaching functions still goes through `write_stage`, `write_pipeline`, and `save_agent`. See [Functions](functions.md) and [function-api](function-api.md).
+
+### Eval tools {#eval-tools}
+
+Eval MCP tools use optional `project_root`. Mocks and graders keyed on tool name cover every mode of a merged tool; see [Evals](evals.md).
+
+| Tool | Notes |
+|------|-------|
+| `get_eval` | `list: true` or `eval_id` + `view` (`definition`, `calibrations`) |
+| `validate` | `kind: eval` or inline `yaml` |
+| `save_eval` | `mode: create` \| `update`; `source: sample` installs the sample |
+| `save_dataset` | `action: create` \| `ops` \| `convert` |
+| `get_eval_run` | list or `eval_run_id`; `view: export` for export |
+| `get_eval_results` | table or `case_id` for one row |
+| `review_eval_results` | `action: label` \| `accept` \| `dismiss` on failure suggestions |
+| `get_eval_failures` | `view: suggestions` \| `sort_status` |
+| `run_eval`, `try_eval_case`, `sort_eval_failures`, `calibrate_eval_grader` | External / may cost money |
+| `cancel_eval_run`, `delete_eval_run` | |
+
+### Catalog discovery and validation
+
+| Tool | Modes |
+|------|-------|
+| `get_started` | Operator orientation (read, operator-only) |
+| `list_catalog` | `kind`: `pipelines`, `tasks`, `skills`, `models`, `providers`, `mcp_servers`, `health` |
+| `validate` | `kind`: catalog paths, `draft`, `agent`, `eval`, `connection_recipient`; `preflight: true` for live checks |
+| `read_pipeline` | `view: package` (default) or `dag` |
+| `write_pipeline` | `mode: create` \| `update` |
+| `write_stage` | `mode: create`, `patch: true`, `no_pipeline: true`, or `form: content` update |
+| `write_task` | `mode: create` \| `update`; `no_pipeline: true` for standalone tasks |
+| `import_task` | GitHub issue → task (external) |
+| `probe_project_mcp` | Connect probe (external) |
+
+Workshop Author profile tools keep names like `write_pipeline` with `mode: create` and `write_stage` with `patch: true`; they are not Host MCP tools.
+
+### Runs, files, and control
+
+| Tool | Modes |
+|------|-------|
+| `start_run` | Exactly one of `pipeline`, `stage`, or `from_run` (+ task shapes as before) |
+| `get_run` | Omit `runId` to list; `view: export` to export |
+| `get_stage` | `view`: `events`, `log`, `envelope`, `verification` |
+| `run_files` | `view`: `artifact`, `changes`, `diff`, `file` |
+| `wait_run` | Long-poll until terminal or waiting |
+| `stage_action` | `action`: `retry`, `resume`, `recover`, `stop_recovery` |
+| `cancel_run`, `abandon_stage` | Destructive cleanup |
+| `delete_runs` | One `runId` or `gc: true` (+ `execute` to apply GC) |
+| `list_waiting` | `detail: full` (default) or `summary` |
+
+### Gates {#decide_feedback_loop}
+
+`answer_gate` and `decide_feedback_loop` stay separate tools (operator-only, `gates.decide`). See [HITL](hitl.md).
+
+**`answer_gate`** — deliver an operator answer for a waiting stage (`runId`, `stageId`, `answer` matching the prompt kind).
+
+**`decide_feedback_loop`** {#decide_feedback_loop} — resolve a feedback-loop `wait_for_human` decision (`decision`: `extend` \| `continue` \| `abandon`, optional `loopId`, `reason`).
+
+Compose with `wait_run`: when `waiting_kind` is `feedback_loop_decision`, call `decide_feedback_loop`; otherwise `answer_gate`.
+
+### Triggers, connections, memories
+
+| Tool | Notes |
+|------|-------|
+| `get_trigger` | list or `id` |
+| `save_trigger` | `mode: create` \| `update`; `enabled_only` toggles enablement |
+| `fire_trigger` | External |
+| `get_connection` | Lists connections |
+| `save_connection` | `mode: create` \| `update` |
+| `test_connection`, `remove_connection` | |
+| `get_memory` | list or `id` |
+| `save_memory` | `mode: create` \| `update`; `card: true` replaces one card |
+| `delete_memory_card` | Destructive |
+
+Full parameter and REST parity for each family remain in [Agent API](agent-api.md), [Evals HTTP API](evals.md#http-api), and [function-api](function-api.md). The rename table in `docs/plans/2026-11-14-1206-refactor-mcp-tool-consolidation-plan.md` lists every old name.
 
 ## Cursor configuration
 
-Add an MCP server entry pointing at the Streamable HTTP URL while `sf ui` or `sf mcp` runs, for example:
+Add an MCP server entry pointing at the Streamable HTTP URL while `sf ui` or `sf mcp` runs. Use **Settings → MCP server** to copy the URL with your toolset choices, or start from bare `/mcp` for core only. For example:
 
 ```json
 {
@@ -1217,6 +368,7 @@ Network errors from `/mcp` and `/api/*` include a stable snake_case `code` along
 | `not_ready` | `/readyz` failing check |
 | `busy_capacity` / `busy_checkout` / `aborted` | Unchanged admission codes |
 | `EVAL_*`, `FILE_CHANGED`, `DATASET_NOT_FOUND` | Eval request errors (`EVAL_INVALID`, `EVAL_RUN_ACTIVE`, `EVAL_ENGINE_UNAVAILABLE`, `EVAL_NODE_TOO_OLD`, `EVAL_NOT_FOUND`, `EVAL_RUN_NOT_FOUND`). See [Eval tools](#eval-tools) |
+| `invalid_arguments` | Merged-tool argument / mode rejection (`isError: true` tool text `{ code, message, status: 400 }`) before the handler runs |
 | `internal_error` | Uncoded internal failure |
 
 ## CLI-only capabilities (decision table)
@@ -1225,28 +377,28 @@ In a container, anything that is CLI-only means `docker exec`. A remote harness 
 
 | Capability | Decision | Reason / substitute |
 |------------|----------|---------------------|
-| `sf graph` | **Not MCP.** Use `describe_pipeline` (definition DAG) or `get_run` / `pipeline_track` (per-run shape). | `sf graph` is a human terminal ASCII render of the same resolved DAG. A second rendering tool would spend MCP context on data the harness already has as JSON. |
+| `sf graph` | **Not MCP.** Use `read_pipeline` with `view: dag` (definition DAG) or `get_run` / `pipeline_track` (per-run shape). | `sf graph` is a human terminal ASCII render of the same resolved DAG. A second rendering tool would spend MCP context on data the harness already has as JSON. |
 | `sf migrate-yaml` | **`docker exec` / laptop only.** | Rewrites checkout YAML in place and shells `git status` to refuse dirty trees. An API that mutates a caller's repository from a request crosses the "repository content is untrusted input" line. Authors migrate before commit. |
-| `sf skills install` | **`docker exec` / image bake only** for durable host skills. Prefer **run-scoped skills** on `start_run` (`skills` param) for harnesses. | Install copies into `.pi/skills` on disk (operator or derived-image path). Harnesses should ship skill bytes with the start call — not install into the container. Use `list_skills` to inspect resolution (run \| checkout \| host). |
+| `sf skills install` | **`docker exec` / image bake only** for durable host skills. Prefer **run-scoped skills** on `start_run` (`skills` param) for harnesses. | Install copies into `.pi/skills` on disk (operator or derived-image path). Harnesses should ship skill bytes with the start call — not install into the container. Use `list_catalog` with `kind: skills` to inspect resolution (run \| checkout \| host). |
 | `sf eval engine install` | **`docker exec` / laptop only** (the Docker image bakes the engine in). | It runs `npm install` of a ~1.2 GB package into `$STAGEFLOW_HOME/eval-engine/`. A network call that installs software is not something a tool request should trigger. A missing engine makes `run_eval` fail `EVAL_ENGINE_UNAVAILABLE`. |
 | `sf a2a validate` / `list` / `add-caller` | **`docker exec` only** for file-based validate and `add-caller`. Read surface: `GET /api/a2a/status` (`read` scope). | These read or write the deployment file directly. |
 | `sf a2a enable` / `caller` / `publication` / `reload` | **Not MCP.** HTTP management API under `/api/a2a` (`read` for GET, `drive` otherwise), also reachable from the CLI. See [A2A — management API](a2a.md#management-api). | Changes apply live (no restart). A caller token is returned once, so it is a console/CLI action, not a tool result an agent harness would keep. |
-| Provider login — API key | **No MCP login tool.** Configure at Host boot via `STAGEFLOW_PROVIDER_<ID>_API_KEY` / `_FILE` ([Providers](providers.md#non-interactive-host-boot-credentials)). | Container path is env/file at boot (Slot 7), not an interactive MCP call. `list_providers` remains read-only inspect. |
+| Provider login — API key | **No MCP login tool.** Configure at Host boot via `STAGEFLOW_PROVIDER_<ID>_API_KEY` / `_FILE` ([Providers](providers.md#non-interactive-host-boot-credentials)). | Container path is env/file at boot (Slot 7), not an interactive MCP call. `list_catalog` with `kind: providers` remains read-only inspect. |
 | Provider login — OAuth | **`docker exec` only.** | Terminal- or browser-driven flow; no headless paste-code API. Once-per-deployment operator action. |
-| `sf export-run` / `sf debug-run` | **Remote when Host is up:** MCP `export_run` and HTTP `GET /api/runs/<id>/export` (read) for a single-run export. Debug bundle: HTTP `GET /api/runs/<id>/debug-bundle` (read) or CLI `sf debug-run` (no MCP tool). Whole-instance: `GET /api/export`. | CLI/`docker exec` remains available for scripts or when the Host is down. |
+| `sf export-run` / `sf debug-run` | **Remote when Host is up:** MCP `get_run` with `view: export` and HTTP `GET /api/runs/<id>/export` (read) for a single-run export. Debug bundle: HTTP `GET /api/runs/<id>/debug-bundle` (read) or CLI `sf debug-run` (no MCP tool). Whole-instance: `GET /api/export`. | CLI/`docker exec` remains available for scripts or when the Host is down. |
 
 There is no MCP `exec`, web terminal, or shell tool — `docker exec` is the supported operator escape hatch ([Docker](docker.md#cli-via-docker-exec)).
 
 ## Limitations
 
 - Cancel signals workers via process-group kill (SIGTERM, then SIGKILL escalation) so agent grandchildren are included; use `cancel_run` for run-level cancel (`wait_run` abort cancels only the wait; `abandon_stage` is per running stage only)
-- `run_stage` access is unrestricted for any authenticated caller of this host (no publish/allowlist step); it has no `rerun` support (no stored `pipeline_path`, the same constraint an inline `start_run` pipeline has)
+- `start_run` with `stage` access is unrestricted for any authenticated caller of this host (no publish/allowlist step); it has no `start_run` with `from_run` support (no stored `pipeline_path`, the same constraint an inline `start_run` pipeline has)
 - REST `POST /api/runs` is path-pipeline-only; inline pipelines are MCP-only (see `start_run` REST asymmetry)
-- No catalog listing resource in v1 (use `list_pipelines` / `list_tasks` / `list_models`)
-- No provider login/logout/OAuth, settings-write, or Stage MCP attach MCP tools (`list_providers`, `list_models`, `list_project_mcp`, and `probe_project_mcp` are read-only inspect). Catalog writes are `create_task_file`, `update_task_file`, `import_task_file`, `create_stage_file`, `write_catalog_file`, and `validate_catalog_draft`, plus the pipeline package tools. See [CLI-only capabilities](#cli-only-capabilities-decision-table)
+- No catalog listing resource in v1 (use `list_catalog` with `kind: pipelines` / `list_catalog` with `kind: tasks` / `list_catalog` with `kind: models`)
+- No provider login/logout/OAuth, settings-write, or Stage MCP attach MCP tools (`list_catalog` with `kind: providers`, `list_catalog` with `kind: models`, and `list_catalog` with `kind: mcp_servers` are read-only catalog inspect; `probe_project_mcp` connects outbound and carries `external` annotations). Catalog writes are `write_task` with `mode: create` and `no_pipeline: true`, `write_task` with `mode: update` and `no_pipeline: true`, `import_task`, `write_stage` with `mode: create` and `no_pipeline: true`, `write_stage` with `mode: update`, `form: content`, and `validate` with `kind: draft`, plus the pipeline package tools. See [CLI-only capabilities](#cli-only-capabilities-decision-table)
 - No MCP tool for debug-bundle / `sf debug-run` (use HTTP `GET /api/runs/<id>/debug-bundle` or CLI)
-- Default `get_run` / run resource read stay lean (no stage event streams or verification evidence) and include `total_cost_usd` plus per-stage `cost_usd` / `definition_id` when the store has them; use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detail
-- Tools return JSON text content blocks, except `read_artifact`, which may return an MCP image content block for known image extensions
+- Default `get_run` / run resource read stay lean (no stage event streams or verification evidence) and include `total_cost_usd` plus per-stage `cost_usd` / `definition_id` when the store has them; use `get_stage` with `view: events`, `log`, `envelope`, or `verification` for detail
+- Tools return JSON text content blocks, except `run_files` with `view: artifact`, which may return an MCP image content block for known image extensions
 - One MCP/UI host per project root (do not run `sf ui` and `sf mcp` as peer writers)
 
 ## See also
@@ -1254,8 +406,8 @@ There is no MCP `exec`, web terminal, or shell tool — `docker exec` is the sup
 - [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) — project `.mcp.json`, Settings inspect, and stage `mcp` names (not this host)
 - [Operator console](operator-console.md) — starts MCP alongside the UI
 - [HITL](hitl.md) — gate kinds and answer shapes
-- [CLI reference](cli-reference.md) — `sf ui`, `sf mcp`, `sf validate`, `sf run-stage` (the 1:1 CLI counterpart of `run_stage`), and host-down `sf runs` (inspect / wait / answer / feedback-decide / retry / resume / abandon / cancel / delete / gc / rerun). CLI `sf runs` is not a 1:1 MCP tool list; it does not clone catalog listing (`list_pipelines` / `list_tasks` / `describe_pipeline`).
+- [CLI reference](cli-reference.md) — `sf ui`, `sf mcp`, `sf validate`, `sf run-stage` (the 1:1 CLI counterpart of `start_run` with `stage`), and host-down `sf runs` (inspect / wait / answer / feedback-decide / retry / resume / abandon / cancel / delete / gc / rerun). CLI `sf runs` is not a 1:1 MCP tool list; it does not clone catalog listing (`list_catalog` with `kind: pipelines` / `list_catalog` with `kind: tasks` / `read_pipeline` with `view: dag`).
 - [Docker and self-hosting](docker.md#cli-via-docker-exec) — literal `docker exec` for CLI-only ops and worktree escape hatch
 - [YAML catalog — Feedback loops](yaml-catalog.md#feedback-loops) — `feedback_loop` / `replay_safe` policy
 - [CI / headless](ci.md) — MCP not used in CI jobs
-- [Envelopes](envelopes.md) — artifact paths returned by `get_run` / `get_envelope`
+- [Envelopes](envelopes.md) — artifact paths returned by `get_run` / `get_stage` with `view: envelope`

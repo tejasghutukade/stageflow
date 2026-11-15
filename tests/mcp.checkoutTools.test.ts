@@ -11,7 +11,7 @@ import {
   listCheckoutChanges,
   parseStatusPorcelainZ,
   readCheckoutFileBytes,
-} from "../src/mcp/checkoutTools.js";
+} from "../src/runread/checkout.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { startUiServer } from "../src/server/http.js";
 import { mcpCall } from "./helpers/mcpCall.js";
@@ -278,7 +278,8 @@ describe("checkout visibility tools (U8)", () => {
     const base = `http://127.0.0.1:${address.port}`;
 
     try {
-      const mcpChanges = await mcpCall(base, "list_checkout_changes", {
+      const mcpChanges = await mcpCall(base, "run_files", {
+        view: "changes",
         runId: created.runId,
       });
       expect(mcpChanges.isError).toBe(false);
@@ -298,7 +299,8 @@ describe("checkout visibility tools (U8)", () => {
       };
       expect(restBody.changes).toEqual(mcpChanges.payload.changes);
 
-      const mcpDiff = await mcpCall(base, "get_run_diff", {
+      const mcpDiff = await mcpCall(base, "run_files", {
+        view: "diff",
         runId: created.runId,
         mode: "stat",
       });
@@ -312,7 +314,8 @@ describe("checkout visibility tools (U8)", () => {
       const diffBody = (await restDiff.json()) as { base_sha: string };
       expect(diffBody.base_sha).toBe(sha);
 
-      const mcpFile = await mcpCall(base, "read_checkout_file", {
+      const mcpFile = await mcpCall(base, "run_files", {
+        view: "file",
         runId: created.runId,
         path: "fresh.txt",
       });
@@ -330,7 +333,8 @@ describe("checkout visibility tools (U8)", () => {
         taskYaml: "id: u\ngoal: g\n",
         taskId: "u",
       });
-      const mcpUnbound = await mcpCall(base, "list_checkout_changes", {
+      const mcpUnbound = await mcpCall(base, "run_files", {
+        view: "changes",
         runId: unbound.runId,
       });
       expect(mcpUnbound.isError).toBe(true);
