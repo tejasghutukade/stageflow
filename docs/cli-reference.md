@@ -666,7 +666,7 @@ sf archive [--out <file>] [--include-secrets] [--include-a2a-artifacts] [--json]
 | `--include-a2a-artifacts` | Include A2A artifact bytes |
 | `--json` | Print metadata JSON (`path`, `bytes`, `sha256`, `file_count`, `left_out_count`, `contains_secrets`, `archive_version`) |
 
-Secrets are left out by default. The first member is a small `.stageflow-archive` marker (format and Stageflow version) and the last is `manifest.json`. The manifest lists every file with its size and SHA-256, and every path left out with the reason (disposable, a secret, or not in the inventory). Run files exclude agent directories, credentials, `node_modules` and `.git`. The archive is written with mode `0600` and opens with a standard `tar -xzf`. It needs free space for the data it copies and stops early when there is not enough.
+Secrets are left out by default, with one exception: `agent/models.json` (model routing and provider pins) is copied without any key, token, secret, password or authorization field and without request `headers`, and the manifest marks it `"note": "keys and headers removed"`; a copy that cannot be read as JSON is left out with the reason. `--include-secrets` copies it as it is. The first member is a small `.stageflow-archive` marker (format and Stageflow version) and the last is `manifest.json`. The manifest lists every file with its size and SHA-256, and every path left out with the reason (disposable, a secret, or not in the inventory). Run files exclude agent directories, credentials, `node_modules` and `.git`. The archive is written with mode `0600` and opens with a standard `tar -xzf`. It needs free space for the data it copies and stops early when there is not enough.
 
 [`sf restore`](#sf-restore) restores an archive as well as a backup.
 

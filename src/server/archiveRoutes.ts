@@ -2,32 +2,20 @@ import { createReadStream, statSync } from "node:fs";
 import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { ArchiveError, buildArchive } from "../archive/build.js";
+import { readJsonBody } from "../agents/ndjson.js";
 import { BackupError, resolveBackupDownloadPath } from "../runstore/backup.js";
 import type { RunStore } from "../runstore/port.js";
 
 type Json = (res: ServerResponse, status: number, body: unknown) => void;
 
+const MAX_BODY_BYTES = 65536;
+
 export type ArchiveAudit = (outcome: "ok" | "error", errorCode?: string) => void;
 
-let building = false;
-
-/** Test hook: lets a test hold the single build slot. */
-export function holdArchiveSlotForTests(held: boolean): void {
-  building = held;
-}
-
-async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    const buffer = typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer);
-    size += buffer.length;
-    if (size > 65536) throw new Error("Request body too large");
-    chunks.push(buffer);
-  }
-  if (chunks.length === 0) return {};
-  const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+/** One archive is built at a time per Host. A server owns one slot; a test can hand in its own and hold it. */
+export type ArchiveSlot = { busy: boolean };
+export function createArchiveSlot(): ArchiveSlot {
+  return { busy: false };
 }
 
 /**
@@ -36,21 +24,21 @@ async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> 
  * (see requiredScopeFor), because an archive can hold secrets.
  */
 export async function handleArchiveRoutes(
-  req: IncomingMessage, method: string, pathname: string, deps: { store: RunStore; homeDir: string; audit: ArchiveAudit }, res: ServerResponse, json: Json,
+  req: IncomingMessage, method: string, pathname: string, deps: { store: RunStore; homeDir: string; audit: ArchiveAudit; slot: ArchiveSlot }, res: ServerResponse, json: Json,
 ): Promise<boolean> {
   if (method === "POST" && pathname === "/api/archive") {
     let body: Record<string, unknown>;
     try {
-      body = await readBody(req);
+      body = await readJsonBody(req, MAX_BODY_BYTES);
     } catch {
       json(res, 400, { code: "archive_bad_request", error: "Request body must be a small JSON object" });
       return true;
     }
-    if (building) {
+    if (deps.slot.busy) {
       json(res, 409, { code: "archive_in_progress", error: "An archive is already being built" });
       return true;
     }
-    building = true;
+    deps.slot.busy = true;
     try {
       const result = await buildArchive({
         store: deps.store,
@@ -69,7 +57,7 @@ export async function handleArchiveRoutes(
       }
       throw err;
     } finally {
-      building = false;
+      deps.slot.busy = false;
     }
     return true;
   }

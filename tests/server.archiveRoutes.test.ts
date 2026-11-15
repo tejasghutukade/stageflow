@@ -5,7 +5,7 @@ import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { globalStageflowHome } from "../src/project/globalHome.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { loadControlTokens } from "../src/server/controlToken.js";
-import { holdArchiveSlotForTests } from "../src/server/archiveRoutes.js";
+import { createArchiveSlot } from "../src/server/archiveRoutes.js";
 import { startMcpServer } from "../src/server/mcpHost.js";
 import { withIsolatedHome } from "./helpers/projectContext.js";
 
@@ -74,17 +74,18 @@ describe("archive HTTP routes", () => {
     await withIsolatedHome(async () => {
       const home = globalStageflowHome();
       const store = createRunStore({ rootDir: home, openerMode: "migrate" });
+      const slot = createArchiveSlot();
       const started = await startMcpServer({
         agent: scriptedFakeAgent([]), cwd: home, rootDir: home, store, port: 0, mcpStateless: true,
-        controlTokens: loadControlTokens({ STAGEFLOW_CONTROL_TOKEN: DRIVE }),
+        controlTokens: loadControlTokens({ STAGEFLOW_CONTROL_TOKEN: DRIVE }), archiveSlot: slot,
       });
       try {
-        holdArchiveSlotForTests(true);
+        slot.busy = true;
         const res = await fetch(`${started.url}/api/archive`, { method: "POST", headers: { Authorization: `Bearer ${DRIVE}`, "Content-Type": "application/json" }, body: "{}" });
         expect(res.status).toBe(409);
         expect(await res.json()).toMatchObject({ code: "archive_in_progress" });
       } finally {
-        holdArchiveSlotForTests(false);
+        slot.busy = false;
         await closeServer(started.server);
       }
     });
