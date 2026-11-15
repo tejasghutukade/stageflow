@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useHostInfo } from "../../hostInfo";
 import { LuChevronRight, LuClock, LuCopy, LuGlobe, LuMessageSquare, LuCircle, LuPlus, LuSearch, LuTriangleAlert } from "react-icons/lu";
 import { agentsApi, listAuthorDrafts, type AgentSummary } from "../../api/agents";
 import { agentCreatePath, agentPath } from "../../routes";
@@ -302,6 +303,7 @@ function DraftsSection({
 }
 
 export function AgentsDirectoryPage({ onNewAgent }: { onNewAgent: () => void }) {
+  useHostInfo();
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [drafts, setDrafts] = useState<Array<{ id: string; name: string; updatedAt: string; messages: number }>>([]);
   const [loading, setLoading] = useState(true);

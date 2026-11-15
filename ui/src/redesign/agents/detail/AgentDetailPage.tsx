@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useHostInfo } from "../../../hostInfo";
 import { LuCopy, LuGlobe, LuTriangleAlert } from "react-icons/lu";
 import {
   AgentApiError,
@@ -314,6 +315,7 @@ function SessionsList({ agentId, stats: initialStats }: { agentId: string; stats
 }
 
 export function AgentDetailPage({ agentId }: { agentId: string }) {
+  useHostInfo();
   const { detail, loading, error, missing, setDetail } = useAgentDetail(agentId);
   const [tab, setTab] = useState<DetailTab>("sessions");
   const [justCreated] = useState(() => consumeAgentCreated(agentId));

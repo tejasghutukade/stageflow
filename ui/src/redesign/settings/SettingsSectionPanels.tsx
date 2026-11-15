@@ -5,6 +5,7 @@ import { getControlToken, setControlToken } from "../../api/controlToken";
 import type { CatalogSnapshot } from "../../catalog/source";
 import { heldWaitingCount } from "../../catalog/views";
 import { agentsApi, type StageflowToolCatalog } from "../../api/agents";
+import { useHostInfo } from "../../hostInfo";
 import { MCP_BARE_URL_NOTES, cursorMcpConfigJson, mcpEndpointUrl } from "../../mcpConnect";
 import type { NotifyPreference } from "../../useWaitingNotifications";
 import { computeConcurrencySlots } from "./settingsConcurrency";
@@ -272,11 +273,13 @@ export function SettingsMcpPanel() {
   const [catalogError, setCatalogError] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const [openToolsets, setOpenToolsets] = useState<ReadonlySet<string>>(() => new Set());
+  const hostInfo = useHostInfo();
   const url = mcpEndpointUrl(window.location, {
+    publicOrigin: hostInfo.publicUrl,
     viteDev: import.meta.env.DEV,
     toolsets: [...selected],
   });
-  const snippet = cursorMcpConfigJson(url);
+  const snippet = cursorMcpConfigJson(url, { apiKeyHeader: hostInfo.managed });
   const [token, setToken] = useState(() => getControlToken());
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [copiedConfig, setCopiedConfig] = useState(false);
@@ -466,24 +469,32 @@ export function SettingsMcpPanel() {
             {snippet}
           </pre>
         </div>
-        <label className="flex flex-col gap-1.5">
-          <span className="font-sans text-[13px] font-medium text-[var(--sf-text-1)]">
-            Control token
-          </span>
-          <span className="font-sans text-xs text-[var(--sf-text-3)]">
-            Stored in this browser only. Paste the Host&apos;s
-            STAGEFLOW_CONTROL_TOKEN, including Docker on localhost. Leave empty
-            when the Host has no token.
-          </span>
-          <input
-            type="password"
-            autoComplete="off"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder="STAGEFLOW_CONTROL_TOKEN"
-            className="h-8 rounded-lg border border-[#ffffff1a] bg-[var(--sf-raised)] px-2.5 font-['Geist_Mono',monospace] text-[13px] text-[var(--sf-text-1)] outline-none"
-          />
-        </label>
+        {hostInfo.managed ? (
+          <p className="font-sans text-xs text-[var(--sf-text-3)]" data-testid="mcp-managed-note">
+            This workspace is hosted. MCP clients sign in with a drive API key from your
+            workspace dashboard, sent as the Authorization header in the snippet above.
+            The control token is not used here.
+          </p>
+        ) : (
+          <label className="flex flex-col gap-1.5">
+            <span className="font-sans text-[13px] font-medium text-[var(--sf-text-1)]">
+              Control token
+            </span>
+            <span className="font-sans text-xs text-[var(--sf-text-3)]">
+              Stored in this browser only. Paste the Host&apos;s
+              STAGEFLOW_CONTROL_TOKEN, including Docker on localhost. Leave empty
+              when the Host has no token.
+            </span>
+            <input
+              type="password"
+              autoComplete="off"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              placeholder="STAGEFLOW_CONTROL_TOKEN"
+              className="h-8 rounded-lg border border-[#ffffff1a] bg-[var(--sf-raised)] px-2.5 font-['Geist_Mono',monospace] text-[13px] text-[var(--sf-text-1)] outline-none"
+            />
+          </label>
+        )}
         {import.meta.env.DEV ? (
           <p className="font-sans text-xs text-[var(--sf-text-3)]">
             Vite hot-reload cannot serve MCP. This snippet uses the default sf
