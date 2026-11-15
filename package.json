@@ -1,6 +1,6 @@
 {
   "name": "stageflow",
-  "version": "0.63.0",
+  "version": "0.64.0",
   "description": "Stageflow — CLI pipeline runtime for configurable stages on Pi",
   "type": "module",
   "main": "./dist/index.js",
