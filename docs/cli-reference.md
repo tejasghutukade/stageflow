@@ -651,6 +651,27 @@ sf backup [--out <file>] [--db-only] [--no-credentials] [--include-a2a-artifacts
 
 HTTP: `POST /api/backup`, `GET /api/backup/<name>` (both require **drive** scope).
 
+## `sf archive`
+
+One tar.gz of everything this Host keeps, with a manifest as the last member. It covers the paths [`sf backup`](#sf-backup) leaves out: the workspace catalog, memories, channel connections, MCP servers, agent transcripts, Workshop drafts, the identity database and run files. See [Data directory](data-directory.md) for what each path is.
+
+```bash
+sf archive [--out <file>] [--include-secrets] [--include-a2a-artifacts] [--json]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--out` | Destination path (refuses `$STAGEFLOW_HOME/worktrees/` and `runs/`); default is under `$STAGEFLOW_HOME/backups/` |
+| `--include-secrets` | Also copy provider credentials, channel and MCP secrets and the MCP sign-in store. The archive is then marked `contains_secrets: true` and must be treated as a secret |
+| `--include-a2a-artifacts` | Include A2A artifact bytes |
+| `--json` | Print metadata JSON (`path`, `bytes`, `sha256`, `file_count`, `left_out_count`, `contains_secrets`, `archive_version`) |
+
+Secrets are left out by default. The manifest lists every file with its size and SHA-256, and every path left out with the reason (disposable, a secret, or not in the inventory). Run files exclude agent directories, credentials, `node_modules` and `.git`. The archive is written with mode `0600` and opens with a standard `tar -xzf`. It needs free space for the data it copies and stops early when there is not enough.
+
+`sf restore` does not accept an archive yet; use it to keep a copy you own and can read. `sf backup` stays the way to restore the run store today.
+
+HTTP: `POST /api/archive` with `{ "include_secrets"?: boolean, "include_a2a_artifacts"?: boolean }` builds one under `backups/` and answers `{ name, bytes, sha256, file_count, left_out_count, contains_secrets, archive_version, stageflow_version, created_at }` (never the path); `GET /api/archive/<name>` streams it. Both require **drive** scope. Only one archive is built at a time (`409 archive_in_progress`); `507 archive_insufficient_space` when the disk is too full.
+
 ## `sf restore`
 
 Whole-store restore. Host must be down (probes `GET /livez`; never calls `ensureGlobalService`). Previous `state.db` is moved aside as `*.pre-restore-<ISO>`.

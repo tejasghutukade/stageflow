@@ -654,7 +654,10 @@ export function requiredScopeFor(
   if (pathname.startsWith("/api/public/chat/")) return null;
   if (isLiveViewRoute(pathname)) return null;
   if (isEvalInternalPath(pathname)) return null;
-  if (pathname === "/api/backup" || pathname.startsWith("/api/backup/")) {
+  if (
+    pathname === "/api/backup" || pathname.startsWith("/api/backup/") ||
+    pathname === "/api/archive" || pathname.startsWith("/api/archive/")
+  ) {
     return "drive";
   }
   if (method === "GET" || method === "HEAD") return "read";
