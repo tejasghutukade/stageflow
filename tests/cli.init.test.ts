@@ -71,6 +71,12 @@ describe("runInitCommand", () => {
           repoRoot,
         );
         expect(validated.status).toBe(0);
+        expect(validated.stderr + validated.stdout).toMatch(/placeholder.*CHANGE_ME/);
+        const ready = runCli(
+          ["ready", "--pipeline", "pipelines/hello.pipeline.yaml"],
+          repoRoot,
+        );
+        expect(ready.status).toBe(1);
         await access(path.join(home, ".stageflow", "agent"));
       } finally {
         await cleanup();

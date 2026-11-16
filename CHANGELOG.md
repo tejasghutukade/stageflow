@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `sf ready` — onboarding readiness checklist (`--pipeline`, `--json`).
+- `sf host status` and `sf starters list|install` for the global workspace catalog.
+- `sf init --fix-model` rewrites hello scaffold `CHANGE_ME` after a provider connects.
+- `sf providers list` and `sf providers status` accept `--json`.
+- `sf run` preflight for model placeholders and provider/model mismatches; logs when a background host is auto-started.
+
+### Changed
+- `sf validate` warns on `CHANGE_ME` model placeholders.
+- `sf providers login` installs workspace starter pipelines when a provider connects (same idempotent copy as the host).
+- Quickstart documents the Node golden path (`npx`, provider-before-init, `sf ready`).
+
 ## [0.65.1] - 2026-11-15
 
 ### Fixed

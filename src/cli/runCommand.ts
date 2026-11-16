@@ -43,6 +43,7 @@ import {
   formatValidationHuman,
   formatValidationJson,
 } from "./validateOutput.js";
+import { runRunPreflight, type ReadyResult } from "./readyCommand.js";
 
 export const RUN_USAGE = `Usage:
   sf run --task <path> --pipeline <path> [--project-root <id-or-path>] [--checkout <path>] [--repository <owner/repo>] [--ref <ref>] [--json] [--include stages] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]`;
@@ -531,6 +532,8 @@ export async function runRunCommand(
     readLine?: () => Promise<string | null>;
     hostBaseUrl?: string;
     ensureService?: () => Promise<EnsureGlobalServiceResult>;
+    /** Test hook; defaults to onboarding preflight before start_run. */
+    readyCheck?: (input: { cwd: string; pipeline: string }) => Promise<ReadyResult>;
   } = {},
 ): Promise<number> {
   const cwd = options.cwd ?? process.cwd();
@@ -596,12 +599,21 @@ export async function runRunCommand(
           : {}),
       });
 
+  const ensureService = options.ensureService ?? (() => ensureGlobalService());
   const startRun =
     options.startRun ??
     defaultStartRun(
       cwd,
       base,
-      options.ensureService ?? (() => ensureGlobalService()),
+      async () => {
+        const ensured = await ensureService();
+        if (ensured.ok && !ensured.alreadyRunning && !parsed.json) {
+          out.log(
+            `Started background Stageflow host on ${base}. Open the operator console with \`sf ui\`.`,
+          );
+        }
+        return ensured;
+      },
       cliProjectRoot,
       progress ? (detail) => progress.update(detail) : undefined,
     );
@@ -618,6 +630,23 @@ export async function runRunCommand(
     options.store ?? (parsed.includeStages ? httpStoreReader(base) : undefined);
 
   try {
+    const readyCheck = options.readyCheck ?? runRunPreflight;
+    const ready = await readyCheck({ cwd, pipeline: parsed.pipeline });
+    if (!ready.ok) {
+      if (parsed.json) {
+        out.log(JSON.stringify(ready, null, 2));
+      } else {
+        for (const check of ready.checks) {
+          if (check.status === "fail") {
+            out.error(`[${check.status}] ${check.id}: ${check.message}`);
+            if (check.fix !== undefined) out.error(`  fix: ${check.fix}`);
+          }
+        }
+        out.error("Preflight failed. Run `sf ready --pipeline " + parsed.pipeline + "` for the full checklist.");
+      }
+      return 1;
+    }
+
     const hasBindingOverride =
       parsed.repository !== undefined || parsed.ref !== undefined;
     const taskLoadRoot = cliProjectRoot?.rootPath ?? cwd;
