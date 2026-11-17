@@ -64,9 +64,9 @@ web_chat:
 
 | Provider | What the user needs | `allow_from` entry | How mail or messages arrive |
 |---|---|---|---|
-| AgentMail `agentmail` | An existing inbox. `config.inbox`, `config.region` `us` or `eu` (default `us`). Secret `apiKey` with inbox read and message send. Optional `inboundSecret` | Email `jane@acme.com`, or a domain `@acme.com` | The Host holds a WebSocket per inbox. No public URL. Optional webhook if `inboundSecret` is set |
+| AgentMail `agentmail` | An existing inbox. `config.inbox`, `config.region` `us` or `eu` (default `us`). Secret `apiKey` with inbox read and message send | Email `jane@acme.com`, or a domain `@acme.com` | The Host holds a WebSocket per inbox. No public URL. No webhook. One session per sender per thread |
 | Slack `slack` | Secret `secrets.botToken` (bot token with `chat:write`). Optional `config.teamId` (`T` plus capitals or digits). Optional secret `inboundSecret` is the app's signing secret, required to receive. Read `GET /api/connections/meta` before inventing keys | Slack user id: `U` or `W`, then 7 or more capitals or digits (`U02ABC1234`). Or `*` | Webhook only |
-| Telegram `telegram` | BotFather token in `botToken`. Optional `config.botUsername`. `inboundSecret` is the `secret_token` passed to `setWebhook`. The person must have opened the bot | `@username`, 5 to 32 characters, a letter then letters, digits, or underscore, no dot. A user with no username can only match `*` | Webhook only |
+| Telegram `telegram` | BotFather token in `botToken`. Optional `config.botUsername`. `inboundSecret` is the `secret_token` passed to `setWebhook`. The person must have opened the bot | Numeric user id, 5 to 15 digits (`123456789`); preferred. Or `@username`, 5 to 32 characters, a letter then letters, digits, or underscore, no dot, which warns `agent.channel_username_entry` because a username can change hands. The Host log names the id of a sender it refused | Webhook only. One-to-one chats only; groups and channels are ignored |
 | iMessage `imessage` | Photon project id and secret as a shared credential (`projectId`, `projectSecret`). Optional package `@spectrum-ts/imessage`; without it the check fails `CHANNEL_PROVIDER_UNSUPPORTED` | E.164 `+14155550123` | The Host holds a Photon stream. No public URL. Group chats are ignored. One session per sender |
 
 WhatsApp (`whatsapp`) can send from a stage. It has no inbound path for an agent.
@@ -75,13 +75,17 @@ WhatsApp (`whatsapp`) can send from a stage. It has no inbound path for an agent
 
 Empty `allow_from` lets nobody in (warning `agent.channel_nobody_allowed`). `*` lets anyone who can reach the connection in (warning `agent.channel_open_to_anyone`). Use specific entries for anything outsiders can message. Duplicates are an error.
 
+An agent that is open to anyone (`*`, or a public mail domain such as `@gmail.com`) cannot be enabled while it has tools, skills, memories, project context or sub-agents: `agent.channel_open_with_tools`. Every channel sender is trusted alike, so list people or company domains before granting anything. Do not propose `*` together with tools.
+
 A sender that does not match is dropped with HTTP 200 `{ "ignored": true }`. Nothing tells the sender they were refused. Mail loops are dropped the same way: the agent's own inbox, `Auto-Submitted` other than `no`, bulk or list precedence, and senders such as mailer-daemon, postmaster, and no-reply. One sender is limited to 20 messages a minute; the rest are ignored.
+
+Everyone in `allow_from` is trusted alike: a channel agent's tools work the same for every allowed sender, and nothing ties a sender to a customer account. Do not build a channel agent that looks up one customer's private data for whoever writes in; use protected web chat for that.
 
 `allow_from` is not an approval list. Approvals are decided in the console, never from the channel.
 
 ## Webhooks and listeners
 
-Webhook URL, for Slack, Telegram, and optional AgentMail: `POST /api/agent-inbound/<connectionId>`.
+Webhook URL, for Slack and Telegram: `POST /api/agent-inbound/<connectionId>`. An AgentMail connection answers `404` there.
 
 The route is exempt from the Stageflow control token. It accepts the call only when the connection has `inboundSecret` and the signature matches. Otherwise `404` (unknown connection or no secret) or `401`. A body over 1 MiB is `413`. A bad body is `400`.
 
@@ -89,7 +93,6 @@ The route is exempt from the Stageflow control token. It accepts the call only w
 |---|---|---|
 | Slack | `x-slack-signature` and `x-slack-request-timestamp` | HMAC, timestamp within 5 minutes. A `url_verification` payload returns the `challenge` |
 | Telegram | `x-telegram-bot-api-secret-token` | Equals `inboundSecret` |
-| AgentMail | `x-agentmail-signature` | HMAC-SHA256 of the raw body |
 
 Slack and Telegram need a public HTTPS URL, and that host listed in `STAGEFLOW_ALLOWED_HOSTS`. AgentMail and iMessage do not: the Host connects out. Status `200` bodies include `{ "ok": true }`, `{ "ignored": true }`, `{ "duplicate": true }`, and Slack's challenge.
 
@@ -126,7 +129,11 @@ Rotate a leaked link by saving `web_chat.slug: ""` through MCP, REST, or the con
 
 ## Protected chat and identity
 
-Experimental. `web_chat.access: authenticated`. The only tool the publication check allows is `tools.mcp.orders: [status]` (grant id `orders.status`), plus sub-agents that are themselves consumer-safe. Filesystem, shell, browser, skills, memory, other MCP servers, and Stageflow tools are refused at chat time with `identity.setup_required`. A channel binding is not part of the publication check. Identity has to be turned on or the same code is returned.
+Experimental. `web_chat.access: authenticated` and `channel.access: authenticated` (with `channel.connection_id`) need identity on and a consumer-safe agent. The publication check allows only declared customer resource tools: `tools.mcp.orders: [status, list]` (grant ids `orders.status`, `orders.list`) and `tools.mcp.account: [profile]` (`account.profile`), plus sub-agents that are themselves consumer-safe. Filesystem, shell, browser, skills, memory, other MCP servers, and Stageflow tools are refused at chat time with `identity.setup_required`. Identity has to be turned on or the same code is returned.
+
+`channel.access: authenticated` also needs a channel identity connection for that agent and inbound connection (`POST /api/identity/connections/channel`). The Host checks that binding when the agent is enabled; web chat does not.
+
+Email and AgentMail channel grants are `address_only` assurance. They cannot satisfy private resource tools on channel assurance alone; the Host replies with a one-time sign-in link to protected web chat (`GET /api/public/chat/:slug/step-up?token=…`, ten minutes, single use). iMessage and Telegram are `provider_verified`.
 
 There is no CLI and no MCP tool for identity. Console: Identity, `#/identity`. REST needs the control token when the Host has one. Writes under `/api/identity/setup` also need `Origin`. Connection and assignment routes do not. `sf backup` does not include `identity/`.
 

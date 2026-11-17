@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.67.0] - 2026-11-16
+
+### Added
+- Agent evals for cross-customer leakage: cases may set `metadata.principal` to a fixture customer identity; the eval session runs customer resource tools against an in-memory fixture order adapter (not the live identity store or order API). The deterministic `consumer_scope` grader fails on out-of-scope tool success or leaked fixture resource ids or statuses in the conversation subject. Sample: `examples/evals/leakage-sample.*`.
+- Customer resource contract for protected agents: Host settings declare resource types (`orders`, `account`) with fixed `/stageflow/…` paths on one downstream API. Tools `orders.list` and `account.profile` join `orders.status`; list calls use the mapped account only and refuse foreign rows. See [Customer resource API contract](docs/order-api-contract.md).
+- A channel identity connection maps an iMessage, Telegram or email sender to a customer account. The Host calls `POST /stageflow/resolve-sender` on the order API (cached for five minutes) and falls back to the assignment table; a revoke wins. An unmatched sender gets the operator's fixed reply and the agent does not run. See [Order API contract](docs/order-api-contract.md).
+- `channel.access: authenticated` runs admitted channel sessions under the consumer gate (same tool limits, authorization re-checks and buffered output as protected web chat). Enabling such an agent requires identity, a registered channel connection and a consumer-safe tool list (declared customer resource tools only).
+- Step-up verification for weak channel sessions: private tools can require `provider_verified` or `signed_in`, email senders need aligned DMARC pass to map, and the Host issues a one-time sign-in link (10 minutes) that raises a matching channel session to `signed_in` for 12 hours after web or handoff sign-in. The link is an absolute URL from `STAGEFLOW_PUBLIC_CHAT_URL` or `STAGEFLOW_PUBLIC_URL`. The Identity page can register the channel connection.
+
+### Fixed
+- An authenticated channel no longer runs the model when the sender is not admitted (identity off, no channel connection, or a provider the channel gate does not handle). The turn is not started; a turn interrupted earlier is failed with `identity.verification_required`.
+- After a sign-in elevation lapses, the next message on that channel stores the new sign-in link as the assistant reply (`identity.step_up_required`) instead of failing the turn with `agent.backend_failed` and sending nothing.
+- The leakage eval grader no longer treats the case's own user prompt as a leaked secret. It grades assistant text, the final reply, and tool results.
+
+## [0.66.0] - 2026-11-16
+
+### Changed
+- **Agents are no longer experimental.** The agent definition file, `/api/agents`, the public web chat API, `sf agents`, the agent MCP tools and the Slack, Telegram, iMessage and AgentMail channels keep their shape between releases. The console no longer marks Agents, Agent sessions and Connections with **Exp**. Still experimental: identity (customer sign-in, protected chat, the order API), A2A, WhatsApp, email rules and the Claude and Cursor backends. The agents page gains [Who should talk to a channel agent](docs/agents.md#who-should-talk-to-a-channel-agent): everyone allowed on a channel is trusted alike, so a channel agent is not yet the way to give each customer their own data.
+- **An agent that anyone can message can no longer have tools.** With `*` or a public mail domain (`@gmail.com` and the like) in `channel.allow_from`, an agent that has tools, skills, memories, project context or sub-agents cannot be enabled (`agent.channel_open_with_tools`). **An agent already enabled like this shows Needs setup and stops answering on its channel after the upgrade** until you list its senders or remove those. Every sender on a channel is trusted alike, so an open channel gave strangers all of them. An agent that only talks may stay open.
+- A channel conversation belongs to its sender. A second allowed person who writes into the same email thread gets a session of their own instead of continuing the first person's. A Slack direct message is now one session per person (it used to be a new session for every message); a thread in a Slack channel stays shared. A message with no sender is ignored.
+- Telegram senders are identified by their numeric user id, which never changes. `allow_from` takes the id (`123456789`); the Host log names the id of a sender it refused. A `@username` entry still works and warns (`agent.channel_username_entry`), because a username can be taken over by someone else. Telegram groups, supergroups and channels are ignored: the agent answers one-to-one chats only.
+
+### Added
+- On a channel the agent is told who is writing: the system prompt gets a Sender section with the channel and the sender's address, phone number or user id as the provider reported it, and a note that anything a message claims about its author cannot be checked. A thread in a Slack channel is described as shared. Compaction never rewrites it.
+
+### Fixed
+- `sf archive` without `--include-secrets` no longer carries OIDC client secrets and provider refresh tokens. They are stored in rows of the identity database, which the archive copied whole. The copy now has them removed (the manifest says so); people, access, revocations and replay protection are kept. Enter the client secret again after restoring such an archive.
+
+### Removed
+- AgentMail webhooks for agents. `POST /api/agent-inbound/<connection id>` answers `404` for an AgentMail connection and the connection form no longer asks for a webhook secret (one saved earlier is ignored, and the connection keeps working). The route checked a signature header and a body shape AgentMail does not send, and a webhook carries no mail headers, so automatic replies could not be told apart. Mail reaches an agent over the stream the Host opens, as before.
+
 ## [0.65.1] - 2026-11-15
 
 ### Fixed

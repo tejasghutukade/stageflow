@@ -93,6 +93,19 @@ export type ServiceConnectionInput = {
   resources: string[];
 };
 
+export type ChannelProvider = "imessage" | "telegram" | "agentmail" | "email";
+
+export type ChannelConnectionInput = {
+  id: string;
+  channelConnectionId: string;
+  agentId: string;
+  provider: ChannelProvider;
+  unmappedReply: string;
+  scope: IdentityScope;
+  agents: string[];
+  resources: string[];
+};
+
 export type IdentityEngineChoice = { kind: "scope" } | { kind: "cerbos"; endpoint: string };
 
 export type IdentitySetupStatus = {
@@ -331,5 +344,6 @@ export const identityApi = {
   rotateSigningKey: async () => projectIdentitySetup(await request("/api/identity/setup/orders/signing-key", "POST")),
   testOrders: async (orderId: string) => projectOrdersTest(await request("/api/identity/setup/orders/test", "POST", { orderId })),
   registerService: (input: ServiceConnectionInput) => connectionResult("/api/identity/connections/service", "POST", input),
+  registerChannel: (input: ChannelConnectionInput) => connectionResult("/api/identity/connections/channel", "POST", input),
   setRevocationSource: (id: string, url: string | null) => connectionResult(connectionUrl(id, "/revocation-source"), "POST", { url }),
 };

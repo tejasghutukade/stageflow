@@ -1,15 +1,16 @@
-# Order API contract
+# Customer resource API contract
 
-This page is for the engineer who owns the system that holds the orders. Stageflow never reads your database. For a protected agent to answer "where is my order?", Stageflow calls two fixed endpoints on an API **you** run, and your API decides, from its own data, whether the person asking may see the order. Operators connect the API from **Identity → Setup**; see [Console: Identity](console-identity.md#setup).
+This page is for the engineer who owns the system that holds customer data (orders, accounts, and similar resources). Stageflow never reads your database. For a protected agent, the Host calls fixed `POST /stageflow/…` endpoints on an API **you** run. Each **resource type** (orders first, then account profile) is declared in Host identity settings with path suffixes appended to one base URL and one audience. The order endpoints below are the reference implementation; account profile uses the same ownership + signed-read pattern. A separate endpoint maps a channel sender to an account. Operators connect the API from **Identity → Setup**; see [Console: Identity](console-identity.md#setup).
 
-Status: experimental. The contract covers one read-only binding, `orders.status`. Nothing else in your system is reachable by a protected agent.
+Status: experimental. Read-only resource tools ship as `orders.status`, `orders.list`, and `account.profile`. Writes (returns, address change) are not part of this contract yet.
 
 ## What you get, and what you must enforce
 
-Stageflow decides who the person is (a verified sign-in mapped to an account) and what access level they were given. It then asks your API two questions:
+Stageflow decides who the person is (a verified sign-in mapped to an account) and what access level they were given. For each resource read it asks your API:
 
-1. **Who owns this order?** Metadata only. Stageflow compares the answer with the person's access level and refuses before any private data moves.
-2. **What is its status?** Called only after the first answer allowed the read. This call carries a signed token that names the person, the order and its version.
+1. **Who owns this resource?** Metadata only (`POST /stageflow/order-ownership` or `/stageflow/account-ownership`). Stageflow compares the answer with the person's access level and refuses before any private data moves.
+2. **What is the private payload?** Called only after the first answer allowed the read (`POST /stageflow/order-status` or `/stageflow/account-profile`). This call carries a signed token that names the person, the resource and its version.
+3. **List (orders only).** `POST /stageflow/orders-list` returns resource ids for the mapped account only. The model cannot widen the list; the Host ignores any account or order id the model supplies.
 
 Your API is the second line of defence, not a pass-through. It must check the token, check ownership itself, and refuse on any mismatch. A model never sees an order that either side refused.
 
@@ -27,13 +28,24 @@ Your API is the second line of defence, not a pass-through. It must check the to
 
 ## Credential
 
-Both calls send `Authorization: Bearer <credential>`. The credential is the value an operator typed into Setup. It is stored write-only on the Host and sent only to this address.
+Every call sends `Authorization: Bearer <credential>`. The credential is the value an operator typed into Setup. It is stored write-only on the Host and sent only to this address.
 
-- Issue a **dedicated service credential** for Stageflow, scoped to these two endpoints and to the Workspace.
+- Issue a **dedicated service credential** for Stageflow, scoped to these endpoints and to the Workspace.
 - Do not accept a person's login token, an OIDC ID token, a Stageflow chat bearer or an administrator key here. Stageflow never sends those, and a credential that also works elsewhere is a larger blast radius than you want.
 - Rotate it in Setup (**Edit settings**) and in your API together.
 
-## Endpoint 1: ownership
+## Finding and error codes (Host)
+
+| Code | Meaning |
+|------|---------|
+| `identity.not_available` | Any downstream refusal, timeout, malformed body, ownership mismatch, or scope denial. Shown to the person; not your API's error text |
+| `identity.setup_required` | Identity off, order API not configured, or the agent is not consumer-safe |
+| `assurance_insufficient` | Channel assurance too weak for the tool (for example email without step-up) |
+| `order_read` / `order_list` / `account_read` | Audit allow reasons after a successful read, list, or profile fetch |
+
+Extra JSON fields, wrong types, redirects, non-`2xx` responses, and bodies over 64 KiB are all treated as refusal (`identity.not_available`).
+
+## Orders: endpoint 1 — ownership
 
 `POST /stageflow/order-ownership`
 
@@ -67,7 +79,7 @@ Reply with **metadata only**:
 
 The reply is checked strictly. A missing field, a wrong type or an **extra field** makes Stageflow refuse the read. Never put order contents, customer names or addresses in this reply. Return a `404` when the order does not exist or is not in that Workspace; do not reveal which.
 
-## Endpoint 2: status
+## Orders: endpoint 2 — status
 
 `POST /stageflow/order-status`
 
@@ -116,6 +128,49 @@ Reply:
 
 As with endpoint 1, extra fields are refused. Stageflow also re-checks the person's permission after the read, so a revocation that happens during the call still stops the answer from being delivered.
 
+## Orders: endpoint 3 — list
+
+`POST /stageflow/orders-list`
+
+Request (the Host always sends the mapped account; values from the model are ignored):
+
+```json
+{ "workspaceId": "local", "accountId": "acct_1001" }
+```
+
+Reply:
+
+```json
+{ "resources": [{ "id": "ord_1001", "version": "7" }] }
+```
+
+| Field | Rule |
+|-------|------|
+| `resources` | At most 1000 entries. Each entry has exactly `id` and `version`. Extra fields fail closed |
+| Scope | Return only orders the credential's workspace ties to `accountId`. Never echo another account's orders because the model named an id |
+
+The Host re-checks each listed id with endpoint 1 and scope rules before returning anything to the model. If any row does not belong to the caller, the whole list is refused.
+
+## Account: ownership and profile
+
+`POST /stageflow/account-ownership` — request `{ "workspaceId", "accountId" }`. Reply uses the same five-field ownership shape as orders, with `id` and `ownerAccountId` equal to the account id.
+
+`POST /stageflow/account-profile` — same transport and signed token rules as order status, with `action` `account:read` in the token. Request `{ "accountId", "expectedVersion" }`. Reply:
+
+```json
+{
+  "ownership": { "...": "same as ownership endpoint" },
+  "receipt": { "principalId": "<token sub>", "grantId": "<token grant>" },
+  "profile": { "accountId": "acct_1001", "displayName": "Jane" }
+}
+```
+
+`displayName` is at most 200 characters. The Host never uses a model-supplied account id; only the signed-in principal's account is read.
+
+## Adding another resource type
+
+Configure a row in Host `identity/settings.json` under `resources` (id, path suffixes, tool ids). Implement the matching `/stageflow/…` endpoints on your API. No Core code change is required when the new type follows the same ownership, optional list, and signed-read pattern.
+
 ## The signed token
 
 `Stageflow-Authorization` is a compact JWT signed with the Host's ES256 signing key. The public key is shown in **Identity → Setup → Order API** with a **Copy public key** button, as a JWKS you can load directly.
@@ -139,7 +194,7 @@ Claims:
 | `agent` | The agent the person is talking to |
 | `grant` | The grant this read belongs to |
 | `account` | The business account the person acts as. This is what you compare with `ownerAccountId` and `assignedAccountIds` |
-| `action` | Always `order:read`. Reject anything else |
+| `action` | `order:read` on order status and list calls; `account:read` on account profile. Reject anything else |
 | `resource`, `resource_version` | The order and the version Stageflow saw. Must match the request body |
 | `scope` | `own`, `assigned`, `selected` or `workspace`. How broad the person's access is |
 | `permission_revision` | Increases whenever the person's access is edited |
@@ -176,8 +231,9 @@ export async function verifyStageflowContext(token, expected) {
     clockTolerance: 0,
     requiredClaims: ["sub", "workspace", "agent", "grant", "account", "action", "resource", "resource_version", "scope", "jti", "iat", "exp"],
   });
-  if (payload.action !== "order:read") throw new Error("wrong action");
-  if (payload.resource !== expected.orderId || payload.resource_version !== expected.expectedVersion) throw new Error("wrong resource");
+  if (payload.action !== "order:read" && payload.action !== "account:read") throw new Error("wrong action");
+  if (payload.action !== expected.action) throw new Error("wrong action");
+  if (payload.resource !== expected.resource || payload.resource_version !== expected.expectedVersion) throw new Error("wrong resource");
   if (payload.exp - payload.iat > 30) throw new Error("token lives too long");
   const now = Date.now() / 1000;
   for (const [jti, exp] of seen) if (exp < now) seen.delete(jti);
@@ -188,6 +244,34 @@ export async function verifyStageflowContext(token, expected) {
 ```
 
 Any other language works the same way: verify an ES256 signature against the published key, then check `aud`, `typ`, `exp`, `action`, `resource` and `resource_version`.
+
+## Endpoint 3: resolve a channel sender
+
+`POST /stageflow/resolve-sender`
+
+Called when a person messages an agent on iMessage, Telegram or email and that agent has a channel identity connection. The same transport rules, credential, timeout and size limit apply. Stageflow calls this on the first message of a session and again after five minutes. It does not follow redirects.
+
+Request:
+
+```json
+{ "workspaceId": "local", "channel": "imessage", "sender": "+14155550123" }
+```
+
+| Field | Meaning |
+|-------|---------|
+| `workspaceId` | The Workspace that owns the Host, the same value as on the order endpoints |
+| `channel` | `imessage`, `telegram`, `agentmail` or `email` |
+| `sender` | The provider's sender, already normalized: E.164 (`+14155550123`), a Telegram numeric user id, or a lowercased email address |
+
+Reply with **only** the account id when the sender is a customer:
+
+```json
+{ "accountId": "cus_881" }
+```
+
+`accountId` is the same kind of id you return as `ownerAccountId`. It is one to 128 characters from `A–Z`, `a–z`, `0–9`, `_` and `-`. An extra field, a wrong type or any status other than `2xx` is treated as "we could not match this sender", except `404`, which means the sender is not a customer. Do not put a name, a message or an error explanation in the body. A timeout, a redirect or a connection error is also treated as not matched. Stageflow then sends the operator's fixed reply and does not run the agent.
+
+A match is cached for five minutes. After that, a sender you no longer return is refused on the next message. An operator revoke in Stageflow wins over a match from this endpoint.
 
 ## Key rotation
 
@@ -205,7 +289,7 @@ Stageflow does not show your error text to the person or the model. Any non-`2xx
 
 ## Checklist before you connect
 
-- [ ] A dedicated credential that works only on these two endpoints
+- [ ] A dedicated credential that works only on these endpoints
 - [ ] `ownership` returns metadata only, with exactly the five fields
 - [ ] `status` verifies the token's signature, `aud`, `typ`, `exp`, `action`, `resource` and `resource_version` before reading private data
 - [ ] `status` re-reads the current owner, assignments and version from your own data and refuses on any mismatch

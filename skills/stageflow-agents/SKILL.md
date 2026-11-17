@@ -192,7 +192,7 @@ Archive (only on the user's explicit request): delete the file, or MCP `archive_
 |---|---|---|
 | Console only | nothing; `web_chat: { enabled: false }` | |
 | Public web link `/chat/<slug>` | tool-less agent, `web_chat.enabled: true`; the Host mints the slug on a save through MCP, REST or the console | [channels-and-identity.md](references/channels-and-identity.md) |
-| Signed-in customers (protected chat, experimental) | `web_chat.access: authenticated`, identity turned on in the console, only `tools.mcp.orders: [status]` | [channels-and-identity.md](references/channels-and-identity.md) |
+| Signed-in customers (protected chat, experimental) | `web_chat.access: authenticated` or `channel.access: authenticated`, identity turned on in the console, only declared customer resource tools (`tools.mcp.orders: [status, list]`, `tools.mcp.account: [profile]`) | [channels-and-identity.md](references/channels-and-identity.md) |
 | Email, Slack, Telegram, iMessage | a connection on the Host, then `channel: { connection_id, allow_from }` | [channels-and-identity.md](references/channels-and-identity.md) |
 | On a timetable | `schedule: { cron, timezone, message }` | [memories-and-schedules.md](references/memories-and-schedules.md) |
 | From another agent | the caller lists it in `sub_agents` | [tools-and-approvals.md](references/tools-and-approvals.md) |

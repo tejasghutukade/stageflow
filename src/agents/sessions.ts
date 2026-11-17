@@ -3,6 +3,7 @@ import type { AgentDefinition } from "../config/loadAgent.js";
 import { assertDelegateAllowed } from "./delegate.js";
 import { AgentError, isAgentError } from "./errors.js";
 import type { EvalGateRegistry } from "./evalGate.js";
+import type { EvalConsumerRegistry } from "../evals/consumer/evalConsumerRegistry.js";
 import { EVAL_SESSION_SOURCE, isEvalSession, type EvalSessionOverrides } from "./evalSession.js";
 import { guardedStream } from "./guardrails.js";
 import { fitHistory } from "./historyFit.js";
@@ -13,8 +14,10 @@ import type { AgentService, AgentSessionDetail } from "./service.js";
 import { scrubSecrets } from "../compaction/scrub.js";
 import { WORKING_STATE_TOOL_NAME } from "../compaction/types.js";
 import { prepareSpan, type SpanKind } from "./trace.js";
-import { loadConsumerSubAgents, allowConsumerToolCall } from "./consumerSafety.js";
+import { allowConsumerToolCall, CHANNEL_CONSUMER_SOURCES, isChannelConsumerTurn, loadConsumerSubAgents } from "./consumerSafety.js";
+import { channelSenderFact } from "./communications/senderFact.js";
 import type { ConsumerAuthorization } from "../identity/authorization.js";
+import { ConsumerStepUpRequired } from "../identity/stepUp.js";
 import { ConsumerAccessError } from "../identity/types.js";
 
 export type { ConversationBackend, ConversationMessage } from "./runtime/types.js";
@@ -46,6 +49,8 @@ export type ConversationOptions = {
   otlpSink?: OtlpSink | undefined;
   /** Eval tool gates by session id. An eval session without one is denied every tool. */
   evalGates?: EvalGateRegistry;
+  /** Fixture consumer sessions for eval leakage runs; never uses the live identity store. */
+  evalConsumers?: EvalConsumerRegistry;
   logError?: (message: string) => void;
 };
 
@@ -71,6 +76,10 @@ function toJson(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function stepUpFailure(error: unknown): string | undefined {
+  return error instanceof ConsumerStepUpRequired ? error.reply : undefined;
 }
 
 /** One turn: open (if needed) → record user message → model + tools → guardrails → record reply. */
@@ -116,6 +125,28 @@ export class AgentConversation {
         input.onSessionOpened?.(sessionId);
       }
       const existing = (await service.getSession(input.projectRoot, sessionId)).session;
+      const existingDef = (await service.get(input.projectRoot, input.agentId)).definition;
+      if (existingDef && isChannelConsumerTurn(existing.source, existingDef, input.consumerSessionId)) {
+        if (!input.consumerSessionId || !this.options.consumerAuthorization) throw new ConsumerAccessError("identity.verification_required");
+        try {
+          await this.options.consumerAuthorization.validateConversation(sessionId, input.consumerSessionId, input.agentId, existing.revision);
+        } catch (error) {
+          const stepUp = stepUpFailure(error);
+          if (stepUp) {
+            const active = await service.beginTurn(input.projectRoot, sessionId, {
+              text: input.text,
+              author: input.author ?? null,
+              ...(input.resumeTurnId ? { resumeTurnId: input.resumeTurnId } : {}),
+            });
+            return service.completeTurn(input.projectRoot, active.turn.id, {
+              status: "failed",
+              errorCode: "identity.step_up_required",
+              assistantText: stepUp,
+            });
+          }
+          throw error;
+        }
+      }
       if (input.source === "schedule" && input.consumerSessionId && this.options.consumerAuthorization) {
         try {
           this.options.consumerAuthorization.conversation(sessionId, input.consumerSessionId, input.agentId, existing.revision);
@@ -127,10 +158,21 @@ export class AgentConversation {
         if (!input.consumerSessionId || !this.options.consumerAuthorization) throw new ConsumerAccessError("identity.verification_required");
         await this.options.consumerAuthorization.validateConversation(sessionId, input.consumerSessionId, input.agentId, existing.revision);
       }
+      const channelConsumer = Boolean(existingDef && isChannelConsumerTurn(existing.source, existingDef, input.consumerSessionId));
+      let allowCarriedHistory: boolean | undefined;
+      if (channelConsumer && existing.rolledFromSessionId && input.consumerSessionId && this.options.consumerAuthorization) {
+        try {
+          await this.options.consumerAuthorization.validateConversation(sessionId, input.consumerSessionId, input.agentId, existing.revision);
+          allowCarriedHistory = true;
+        } catch {
+          allowCarriedHistory = false;
+        }
+      }
       const active = await service.beginTurn(input.projectRoot, sessionId, {
         text: input.text,
         author: input.author ?? null,
         ...(input.resumeTurnId ? { resumeTurnId: input.resumeTurnId } : {}),
+        ...(allowCarriedHistory === false ? { allowCarriedHistory: false } : {}),
       });
       if (active.session.agentId !== input.agentId) {
         await service.completeTurn(input.projectRoot, active.turn.id, { status: "failed", errorCode: "agent.session_not_found" });
@@ -166,9 +208,14 @@ export class AgentConversation {
     const { service, backend } = this.options;
     const { definition, turn } = active;
     const scheduleService = active.session.source === "schedule" && definition.web_chat.access === "authenticated" && !!input.consumerSessionId;
-    const consumer = active.session.source === "web_consumer" || scheduleService;
+    const channelConsumer = isChannelConsumerTurn(active.session.source, definition, input.consumerSessionId);
+    const consumer = active.session.source === "web_consumer" || scheduleService || channelConsumer;
     const external = consumer || active.session.source === "web" || active.session.source === "web_public";
     if (definition.web_chat.access === "authenticated" && !consumer && !["console", "cli", "mcp"].includes(active.session.source)) {
+      throw new ConsumerAccessError("identity.verification_required");
+    }
+    if (definition.channel?.access === "authenticated" && CHANNEL_CONSUMER_SOURCES.has(active.session.source)
+      && (!input.consumerSessionId || input.consumerSessionId.length === 0)) {
       throw new ConsumerAccessError("identity.verification_required");
     }
     const safeSubAgents = external ? await loadConsumerSubAgents(definition, async (id) => {
@@ -196,6 +243,7 @@ export class AgentConversation {
     let stopReason: { code: string; message: string } | undefined;
     let gateChain: Promise<unknown> = Promise.resolve();
 
+    const evalConsumer = isEvalSession(active.session) ? this.options.evalConsumers?.get(sessionId) : undefined;
     const gateOne = async (call: ToolCall): Promise<GateDecision> => {
       if (active.session.source === EVAL_SESSION_SOURCE) {
         const gate = this.options.evalGates?.get(sessionId);
@@ -214,6 +262,14 @@ export class AgentConversation {
             attributes: { "stageflow.approval.outcome": "would_ask_first", "gen_ai.tool.name": call.tool },
           });
         }
+        if (!decision.allow) return decision;
+        if (evalConsumer && allowConsumerToolCall(call.tool, definition.sub_agents)) {
+          try {
+            await evalConsumer.auth.check(sessionId, evalConsumer.consumerSessionId, input.agentId, call.tool, call.input, controller.signal);
+          } catch {
+            return { allow: false, reason: "identity.not_available" };
+          }
+        }
         return decision;
       }
       if (!isToolGranted(definition, call.tool)) {
@@ -231,7 +287,13 @@ export class AgentConversation {
           if (!allowConsumerToolCall(call.tool, definition.sub_agents)) return { allow: false, reason: "identity.not_available" };
           await consumerAuth!.check(sessionId, input.consumerSessionId!, input.agentId, call.tool, call.input, controller.signal);
           return { allow: true };
-        } catch { return { allow: false, reason: "identity.not_available" }; }
+        } catch (error) {
+          if (error instanceof ConsumerStepUpRequired && channelConsumer) {
+            stopReason = { code: "identity.step_up_required", message: error.reply };
+            return { allow: false, reason: error.reply, stopTurn: true };
+          }
+          return { allow: false, reason: "identity.not_available" };
+        }
       };
       const allowed = await checkConsumer();
       if (!allowed.allow) return allowed;
@@ -356,6 +418,7 @@ export class AgentConversation {
       await assertDelivery();
       if (consumer && controller.signal.aborted) throw new ConsumerAccessError("identity.not_available");
       const transcript = [...active.history, active.userMessage].map((m) => ({ role: m.role, text: m.text }));
+      const senderFact = channelSenderFact(active.session);
       result = await backend.complete({
         sessionId,
         projectRoot: input.projectRoot,
@@ -364,20 +427,49 @@ export class AgentConversation {
         signal: controller.signal,
         onDelta: (text) => stream.push(text),
         hooks,
+        ...(senderFact ? { senderFact } : {}),
         ...(consumer && safeSubAgents ? { consumerSafeSubAgents: safeSubAgents } : {}),
-        ...(external ? { consumerTools: consumer ? consumerAuth!.tools(sessionId, input.consumerSessionId!, input.agentId)
-          .filter((tool) => isToolGranted(definition, tool.grantId)).map((tool) => ({ ...tool,
-            execute: async (args: Record<string, unknown>, signal: AbortSignal) => {
-              await assertDelivery();
-              const output = await tool.execute(args, signal);
-              await assertDelivery();
-              return output;
-            },
-          })) : [] } : {}),
+        ...(evalConsumer
+          ? {
+              consumerTools: evalConsumer.auth.tools(sessionId, evalConsumer.consumerSessionId, input.agentId)
+                .filter((tool) => isToolGranted(definition, tool.grantId))
+                .map((tool) => ({
+                  ...tool,
+                  execute: async (args: Record<string, unknown>, signal: AbortSignal) => tool.execute(args, signal),
+                })),
+            }
+          : external
+            ? {
+                consumerTools: consumer
+                  ? consumerAuth!.tools(sessionId, input.consumerSessionId!, input.agentId)
+                      .filter((tool) => isToolGranted(definition, tool.grantId))
+                      .map((tool) => ({
+                        ...tool,
+                        execute: async (args: Record<string, unknown>, signal: AbortSignal) => {
+                          await assertDelivery();
+                          const output = await tool.execute(args, signal);
+                          await assertDelivery();
+                          return output;
+                        },
+                      }))
+                  : [],
+              }
+            : {}),
       });
       await assertDelivery();
     } catch (error) {
       stream.discard();
+      const stepUp = stepUpFailure(error);
+      if (stepUp) {
+        record({ turnId: turn.id, name: `invoke_agent ${definition.id}`, kind: "agent", status: "error", startedAt, endedAt: new Date(), attributes: { "error.type": "identity.step_up_required" } });
+        const detail = await service.completeTurn(input.projectRoot, turn.id, {
+          status: "failed",
+          errorCode: "identity.step_up_required",
+          assistantText: stepUp,
+        });
+        this.exportLive(input.projectRoot, active.session, definition, turn.id);
+        return detail;
+      }
       const code = isAgentError(error) ? error.code : "agent.backend_failed";
       record({ turnId: turn.id, name: `invoke_agent ${definition.id}`, kind: "agent", status: "error", startedAt, endedAt: new Date(), attributes: { "error.type": code } });
       await service.completeTurn(input.projectRoot, turn.id, { status: "failed", errorCode: code });
@@ -427,7 +519,7 @@ export class AgentConversation {
     const detail = await service.completeTurn(input.projectRoot, turn.id, {
       status: failed ? "failed" : cancelled ? "cancelled" : "succeeded",
       ...(failed ? { errorCode: stopReason!.code } : {}),
-      assistantText: result.text,
+      assistantText: failed && stopReason?.code === "identity.step_up_required" ? stopReason.message : result.text,
       ...(usage ? { usage, costUsd: usage.costUsd } : {}),
       ...(evalScores.length > 0 ? { evalScores } : {}),
     });

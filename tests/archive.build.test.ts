@@ -9,6 +9,7 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { ArchiveError, buildArchive, type ArchiveManifest } from "../src/archive/build.js";
 import { ARCHIVE_RULES, ruleFor } from "../src/archive/inventory.js";
+import { ConsumerIdentityStore } from "../src/identity/store.js";
 import { createRunStoreWithConnection } from "../src/runstore/createStore.js";
 import { storeRootFor } from "../src/runstore/paths.js";
 import type { RunStore } from "../src/runstore/port.js";
@@ -101,6 +102,49 @@ describe("buildArchive", () => {
     expect(leftOut.get("unknown-new-thing/")).toBe("not in the archive inventory");
     expect(leftOut.has("eval-engine/")).toBe(true);
     expect(statSync(result.path).mode & 0o777).toBe(0o600);
+  });
+
+  it("keeps people and revocations in the identity database and removes its client secrets unless secrets are included", async () => {
+    const { home, store } = await makeHome();
+    const identityPath = path.join(home, "identity", "consumer-identity.db");
+    mkdirSync(path.dirname(identityPath), { recursive: true });
+    const clientSecret = `oidc-client-${CANARY}`;
+    const refresh = `refresh-${CANARY}`;
+    const live = new ConsumerIdentityStore(identityPath, "local");
+    live.registerOidc({ id: "directory", issuer: "https://login.example.com", clientId: "orders-app", agentId: "support", redirectUri: "https://chat.example/api/public/chat/slug/oidc/callback", algorithms: ["ES256"] }, clientSecret);
+    const permission = { scope: "own" as const, agents: ["support"], actions: ["conversation:use" as const, "order:read" as const] };
+    live.assign("directory", "alice", "acct-alice", "business-directory:v1", permission);
+    const bob = live.assign("directory", "bob", "acct-bob", "business-directory:v1", permission);
+    live.revoke("principal", bob);
+    live.close();
+    const raw = new Database(identityPath);
+    raw.prepare("INSERT INTO identity_sessions(workspace, id, principal, agent, expires, principal_revision, active, refresh_secret) SELECT 'local', 'ses1', id, 'support', 9999999999999, revision, 1, ? FROM identity_principals WHERE subject = 'alice'").run(refresh);
+    raw.close();
+
+    const build = (includeSecrets: boolean) => buildArchive({ store: { snapshotInto: store.snapshotInto.bind(store), ...noRuns }, homeDir: home, includeSecrets, outPath: path.join(home, "backups", `identity-${includeSecrets}.tar.gz`) });
+    const plain = await build(false);
+    const dir = extract(plain.path);
+    const copyPath = path.join(dir, "identity", "consumer-identity.db");
+    expect(readFileSync(copyPath).includes(CANARY)).toBe(false);
+    expect(manifestOf(dir).files.find((file) => file.path === "identity/consumer-identity.db")?.note).toMatch(/client secrets and refresh tokens removed/);
+    const copy = new ConsumerIdentityStore(copyPath, "local");
+    expect(copy.listAssignments().map((row) => [row.subject, row.accountId, row.active])).toEqual([["alice", "acct-alice", true], ["bob", "acct-bob", false]]);
+    expect(() => copy.oidcClientSecret("directory")).toThrow("identity.setup_required");
+    expect(copy.oidcSetup("directory").clientId).toBe("orders-app");
+    copy.close();
+    expect(() => new ConsumerIdentityStore(copyPath, "another-workspace")).toThrow(/another Workspace/);
+    // The live database is untouched.
+    const still = new ConsumerIdentityStore(identityPath, "local");
+    expect(still.oidcClientSecret("directory")).toBe(clientSecret);
+    still.close();
+
+    const full = await build(true);
+    const fullDir = extract(full.path);
+    expect(manifestOf(fullDir).contains_secrets).toBe(true);
+    const kept = new ConsumerIdentityStore(path.join(fullDir, "identity", "consumer-identity.db"), "local");
+    expect(kept.oidcClientSecret("directory")).toBe(clientSecret);
+    expect(kept.refreshSecret("ses1")).toBe(refresh);
+    kept.close();
   });
 
   it("includes secrets, the paired OAuth files together, and marks the archive", async () => {

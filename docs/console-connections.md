@@ -5,7 +5,7 @@ title: Console - Connections
 
 # Connections
 
-Experimental. Channels, email accounts and email rules work; their shape may still change.
+WhatsApp and email rules are experimental; their shape may still change. Everything else on this page is stable.
 
 `#/connections` lists everything Stageflow talks to, in four sections:
 

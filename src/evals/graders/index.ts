@@ -1,5 +1,6 @@
 import type { ResolvedGrader } from "../types.js";
 import { gradeCode } from "./codeGrader.js";
+import { gradeConsumerScope } from "./consumerScopeGrader.js";
 import { gradeConversationCheck } from "./conversationCheckGrader.js";
 import { gradeField } from "./fieldGrader.js";
 import { gradeReference } from "./referenceGrader.js";
@@ -9,7 +10,7 @@ import type { GradeCase, GradeData, GraderContext, Subject } from "./types.js";
 
 export type DeterministicGrader = Extract<
   ResolvedGrader,
-  { type: "schema" | "field" | "reference" | "code" | "tool_calls" | "conversation_check" }
+  { type: "schema" | "field" | "reference" | "code" | "tool_calls" | "conversation_check" | "consumer_scope" }
 >;
 
 export function isDeterministicGrader(grader: ResolvedGrader): grader is DeterministicGrader {
@@ -19,7 +20,8 @@ export function isDeterministicGrader(grader: ResolvedGrader): grader is Determi
     grader.type === "reference" ||
     grader.type === "code" ||
     grader.type === "tool_calls" ||
-    grader.type === "conversation_check"
+    grader.type === "conversation_check" ||
+    grader.type === "consumer_scope"
   );
 }
 
@@ -42,10 +44,12 @@ export function gradeDeterministic(
       return gradeToolCalls(grader, subject, testCase, context);
     case "conversation_check":
       return gradeConversationCheck(grader, subject, testCase, context);
+    case "consumer_scope":
+      return gradeConsumerScope(grader, subject, testCase, context);
   }
 }
 
-export { gradeCode, gradeConversationCheck, gradeField, gradeReference, gradeSchema, gradeToolCalls };
+export { gradeCode, gradeConsumerScope, gradeConversationCheck, gradeField, gradeReference, gradeSchema, gradeToolCalls };
 export { caseGoal, goalRubricText } from "./goal.js";
 export { renderTranscript } from "./transcript.js";
 export { evaluatePath, resolveValue } from "./path.js";

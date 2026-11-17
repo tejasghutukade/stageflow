@@ -1,6 +1,17 @@
+import { assuranceMeets, requiredAssurance } from "./assurance.js";
+import { admitChannelSender, ChannelSenderCache, type ChannelAdmission } from "./channel.js";
+import { ConsumerStepUpRequired, issueStepUp, peekStepUpAccount, resolveStepUpOrigin, tryCompleteStepUp } from "./stepUp.js";
 import { admitEmbeddedConsumer } from "./handoff.js";
 import { completeOidcSignIn, loopbackRequestUrl, prepareOidcConnection, refreshOidcEvidence, startOidcSignIn } from "./oidc.js";
-import { ORDER_TOOL_ID, orderInput, orderOwnership, type OrderDataAdapter } from "./orders.js";
+import { customerAdapterFromInput, orderInput, orderOwnership, type CustomerDataAdapter, type OrderDataAdapter } from "./customerApi.js";
+import {
+  ACCOUNT_PROFILE_TOOL_ID,
+  DEFAULT_RESOURCE_TYPES,
+  ORDER_LIST_TOOL_ID,
+  ORDER_TOOL_ID,
+  resolveResourceTool,
+  type ResourceTypeDefinition,
+} from "./resourceContract.js";
 import {
   ConsumerIdentityStore,
   type ConsumerAssignmentView,
@@ -23,8 +34,14 @@ import {
 } from "./types.js";
 
 export class ConsumerAuthorization {
+  private readonly senderCache = new ChannelSenderCache();
+  private readonly customer: CustomerDataAdapter;
+  resolveStepUpSlug?: (agentId: string) => string | undefined;
+
   constructor(private readonly store: ConsumerIdentityStore, private readonly engine: AuthorizationEngine,
-    private readonly orders: OrderDataAdapter, readonly policyRevision: string, private readonly oidcAllowLoopback = false) {
+    customer: CustomerDataAdapter | OrderDataAdapter, readonly policyRevision: string, private readonly oidcAllowLoopback = false,
+    private readonly resourceTypes: readonly ResourceTypeDefinition[] = DEFAULT_RESOURCE_TYPES) {
+    this.customer = customerAdapterFromInput(customer);
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(policyRevision)) throw new ConsumerAccessError("identity.setup_required");
   }
 
@@ -54,6 +71,40 @@ export class ConsumerAuthorization {
 
   registerService(id: string, accountId: string, permission: ConsumerPermission): void {
     this.store.registerService(id, accountId, permission);
+  }
+
+  registerChannel(input: { id: string; channelConnectionId: string; agentId: string; provider: "imessage" | "telegram" | "agentmail" | "email"; unmappedReply: string; permission: ConsumerPermission }): void {
+    this.store.registerChannel(input);
+  }
+
+  hasChannelConnection(agentId: string, channelConnectionId: string): boolean {
+    return (["imessage", "telegram", "agentmail", "email"] as const).some(
+      (provider) => this.store.findChannelConnection(agentId, channelConnectionId, provider) !== undefined,
+    );
+  }
+
+  bindingFor(conversation: string): { sessionId: string; agentId: string } | undefined {
+    return this.store.bindingFor(conversation);
+  }
+
+  admitChannelSender(input: {
+    agentId: string; channelConnectionId: string; provider: string; sender: string | undefined;
+    conversationId?: string; dmarcPass?: boolean; signal: AbortSignal;
+  }): Promise<ChannelAdmission> {
+    return admitChannelSender(this.store, this.senderCache, this.customer, input);
+  }
+
+  completeStepUp(token: string, signedInAccountId: string): void {
+    tryCompleteStepUp(this.store, token, signedInAccountId);
+  }
+
+  completeStepUpFromWebSession(token: string, webSessionId: string, agentId: string): void {
+    const authority = this.store.resolve(webSessionId, agentId);
+    tryCompleteStepUp(this.store, token, authority.principal.accountId);
+  }
+
+  peekStepUpAccount(token: string): string | undefined {
+    return peekStepUpAccount(this.store, token);
   }
 
   disableConnection(id: string): void {
@@ -153,7 +204,22 @@ export class ConsumerAuthorization {
   }
 
   async check(conversation: string, sessionId: string, agentId: string, tool: string, input: Record<string, unknown>, signal: AbortSignal): Promise<void> {
-    await this.authorize(conversation, sessionId, agentId, tool, input, signal);
+    const binding = resolveResourceTool(this.resourceTypes, tool);
+    if (!binding) throw new ConsumerAccessError("identity.not_available");
+    const kind = binding.binding.kind;
+    if (kind === "list") {
+      await this.authorizeList(conversation, sessionId, agentId, tool, signal);
+      return;
+    }
+    if (kind === "account_read") {
+      await this.authorizeAccount(conversation, sessionId, agentId, tool, signal);
+      return;
+    }
+    if (kind === "read") {
+      await this.authorize(conversation, sessionId, agentId, tool, input, signal);
+      return;
+    }
+    throw new ConsumerAccessError("identity.not_available");
   }
 
   async preview(accountId: string, scope: ConsumerScope, resources: string[] | null, order: OwnedResource, signal: AbortSignal): Promise<boolean> {
@@ -171,32 +237,91 @@ export class ConsumerAuthorization {
     this.store.conversation(conversation, sessionId, agentId, revision);
     for (const disclosure of this.store.disclosures(sessionId)) {
       const current = await this.authorize(conversation, sessionId, agentId, ORDER_TOOL_ID, { orderId: disclosure.resource }, AbortSignal.timeout(3_000));
-      if (current.resource.version !== disclosure.version) throw new ConsumerAccessError("identity.not_available");
+      if (current.resource!.version !== disclosure.version) throw new ConsumerAccessError("identity.not_available");
     }
     this.store.conversation(conversation, sessionId, agentId, revision);
   }
 
   tools(conversation: string, sessionId: string, agentId: string): ConsumerRuntimeTool[] {
-    return [{ name: "consumer_order_status", grantId: ORDER_TOOL_ID,
-      description: "Read the status of an authorized order. Only an order identifier is accepted.",
-      parameters: { type: "object", properties: { orderId: { type: "string", pattern: "^[A-Za-z0-9_-]{1,128}$" } }, required: ["orderId"], additionalProperties: false },
-      execute: async (input, signal) => {
-        try {
-          const before = await this.authorize(conversation, sessionId, agentId, ORDER_TOOL_ID, input, signal);
-          const result = await this.orders.read(before.authority, before.resource, signal);
-          const after = await this.authorize(conversation, sessionId, agentId, ORDER_TOOL_ID, input, signal);
-          if (before.authority.principal.revision !== after.authority.principal.revision
-            || before.resource.version !== after.resource.version || before.resource.ownerAccountId !== after.resource.ownerAccountId
-            || JSON.stringify(before.resource.assignedAccountIds) !== JSON.stringify(after.resource.assignedAccountIds)) throw new Error("changed");
-          if (result.orderId !== before.resource.id || typeof result.status !== "string" || result.status.length > 200
-            || typeof result.updatedAt !== "string" || !Number.isFinite(Date.parse(result.updatedAt))) throw new Error("invalid");
-          this.store.recordDisclosure(sessionId, before.resource.id, before.resource.version);
-          return JSON.stringify({ orderId: result.orderId, status: result.status, updatedAt: result.updatedAt });
-        } catch { throw new ConsumerAccessError("identity.not_available"); }
-      } }];
+    const tools: ConsumerRuntimeTool[] = [];
+    if (resolveResourceTool(this.resourceTypes, ORDER_TOOL_ID)) {
+      tools.push({ name: "consumer_order_status", grantId: ORDER_TOOL_ID,
+        description: "Read the status of an authorized order. Only an order identifier is accepted.",
+        parameters: { type: "object", properties: { orderId: { type: "string", pattern: "^[A-Za-z0-9_-]{1,128}$" } }, required: ["orderId"], additionalProperties: false },
+        execute: async (input, signal) => {
+          try {
+            const before = await this.authorize(conversation, sessionId, agentId, ORDER_TOOL_ID, input, signal);
+            const ordersType = this.resourceTypes.find((row) => row.id === "orders")!;
+            const raw = await this.customer.read("orders", before.authority, before.resource!, "order:read", ordersType.readPath, signal);
+            if (!("orderId" in raw)) throw new Error("invalid");
+            const result = raw;
+            const after = await this.authorize(conversation, sessionId, agentId, ORDER_TOOL_ID, input, signal);
+            if (before.resource!.version !== after.resource!.version || before.resource!.ownerAccountId !== after.resource!.ownerAccountId
+              || JSON.stringify(before.resource!.assignedAccountIds) !== JSON.stringify(after.resource!.assignedAccountIds)
+              || before.authority.principal.revision !== after.authority.principal.revision) throw new Error("changed");
+            if (result.orderId !== before.resource!.id || typeof result.status !== "string" || result.status.length > 200
+              || typeof result.updatedAt !== "string" || !Number.isFinite(Date.parse(result.updatedAt))) throw new Error("invalid");
+            this.store.recordDisclosure(sessionId, before.resource!.id, before.resource!.version);
+            return JSON.stringify({ orderId: result.orderId, status: result.status, updatedAt: result.updatedAt });
+          } catch (error) {
+            if (error instanceof ConsumerAccessError && error.code === "identity.step_up_required") throw error;
+            throw new ConsumerAccessError("identity.not_available");
+          }
+        } });
+    }
+    if (resolveResourceTool(this.resourceTypes, ORDER_LIST_TOOL_ID)) {
+      const ordersType = this.resourceTypes.find((row) => row.id === "orders")!;
+      tools.push({ name: "consumer_order_list", grantId: ORDER_LIST_TOOL_ID,
+        description: "List orders for the signed-in customer account. Extra identifiers in the request are ignored.",
+        parameters: { type: "object", properties: {}, additionalProperties: true },
+        execute: async (input, signal) => {
+          try {
+            const ctx = await this.authorizeList(conversation, sessionId, agentId, ORDER_LIST_TOOL_ID, signal);
+            const listed = await this.customer.list("orders", ctx.authority, ordersType.listPath!, signal);
+            const visible: Array<{ id: string; version: string }> = [];
+            for (const row of listed) {
+              const resource = await this.customer.ownership(this.store.workspaceId, "orders", row.id, "orderId", signal);
+              const allowed = await allowWithinScope(this.engine, {
+                authority: ctx.authority, action: "order:read", resource, policyRevision: this.policyRevision,
+              }, signal);
+              if (!allowed) throw new Error("denied");
+              visible.push({ id: row.id, version: row.version });
+            }
+            this.store.audit(ctx.authority.principal.id, conversation, "allow", "order_list");
+            return JSON.stringify({ resources: visible });
+          } catch (error) {
+            if (error instanceof ConsumerAccessError && error.code === "identity.step_up_required") throw error;
+            throw new ConsumerAccessError("identity.not_available");
+          }
+        } });
+    }
+    if (resolveResourceTool(this.resourceTypes, ACCOUNT_PROFILE_TOOL_ID)) {
+      const accountType = this.resourceTypes.find((row) => row.id === "account")!;
+      tools.push({ name: "consumer_account_profile", grantId: ACCOUNT_PROFILE_TOOL_ID,
+        description: "Read the signed-in customer's account profile.",
+        parameters: { type: "object", properties: {}, additionalProperties: true },
+        execute: async (input, signal) => {
+          try {
+            const before = await this.authorizeAccount(conversation, sessionId, agentId, ACCOUNT_PROFILE_TOOL_ID, signal);
+            const rawProfile = await this.customer.read("account", before.authority, before.resource!, "account:read", accountType.readPath, signal);
+            if (!("displayName" in rawProfile)) throw new Error("invalid");
+            const profile = rawProfile;
+            const after = await this.authorizeAccount(conversation, sessionId, agentId, ACCOUNT_PROFILE_TOOL_ID, signal);
+            if (before.authority.principal.revision !== after.authority.principal.revision
+              || before.resource!.version !== after.resource!.version) throw new Error("changed");
+            if (profile.accountId !== before.resource!.id || typeof profile.displayName !== "string") throw new Error("invalid");
+            this.store.audit(before.authority.principal.id, conversation, "allow", "account_read");
+            return JSON.stringify(profile);
+          } catch (error) {
+            if (error instanceof ConsumerAccessError && error.code === "identity.step_up_required") throw error;
+            throw new ConsumerAccessError("identity.not_available");
+          }
+        } });
+    }
+    return tools;
   }
 
-  private async authorize(conversation: string, sessionId: string, agentId: string, tool: string, input: Record<string, unknown>, signal: AbortSignal): Promise<{ authority: ConsumerAuthority; resource: OwnedResource }> {
+  private async authorize(conversation: string, sessionId: string, agentId: string, tool: string, input: Record<string, unknown>, signal: AbortSignal): Promise<{ authority: ConsumerAuthority; resource?: OwnedResource }> {
     let authority: ConsumerAuthority | undefined;
     let denyReason = "order_not_available";
     try {
@@ -207,20 +332,117 @@ export class ConsumerAuthorization {
         denyReason = protection;
         throw new Error("denied");
       }
+      const required = requiredAssurance(tool);
+      const currentAssurance = this.store.sessionAssurance(authority.sessionId);
+      if (!assuranceMeets(currentAssurance, required)) {
+        denyReason = "assurance_insufficient";
+        if (this.store.sessionProtection(authority.sessionId).kind === "channel") this.raiseStepUp(authority, conversation);
+        throw new Error("denied");
+      }
+      const binding = resolveResourceTool(this.resourceTypes, tool);
       const permission = authority.principal.permission;
-      if (signal.aborted || tool !== ORDER_TOOL_ID || !authority.actions.includes("order:read") || !permission.actions.includes("order:read")
+      if (signal.aborted || !binding || binding.binding.kind !== "read"
+        || !authority.actions.includes(binding.binding.permissionAction)
+        || !permission.actions.includes(binding.binding.permissionAction)
         || (authority.resources && !authority.resources.includes(args.orderId))) throw new Error("denied");
-      const resource = orderOwnership.parse(await this.orders.ownership(this.store.workspaceId, args.orderId, signal));
+      const resource = orderOwnership.parse(await this.customer.ownership(this.store.workspaceId, "orders", args.orderId, "orderId", signal));
       if (resource.id !== args.orderId || resource.workspaceId !== this.store.workspaceId) throw new Error("denied");
-      const allowed = await allowWithinScope(this.engine, { authority, action: "order:read", resource, policyRevision: this.policyRevision }, signal);
+      const allowed = await allowWithinScope(this.engine, { authority, action: binding.binding.permissionAction, resource, policyRevision: this.policyRevision }, signal);
       const current = this.store.conversation(conversation, sessionId, agentId);
       if (!allowed || signal.aborted || current.principal.revision !== authority.principal.revision) throw new Error("denied");
       this.store.audit(authority.principal.id, conversation, "allow", "order_read");
       return { authority, resource };
-    } catch {
+    } catch (error) {
+      if (error instanceof ConsumerAccessError && error.code === "identity.step_up_required") throw error;
       this.store.audit(authority?.principal.id ?? null, conversation, "deny", denyReason);
       throw new ConsumerAccessError("identity.not_available");
     }
+  }
+
+  private async authorizeList(conversation: string, sessionId: string, agentId: string, tool: string, signal: AbortSignal): Promise<{ authority: ConsumerAuthority }> {
+    let authority: ConsumerAuthority | undefined;
+    let denyReason = "order_not_available";
+    try {
+      authority = this.store.conversation(conversation, sessionId, agentId);
+      const protection = await this.protectionFailure(authority, signal);
+      if (protection) {
+        denyReason = protection;
+        throw new Error("denied");
+      }
+      const required = requiredAssurance(tool);
+      const currentAssurance = this.store.sessionAssurance(authority.sessionId);
+      if (!assuranceMeets(currentAssurance, required)) {
+        denyReason = "assurance_insufficient";
+        if (this.store.sessionProtection(authority.sessionId).kind === "channel") this.raiseStepUp(authority, conversation);
+        throw new Error("denied");
+      }
+      const binding = resolveResourceTool(this.resourceTypes, tool);
+      const permission = authority.principal.permission;
+      if (signal.aborted || !binding || binding.binding.kind !== "list"
+        || !authority.actions.includes(binding.binding.permissionAction)
+        || !permission.actions.includes(binding.binding.permissionAction)) throw new Error("denied");
+      const current = this.store.conversation(conversation, sessionId, agentId);
+      if (signal.aborted || current.principal.revision !== authority.principal.revision) throw new Error("denied");
+      return { authority };
+    } catch (error) {
+      if (error instanceof ConsumerAccessError && error.code === "identity.step_up_required") throw error;
+      this.store.audit(authority?.principal.id ?? null, conversation, "deny", denyReason);
+      throw new ConsumerAccessError("identity.not_available");
+    }
+  }
+
+  private async authorizeAccount(conversation: string, sessionId: string, agentId: string, tool: string, signal: AbortSignal): Promise<{ authority: ConsumerAuthority; resource: OwnedResource }> {
+    let authority: ConsumerAuthority | undefined;
+    let denyReason = "order_not_available";
+    try {
+      authority = this.store.conversation(conversation, sessionId, agentId);
+      const protection = await this.protectionFailure(authority, signal);
+      if (protection) {
+        denyReason = protection;
+        throw new Error("denied");
+      }
+      const required = requiredAssurance(tool);
+      const currentAssurance = this.store.sessionAssurance(authority.sessionId);
+      if (!assuranceMeets(currentAssurance, required)) {
+        denyReason = "assurance_insufficient";
+        if (this.store.sessionProtection(authority.sessionId).kind === "channel") this.raiseStepUp(authority, conversation);
+        throw new Error("denied");
+      }
+      const binding = resolveResourceTool(this.resourceTypes, tool);
+      const permission = authority.principal.permission;
+      if (signal.aborted || !binding || binding.binding.kind !== "account_read"
+        || !authority.actions.includes(binding.binding.permissionAction)
+        || !permission.actions.includes(binding.binding.permissionAction)) throw new Error("denied");
+      const accountId = authority.principal.accountId;
+      const resource = orderOwnership.parse(await this.customer.ownership(this.store.workspaceId, "account", accountId, "accountId", signal));
+      if (resource.id !== accountId || resource.workspaceId !== this.store.workspaceId || resource.ownerAccountId !== accountId) throw new Error("denied");
+      const allowed = await allowWithinScope(this.engine, { authority, action: binding.binding.permissionAction, resource, policyRevision: this.policyRevision }, signal);
+      const current = this.store.conversation(conversation, sessionId, agentId);
+      if (!allowed || signal.aborted || current.principal.revision !== authority.principal.revision) throw new Error("denied");
+      return { authority, resource };
+    } catch (error) {
+      if (error instanceof ConsumerAccessError && error.code === "identity.step_up_required") throw error;
+      this.store.audit(authority?.principal.id ?? null, conversation, "deny", denyReason);
+      throw new ConsumerAccessError("identity.not_available");
+    }
+  }
+
+  private raiseStepUp(authority: ConsumerAuthority, conversation: string): never {
+    const origin = resolveStepUpOrigin();
+    if (!origin) {
+      this.store.audit(authority.principal.id, conversation, "deny", "step_up_origin_missing");
+      throw new ConsumerAccessError("identity.step_up_required");
+    }
+    const slug = this.resolveStepUpSlug?.(authority.agentId) ?? authority.agentId;
+    const issued = issueStepUp(this.store, {
+      channelSessionId: authority.sessionId,
+      agentId: authority.agentId,
+      accountId: authority.principal.accountId,
+      principalId: authority.principal.id,
+      slug,
+    }, origin);
+    this.store.audit(authority.principal.id, conversation, "deny", "assurance_insufficient");
+    throw new ConsumerStepUpRequired(issued.reply);
   }
 
   private async protectionFailure(authority: ConsumerAuthority, signal: AbortSignal): Promise<string | null> {

@@ -41,14 +41,6 @@
           "input": "password",
           "required": true,
           "placeholder": "am_..."
-        },
-        {
-          "key": "inboundSecret",
-          "label": "Webhook secret (optional)",
-          "hint": "Lets agents receive mail for this inbox. Sign webhooks to /api/agent-inbound/<connection id> with this secret (HMAC-SHA256 of the body in the x-agentmail-signature header).",
-          "target": "secret",
-          "input": "password",
-          "required": false
         }
       ],
       "recipient": {

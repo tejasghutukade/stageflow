@@ -21,7 +21,7 @@ An eval is a file in your project, `evals/<id>.eval.yaml`. It names a **target**
 | **Case** | One test input with an `id`, an `input`, and optional `expected`, `tags`, `title`, `goal`, `metadata`. For an agent it is a **scenario** |
 | **Repeat** | One execution of a case. Each case runs `repeats` times because models vary |
 | **Result** | One (case, repeat): the stage output (or the agent conversation) plus its grades. 24 cases with 3 repeats make 72 results |
-| **Grader** | One rule that scores a result: `schema`, `field`, `reference`, `rubric` or `code`; for agents also `tool_calls`, `conversation_check` or `goal_reached` |
+| **Grader** | One rule that scores a result: `schema`, `field`, `reference`, `rubric` or `code`; for agents also `tool_calls`, `conversation_check`, `consumer_scope` or `goal_reached` |
 | **Grade** | One grader's verdict on one result |
 | **Rubric** | A grader written in words and judged by a model |
 | **Judge** | The model that applies rubrics |
@@ -465,6 +465,7 @@ A dataset row for an agent eval is a **scenario**. Dataset files are the same as
 - **`script`.** `input.script` is the list of user messages (1 to 40). They are sent in order. The conversation ends after the last one is answered (`stop_reason: script_end`) or at `max_turns`. It is deterministic, cheap, and best for regressions.
 - **`simulated`.** `input.opening` is sent as the first user message as written. After each agent reply the simulator model writes the next user message from `persona`, `goal` and `facts` (things the user knows and reveals only when asked or natural), and ends the conversation when the goal is met, the user gives up, it repeats itself, or `max_turns` is reached. It adds a model call per turn and some noise.
 - **`tool_mocks`** maps tool ids to `{ "result": … }` or `{ "error": "…" }`. They apply under `read_only` (for tools that would be stubbed) and `mocked`, and are ignored under `real`.
+- **`metadata.principal`** names a test customer from the built-in **eval fixture identity store** (`customer-a`, `customer-a-selected`, `customer-b`). An eval session with this field runs customer resource tools through an in-memory order adapter and the same consumer scope checks as protected chat. It never uses the Host identity database or a live order API.
 - **`expected`** is free JSON. Three keys have a meaning: `outcome` (text, the fallback goal for `goal_reached`), `tools` (the default `must_call` of a `tool_calls` grader) and `forbidden_tools` (the default `must_not_call`).
 
 Field limits are in [YAML catalog: datasets](yaml-catalog.md#datasets-dataset-jsonl). A scenario that fails its mode's check is **skipped** when a run starts and reported (`dataset.input_mismatch`, "scenario …"); typos inside `input` warn (`dataset.scenario_unknown_field`). In the console you can add scenarios in a form, upload a file, or build script scenarios from finished sessions of the agent (**From past sessions**: each selected session becomes a script of its user messages, with `expected.tools` set to the tools it called and the tag `from-session`; tool results are not copied). An upload maps columns to `input.opening`, `input.goal`, `input.persona`, `input.mode`, `input.facts` (split), `expected.outcome`, `expected.tools`, `expected.forbidden_tools`, `title` and `tags`. **Scripts and tool mocks cannot be mapped from CSV**; they need a JSON or JSONL file (a hand-written CSV can use `input.script:json`). A dataset can serve a stage eval and an agent eval at once, but most rows will be invalid for one of them, so the console warns.
@@ -477,7 +478,7 @@ A grader reads the **conversation subject**, not the envelope. A grader type tha
 |------|-------|-------|
 | `schema` | yes | no |
 | `field`, `reference`, `code`, `rubric` | yes | yes |
-| `tool_calls`, `conversation_check`, `goal_reached` | no | yes |
+| `tool_calls`, `conversation_check`, `consumer_scope`, `goal_reached` | no | yes |
 
 **`tool_calls`.** Passes when every rule holds; score 1 or 0.
 
@@ -502,6 +503,8 @@ A call counts as called whatever its outcome, so an attempted `billing.refund` t
 `tool_mocks`, `must_call`, `must_not_call` and expected tool lists are keyed by **tool name only**, not by mode fields on consolidated Stageflow tools: a mock or grader on `start_run` applies to every `start_run` mode (pipeline, single-stage, rerun), and the same rule applies to Guide eval forbidden lists.
 
 **`conversation_check`.** Deterministic checks of the shape of the conversation: `max_turns` (user turns), `max_agent_questions_per_turn` (a question is a `?` followed by a space or the end of the text, outside code fences and URLs) and `final_reply` (a list of `field` checks applied to the last assistant message).
+
+**`consumer_scope`.** Deterministic pass or fail for cross-customer leakage on agent evals that set `metadata.principal`. The eval gate still runs first. After that, allowed customer resource tool calls go through the fixture consumer path. The grader inspects the stored conversation subject only: no successful `orders.status`, `orders.list` or `account.profile` call may target a resource outside the principal's scope, and no out-of-scope resource id or private status from the fixture catalog may appear in messages or tool summaries. Every case needs `metadata.principal`; there are no grader fields. Judge-free sample: [`examples/evals/leakage-sample.eval.yaml`](../examples/evals/leakage-sample.eval.yaml).
 
 **`goal_reached`.** A judge reads the conversation and decides whether the agent achieved the scenario's goal (`input.goal`, else `expected.outcome`). It does not trust the simulator's own "done" signal. Pass or fail only. Optional `judge` and `guidance`. Needs a judge model.
 

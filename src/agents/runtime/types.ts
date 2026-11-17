@@ -32,6 +32,8 @@ export type CompleteInput = {
   onDelta: (text: string) => void;
   hooks: TurnHooks;
   consumerTools?: ConsumerRuntimeTool[];
+  /** Who is writing on a channel, as the Host knows it. Goes in the system prompt, which compaction never rewrites. */
+  senderFact?: string;
   /** Sub-agents already checked as consumer-safe. Ambient sub-agents stay off the consumer turn. */
   consumerSafeSubAgents?: readonly string[];
 };

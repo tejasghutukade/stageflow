@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentChatController } from "../src/agents/chatTurn.js";
 import { EvalGateRegistry } from "../src/agents/evalGate.js";
+import { EvalConsumerRegistry } from "../src/evals/consumer/evalConsumerRegistry.js";
 import { createAgentCaseRunner, type AgentRunnerHost } from "../src/evals/runner/agentCaseRunner.js";
 import { createEvalCaseRunner } from "../src/evals/runner/caseRunner.js";
 import { FakeAgentBackend, type FakeTurnScript } from "../src/evals/runner/FakeAgentBackend.js";
@@ -22,8 +23,9 @@ async function setup(backend: FakeAgentBackend, agents: Record<string, Record<st
     await fx.service.create(fx.project, agentInput(id, overrides), { source: "console" });
   }
   const evalGates = new EvalGateRegistry();
-  const chat = new AgentChatController({ service: fx.service, backend, evalGates });
-  const host: AgentRunnerHost = { service: fx.service, chat, evalGates, backend };
+  const evalConsumers = new EvalConsumerRegistry();
+  const chat = new AgentChatController({ service: fx.service, backend, evalGates, evalConsumers });
+  const host: AgentRunnerHost = { service: fx.service, chat, evalGates, evalConsumers, backend };
   const detail = await fx.service.get(fx.project, "support");
   return { fx, host, chat, evalGates, detail };
 }

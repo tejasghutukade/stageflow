@@ -33,7 +33,7 @@ channel:
   allow_from: [U02ABC1234]
 ```
 
-A Slack sender is a **user id** (`U…` or `W…`, from the profile menu → Copy member ID), so `allow_from` takes Slack user ids or `*`. Email, phone and `@domain` entries never match a Slack sender. The reply goes to the same channel; each Slack thread is one session. Messages from bots are ignored.
+A Slack sender is a **user id** (`U…` or `W…`, from the profile menu → Copy member ID), so `allow_from` takes Slack user ids or `*`. Email, phone and `@domain` entries never match a Slack sender. The reply goes to the same channel. A direct message to the app is one session per person. In a channel, each Slack thread is one session shared by everyone who writes in it. Messages from bots are ignored.
 
 ## Troubleshooting
 

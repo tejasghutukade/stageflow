@@ -98,7 +98,8 @@ channel:
 | Field | Type | Default | Rules |
 |-------|------|---------|-------|
 | `channel.connection_id` | string | none | The [connection](channels.md) this agent answers on. One agent per connection; two connections that reach the same inbox or line also count as one (`agent.channel_in_use`). An unknown id warns (`agent.connection_unknown`). |
-| `channel.allow_from` | list of strings | `[]` | Who may message the agent. No duplicates. Empty lets nobody in and warns (`agent.channel_nobody_allowed`); `*` lets anyone in and warns (`agent.channel_open_to_anyone`). |
+| `channel.access` | `allow_list` or `authenticated` | `allow_list` | `authenticated` runs admitted senders under the consumer gate with every declared customer resource tool (`orders.status`, `orders.list`, `account.profile`). Needs identity, a channel identity connection for this agent and connection, and a consumer-safe agent; see [Consumer identity](consumer-identity.md). |
+| `channel.allow_from` | list of strings | `[]` | Who may message the agent. No duplicates. Empty lets nobody in and warns (`agent.channel_nobody_allowed`); `*` or a public mail domain (`@gmail.com`) lets anyone in and warns (`agent.channel_open_to_anyone`); with tools, skills, memories, project context or sub-agents the agent then cannot be enabled (`agent.channel_open_with_tools`). A Telegram `@username` entry warns (`agent.channel_username_entry`); use the numeric user id. |
 
 An `allow_from` entry is one of:
 
@@ -210,7 +211,9 @@ Warning codes:
 | `agent.skill_unknown` | The skill is not installed. |
 | `agent.sub_agent_unknown` | No agent has that id. |
 | `agent.connection_unknown` | No connection has that id. |
-| `agent.channel_nobody_allowed`, `agent.channel_open_to_anyone` | An empty or `*` `allow_from`. |
+| `agent.channel_nobody_allowed`, `agent.channel_open_to_anyone` | An empty `allow_from`, or one with `*` or a public mail domain. |
+| `agent.channel_open_with_tools` | Open to anyone and the agent has tools, skills, memories, project context or sub-agents. A warning while the agent is off; an error when enabling, and an enabled agent stops answering on its channel. |
+| `agent.channel_username_entry` | `allow_from` has a Telegram `@username`, which can change hands. Use the numeric user id. |
 | `agent.channel_approvers_unused` | `approvals.approvers.channel_ids` is reserved and ignored. |
 | `agent.web_chat_slug_missing` | Web chat is on with no link yet. |
 | `agent.web_chat_reads_conversations` | Web chat is on and the agent can read every agent's sessions, including visitors' messages. |

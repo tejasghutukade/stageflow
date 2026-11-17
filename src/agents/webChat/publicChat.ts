@@ -104,6 +104,16 @@ export class PublicWebChat {
     try {
       const parts = pathname.slice("/api/public/chat/".length).replace(/\/+$/, "").split("/");
       const [slug = "", threads, threadId, messages] = parts;
+      if (parts.length === 2 && threads === "step-up" && method === "GET") {
+        const target = await this.resolve(slug);
+        if (!this.options.consumerAuthorization) throw new ConsumerAccessError("identity.setup_required");
+        const token = new URL(req.url ?? "/", "http://local").searchParams.get("token") ?? "";
+        if (token.length < 16 || this.options.consumerAuthorization.peekStepUpAccount(token) === undefined) {
+          throw new ConsumerAccessError("identity.verification_required");
+        }
+        res.setHeader("Set-Cookie", stepUpCookie(slug, token, 600));
+        return this.json(res, 200, { requiresSignIn: true });
+      }
       if (parts.length === 2 && threads === "admission" && method === "POST") {
         this.assertOrigin(req);
         const target = await this.resolve(slug);
@@ -113,6 +123,8 @@ export class PublicWebChat {
           || typeof body.connectionId !== "string" || typeof body.assertion !== "string") throw new WebChatError("web_chat.invalid");
         this.throttle(slug, req.socket.remoteAddress ?? "unknown", req, target, "thread");
         const admitted = await this.options.consumerAuthorization.admit(body.connectionId, target.agentId, body.assertion);
+        const stepUp = readStepUpCookie(req);
+        if (stepUp) this.options.consumerAuthorization.completeStepUpFromWebSession(stepUp, admitted.sessionId, target.agentId);
         return this.json(res, 201, { token: admitted.token, tokenType: "Bearer", expiresIn: Math.max(0, Math.floor((admitted.expiresAt - this.now()) / 1000)) });
       }
       if (parts.length === 3 && threads === "oidc" && (threadId === "start" || threadId === "callback")) {
@@ -133,7 +145,9 @@ export class PublicWebChat {
         const state = currentUrl.searchParams.get("state") ?? "";
         if (readCookie(req, "sf_oidc") !== state) throw new ConsumerAccessError("identity.verification_required");
         const admitted = await this.options.consumerAuthorization.completeOidc(target.agentId, currentUrl);
-        res.setHeader("Set-Cookie", oidcCookie(slug, "", 0));
+        const stepUp = readStepUpCookie(req);
+        if (stepUp) this.options.consumerAuthorization.completeStepUpFromWebSession(stepUp, admitted.sessionId, target.agentId);
+        res.setHeader("Set-Cookie", [oidcCookie(slug, "", 0), stepUpCookie(slug, "", 0)]);
         return this.json(res, 201, { token: admitted.token, tokenType: "Bearer", expiresIn: Math.max(0, Math.floor((admitted.expiresAt - this.now()) / 1000)) });
       }
       const shapeOk =
@@ -383,6 +397,15 @@ export class PublicWebChat {
 
 function oidcCookie(slug: string, value: string, maxAge: number): string {
   return `sf_oidc=${value}; HttpOnly; Secure; SameSite=Lax; Path=/api/public/chat/${slug}/oidc; Max-Age=${maxAge}`;
+}
+
+function stepUpCookie(slug: string, value: string, maxAge: number): string {
+  return `sf_step_up=${value}; HttpOnly; Secure; SameSite=Lax; Path=/api/public/chat/${slug}; Max-Age=${maxAge}`;
+}
+
+function readStepUpCookie(req: IncomingMessage): string | undefined {
+  const value = readCookie(req, "sf_step_up");
+  return value && value.length >= 16 ? value : undefined;
 }
 
 function readCookie(req: IncomingMessage, name: string): string | undefined {

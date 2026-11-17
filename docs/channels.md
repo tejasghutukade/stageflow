@@ -1,6 +1,6 @@
 # Communication channels
 
-Experimental. Slack, Telegram, WhatsApp, iMessage, and AgentMail sending and replies work; the shape may still change.
+WhatsApp is experimental; its shape may still change. The other providers are stable.
 
 Channels let a stage send a message over an external service. You define a **connection** once (in the console or in `connections.yaml`), then a stage lists it under [`channels:`](yaml-catalog.md#stage-channels) with the recipient pinned. The agent gets one tool, `send_message`, and cannot pick a different recipient.
 
@@ -216,6 +216,8 @@ connections:
 Provider reference: <https://photon.codes/docs/spectrum-ts/providers/imessage>.
 
 ### WhatsApp (Photon)
+
+Experimental: this provider's shape may still change.
 
 Sends WhatsApp Business messages, 1:1 only, through the same shared `photon` credential as iMessage. Enable WhatsApp for the project in the Photon dashboard first. WhatsApp is send-only: neither stages nor agents receive on it.
 

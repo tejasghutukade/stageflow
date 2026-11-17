@@ -52,7 +52,7 @@ Every valid save is a revision with a source. A save based on an old revision is
 
 ## Reach
 
-Console only by default, plus web chat for agents created through tools. Inbound channels: AgentMail and iMessage (the Host keeps a stream open, no public URL needed), Slack and Telegram (webhook at \`/api/agent-inbound/<connection id>\`, needs an \`inboundSecret\` and a URL the provider can reach). WhatsApp is send-only. On a channel the system sends the reply; an unknown delivery outcome is never resent and fails the turn as \`agent.reply_undelivered\`.
+Console only by default, plus web chat for agents created through tools. Inbound channels: AgentMail and iMessage (the Host keeps a stream open, no public URL needed), Slack and Telegram (webhook at \`/api/agent-inbound/<connection id>\`, needs an \`inboundSecret\` and a URL the provider can reach). WhatsApp is send-only. An agent that anyone can message (\`*\` or a public mail domain in \`allow_from\`) cannot be enabled while it has tools, memories or project context (\`agent.channel_open_with_tools\`). On a channel the system sends the reply; an unknown delivery outcome is never resent and fails the turn as \`agent.reply_undelivered\`.
 
 ## Tools for agents
 

@@ -8,6 +8,7 @@ export type TelegramInboundConfig = {
 
 export type TelegramParseResult =
   | { ok: true; message: AgentInboundMessage }
+  | { ok: true; ignored: true; reason: "not_private_chat" | "no_sender" }
   | { ok: false; code: "agent.signature_invalid" | "agent.invalid" };
 
 export function verifyTelegramSecret(
@@ -36,6 +37,8 @@ export function parseTelegramInbound(
   if (text.length === 0) return { ok: false, code: "agent.invalid" };
   const chat = record.chat;
   if (typeof chat !== "object" || chat === null) return { ok: false, code: "agent.invalid" };
+  // Only one-to-one chats: in a group the reply would reach people who were never allowed.
+  if ((chat as { type?: unknown }).type !== "private") return { ok: true, ignored: true, reason: "not_private_chat" };
   const chatId = (chat as { id?: unknown }).id;
   if (typeof chatId !== "number" && typeof chatId !== "string") {
     return { ok: false, code: "agent.invalid" };
@@ -44,11 +47,10 @@ export function parseTelegramInbound(
   if (typeof messageId !== "number" || !Number.isFinite(messageId)) {
     return { ok: false, code: "agent.invalid" };
   }
-  const from = record.from;
-  const fromLabel =
-    typeof from === "object" && from !== null && typeof (from as { username?: unknown }).username === "string"
-      ? (from as { username: string }).username
-      : undefined;
+  const from = typeof record.from === "object" && record.from !== null ? (record.from as { id?: unknown; username?: unknown }) : undefined;
+  // The numeric user id never changes; a username can be dropped and taken by someone else.
+  if (typeof from?.id !== "number" || !Number.isSafeInteger(from.id)) return { ok: true, ignored: true, reason: "no_sender" };
+  const username = typeof from.username === "string" && from.username.length > 0 ? from.username : undefined;
   const threadId = String(chatId);
   return {
     ok: true,
@@ -59,7 +61,8 @@ export function parseTelegramInbound(
       threadId,
       replyTo: threadId,
       text,
-      ...(fromLabel !== undefined ? { from: fromLabel } : {}),
+      from: String(from.id),
+      ...(username !== undefined ? { fromUsername: username } : {}),
     },
   };
 }

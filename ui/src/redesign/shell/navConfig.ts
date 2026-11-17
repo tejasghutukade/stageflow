@@ -46,14 +46,14 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Activity",
     items: [
       { id: "runs", label: "Pipeline runs", href: "#/runs", icon: LuList, badge: "inFlight" },
-      { id: "agent-sessions", label: "Agent sessions", href: "#/agent-sessions", icon: LuMessagesSquare, badge: "agentsActive", experimental: true },
+      { id: "agent-sessions", label: "Agent sessions", href: "#/agent-sessions", icon: LuMessagesSquare, badge: "agentsActive" },
     ],
   },
   {
     label: "Build",
     items: [
       { id: "pipelines", label: "Pipelines", href: "#/pipelines", icon: LuLayers },
-      { id: "agents", label: "Agents", href: "#/agents", icon: LuBot, experimental: true },
+      { id: "agents", label: "Agents", href: "#/agents", icon: LuBot },
       { id: "functions", label: "Functions", href: "#/functions", icon: LuSquareFunction },
       { id: "tasks", label: "Tasks", href: "#/tasks", icon: LuList },
       { id: "catalog", label: "Catalog", href: "#/catalog?tab=stages", icon: LuSparkles },
@@ -64,7 +64,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Connect",
     items: [
       { id: "triggers", label: "Triggers", href: "#/triggers", icon: LuZap },
-      { id: "connections", label: "Connections", href: "#/connections", icon: LuPlug, experimental: true },
+      { id: "connections", label: "Connections", href: "#/connections", icon: LuPlug },
       { id: "identity", label: "Identity", href: "#/identity", icon: LuShield, experimental: true },
       { id: "a2a", label: "A2A", href: "#/a2a", icon: LuNetwork, experimental: true },
       { id: "memories", label: "Memories", href: "#/memories", icon: LuBookOpen },

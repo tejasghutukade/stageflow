@@ -9,6 +9,8 @@ export type AgentMailSocket = {
   close(): void;
 };
 
+export type AgentMailDmarc = { result: string; aligned?: boolean };
+
 export type AgentMailMessage = {
   inboxId: string;
   threadId: string;
@@ -21,7 +23,15 @@ export type AgentMailMessage = {
   html?: string;
   extractedText?: string;
   headers?: Record<string, string>;
+  dmarc?: AgentMailDmarc;
+  authenticationResults?: { dmarc?: AgentMailDmarc };
 };
+
+export function dmarcAlignedPass(message: AgentMailMessage): boolean {
+  const dmarc = message.dmarc ?? message.authenticationResults?.dmarc;
+  if (!dmarc) return false;
+  return dmarc.result.toLowerCase() === "pass" && dmarc.aligned === true;
+}
 
 export type AgentMailTransport = {
   connect(): Promise<AgentMailSocket>;
@@ -84,12 +94,12 @@ export function toInbound(connectionId: string, message: AgentMailMessage): Agen
   return {
     provider: "agentmail",
     connectionId,
-    // The message id (not the event id) so the live stream and the catch-up list dedupe against each other.
     eventId: `agentmail:${message.messageId}`,
     threadId: message.threadId,
     text,
     from: message.from,
     replyTo: message.messageId,
+    dmarcPass: dmarcAlignedPass(message),
   };
 }
 

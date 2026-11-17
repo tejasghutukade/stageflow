@@ -119,23 +119,23 @@ A stream that ends with neither `done` nor `error` was cut off (the CLI reports 
 
 ## Inbound webhooks
 
-`POST /api/agent-inbound/:connectionId` receives messages for Slack and Telegram connections and for AgentMail connections that use a webhook. It needs no control token; the provider's signature against the connection's `inboundSecret` is the credential. (AgentMail and iMessage are normally received over a stream the Host opens itself; see [Agents — the Host listens](agents.md#agentmail-and-imessage-the-host-listens).)
+`POST /api/agent-inbound/:connectionId` receives messages for Slack and Telegram connections. It needs no control token; the provider's signature against the connection's `inboundSecret` is the credential. (AgentMail and iMessage are received only over a stream the Host opens itself; see [Agents — the Host listens](agents.md#agentmail-and-imessage-the-host-listens).)
 
 | Provider | `inboundSecret` is | Header checked |
 |----------|--------------------|----------------|
 | Slack | App signing secret | `x-slack-signature` and `x-slack-request-timestamp` |
 | Telegram | `secret_token` given to `setWebhook` | `x-telegram-bot-api-secret-token` |
-| AgentMail | Webhook secret | `x-agentmail-signature` (HMAC-SHA256 of the raw body) |
 
 | Status | Body | Meaning |
 |--------|------|---------|
 | `200` | `{ "ok": true }` | Accepted; the agent answers in the background and the reply goes out on the same connection |
 | `200` | `{ "challenge": "…" }` | Slack `url_verification` |
-| `200` | `{ "ignored": true }` | Dropped on purpose: a bot's own message, no enabled agent on this connection, sender not in `allow_from`, or sender over 20 messages a minute. Nothing is retried, and the sender cannot tell the difference |
+| `200` | `{ "ignored": true }` | Dropped on purpose: a bot's own message, a Telegram group or a message with no sender, no enabled agent on this connection, an agent that is open to anyone and has tools, sender not in `allow_from`, or sender over 20 messages a minute. Nothing is retried, and the sender cannot tell the difference |
+| `200` | `{ "unmatched": true }` | Channel identity could not map the sender: the connection's fixed reply was sent and no agent turn ran. Nothing is retried |
 | `200` | `{ "duplicate": true }` | This event id was already handled |
 | `400` | | Body is not JSON, or not a message this provider recognises |
 | `401` | | Signature does not verify |
-| `404` | | No such connection, or it has no `inboundSecret` |
+| `404` | | No such connection, it has no `inboundSecret`, or it is not a Slack or Telegram connection |
 | `413` | | Body over 1 MiB |
 | `503` | `{ "code": "agent.store_unavailable" }` | The Host runs without the agent store |
 
@@ -175,6 +175,7 @@ For an agent with `web_chat.access: authenticated` the same thread and message r
 | Method and path | Purpose |
 |-----------------|---------|
 | `POST /api/public/chat/:slug/admission` | Body `{ connectionId, assertion }`, the signed one-time handoff token. `201 { token, tokenType: "Bearer", expiresIn }` |
+| `GET /api/public/chat/:slug/step-up?token=` | `200 { requiresSignIn: true }`. Sets an `sf_step_up` cookie for the slug when the query token is valid; an invalid or missing token is `identity.verification_required` (401) |
 | `POST /api/public/chat/:slug/oidc/start` | Body `{ connectionId }`. `200 { authorizationUrl }` and an `sf_oidc` cookie. Send the browser to the URL |
 | `GET /api/public/chat/:slug/oidc/callback` | The provider's redirect. Returns the same `201 { token, … }` shape |
 
