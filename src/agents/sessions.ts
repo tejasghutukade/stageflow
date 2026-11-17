@@ -14,7 +14,7 @@ import type { AgentService, AgentSessionDetail } from "./service.js";
 import { scrubSecrets } from "../compaction/scrub.js";
 import { WORKING_STATE_TOOL_NAME } from "../compaction/types.js";
 import { prepareSpan, type SpanKind } from "./trace.js";
-import { allowConsumerToolCall, CHANNEL_CONSUMER_SOURCES, isChannelConsumerTurn, loadConsumerSubAgents } from "./consumerSafety.js";
+import { allowConsumerToolCall, isAuthenticatedChannelSource, isChannelConsumerTurn, loadConsumerSubAgents, requireChannelConsumerTurn } from "./consumerSafety.js";
 import { channelSenderFact } from "./communications/senderFact.js";
 import type { ConsumerAuthorization } from "../identity/authorization.js";
 import { ConsumerStepUpRequired } from "../identity/stepUp.js";
@@ -78,10 +78,6 @@ function toJson(value: unknown): string {
   }
 }
 
-function stepUpFailure(error: unknown): string | undefined {
-  return error instanceof ConsumerStepUpRequired ? error.reply : undefined;
-}
-
 /** One turn: open (if needed) → record user message → model + tools → guardrails → record reply. */
 export class AgentConversation {
   private controller: AbortController | null = null;
@@ -126,26 +122,26 @@ export class AgentConversation {
       }
       const existing = (await service.getSession(input.projectRoot, sessionId)).session;
       const existingDef = (await service.get(input.projectRoot, input.agentId)).definition;
-      if (existingDef && isChannelConsumerTurn(existing.source, existingDef, input.consumerSessionId)) {
-        if (!input.consumerSessionId || !this.options.consumerAuthorization) throw new ConsumerAccessError("identity.verification_required");
-        try {
-          await this.options.consumerAuthorization.validateConversation(sessionId, input.consumerSessionId, input.agentId, existing.revision);
-        } catch (error) {
-          const stepUp = stepUpFailure(error);
-          if (stepUp) {
-            const active = await service.beginTurn(input.projectRoot, sessionId, {
-              text: input.text,
-              author: input.author ?? null,
-              ...(input.resumeTurnId ? { resumeTurnId: input.resumeTurnId } : {}),
-            });
-            return service.completeTurn(input.projectRoot, active.turn.id, {
-              status: "failed",
-              errorCode: "identity.step_up_required",
-              assistantText: stepUp,
-            });
-          }
-          throw error;
-        }
+      const channelTurn = await requireChannelConsumerTurn(this.options.consumerAuthorization, {
+        source: existing.source,
+        definition: existingDef,
+        consumerSessionId: input.consumerSessionId,
+        conversationId: sessionId,
+        agentId: input.agentId,
+        revision: existing.revision,
+      });
+      if (channelTurn.status === "refused") throw new ConsumerAccessError("identity.verification_required");
+      if (channelTurn.status === "step_up") {
+        const active = await service.beginTurn(input.projectRoot, sessionId, {
+          text: input.text,
+          author: input.author ?? null,
+          ...(input.resumeTurnId ? { resumeTurnId: input.resumeTurnId } : {}),
+        });
+        return service.completeTurn(input.projectRoot, active.turn.id, {
+          status: "failed",
+          errorCode: "identity.step_up_required",
+          assistantText: channelTurn.reply,
+        });
       }
       if (input.source === "schedule" && input.consumerSessionId && this.options.consumerAuthorization) {
         try {
@@ -214,7 +210,7 @@ export class AgentConversation {
     if (definition.web_chat.access === "authenticated" && !consumer && !["console", "cli", "mcp"].includes(active.session.source)) {
       throw new ConsumerAccessError("identity.verification_required");
     }
-    if (definition.channel?.access === "authenticated" && CHANNEL_CONSUMER_SOURCES.has(active.session.source)
+    if (isAuthenticatedChannelSource(active.session.source, definition)
       && (!input.consumerSessionId || input.consumerSessionId.length === 0)) {
       throw new ConsumerAccessError("identity.verification_required");
     }
@@ -459,7 +455,7 @@ export class AgentConversation {
       await assertDelivery();
     } catch (error) {
       stream.discard();
-      const stepUp = stepUpFailure(error);
+      const stepUp = error instanceof ConsumerStepUpRequired ? error.reply : undefined;
       if (stepUp) {
         record({ turnId: turn.id, name: `invoke_agent ${definition.id}`, kind: "agent", status: "error", startedAt, endedAt: new Date(), attributes: { "error.type": "identity.step_up_required" } });
         const detail = await service.completeTurn(input.projectRoot, turn.id, {

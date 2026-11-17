@@ -322,97 +322,30 @@ export class ConsumerAuthorization {
   }
 
   private async authorize(conversation: string, sessionId: string, agentId: string, tool: string, input: Record<string, unknown>, signal: AbortSignal): Promise<{ authority: ConsumerAuthority; resource?: OwnedResource }> {
-    let authority: ConsumerAuthority | undefined;
-    let denyReason = "order_not_available";
-    try {
-      const args = orderInput.parse(input);
-      authority = this.store.conversation(conversation, sessionId, agentId);
-      const protection = await this.protectionFailure(authority, signal);
-      if (protection) {
-        denyReason = protection;
-        throw new Error("denied");
-      }
-      const required = requiredAssurance(tool);
-      const currentAssurance = this.store.sessionAssurance(authority.sessionId);
-      if (!assuranceMeets(currentAssurance, required)) {
-        denyReason = "assurance_insufficient";
-        if (this.store.sessionProtection(authority.sessionId).kind === "channel") this.raiseStepUp(authority, conversation);
-        throw new Error("denied");
-      }
-      const binding = resolveResourceTool(this.resourceTypes, tool);
-      const permission = authority.principal.permission;
-      if (signal.aborted || !binding || binding.binding.kind !== "read"
-        || !authority.actions.includes(binding.binding.permissionAction)
-        || !permission.actions.includes(binding.binding.permissionAction)
-        || (authority.resources && !authority.resources.includes(args.orderId))) throw new Error("denied");
-      const resource = orderOwnership.parse(await this.customer.ownership(this.store.workspaceId, "orders", args.orderId, "orderId", signal));
-      if (resource.id !== args.orderId || resource.workspaceId !== this.store.workspaceId) throw new Error("denied");
+    let args: { orderId: string } | undefined;
+    return this.runResourceGate(conversation, sessionId, agentId, tool, signal, "read", async ({ authority, binding }) => {
+      if (authority.resources && args && !authority.resources.includes(args.orderId)) throw new Error("denied");
+      const orderId = args!.orderId;
+      const resource = orderOwnership.parse(await this.customer.ownership(this.store.workspaceId, "orders", orderId, "orderId", signal));
+      if (resource.id !== orderId || resource.workspaceId !== this.store.workspaceId) throw new Error("denied");
       const allowed = await allowWithinScope(this.engine, { authority, action: binding.binding.permissionAction, resource, policyRevision: this.policyRevision }, signal);
       const current = this.store.conversation(conversation, sessionId, agentId);
       if (!allowed || signal.aborted || current.principal.revision !== authority.principal.revision) throw new Error("denied");
       this.store.audit(authority.principal.id, conversation, "allow", "order_read");
       return { authority, resource };
-    } catch (error) {
-      if (error instanceof ConsumerAccessError && error.code === "identity.step_up_required") throw error;
-      this.store.audit(authority?.principal.id ?? null, conversation, "deny", denyReason);
-      throw new ConsumerAccessError("identity.not_available");
-    }
+    }, () => { args = orderInput.parse(input); });
   }
 
   private async authorizeList(conversation: string, sessionId: string, agentId: string, tool: string, signal: AbortSignal): Promise<{ authority: ConsumerAuthority }> {
-    let authority: ConsumerAuthority | undefined;
-    let denyReason = "order_not_available";
-    try {
-      authority = this.store.conversation(conversation, sessionId, agentId);
-      const protection = await this.protectionFailure(authority, signal);
-      if (protection) {
-        denyReason = protection;
-        throw new Error("denied");
-      }
-      const required = requiredAssurance(tool);
-      const currentAssurance = this.store.sessionAssurance(authority.sessionId);
-      if (!assuranceMeets(currentAssurance, required)) {
-        denyReason = "assurance_insufficient";
-        if (this.store.sessionProtection(authority.sessionId).kind === "channel") this.raiseStepUp(authority, conversation);
-        throw new Error("denied");
-      }
-      const binding = resolveResourceTool(this.resourceTypes, tool);
-      const permission = authority.principal.permission;
-      if (signal.aborted || !binding || binding.binding.kind !== "list"
-        || !authority.actions.includes(binding.binding.permissionAction)
-        || !permission.actions.includes(binding.binding.permissionAction)) throw new Error("denied");
+    return this.runResourceGate(conversation, sessionId, agentId, tool, signal, "list", async ({ authority }) => {
       const current = this.store.conversation(conversation, sessionId, agentId);
       if (signal.aborted || current.principal.revision !== authority.principal.revision) throw new Error("denied");
       return { authority };
-    } catch (error) {
-      if (error instanceof ConsumerAccessError && error.code === "identity.step_up_required") throw error;
-      this.store.audit(authority?.principal.id ?? null, conversation, "deny", denyReason);
-      throw new ConsumerAccessError("identity.not_available");
-    }
+    });
   }
 
   private async authorizeAccount(conversation: string, sessionId: string, agentId: string, tool: string, signal: AbortSignal): Promise<{ authority: ConsumerAuthority; resource: OwnedResource }> {
-    let authority: ConsumerAuthority | undefined;
-    let denyReason = "order_not_available";
-    try {
-      authority = this.store.conversation(conversation, sessionId, agentId);
-      const protection = await this.protectionFailure(authority, signal);
-      if (protection) {
-        denyReason = protection;
-        throw new Error("denied");
-      }
-      const required = requiredAssurance(tool);
-      const currentAssurance = this.store.sessionAssurance(authority.sessionId);
-      if (!assuranceMeets(currentAssurance, required)) {
-        denyReason = "assurance_insufficient";
-        if (this.store.sessionProtection(authority.sessionId).kind === "channel") this.raiseStepUp(authority, conversation);
-        throw new Error("denied");
-      }
-      const binding = resolveResourceTool(this.resourceTypes, tool);
-      const permission = authority.principal.permission;
-      if (signal.aborted || !binding || binding.binding.kind !== "account_read"
-        || !authority.actions.includes(binding.binding.permissionAction)
-        || !permission.actions.includes(binding.binding.permissionAction)) throw new Error("denied");
+    return this.runResourceGate(conversation, sessionId, agentId, tool, signal, "account_read", async ({ authority, binding }) => {
       const accountId = authority.principal.accountId;
       const resource = orderOwnership.parse(await this.customer.ownership(this.store.workspaceId, "account", accountId, "accountId", signal));
       if (resource.id !== accountId || resource.workspaceId !== this.store.workspaceId || resource.ownerAccountId !== accountId) throw new Error("denied");
@@ -420,6 +353,42 @@ export class ConsumerAuthorization {
       const current = this.store.conversation(conversation, sessionId, agentId);
       if (!allowed || signal.aborted || current.principal.revision !== authority.principal.revision) throw new Error("denied");
       return { authority, resource };
+    });
+  }
+
+  private async runResourceGate<T>(
+    conversation: string,
+    sessionId: string,
+    agentId: string,
+    tool: string,
+    signal: AbortSignal,
+    kind: "read" | "list" | "account_read",
+    finish: (gate: { authority: ConsumerAuthority; binding: NonNullable<ReturnType<typeof resolveResourceTool>> }) => Promise<T>,
+    prepare?: () => void,
+  ): Promise<T> {
+    let authority: ConsumerAuthority | undefined;
+    let denyReason = "order_not_available";
+    try {
+      prepare?.();
+      authority = this.store.conversation(conversation, sessionId, agentId);
+      const protection = await this.protectionFailure(authority, signal);
+      if (protection) {
+        denyReason = protection;
+        throw new Error("denied");
+      }
+      const required = requiredAssurance(tool);
+      const currentAssurance = this.store.sessionAssurance(authority.sessionId);
+      if (!assuranceMeets(currentAssurance, required)) {
+        denyReason = "assurance_insufficient";
+        if (this.store.sessionProtection(authority.sessionId).kind === "channel") this.raiseStepUp(authority, conversation);
+        throw new Error("denied");
+      }
+      const binding = resolveResourceTool(this.resourceTypes, tool);
+      const permission = authority.principal.permission;
+      if (signal.aborted || !binding || binding.binding.kind !== kind
+        || !authority.actions.includes(binding.binding.permissionAction)
+        || !permission.actions.includes(binding.binding.permissionAction)) throw new Error("denied");
+      return await finish({ authority, binding });
     } catch (error) {
       if (error instanceof ConsumerAccessError && error.code === "identity.step_up_required") throw error;
       this.store.audit(authority?.principal.id ?? null, conversation, "deny", denyReason);

@@ -1,19 +1,58 @@
 import { grantedToolIds, type AgentDefinition } from "../config/loadAgent.js";
 import type { AgentIssue } from "../config/loadAgent.js";
 import { consumerResourceToolIds } from "../identity/resourceContract.js";
+import { ConsumerStepUpRequired } from "../identity/stepUp.js";
 import { ConsumerAccessError } from "../identity/types.js";
 
 export const CHANNEL_CONSUMER_SOURCES = new Set(["imessage", "telegram", "agentmail", "email", "slack"]);
+
+type ChannelTurnAuth = {
+  validateConversation(conversation: string, sessionId: string, agentId: string, revision?: number): Promise<void>;
+};
+
+export type ChannelTurnDecision =
+  | { status: "skip" }
+  | { status: "ok" }
+  | { status: "refused" }
+  | { status: "step_up"; reply: string };
+
+export function isAuthenticatedChannelSource(
+  source: string,
+  definition: Pick<AgentDefinition, "channel"> | null | undefined,
+): boolean {
+  return Boolean(definition?.channel?.access === "authenticated" && CHANNEL_CONSUMER_SOURCES.has(source));
+}
 
 export function isChannelConsumerTurn(
   source: string,
   definition: Pick<AgentDefinition, "channel">,
   consumerSessionId?: string,
 ): boolean {
-  return CHANNEL_CONSUMER_SOURCES.has(source)
-    && definition.channel?.access === "authenticated"
+  return isAuthenticatedChannelSource(source, definition)
     && consumerSessionId !== undefined
     && consumerSessionId.length > 0;
+}
+
+export async function requireChannelConsumerTurn(
+  auth: ChannelTurnAuth | undefined,
+  input: {
+    source: string;
+    definition: Pick<AgentDefinition, "channel"> | null | undefined;
+    consumerSessionId: string | undefined;
+    conversationId: string;
+    agentId: string;
+    revision?: number;
+  },
+): Promise<ChannelTurnDecision> {
+  if (!isChannelConsumerTurn(input.source, input.definition ?? {}, input.consumerSessionId)) return { status: "skip" };
+  if (!input.consumerSessionId || !auth) return { status: "refused" };
+  try {
+    await auth.validateConversation(input.conversationId, input.consumerSessionId, input.agentId, input.revision);
+    return { status: "ok" };
+  } catch (error) {
+    if (error instanceof ConsumerStepUpRequired) return { status: "step_up", reply: error.reply };
+    throw error;
+  }
 }
 
 export function isConsumerSafeAgent(definition: Pick<AgentDefinition, "model" | "project_context" | "memories" | "tools">): boolean {

@@ -1,6 +1,6 @@
 import { CHANNEL_ERROR_INFO } from "../../channels/errorInfo.js";
 import { ChannelError } from "../../channels/errors.js";
-import { CHANNEL_CONSUMER_SOURCES, isChannelConsumerTurn } from "../consumerSafety.js";
+import { isAuthenticatedChannelSource } from "../consumerSafety.js";
 import { AgentError } from "../errors.js";
 import type { ConsumerAuthorization } from "../../identity/authorization.js";
 import { ConsumerAccessError } from "../../identity/types.js";
@@ -66,17 +66,10 @@ export class ReplyDelivery {
     const auth = this.options.consumerAuthorization;
     const { session } = await this.options.service.getSession(this.options.projectRoot, sessionId);
     const definition = (await this.options.service.get(this.options.projectRoot, session.agentId)).definition;
-    if (definition?.channel?.access === "authenticated" && CHANNEL_CONSUMER_SOURCES.has(session.source)) {
-      if (!auth) throw new ConsumerAccessError("identity.not_available");
-      const binding = auth.bindingFor(session.id);
-      if (!binding) throw new ConsumerAccessError("identity.not_available");
-      await auth.validateConversation(session.id, binding.sessionId, binding.agentId, session.revision);
-      return;
-    }
-    if (!auth) return;
+    if (!isAuthenticatedChannelSource(session.source, definition)) return;
+    if (!auth) throw new ConsumerAccessError("identity.not_available");
     const binding = auth.bindingFor(session.id);
-    if (!binding) return;
-    if (!definition || !isChannelConsumerTurn(session.source, definition, binding.sessionId)) return;
+    if (!binding) throw new ConsumerAccessError("identity.not_available");
     await auth.validateConversation(session.id, binding.sessionId, binding.agentId, session.revision);
   }
 
