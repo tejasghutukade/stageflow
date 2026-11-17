@@ -27,7 +27,7 @@ function runCli(args: string[], cwd: string) {
 
 describe("resolveInitDefaultModel", () => {
   it("uses provider family default when exactly one configured", () => {
-    expect(resolveInitDefaultModel(["openrouter"])).toBe("openrouter/auto");
+    expect(resolveInitDefaultModel(["openrouter"])).toBe("openrouter/anthropic/claude-sonnet-5.5");
     expect(resolveInitDefaultModel(["anthropic"])).toBe(
       "anthropic/claude-sonnet-5-5",
     );
@@ -92,7 +92,7 @@ describe("runInitCommand", () => {
           path.join(repoRoot, "pipelines/hello.pipeline.yaml"),
           "utf8",
         );
-        expect(yaml).toBe(helloPipelineYaml("openrouter/auto"));
+        expect(yaml).toBe(helloPipelineYaml("openrouter/anthropic/claude-sonnet-5.5"));
         expect(yaml).not.toMatch(/anthropic\/claude-sonnet-4-5/);
       } finally {
         await cleanup();

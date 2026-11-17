@@ -26,6 +26,7 @@ function runtime(forced: boolean[]): CatalogRuntime {
     getProviderAuthStatus: () => ({ configured: true }),
     listCredentials: async () => [],
     getModels: () => [
+      { id: "anthropic/claude-sonnet-5.5", provider: "openrouter", name: "Claude Sonnet 5.5" },
       { id: "nvidia/nemotron-3.5-lightning:free", provider: "openrouter", name: "Nemotron" },
       { id: "openai/gpt-oss", provider: "openrouter" },
     ],
@@ -72,11 +73,15 @@ describe("GET /api/models", () => {
     const { status, body } = await call("GET", "/api/models");
     expect(status).toBe(200);
     expect(body.models).toEqual(expect.arrayContaining(["openrouter/nvidia/nemotron-3.5-lightning:free", "openrouter/openai/gpt-oss"]));
-    expect(body.providers[0].models.map((model: { id: string }) => model.id)).toEqual(["openrouter/nvidia/nemotron-3.5-lightning:free", "openrouter/openai/gpt-oss"]);
+    expect(body.providers[0].models.map((model: { id: string }) => model.id)).toEqual([
+      "openrouter/anthropic/claude-sonnet-5.5",
+      "openrouter/nvidia/nemotron-3.5-lightning:free",
+      "openrouter/openai/gpt-oss",
+    ]);
     expect(body.providers).toHaveLength(1);
-    expect(body.providers[0].models.map((model: { judge_capable: boolean }) => model.judge_capable)).toEqual([true, true]);
+    expect(body.providers[0].models.map((model: { judge_capable: boolean }) => model.judge_capable)).toEqual([true, true, true]);
     expect(body.providers[0]).toMatchObject({ id: "openrouter", name: "OpenRouter", source: "live" });
-    expect(body.default).toBe("openrouter/nvidia/nemotron-3.5-lightning:free");
+    expect(body.default).toBe("openrouter/anthropic/claude-sonnet-5.5");
     expect(body.unlisted).not.toContain("openrouter/openai/gpt-oss");
     expect(typeof body.fetchedAt).toBe("string");
     expect(Array.isArray(body.entries)).toBe(true);

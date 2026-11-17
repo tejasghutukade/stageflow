@@ -37,7 +37,7 @@ One catalog feeds every picker, \`list_catalog\` with \`kind: models\`, and the 
 
 - Only connected providers appear. Lists are fetched live and cached for 30 seconds, with a built-in fallback when a provider is unreachable.
 - Any \`provider/model\` id can be typed; an id no connected provider lists is saved and runs as written, with a warning.
-- The catalog default (used by pickers, by \`write_stage\` create mode, and by the Workshop) is: \`stageflow.yaml\` \`model\`, then the Workshop model in Settings, then the catalog's pick (a free OpenRouter model when connected, else the first free model, else the first model; never a Cursor model while another exists). This does not change stage resolution above.
+- The catalog default (used by pickers, by \`write_stage\` create mode, and by the Workshop) is: \`stageflow.yaml\` \`model\`, then the Workshop model in Settings, then the catalog's pick (\`openrouter/anthropic/claude-sonnet-5.5\` when OpenRouter lists it, else the first free model, else the first model; never a Cursor model while another exists). This does not change stage resolution above.
 - Cursor models (\`cursor/…\`) need a Cursor API key. Agents refuse Cursor models unless the Host sets \`STAGEFLOW_AGENTS_ALLOW_CURSOR_NATIVE_TOOLS=1\`, because Cursor runs its own file and shell tools and grants cannot hold (\`agent.model_native_tools\`).
 
 ## Agents

@@ -155,6 +155,34 @@ describe("control token fragment", () => {
   });
 });
 
+describe("notifyControlTokenRequired", () => {
+  it("clears a stored token after the Host rejected it", async () => {
+    const { setControlToken, getControlToken, notifyControlTokenRequired } = await import(
+      "./controlToken"
+    );
+    setControlToken("s".repeat(32));
+    notifyControlTokenRequired();
+    expect(getControlToken()).toBe("");
+  });
+});
+
+describe("verifyControlToken", () => {
+  it("returns ok when health accepts the bearer", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 })),
+    );
+    const { verifyControlToken } = await import("./controlToken");
+    await expect(verifyControlToken("t".repeat(32))).resolves.toBe("ok");
+  });
+
+  it("returns rejected on 401", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 401 })));
+    const { verifyControlToken } = await import("./controlToken");
+    await expect(verifyControlToken("bad")).resolves.toBe("rejected");
+  });
+});
+
 describe("api Authorization attachment", () => {
   it("includes Authorization from localStorage on api()", async () => {
     const { setControlToken } = await import("./controlToken");

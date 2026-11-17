@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- The catalog default model with OpenRouter connected is `openrouter/anthropic/claude-sonnet-5.5` (was `openrouter/nvidia/nemotron-3.5-lightning:free`). `sf init` with only OpenRouter configured uses the same id.
+- A new `$STAGEFLOW_HOME/workspace` manifest no longer lists a `catalog.triggers` root (triggers start empty). Shipped `docker-compose.yml` no longer auto-registers the in-image `triggers-readiness` catalog.
+
 ## [0.67.0] - 2026-11-16
 
 ### Added

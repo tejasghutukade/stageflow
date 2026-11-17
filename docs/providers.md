@@ -128,7 +128,7 @@ One catalog supplies every model list and the default model: the stage, pipeline
 - **Live, with a fallback.** The Host asks each connected provider for its current model list through Pi's model registry (OpenRouter's free models, for example), caches it for 30 seconds and in Pi's `models-store.json`, and falls back to Pi's built-in list when a provider is unreachable (that provider shows "built-in list"). `POST /api/models/refresh`, or the refresh button in a picker, forces Pi to refetch.
 - **Ids are `provider/model`**, the form Pi resolves and stage, pipeline and agent files store.
 - **Custom ids still work.** A picker accepts any `provider/model` you type. An id no connected provider lists is saved and runs as written; the picker and agent validation warn "not in connected providers". Hand-written YAML with such ids still loads.
-- **Default model.** `stageflow.yaml` `model`, then the Settings Workshop model, then the catalog's pick: `openrouter/nvidia/nemotron-3.5-lightning:free` when connected, else the first free model, else the first model, never a Cursor model while another exists. Hosts resolve it at boot.
+- **Default model.** `stageflow.yaml` `model`, then the Settings Workshop model, then the catalog's pick: `openrouter/anthropic/claude-sonnet-5.5` when connected, else the first free model, else the first model, never a Cursor model while another exists. Hosts resolve it at boot.
 
 `GET /api/models` returns `models` (catalog plus ids pipelines use), `providers` (grouped, with `source`, `free`, `contextWindow`, `nativeTools`), `default`, `fetchedAt` and `unlisted`.
 

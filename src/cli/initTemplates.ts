@@ -15,7 +15,7 @@ export const LOUD_MODEL_PLACEHOLDER = "CHANGE_ME/<provider-model>";
 
 const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
   anthropic: "anthropic/claude-sonnet-5-5",
-  openrouter: "openrouter/auto",
+  openrouter: "openrouter/anthropic/claude-sonnet-5.5",
   cursor: "cursor/auto",
 };
 
