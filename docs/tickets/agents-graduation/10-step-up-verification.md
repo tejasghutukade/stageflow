@@ -34,4 +34,6 @@ A phone number on iMessage and a Telegram user id are asserted by the provider. 
 
 Done on this branch (changelog under Unreleased). TTLs: step-up link **10 minutes** (`STEP_UP_LINK_MS`), elevated `signed_in` assurance **12 hours** (`SIGNED_IN_ELEVATION_MS`). Code: `src/identity/assurance.ts`, `stepUp.ts`, assurance checks in `authorization.ts`, DMARC gating in `channel.ts` and `agentmailListener.ts`, host reply on channel turns in `sessions.ts`, web completion in `publicChat.ts`. Tests: `tests/identity.stepUp.test.ts` plus existing `tests/identity.channel.test.ts`.
 
-Left out: per-tool assurance configuration in the console or YAML (requirements are in code; `orders.status` → `provider_verified`). Slack sender admission unchanged. No absolute public URL prefix for step-up links (paths are relative to the Host).
+Left out: per-tool assurance configuration in the console or YAML (requirements are in code; `orders.status`, `orders.list` and `account.profile` all require `provider_verified`). Slack sender admission unchanged.
+
+Corrected in ticket 14: step-up links are absolute when `STAGEFLOW_PUBLIC_CHAT_URL` or `STAGEFLOW_PUBLIC_URL` is a usable origin. With no origin the Host records `step_up_origin_missing` and issues no token.

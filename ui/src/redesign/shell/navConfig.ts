@@ -65,7 +65,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: "triggers", label: "Triggers", href: "#/triggers", icon: LuZap },
       { id: "connections", label: "Connections", href: "#/connections", icon: LuPlug },
-      { id: "identity", label: "Identity", href: "#/identity", icon: LuShield, experimental: true },
+      { id: "identity", label: "Identity", href: "#/identity", icon: LuShield },
       { id: "a2a", label: "A2A", href: "#/a2a", icon: LuNetwork, experimental: true },
       { id: "memories", label: "Memories", href: "#/memories", icon: LuBookOpen },
     ],

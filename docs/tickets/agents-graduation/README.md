@@ -3,7 +3,7 @@
 Goal: take Agents out of experimental. Two phases.
 
 - **Phase 1 (01–07):** agents stable for internal and allow-listed use. Identity and customer-facing channels stay experimental.
-- **Phase 2 (08–13):** a customer on iMessage, Telegram or email can only reach their own data. Then customer support on channels graduates.
+- **Phase 2 (08–14):** a customer on iMessage, Telegram or email can only reach their own data. Then customer support on channels graduates: for self-hosted installs in 14, for Cloud after 13.
 
 Background (found by code reading, 2026-11-16):
 
@@ -28,6 +28,7 @@ Background (found by code reading, 2026-11-16):
 | 11 | Customer-scoped tool contract beyond order status | 2 | 09 |
 | 12 | Evals for cross-customer leakage | 2 | 09 |
 | 13 | Cloud: Core bump, public chat route, keep-awake | 2 | 07 |
+| 14 | Freeze the identity contract and remove "experimental" (self-hosted) | 2 | 08–12 |
 
 Every Core ticket: `npm test`, `npm run ui:test`, `npm run typecheck`, docs updated in the same change, version bump and changelog.
 
@@ -35,4 +36,4 @@ All owner decisions were made on 2026-11-16 and are recorded in each ticket.
 
 Phase 1 (01-07) shipped in 0.66.0. Each ticket has an Outcome section with what was left out.
 
-08 is implemented on this branch (see its Outcome). 09 is done (see its Outcome). 10 is done (see its Outcome). 11 is done (see its Outcome). 12 is done (see its Outcome). 13 remains: cloud readiness in the `stageflow-cloud` repository.
+08 is implemented on this branch (see its Outcome). 09 is done (see its Outcome). 10 is done (see its Outcome). 11 is done (see its Outcome). 12 is done (see its Outcome). 13 remains: cloud readiness in the `stageflow-cloud` repository. 14 is done in 0.67.0 (see its Outcome): self-hosted identity graduates without waiting for 13.

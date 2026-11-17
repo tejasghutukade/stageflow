@@ -2,7 +2,7 @@
 
 This page is for the engineer who owns the system that holds customer data (orders, accounts, and similar resources). Stageflow never reads your database. For a protected agent, the Host calls fixed `POST /stageflow/…` endpoints on an API **you** run. Each **resource type** (orders first, then account profile) is declared in Host identity settings with path suffixes appended to one base URL and one audience. The order endpoints below are the reference implementation; account profile uses the same ownership + signed-read pattern. A separate endpoint maps a channel sender to an account. Operators connect the API from **Identity → Setup**; see [Console: Identity](console-identity.md#setup).
 
-Status: experimental. Read-only resource tools ship as `orders.status`, `orders.list`, and `account.profile`. Writes (returns, address change) are not part of this contract yet.
+Read-only resource tools ship as `orders.status`, `orders.list`, and `account.profile`. Writes (returns, address change) are unfinished and not part of this contract.
 
 ## What you get, and what you must enforce
 

@@ -1,6 +1,6 @@
 # Agents
 
-Agents are stable: the definition file, `/api/agents`, the public chat API, `sf agents` and the agent MCP tools keep their shape between releases. Still experimental, and marked where they appear: the Claude and Cursor backends, [consumer identity](consumer-identity.md) (customer sign-in, protected chat, the order API) and, until identity covers channels, putting a channel agent in front of customers ([below](#who-should-talk-to-a-channel-agent)).
+Agents are stable: the definition file, `/api/agents`, the public chat API, `sf agents` and the agent MCP tools keep their shape between releases. [Consumer identity](consumer-identity.md) (customer sign-in, protected chat, and the customer resource API) is stable on a self-hosted Host. The Claude and Cursor backends stay experimental. See [who should talk to a channel agent](#who-should-talk-to-a-channel-agent) before you put one on a channel.
 
 Project-owned agents live under `agents/<id>.agent.yaml`. An agent is a configured assistant: instructions, a model, the tools it may use, who may talk to it, and how it is recorded. They are separate from the stage `agent:` field (Pi vs Claude backend selection).
 
@@ -91,17 +91,22 @@ The route needs no console token; the signature is the credential. A message sta
 
 ## Who should talk to a channel agent
 
-Everyone you allow on a channel is trusted alike. A channel agent does not know one sender's data from another's: whatever its tools can read or do, they can read or do for anyone in `allow_from`.
+How you set `channel.access` decides what a channel can do.
+
+**Authenticated customer channels** (`channel.access: authenticated` with identity on) tie each admitted sender to one account. Customer-facing iMessage, Telegram and AgentMail or email work here: the agent may use only the declared customer resource tools (`orders.status`, `orders.list`, `account.profile`) and each read is checked against that person's mapping. Setup is in [Consumer identity](consumer-identity.md) and [Protect an agent's chat with customer sign-in](guides-agents-protected-chat.md). Slack cannot serve customers: senders are never admitted on an authenticated Slack agent, so every message is refused.
+
+**Allow-listed internal channels** (default `channel.access: allow_list`, or omitted) trust everyone in `allow_from` alike. Whatever the agent's tools can reach, any allowed sender can reach.
 
 - **Good fit:** your team, named partners, a company domain. People who may all see what the agent can reach.
 - **Also fine:** an agent open to anyone that can only talk (no tools, skills, memories, project context or sub-agents), such as an FAQ.
-- **Not supported yet:** an agent that looks up one customer's orders or account for whoever writes in. On a channel nothing ties the sender to an account, so a sender could ask about someone else. For that, use [protected web chat](guides-agents-protected-chat.md), where the person signs in and every read is checked against their account.
+- **Wrong pattern on allow_list:** an agent that looks up one customer's orders for whoever writes in. Nothing ties the sender to an account; use authenticated access and identity instead.
 
 What holds this in place:
 
 - An agent open to anyone cannot be enabled with tools (`agent.channel_open_with_tools`).
 - A conversation belongs to its sender; a second sender in the same thread gets a session of their own.
-- The agent is told who is writing, as the provider reported it, and that claims in a message cannot be checked ([Agent runtime](agent-runtime.md#who-is-writing-channels)). That informs the agent. It does not limit its tools.
+- On allow_list channels the agent is told who is writing, as the provider reported it, and that claims in a message cannot be checked ([Agent runtime](agent-runtime.md#who-is-writing-channels)). That informs the agent. It does not limit its tools.
+- On authenticated channels assurance and the consumer gate limit tools before execution.
 
 ## Schedules
 

@@ -32,7 +32,7 @@ Behind a reverse proxy every visitor shares the proxy's address, so the per-IP l
 
 ## Behind a reverse proxy
 
-- Forward only the public routes: `GET /chat/<slug>` and its assets, `/api/public/chat/<slug>/…` (streamed NDJSON, so disable response buffering and use a long read timeout) and, for Slack and Telegram agents, `POST /api/agent-inbound/<connection id>`. Do not forward the rest of `/api`, `/mcp` or the console: those are for operators and stay on the private network or loopback.
+- Forward only the public routes: `GET /chat/<slug>` and its assets, `/api/public/chat/<slug>/…` including admission, the OIDC callback and step-up links (streamed NDJSON on message routes, so disable response buffering and use a long read timeout) and, for Slack and Telegram agents, `POST /api/agent-inbound/<connection id>`. Do not forward the rest of `/api`, `/mcp` or the console: those are for operators and stay on the private network or loopback.
 - Pass the browser's original `Host` through to Stageflow unchanged. The Host allow-list still applies on public chat; a rewritten or internal hostname is refused.
 - Add the public hostname to `STAGEFLOW_ALLOWED_HOSTS`.
 - The page works same-origin. To host the page elsewhere, list its origin in `STAGEFLOW_PUBLIC_CHAT_ORIGINS` (comma-separated) so the browser may call the API.
@@ -41,7 +41,7 @@ Behind a reverse proxy every visitor shares the proxy's address, so the per-IP l
 ## Safety
 
 - Anonymous public agents must be tool-less, with project context, shared memory, browser, skills and sub-agents off. Unsafe publications return `identity.setup_required`; old unscoped histories are not adopted.
-- Protected tools require [consumer identity](consumer-identity.md) (turn it on from **Identity** in the console), an `authenticated` agent and an embedded client that signs people in. The step-by-step is [Protect an agent's chat with customer sign-in](guides-agents-protected-chat.md). Only the constrained order binding is supported in this experimental increment. Its ask-first tools still wait for an operator and reauthorize after the wait.
+- Protected tools require [consumer identity](consumer-identity.md) (turn it on from **Identity** in the console), an `authenticated` agent and an embedded client that signs people in. The built-in chat page has no sign-in button. The step-by-step is [Protect an agent's chat with customer sign-in](guides-agents-protected-chat.md). Supported customer resource tools are `orders.status`, `orders.list`, and `account.profile`. Ask-first tools still wait for an operator and reauthorize after the wait.
 
 ## Troubleshooting
 

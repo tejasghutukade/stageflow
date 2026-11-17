@@ -79,7 +79,7 @@ An agent that is open to anyone (`*`, or a public mail domain such as `@gmail.co
 
 A sender that does not match is dropped with HTTP 200 `{ "ignored": true }`. Nothing tells the sender they were refused. Mail loops are dropped the same way: the agent's own inbox, `Auto-Submitted` other than `no`, bulk or list precedence, and senders such as mailer-daemon, postmaster, and no-reply. One sender is limited to 20 messages a minute; the rest are ignored.
 
-Everyone in `allow_from` is trusted alike: a channel agent's tools work the same for every allowed sender, and nothing ties a sender to a customer account. Do not build a channel agent that looks up one customer's private data for whoever writes in; use protected web chat for that.
+On `channel.access: allow_list` (default), everyone in `allow_from` is trusted alike: the agent's tools work the same for every allowed sender, and nothing ties a sender to a customer account. For one customer's orders and account on iMessage, Telegram or email, set `channel.access: authenticated` with identity on. Slack cannot serve customers on an authenticated agent: senders are never admitted, so every message is refused. Allow-listed Slack stays internal use.
 
 `allow_from` is not an approval list. Approvals are decided in the console, never from the channel.
 
@@ -129,11 +129,11 @@ Rotate a leaked link by saving `web_chat.slug: ""` through MCP, REST, or the con
 
 ## Protected chat and identity
 
-Experimental. `web_chat.access: authenticated` and `channel.access: authenticated` (with `channel.connection_id`) need identity on and a consumer-safe agent. The publication check allows only declared customer resource tools: `tools.mcp.orders: [status, list]` (grant ids `orders.status`, `orders.list`) and `tools.mcp.account: [profile]` (`account.profile`), plus sub-agents that are themselves consumer-safe. Filesystem, shell, browser, skills, memory, other MCP servers, and Stageflow tools are refused at chat time with `identity.setup_required`. Identity has to be turned on or the same code is returned.
+On a self-hosted Host, `web_chat.access: authenticated` and `channel.access: authenticated` (with `channel.connection_id`) need identity on and a consumer-safe agent. The publication check allows only declared customer resource tools: `tools.mcp.orders: [status, list]` (grant ids `orders.status`, `orders.list`) and `tools.mcp.account: [profile]` (`account.profile`), plus sub-agents that are themselves consumer-safe. `orders.status`, `orders.list`, and `account.profile` require `provider_verified` assurance in code. Filesystem, shell, browser, skills, memory, other MCP servers, and Stageflow tools are refused at chat time with `identity.setup_required`. Identity has to be turned on or the same code is returned. The built-in `/chat/<slug>` page has no sign-in button; protected web chat needs an embedded client.
 
-`channel.access: authenticated` also needs a channel identity connection for that agent and inbound connection (`POST /api/identity/connections/channel`). The Host checks that binding when the agent is enabled; web chat does not.
+`channel.access: authenticated` also needs a channel identity connection for that agent and inbound connection (`POST /api/identity/connections/channel`). The Host checks that binding when the agent is enabled; web chat does not. Customer channels are iMessage, Telegram and email (AgentMail). Slack senders are never admitted on an authenticated agent, so every message is refused.
 
-Email and AgentMail channel grants are `address_only` assurance. They cannot satisfy private resource tools on channel assurance alone; the Host replies with a one-time sign-in link to protected web chat (`GET /api/public/chat/:slug/step-up?token=…`, ten minutes, single use). iMessage and Telegram are `provider_verified`.
+Email and AgentMail channel grants are `address_only` assurance. They cannot satisfy the resource tools on channel assurance alone; the Host replies with a one-time step-up link (`GET /api/public/chat/:slug/step-up?token=…`, ten minutes, single use) using `STAGEFLOW_PUBLIC_CHAT_URL` then `STAGEFLOW_PUBLIC_URL`. With no usable origin the Host records `step_up_origin_missing`, issues no token, and the turn fails with `identity.step_up_required`. iMessage and Telegram are `provider_verified`.
 
 There is no CLI and no MCP tool for identity. Console: Identity, `#/identity`. REST needs the control token when the Host has one. Writes under `/api/identity/setup` also need `Origin`. Connection and assignment routes do not. `sf backup` does not include `identity/`.
 
