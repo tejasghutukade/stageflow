@@ -70,7 +70,7 @@ npx stageflow@latest ui    # http://127.0.0.1:3847
 npx stageflow@latest run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml
 ```
 
-Connect a provider **before** `sf init` when you can — `sf init` fills `model` from the single configured provider. If you already ran `sf init` with `CHANGE_ME`, run `sf providers login …` then `sf init --fix-model`. `sf validate` warns on `CHANGE_ME`; `sf ready` and `sf run` preflight block until the model is real and the provider is connected.
+Connect a provider **before** `sf init` when you can — `sf init` fills `model` from the single configured provider. If you already ran `sf init` with `CHANGE_ME`, run `sf providers login …` then `sf init --fix-model`. `sf validate` warns on `CHANGE_ME`. `sf run` refuses to start while a model is still `CHANGE_ME`. `sf ready` also reports when the model’s provider is not connected.
 
 ## 1. Scaffold the catalog
 

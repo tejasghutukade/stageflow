@@ -188,16 +188,30 @@ export async function runReadyChecks(options: {
   return { ok, checks };
 }
 
-/** Subset used by `sf run` before start_run: model placeholders and provider/model mismatches only. */
+/**
+ * `sf run` only blocks on `CHANGE_ME` placeholders.
+ * It does not probe the host or auth: those belong to `sf ready`. Load errors stay on the validation gate so `sf run --json` shape is unchanged.
+ */
 export async function runRunPreflight(options: {
   cwd?: string;
   pipeline: string;
 }): Promise<ReadyResult> {
-  const full = await runReadyChecks(options);
-  const runIds = new Set(["model_placeholder", "model_provider", "pipeline_load"]);
-  const checks = full.checks.filter((c) => runIds.has(c.id));
-  const ok = !checks.some((c) => c.status === "fail");
-  return { ok, checks: checks.length > 0 ? checks : full.checks.filter((c) => c.id === "pipeline_models") };
+  const cwd = options.cwd ?? process.cwd();
+  const outcome = await loadPipelineOutcome(options.pipeline, { cwd });
+  if (!outcome.ok) return { ok: true, checks: [] };
+  const placeholders = findingsForModelPlaceholders(cwd, options.pipeline, outcome.value);
+  if (placeholders.length === 0) return { ok: true, checks: [] };
+  return {
+    ok: false,
+    checks: [
+      {
+        id: "model_placeholder",
+        status: "fail",
+        message: placeholders[0]!.message,
+        fix: "sf init --fix-model",
+      },
+    ],
+  };
 }
 
 export type ReadyCommandIo = {
