@@ -71,13 +71,11 @@ See [Architecture](docs/architecture.md) for component boundaries, execution flo
 ### Docker (recommended)
 
 Run Stageflow from the published image. It is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.67` is the current minor tag (`0.67.0` is that exact release).
-
 ```bash
 docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.67 \
-  sf ui
+  ghcr.io/tejasghutukade/stageflow:0.67 \  sf ui
 ```
 
 Open [http://127.0.0.1:3847](http://127.0.0.1:3847). Connect a provider under **Settings → Providers**, then **New pipeline** on the Pipelines page. The `stageflow-data` volume keeps that state across runs.
@@ -92,8 +90,7 @@ docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
   -v "$PWD":/project \
-  ghcr.io/tejasghutukade/stageflow:0.67 \
-  sf ui
+  ghcr.io/tejasghutukade/stageflow:0.67 \  sf ui
 ```
 
 Building from this checkout, instead of pulling, is [Docker — Local try](docs/docker.md#local-try-compose).

@@ -47,6 +47,9 @@ import { VALIDATE_USAGE, runValidateCommand } from "./cli/validateCommand.js";
 import { GRAPH_USAGE, runGraphCommand } from "./cli/graphCommand.js";
 import { MIGRATE_YAML_USAGE, runMigrateYamlCommand } from "./cli/migrateYamlCommand.js";
 import { DOCTOR_USAGE, runDoctorCommand } from "./cli/doctorCommand.js";
+import { READY_USAGE, runReadyCommand } from "./cli/readyCommand.js";
+import { HOST_USAGE, runHostCommand } from "./cli/hostCommand.js";
+import { STARTERS_USAGE, runStartersCommand } from "./cli/startersCommand.js";
 import { pinStageflowHome } from "./project/globalHome.js";
 import { resolveStageflowContext } from "./project/resolveStageflowContext.js";
 import { exitForOutcome, runStageWorker } from "./runtime/stageWorker.js";
@@ -97,6 +100,9 @@ const COMMAND_USAGE: Record<string, string> = {
   "run-stage": RUN_STAGE_USAGE,
   validate: VALIDATE_USAGE,
   doctor: DOCTOR_USAGE,
+  ready: READY_USAGE,
+  host: HOST_USAGE,
+  starters: STARTERS_USAGE,
   graph: GRAPH_USAGE,
   a2a: A2A_USAGE,
   "migrate-yaml": MIGRATE_YAML_USAGE,
@@ -124,7 +130,10 @@ const USAGE = `Usage:
   sf run --task <path> --pipeline <path> [--checkout <path>] [--repository <owner/repo>] [--ref <ref>] [--json] [--include stages] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]
   sf run-stage (--stage <path> | --stage-inline '<json>') (--task <path> | --task-inline '<json>' | --envelope-ref <runId>:<stageId>[:<attempt>]) [--checkout <path>] [--model <id>] [--blocking] [--timeout-ms <n>] [--json]
   sf validate [--pipeline <path>] [--task <path>] [--strict] [--json]
+  sf ready [--json] [--pipeline <path>]
   sf doctor [--json] [--pipeline <path>] [--strict]
+  sf host status [--json]
+  sf starters list|install [--json]
   sf graph --pipeline <path> [--json]
   sf migrate-yaml [path] [--root <path>] [--write] [--json] [--force]
   sf artifact read --run <runId> --path <relPath> [--out <file>]
@@ -151,7 +160,7 @@ const USAGE = `Usage:
   sf agents …    (see sf agents --help)
   ${UI_USAGE_LINE}
   ${MCP_USAGE_LINE}
-  sf providers list
+  sf providers list [--json]
   sf providers status [--provider <id>]
   sf providers detect
   sf providers source [get | set sf_owned]
@@ -243,6 +252,9 @@ function parseArgs(argv: string[]): {
     command === "providers" ||
     command === "validate" ||
     command === "doctor" ||
+    command === "ready" ||
+    command === "host" ||
+    command === "starters" ||
     command === "graph" ||
     command === "a2a" ||
     command === "migrate-yaml" ||
@@ -562,6 +574,18 @@ export async function main(argv: string[]): Promise<number> {
 
     if (parsed.command === "doctor") {
       return runDoctorCommand(argv.slice(3), { cwd: ctx.invocationCwd });
+    }
+
+    if (parsed.command === "ready") {
+      return runReadyCommand(argv.slice(3), { cwd: ctx.invocationCwd });
+    }
+
+    if (parsed.command === "host") {
+      return runHostCommand(argv.slice(3));
+    }
+
+    if (parsed.command === "starters") {
+      return runStartersCommand(argv.slice(3), { cwd: ctx.invocationCwd });
     }
 
     if (parsed.command === "graph") {

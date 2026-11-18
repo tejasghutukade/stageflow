@@ -6,7 +6,6 @@
 |---------|-----------|
 | 0.67.x  | Yes       |
 | < 0.67  | No        |
-
 ## Reporting a Vulnerability
 
 **Please do not open a public GitHub issue for security vulnerabilities.**
