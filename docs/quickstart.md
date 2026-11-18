@@ -9,13 +9,13 @@ Docker is the recommended way to run Stageflow: pull the published image and ope
 
 ## Docker (recommended)
 
-The image is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.65` is the current minor tag (`0.65.1` is that exact release). Each release is also tagged `x.y.z` and `x.y`.
+The image is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.66` is the current minor tag (`0.66.0` is that exact release). Each release is also tagged `x.y.z` and `x.y`.
 
 ```bash
 docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.65 \
+  ghcr.io/tejasghutukade/stageflow:0.66 \
   sf ui
 ```
 
@@ -31,7 +31,7 @@ docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
   -v "$PWD":/project \
-  ghcr.io/tejasghutukade/stageflow:0.65 \
+  ghcr.io/tejasghutukade/stageflow:0.66 \
   sf ui
 ```
 
@@ -42,11 +42,35 @@ That project needs the same files as the Node scaffold below (`stageflow.yaml`, 
 Use this when you want `sf` in the shell on the machine.
 
 - **Node.js ≥ 20**
-- A Pi-compatible model provider (connect after install)
+- A Pi-compatible model provider (connect before your first run)
+
+Try without a global install (avoids `npm i -g` permission issues on many Linux setups):
+
+```bash
+npx stageflow@latest --version
+```
+
+Persistent install:
 
 ```bash
 npm i -g stageflow
+# If EACCES: npm config set prefix ~/.local && export PATH="$HOME/.local/bin:$PATH"
+# or: curl -fsSL https://raw.githubusercontent.com/tejasghutukade/stageflow/main/install.sh | bash
 ```
+
+### Golden path (Node)
+
+```bash
+mkdir my-stageflow && cd my-stageflow && git init
+npx stageflow@latest providers login openrouter --type api_key --api-key-env OPENROUTER_API_KEY
+npx stageflow@latest init
+npx stageflow@latest validate --strict
+npx stageflow@latest ready --pipeline pipelines/hello.pipeline.yaml
+npx stageflow@latest ui    # http://127.0.0.1:3847
+npx stageflow@latest run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml
+```
+
+Connect a provider **before** `sf init` when you can — `sf init` fills `model` from the single configured provider. If you already ran `sf init` with `CHANGE_ME`, run `sf providers login …` then `sf init --fix-model`. `sf validate` warns on `CHANGE_ME`. `sf run` refuses to start while a model is still `CHANGE_ME`. `sf ready` also reports when the model’s provider is not connected.
 
 ## 1. Scaffold the catalog
 
@@ -55,6 +79,8 @@ In an empty project directory (preferably a git repo), run:
 ```bash
 sf init
 ```
+
+(Or `sf init --fix-model` after connecting a provider.)
 
 This creates:
 
@@ -118,9 +144,9 @@ Stages are **object entries** with inline bodies or `uses:` paths — not bare s
 sf validate --strict
 ```
 
-With no flags, `sf validate` checks all pipelines and tasks declared in `stageflow.yaml` (manifest-all), plus the stages those pipelines reference. `--strict` promotes manifest warnings (missing manifest, empty catalog) to errors.
+With no flags, `sf validate` checks all pipelines and tasks declared in `stageflow.yaml` (manifest-all), plus the stages those pipelines reference. `--strict` promotes manifest warnings (missing manifest, empty catalog) to errors. `CHANGE_ME` model placeholders surface as validation warnings.
 
-It does not prove provider auth or checkout paths.
+It does not prove provider auth or checkout paths — use `sf ready --pipeline <path>` for that.
 
 ## 3. Connect a provider
 
@@ -141,7 +167,7 @@ See [Providers](providers.md) for `sf_owned` credential storage.
 
 ### Starter pipelines
 
-On a new install, Stageflow adds four starter pipelines to your workspace (`$STAGEFLOW_HOME/workspace/starters/`) as soon as a provider is connected. Each one is filled in with your default model, so it runs as is:
+On a new install, Stageflow adds four starter pipelines to your workspace (`$STAGEFLOW_HOME/workspace/starters/`) when a provider is connected — from `sf providers login`, `sf starters install`, or the first `sf ui` / host boot. Each one is filled in with your default model, so it runs as is. List them with `sf starters list`.
 
 | Starter | What it shows |
 |---------|---------------|
@@ -179,10 +205,13 @@ If a stage calls `ask_operator`, the run pauses until you reply in the console. 
 
 ### CLI smoke path
 
-1. `sf init` (or author the three files above)
-2. `sf providers list` / `sf providers login …`
-3. `sf validate --strict`
-4. `sf run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml`
+1. `sf providers login …` (or console **Settings → Providers**)
+2. `sf init` (or author the three files above; `sf init --fix-model` if you connected a provider after init)
+3. `sf validate --strict` and `sf ready --pipeline pipelines/hello.pipeline.yaml`
+4. `sf ui` (optional but avoids depending on the headless auto-start alone)
+5. `sf run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml`
+
+`sf run` auto-starts a background host when none is listening and prints how to open `sf ui`. `sf host status` reports the service URL and `STAGEFLOW_HOME`.
 
 ### MCP smoke path
 

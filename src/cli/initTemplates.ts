@@ -13,6 +13,11 @@ catalog:
 
 export const LOUD_MODEL_PLACEHOLDER = "CHANGE_ME/<provider-model>";
 
+export function isModelPlaceholder(model: string): boolean {
+  const trimmed = model.trim();
+  return trimmed.startsWith("CHANGE_ME/") || trimmed === LOUD_MODEL_PLACEHOLDER;
+}
+
 const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
   anthropic: "anthropic/claude-sonnet-5-5",
   openrouter: "openrouter/auto",

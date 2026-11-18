@@ -38,6 +38,7 @@ import { ChannelRegistry } from "../channels/registry.js";
 import { validateStageChannels } from "../channels/stageChannels.js";
 import type { AnyChannelProvider } from "../channels/types.js";
 import { inspectMemorySync, memoryHome } from "../memory/host.js";
+import { findingsForModelPlaceholders } from "./modelPlaceholder.js";
 
 export type ValidationSeverity = "error" | "warning";
 
@@ -122,6 +123,7 @@ export type ValidationFindingCode =
   | "catalog.mixed_yaml_dialect"
   | "catalog.legacy_yaml"
   | "catalog.stageflow_home_absolute_path"
+  | "catalog.model_placeholder"
   | "function.missing"
   | "function.kind_mismatch"
   | "function.grant_not_requested"
@@ -887,6 +889,7 @@ async function runPipelineValidation(
   );
   findings.push(...findingsForMemories(cwd, pipelinePath, outcome.value));
   findings.push(...findingsForStageflowHomeAbsolutePaths(cwd, outcome.value));
+  findings.push(...findingsForModelPlaceholders(cwd, pipelinePath, outcome.value));
 
   if (validateStages && outcome.value.stageSources) {
     for (const source of Object.values(outcome.value.stageSources)) {

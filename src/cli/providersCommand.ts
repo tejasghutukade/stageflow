@@ -17,9 +17,11 @@ import { mapProviderAuthError } from "../agent/providerInspect.js";
 import { createTerminalAuthInteraction } from "./terminalAuthInteraction.js";
 import { promptSecret, readApiKeyFromEnv } from "./terminalSecret.js";
 
+import { provisionStartersFromCli } from "./provisionStarters.js";
+
 export const PROVIDERS_USAGE = `Usage:
-  sf providers list
-  sf providers status [--provider <id>]
+  sf providers list [--json]
+  sf providers status [--provider <id>] [--json]
   sf providers detect
   sf providers source [get | set sf_owned]
   sf providers login <providerId> [--type api_key|oauth] [--api-key-env <VAR>]
@@ -75,6 +77,7 @@ function formatProvider(p: ProviderSummary): string {
 type ParsedProviders = {
   subcommand?: string;
   help: boolean;
+  json: boolean;
   providerFlag?: string;
   type?: "api_key" | "oauth";
   apiKeyEnv?: string;
@@ -83,21 +86,24 @@ type ParsedProviders = {
 
 function parseProvidersArgs(args: string[]): ParsedProviders {
   if (args.length === 0) {
-    return { help: false, positionals: [] };
+    return { help: false, json: false, positionals: [] };
   }
   if (args[0] === "--help" || args[0] === "-h") {
-    return { help: true, positionals: [] };
+    return { help: true, json: false, positionals: [] };
   }
   const subcommand = args[0];
   let providerFlag: string | undefined;
   let type: "api_key" | "oauth" | undefined;
   let apiKeyEnv: string | undefined;
   let help = false;
+  let json = false;
   const positionals: string[] = [];
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--help" || arg === "-h") {
       help = true;
+    } else if (arg === "--json") {
+      json = true;
     } else if (arg === "--provider") {
       const value = args[++i];
       if (value === undefined || value.length === 0) {
@@ -126,7 +132,7 @@ function parseProvidersArgs(args: string[]): ParsedProviders {
       positionals.push(arg);
     }
   }
-  return { subcommand, help, providerFlag, type, apiKeyEnv, positionals };
+  return { subcommand, help, json, providerFlag, type, apiKeyEnv, positionals };
 }
 
 function resolveLoginType(
@@ -177,15 +183,21 @@ export async function runProvidersCommand(
     switch (parsed.subcommand) {
       case "list": {
         const listed = await listProviders(cwd, ctx);
-        for (const provider of listed.providers) {
-          out.log(formatProvider(provider));
+        if (parsed.json) {
+          out.log(JSON.stringify(listed, null, 2));
+        } else {
+          for (const provider of listed.providers) {
+            out.log(formatProvider(provider));
+          }
         }
         return 0;
       }
       case "status": {
         try {
           const status = await getAuthStatus(cwd, parsed.providerFlag, ctx);
-          if (Array.isArray(status)) {
+          if (parsed.json) {
+            out.log(JSON.stringify(status, null, 2));
+          } else if (Array.isArray(status)) {
             for (const row of status) out.log(formatStatus(row));
           } else {
             out.log(formatStatus(status));
@@ -272,6 +284,12 @@ export async function runProvidersCommand(
           }
           const status = await loginWithApiKey(cwd, providerId, apiKey, ctx);
           out.log(formatStatus(status));
+          const starters = await provisionStartersFromCli(cwd);
+          if (starters.installed) {
+            out.log(
+              `Installed starter pipelines under ${starters.workspacePath}/starters (${starters.files.length} file(s))`,
+            );
+          }
           return 0;
         }
         const abort = new AbortController();
@@ -284,6 +302,12 @@ export async function runProvidersCommand(
             out.error(result.warning);
           }
           out.log(formatStatus(result.provider));
+          const starters = await provisionStartersFromCli(cwd);
+          if (starters.installed) {
+            out.log(
+              `Installed starter pipelines under ${starters.workspacePath}/starters (${starters.files.length} file(s))`,
+            );
+          }
           return 0;
         } finally {
           process.removeListener("SIGINT", onSigInt);
