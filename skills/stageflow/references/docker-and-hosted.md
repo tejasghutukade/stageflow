@@ -39,11 +39,13 @@ A new volume is seeded from the image, including the baked eval engine. A bind m
 Local console, port published only on this machine. The published port stays on `127.0.0.1`. The process inside still binds `0.0.0.0`. The container logs print `Control token: <token>` on first start. Later starts reuse it and print the file path. Copy that into the console prompt. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`.
 
 ```bash
-docker pull ghcr.io/tejasghutukade/stageflow:0.67.0docker run --rm --name stageflow \
+docker pull ghcr.io/tejasghutukade/stageflow:0.67.0
+docker run --rm --name stageflow \
   -e STAGEFLOW_PROVIDER_OPENROUTER_API_KEY \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.67.0 \  sf ui
+  ghcr.io/tejasghutukade/stageflow:0.67.0 \
+  sf ui
 ```
 
 `-e STAGEFLOW_PROVIDER_OPENROUTER_API_KEY` with no value forwards the variable from the shell. A bare `OPENROUTER_API_KEY` does not log the provider in at boot. See `providers-and-models.md`.
@@ -61,7 +63,8 @@ When the port is not limited to this machine, set a token yourself and publish d
 ```bash
 export STAGEFLOW_CONTROL_TOKEN="$(openssl rand -hex 32)"
 docker pull ghcr.io/tejasghutukade/stageflow:0.67.0
-DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/tejasghutukade/stageflow:0.67.0)"docker run --rm --name stageflow \
+DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/tejasghutukade/stageflow:0.67.0)"
+docker run --rm --name stageflow \
   -e STAGEFLOW_CONTROL_TOKEN \
   -p 3847:3847 \
   -v stageflow-data:/data \
@@ -81,7 +84,8 @@ This is the standing Host without a Stageflow checkout. Save it where the user w
 ```yaml
 services:
   stageflow:
-    image: ghcr.io/tejasghutukade/stageflow:0.67.0    command: ["sf", "ui"]
+    image: ghcr.io/tejasghutukade/stageflow:0.67.0
+    command: ["sf", "ui"]
     ports:
       - "127.0.0.1:3847:3847"
     environment:
