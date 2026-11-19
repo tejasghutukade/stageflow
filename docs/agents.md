@@ -65,7 +65,7 @@ limits:
 | Slack | Slack user id such as `U02ABC1234`, or `*` | The user id of the message author |
 | Telegram | Numeric user id such as `123456789`, `@username`, or `*` | The sender's user id, which never changes. A `@username` entry matches the current username and warns (`agent.channel_username_entry`): a username can change hands. |
 
-An agent that anyone can message (`*`, or a public mail domain such as `@gmail.com`) cannot be enabled while it has tools, skills, memories, project context or sub-agents (`agent.channel_open_with_tools`): every sender on a channel is trusted alike and gets all of them. List the people or company domains instead, or keep the agent to talking. An agent already enabled in that state shows **Needs setup** and stops answering on its channel until it is fixed.
+On an allow-list channel, an agent that anyone can message (`*`, or a public mail domain such as `@gmail.com`) cannot be enabled while it has tools, skills, memories, project context or sub-agents (`agent.channel_open_with_tools`): every sender on a channel is trusted alike and gets all of them. List the people or company domains instead, or keep the agent to talking. An agent already enabled in that state shows **Needs setup** and stops answering on its channel until it is fixed.
 
 **Whose conversation it is.** An email thread and a Telegram chat belong to one sender: a second allowed person who writes into the same email thread gets a session of their own and never sees the first person's conversation. iMessage is one session per sender. Slack: a direct message is one session per person; a thread in a channel is one session shared by everyone who writes in it, since they can all read it anyway. A message with no sender is ignored. Telegram groups and channels are ignored; the agent answers one-to-one chats only.
 
@@ -93,7 +93,7 @@ The route needs no console token; the signature is the credential. A message sta
 
 How you set `channel.access` decides what a channel can do.
 
-**Authenticated customer channels** (`channel.access: authenticated` with identity on) tie each admitted sender to one account. Customer-facing iMessage, Telegram and AgentMail or email work here: the agent may use only the declared customer resource tools (`orders.status`, `orders.list`, `account.profile`) and each read is checked against that person's mapping. Setup is in [Consumer identity](consumer-identity.md) and [Protect an agent's chat with customer sign-in](guides-agents-protected-chat.md). Slack cannot serve customers: senders are never admitted on an authenticated Slack agent, so every message is refused.
+**Authenticated customer channels** (`channel.access: authenticated` with identity on) tie each admitted sender to one account. Customer-facing iMessage, Telegram and AgentMail work here, and `allow_from: ["*"]` is allowed so that every customer can write in; a sender with no account gets the connection's fixed reply and no turn runs. Email accounts (IMAP) are not supported: they give no sender verdict, so their senders are never admitted. the agent may use only the declared customer resource tools (`orders.status`, `orders.list`, `account.profile`) and each read is checked against that person's mapping. Setup is in [Consumer identity](consumer-identity.md) and [Protect an agent's chat with customer sign-in](guides-agents-protected-chat.md). Slack cannot serve customers: senders are never admitted on an authenticated Slack agent, so every message is refused.
 
 **Allow-listed internal channels** (default `channel.access: allow_list`, or omitted) trust everyone in `allow_from` alike. Whatever the agent's tools can reach, any allowed sender can reach.
 
@@ -103,7 +103,7 @@ How you set `channel.access` decides what a channel can do.
 
 What holds this in place:
 
-- An agent open to anyone cannot be enabled with tools (`agent.channel_open_with_tools`).
+- An allow-list agent open to anyone cannot be enabled with tools (`agent.channel_open_with_tools`).
 - A conversation belongs to its sender; a second sender in the same thread gets a session of their own.
 - On allow_list channels the agent is told who is writing, as the provider reported it, and that claims in a message cannot be checked ([Agent runtime](agent-runtime.md#who-is-writing-channels)). That informs the agent. It does not limit its tools.
 - On authenticated channels assurance and the consumer gate limit tools before execution.

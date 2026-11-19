@@ -9,7 +9,11 @@ export type AgentMailSocket = {
   close(): void;
 };
 
-export type AgentMailDmarc = { result: string; aligned?: boolean };
+/**
+ * The verdicts AgentMail records on a received message (`authentication_results`), computed by its receiving
+ * server. Never read from a header: the sender can write any header they like.
+ */
+export type AgentMailAuthenticationResults = { dmarc?: string; dmarcDomain?: string; spf?: string; dkim?: string };
 
 export type AgentMailMessage = {
   inboxId: string;
@@ -23,20 +27,28 @@ export type AgentMailMessage = {
   html?: string;
   extractedText?: string;
   headers?: Record<string, string>;
-  dmarc?: AgentMailDmarc;
-  authenticationResults?: { dmarc?: AgentMailDmarc };
+  authenticationResults?: AgentMailAuthenticationResults;
 };
 
-export function dmarcAlignedPass(message: AgentMailMessage): boolean {
-  const dmarc = message.dmarc ?? message.authenticationResults?.dmarc;
-  if (!dmarc) return false;
-  return dmarc.result.toLowerCase() === "pass" && dmarc.aligned === true;
+/**
+ * DMARC passed for the domain the mail claims to be from. DMARC itself requires an aligned SPF or DKIM pass, and the
+ * verdict must be about the From address's own domain; anything else (no verdict, another domain, mail from before
+ * AgentMail recorded verdicts) is not a pass.
+ */
+export function dmarcAlignedPass(message: Pick<AgentMailMessage, "from" | "authenticationResults">): boolean {
+  const results = message.authenticationResults;
+  if (results?.dmarc?.toLowerCase() !== "pass" || !results.dmarcDomain) return false;
+  const sender = addressOf(message.from);
+  const domain = sender.includes("@") ? sender.slice(sender.lastIndexOf("@") + 1) : "";
+  return domain.length > 0 && domain === results.dmarcDomain.trim().toLowerCase();
 }
 
 export type AgentMailTransport = {
   connect(): Promise<AgentMailSocket>;
   /** Mail that arrived while the Host was not listening. */
   recent(inbox: string, since: Date): Promise<AgentMailMessage[]>;
+  /** The whole stored message, for what a stream event may leave out (the authentication verdicts). */
+  get?(inbox: string, messageId: string): Promise<AgentMailMessage>;
 };
 
 export type AgentMailListenerConfig = { connectionId: string; inbox: string };
@@ -125,7 +137,12 @@ export function createAgentMailListener(config: AgentMailListenerConfig, transpo
       deps.log(`agentmail ${config.connectionId}: ignored a message (${reason})`);
       return;
     }
-    const inbound = toInbound(config.connectionId, message);
+    // A stream event may not carry the verdicts; the stored message does. Without them the sender is not verified.
+    let full = message;
+    if (!message.authenticationResults && transport.get) {
+      full = await transport.get(config.inbox, message.messageId).then((stored) => ({ ...message, authenticationResults: stored.authenticationResults }), () => message);
+    }
+    const inbound = toInbound(config.connectionId, full);
     if (!inbound) return;
     tracker.received();
     await deps.onMessage(inbound).catch((error) => deps.log(`agentmail ${config.connectionId}: delivery failed: ${error instanceof Error ? error.message : String(error)}`));
@@ -214,6 +231,10 @@ export function sdkAgentMailTransport(options: { apiKey: string; region: "us" | 
       // The list carries previews only; the agent needs the body.
       const full = await Promise.all((page.messages ?? []).map((item: { messageId: string }) => sdkClient.inboxes.messages.get(inbox, item.messageId)));
       return full as AgentMailMessage[];
+    },
+    async get(inbox, messageId) {
+      const sdkClient = await load();
+      return (await sdkClient.inboxes.messages.get(inbox, messageId)) as AgentMailMessage;
     },
   };
 }

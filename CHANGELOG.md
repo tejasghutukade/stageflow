@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.67.0] - 2026-11-16
 
+### Fixed
+- An authenticated customer channel can be open to every customer. `allow_from: ["*"]` with `channel.access: authenticated` no longer trips `agent.channel_open_with_tools`: each sender is mapped to their own account or gets the fixed reply, and the agent is already limited to customer resource tools. An allow-list channel open to anyone still cannot have tools.
+- AgentMail senders on an authenticated channel are admitted. The Host looked for a DMARC field AgentMail does not send, so every sender was refused as `dmarc_failed`. It now reads AgentMail's recorded verdict (`authentication_results`, fetching the stored message when the stream event leaves it out) and admits a sender only on `dmarc: pass` for the From address's own domain. Requires `agentmail` 0.5.54. Email accounts (IMAP) still cannot serve an authenticated channel.
+
 ### Added
 - Agent evals for cross-customer leakage: cases may set `metadata.principal` to a fixture customer identity; the eval session runs customer resource tools against an in-memory fixture order adapter (not the live identity store or order API). The deterministic `consumer_scope` grader fails on out-of-scope tool success or leaked fixture resource ids or statuses in the conversation subject. Sample: `examples/evals/leakage-sample.*`.
 - Customer resource contract for protected agents: Host settings declare resource types (`orders`, `account`) with fixed `/stageflow/…` paths on one downstream API. Tools `orders.list` and `account.profile` join `orders.status`; list calls use the mapped account only and refuse foreign rows. See [Customer resource API contract](docs/order-api-contract.md).

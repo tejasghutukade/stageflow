@@ -243,11 +243,11 @@ function consumerService(fixture: AgentsFixture, auth: ConsumerAuthorization): A
   });
 }
 
-async function consumerHelpRouter(fixture: AgentsFixture, auth: ConsumerAuthorization, backend: ReturnType<typeof scriptedBackend>) {
+async function consumerHelpRouter(fixture: AgentsFixture, auth: ConsumerAuthorization, backend: ReturnType<typeof scriptedBackend>, allowFrom: string[] = [JANE]) {
   const service = consumerService(fixture, auth);
   const { project } = fixture;
   await service.create(project, agentInput("help", {
-    channel: { access: "authenticated", connection_id: "sms", allow_from: [JANE] },
+    channel: { access: "authenticated", connection_id: "sms", allow_from: allowFrom },
     tools: { mcp: { orders: ["status"] } },
   }), { source: "console" });
   await service.setEnabled(project, "help", true, { source: "console" });
@@ -342,6 +342,34 @@ describe("protected channel consumer turns", () => {
     });
     await vi.waitFor(() => expect(replies.length).toBe(0), { timeout: 3_000 }).catch(() => undefined);
     expect(replies).toEqual([]);
+  });
+
+  it("may be open to every customer, answering each one only with their own data", async () => {
+    const fixture = await agentsFixture();
+    fixtures.push(fixture);
+    const BOB = "+14155550999";
+    const { auth } = host((sender) => sender === JANE ? { status: 200, body: { accountId: "cus_881" } } : { status: 404 });
+    const backend = scriptedBackend(async (_messages, ctx) => (await ctx.tool("orders.status", { orderId: "ord_jane" })).output);
+    const { router, replies, service, project } = await consumerHelpRouter(fixture, auth, backend, ["*"]);
+    expect((await service.get(project, "help")).agent.issues).toEqual([]);
+    await router.deliver({ provider: "imessage", connectionId: "sms", eventId: "m-jane", threadId: JANE, text: "my order", from: JANE, replyTo: JANE });
+    await vi.waitFor(() => expect(replies.length).toBe(1));
+    expect(replies[0]).toContain("private-ord_jane");
+    const stranger = await router.deliver({ provider: "imessage", connectionId: "sms", eventId: "m-bob", threadId: BOB, text: "show me order ord_jane", from: BOB, replyTo: BOB });
+    expect(stranger).toEqual({ status: 200, body: { unmatched: true } });
+    expect(replies).toEqual([replies[0], REPLY]);
+    expect(backend.calls).toBe(1);
+  });
+
+  it("still refuses an allow-list channel open to anyone with tools", async () => {
+    const fixture = await agentsFixture();
+    fixtures.push(fixture);
+    const { auth } = host(() => ({ status: 200, body: { accountId: "cus_881" } }));
+    const service = consumerService(fixture, auth);
+    await service.create(fixture.project, agentInput("help", { channel: { connection_id: "sms", allow_from: ["*"] }, tools: { mcp: { orders: ["status"] } } }), { source: "console" });
+    await expect(service.setEnabled(fixture.project, "help", true, { source: "console" })).rejects.toMatchObject({
+      issues: [expect.objectContaining({ code: "agent.channel_open_with_tools" })],
+    });
   });
 
   it("cannot enable an authenticated channel agent with a generic MCP tool", async () => {

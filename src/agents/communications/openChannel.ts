@@ -21,6 +21,9 @@ function capabilities(definition: AgentDefinition): string[] {
  */
 export function openChannelIssues(definition: AgentDefinition): AgentIssue[] {
   if (!definition.channel || !openToAnyone(definition.channel.allow_from)) return [];
+  // An authenticated channel ties each sender to their own account and limits the agent to customer-scoped tools
+  // (checked when it is enabled), so it may be open to every customer.
+  if (definition.channel.access === "authenticated") return [];
   const has = capabilities(definition);
   if (has.length === 0) return [];
   return [{

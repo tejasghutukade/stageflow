@@ -177,7 +177,15 @@ describe("agentmail dmarc admission", () => {
     expect(await auth.admitChannelSender({
       agentId: "help", channelConnectionId: "inbox", provider: "agentmail", sender: JANE, signal: AbortSignal.timeout(3_000),
     })).toMatchObject({ outcome: "unmapped", reason: "dmarc_failed" });
-    expect(dmarcAlignedPass({ inboxId: "i", threadId: "t", messageId: "m", from: JANE, dmarc: { result: "pass", aligned: true } })).toBe(true);
-    expect(dmarcAlignedPass({ inboxId: "i", threadId: "t", messageId: "m", from: JANE, dmarc: { result: "pass", aligned: false } })).toBe(false);
+    const from = "Jane <jane@acme.com>";
+    expect(dmarcAlignedPass({ from, authenticationResults: { dmarc: "pass", dmarcDomain: "acme.com" } })).toBe(true);
+    expect(dmarcAlignedPass({ from, authenticationResults: { dmarc: "PASS", dmarcDomain: "ACME.com" } })).toBe(true);
+    expect(dmarcAlignedPass({ from, authenticationResults: { dmarc: "pass", dmarcDomain: "evil.com" } })).toBe(false);
+    expect(dmarcAlignedPass({ from, authenticationResults: { dmarc: "pass" } })).toBe(false);
+    expect(dmarcAlignedPass({ from, authenticationResults: { dmarc: "fail", dmarcDomain: "acme.com" } })).toBe(false);
+    expect(dmarcAlignedPass({ from, authenticationResults: { dmarc: "none", dmarcDomain: "acme.com" }  })).toBe(false);
+    expect(dmarcAlignedPass({ from, authenticationResults: { spf: "pass", dkim: "pass" } })).toBe(false);
+    expect(dmarcAlignedPass({ from, authenticationResults: {} })).toBe(false);
+    expect(dmarcAlignedPass({ from })).toBe(false);
   });
 });

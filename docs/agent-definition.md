@@ -212,7 +212,7 @@ Warning codes:
 | `agent.sub_agent_unknown` | No agent has that id. |
 | `agent.connection_unknown` | No connection has that id. |
 | `agent.channel_nobody_allowed`, `agent.channel_open_to_anyone` | An empty `allow_from`, or one with `*` or a public mail domain. |
-| `agent.channel_open_with_tools` | Open to anyone and the agent has tools, skills, memories, project context or sub-agents. A warning while the agent is off; an error when enabling, and an enabled agent stops answering on its channel. |
+| `agent.channel_open_with_tools` | An allow-list channel (not `access: authenticated`) open to anyone, and the agent has tools, skills, memories, project context or sub-agents. A warning while the agent is off; an error when enabling, and an enabled agent stops answering on its channel. |
 | `agent.channel_username_entry` | `allow_from` has a Telegram `@username`, which can change hands. Use the numeric user id. |
 | `agent.channel_approvers_unused` | `approvals.approvers.channel_ids` is reserved and ignored. |
 | `agent.web_chat_slug_missing` | Web chat is on with no link yet. |
