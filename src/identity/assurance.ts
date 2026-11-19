@@ -38,5 +38,5 @@ export function assuranceMeets(current: SessionAssurance, required: SessionAssur
 }
 
 export function stepUpReply(url: string): string {
-  return `Sign in to continue: ${url}`;
+  return `Please sign in before I share account details: ${url}\nThe link works once, for ten minutes. After you sign in, send your question again.`;
 }

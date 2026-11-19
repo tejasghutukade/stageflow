@@ -73,7 +73,7 @@ Done in 0.67.0 (the unpublished release that already holds tickets 08–12). No 
 - Resource tools `orders.status`, `orders.list`, `account.profile` and actions `order:read`, `account:read`.
 - Public chat admission, the bearer on thread routes, `/api/public/chat/:slug/oidc/…`, `GET /api/public/chat/:slug/step-up`, error `identity.step_up_required`.
 - `/api/identity/*` and `/api/identity/setup/*`, including channel connections.
-- Audit events `step_up_issued`, `step_up_completed`, `step_up_origin_missing`, and the `step_up_denied_*` / `assurance_insufficient` denials.
+- Audit events `step_up_issued`, `step_up_completed`, `step_up_origin_missing`, `step_up_sign_in_missing`, and the `step_up_denied_*` / `assurance_insufficient` denials.
 - `STAGEFLOW_PUBLIC_CHAT_URL`, then `STAGEFLOW_PUBLIC_URL`, for the absolute step-up link.
 - The `consumer_scope` grader and `examples/evals/leakage-sample.*`.
 - The embedder hook `consumerAuthorization` on `startUiServer`.

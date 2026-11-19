@@ -41,6 +41,7 @@ Every call sends `Authorization: Bearer <credential>`. The credential is the val
 | `identity.not_available` | Any downstream refusal, timeout, malformed body, ownership mismatch, or scope denial. Shown to the person; not your API's error text |
 | `identity.setup_required` | Identity off, order API not configured, or the agent is not consumer-safe |
 | `assurance_insufficient` | Channel assurance too weak for the tool (for example email without step-up) |
+| `step_up_sign_in_missing` | Step-up needed, but the agent has no active OIDC connection on its protected web chat, so no link was issued |
 | `order_read` / `order_list` / `account_read` | Audit allow reasons after a successful read, list, or profile fetch |
 
 Extra JSON fields, wrong types, redirects, non-`2xx` responses, and bodies over 64 KiB are all treated as refusal (`identity.not_available`).

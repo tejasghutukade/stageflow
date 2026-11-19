@@ -9,6 +9,7 @@ import { BodyError, readJsonBody, writeFrame } from "../ndjson.js";
 import { SlidingWindowLimiter } from "./rateLimit.js";
 import type { ConsumerAuthorization } from "../../identity/authorization.js";
 import { ConsumerAccessError } from "../../identity/types.js";
+import type { StepUpOutcome } from "../../identity/stepUp.js";
 
 const SOURCE = "web_public";
 const MAX_THREADS = 50;
@@ -104,16 +105,7 @@ export class PublicWebChat {
     try {
       const parts = pathname.slice("/api/public/chat/".length).replace(/\/+$/, "").split("/");
       const [slug = "", threads, threadId, messages] = parts;
-      if (parts.length === 2 && threads === "step-up" && method === "GET") {
-        const target = await this.resolve(slug);
-        if (!this.options.consumerAuthorization) throw new ConsumerAccessError("identity.setup_required");
-        const token = new URL(req.url ?? "/", "http://local").searchParams.get("token") ?? "";
-        if (token.length < 16 || this.options.consumerAuthorization.peekStepUpAccount(token) === undefined) {
-          throw new ConsumerAccessError("identity.verification_required");
-        }
-        res.setHeader("Set-Cookie", stepUpCookie(slug, token, 600));
-        return this.json(res, 200, { requiresSignIn: true });
-      }
+      if (parts.length === 2 && threads === "step-up" && method === "GET") return await this.stepUp(req, res, slug);
       if (parts.length === 2 && threads === "admission" && method === "POST") {
         this.assertOrigin(req);
         const target = await this.resolve(slug);
@@ -141,13 +133,13 @@ export class PublicWebChat {
           return this.json(res, 200, { authorizationUrl: started.authorizationUrl });
         }
         if (method !== "GET") throw new WebChatError("web_chat.invalid");
+        const stepUpToken = readStepUpCookie(req);
+        if (stepUpToken) return await this.completeStepUp(req, res, slug, target, stepUpToken);
         const currentUrl = this.options.consumerAuthorization.requestUrl(typeof req.headers.host === "string" ? req.headers.host : undefined, req.url ?? "/");
         const state = currentUrl.searchParams.get("state") ?? "";
         if (readCookie(req, "sf_oidc") !== state) throw new ConsumerAccessError("identity.verification_required");
         const admitted = await this.options.consumerAuthorization.completeOidc(target.agentId, currentUrl);
-        const stepUp = readStepUpCookie(req);
-        if (stepUp) this.options.consumerAuthorization.completeStepUpFromWebSession(stepUp, admitted.sessionId, target.agentId);
-        res.setHeader("Set-Cookie", [oidcCookie(slug, "", 0), stepUpCookie(slug, "", 0)]);
+        res.setHeader("Set-Cookie", oidcCookie(slug, "", 0));
         return this.json(res, 201, { token: admitted.token, tokenType: "Bearer", expiresIn: Math.max(0, Math.floor((admitted.expiresAt - this.now()) / 1000)) });
       }
       const shapeOk =
@@ -188,6 +180,61 @@ export class PublicWebChat {
       const { type: _type, ...body } = errorFrame(failure);
       return this.json(res, (FRIENDLY[failure.code] ?? FRIENDLY["web_chat.failed"]!).status, body);
     }
+  }
+
+  /* ---------- step-up links (a person opens these from an email, so they answer with a page) ---------- */
+
+  /** Opens a step-up link: checks it, then sends the browser straight to the agent's sign-in provider. */
+  private async stepUp(req: IncomingMessage, res: ServerResponse, slug: string): Promise<boolean> {
+    const auth = this.options.consumerAuthorization;
+    const token = new URL(req.url ?? "/", "http://local").searchParams.get("token") ?? "";
+    let target: Resolved;
+    try {
+      target = await this.resolve(slug);
+    } catch {
+      return page(res, 404, STEP_UP_PAGES.unavailable);
+    }
+    try {
+      this.throttle(slug, req.socket.remoteAddress ?? "unknown", req, target, "thread");
+    } catch {
+      return page(res, 429, STEP_UP_PAGES.busy);
+    }
+    if (!auth || token.length < 16 || auth.stepUpAgent(token) !== target.agentId) return page(res, 401, STEP_UP_PAGES.expired);
+    const signIn = auth.stepUpSignIn(target.agentId);
+    if (!signIn || signIn.slug !== slug) return page(res, 503, STEP_UP_PAGES.unavailable);
+    let started: { authorizationUrl: string; state: string };
+    try {
+      started = await auth.startOidc(signIn.connectionId, target.agentId);
+    } catch (error) {
+      this.options.logError?.(`step-up sign-in could not start: ${error instanceof Error ? error.message : String(error)}`);
+      return page(res, 503, STEP_UP_PAGES.busy);
+    }
+    res.writeHead(302, {
+      Location: started.authorizationUrl,
+      "Set-Cookie": [stepUpCookie(slug, token, 600), oidcCookie(slug, started.state, 600)],
+      "Cache-Control": "no-store",
+      "Referrer-Policy": "no-referrer",
+    });
+    res.end();
+    return true;
+  }
+
+  /** The provider's callback for a step-up sign-in: raises the channel conversation, never hands out a chat bearer. */
+  private async completeStepUp(req: IncomingMessage, res: ServerResponse, slug: string, target: Resolved, token: string): Promise<boolean> {
+    const auth = this.options.consumerAuthorization!;
+    res.setHeader("Set-Cookie", [oidcCookie(slug, "", 0), stepUpCookie(slug, "", 0)]);
+    const currentUrl = auth.requestUrl(typeof req.headers.host === "string" ? req.headers.host : undefined, req.url ?? "/");
+    const state = currentUrl.searchParams.get("state") ?? "";
+    if (state.length === 0 || readCookie(req, "sf_oidc") !== state) return page(res, 401, STEP_UP_PAGES.failed);
+    let outcome: StepUpOutcome;
+    try {
+      const admitted = await auth.completeOidc(target.agentId, currentUrl);
+      outcome = auth.completeStepUpFromWebSession(token, admitted.sessionId, target.agentId);
+    } catch {
+      return page(res, 401, STEP_UP_PAGES.failed);
+    }
+    if (outcome === "completed") return page(res, 200, STEP_UP_PAGES.completed);
+    return page(res, outcome === "account_mismatch" ? 403 : 401, outcome === "account_mismatch" ? STEP_UP_PAGES.mismatch : STEP_UP_PAGES.expired);
   }
 
   private async collection(req: IncomingMessage, res: ServerResponse, method: string, target: Resolved, visitor: string): Promise<boolean> {
@@ -397,6 +444,37 @@ export class PublicWebChat {
 
 function oidcCookie(slug: string, value: string, maxAge: number): string {
   return `sf_oidc=${value}; HttpOnly; Secure; SameSite=Lax; Path=/api/public/chat/${slug}/oidc; Max-Age=${maxAge}`;
+}
+
+const STEP_UP_PAGES = {
+  completed: { title: "You're signed in", body: "Go back to your conversation and send your question again." },
+  mismatch: { title: "That's a different account", body: "You signed in with an account that doesn't match this conversation. Open the link again and sign in with the account you contacted us from." },
+  expired: { title: "This link has expired", body: "Sign-in links work once, for ten minutes. Ask your question again in your conversation to get a new link." },
+  failed: { title: "We couldn't sign you in", body: "Open the link again to try once more, or ask in your conversation for a new link." },
+  unavailable: { title: "Sign-in isn't available", body: "This link can't be used right now. Reply in your conversation and we'll help another way." },
+  busy: { title: "Please try again shortly", body: "Sign-in is busy right now. Open the link again in a minute." },
+} as const;
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function page(res: ServerResponse, status: number, content: { title: string; body: string }): boolean {
+  const title = escapeHtml(content.title);
+  res.writeHead(status, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+    "X-Robots-Tag": "noindex",
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+  });
+  res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title>`
+    + "<style>body{margin:0;font:16px/1.5 system-ui,-apple-system,sans-serif;background:#f6f6f4;color:#1f1f1d;display:flex;min-height:100vh;align-items:center;justify-content:center}"
+    + "main{max-width:420px;margin:16px;padding:32px;background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.08)}h1{font-size:20px;margin:0 0 8px}p{margin:0;color:#55554f}"
+    + "@media (prefers-color-scheme:dark){body{background:#161615;color:#ededea}main{background:#222220;box-shadow:none}p{color:#b4b4ae}}</style></head>"
+    + `<body><main><h1>${title}</h1><p>${escapeHtml(content.body)}</p></main></body></html>`);
+  return true;
 }
 
 function stepUpCookie(slug: string, value: string, maxAge: number): string {

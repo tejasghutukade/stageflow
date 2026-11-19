@@ -45,24 +45,42 @@ export function issueStepUp(
   return { token, url: absolute, reply: stepUpReply(absolute) };
 }
 
-export function tryCompleteStepUp(store: ConsumerIdentityStore, token: string, signedInAccountId: string): void {
+export type StepUpOutcome = "completed" | "account_mismatch" | "expired";
+
+export function tryCompleteStepUp(store: ConsumerIdentityStore, token: string, signedInAccountId: string): StepUpOutcome {
   const peeked = store.peekStepUp(token);
   if (!peeked) {
     store.consumeStepUp(token);
-    return;
+    return "expired";
   }
   if (peeked.accountId !== signedInAccountId) {
     store.audit(peeked.principalId, null, "deny", "step_up_denied_account_mismatch");
-    return;
+    return "account_mismatch";
   }
   const row = store.consumeStepUp(token);
-  if (!row) return;
+  if (!row) return "expired";
   store.elevateChannelSession(row.channelSessionId, "signed_in", store.currentTime() + SIGNED_IN_ELEVATION_MS);
   store.audit(row.principalId, null, "allow", "step_up_completed");
+  return "completed";
 }
 
 export function peekStepUpAccount(store: ConsumerIdentityStore, token: string): string | undefined {
   return store.peekStepUp(token)?.accountId;
+}
+
+const CALLBACK_PATH = /^\/api\/public\/chat\/([a-z0-9]{16,32})\/oidc\/callback$/;
+
+/**
+ * Where a step-up link signs the person in: the agent's active OIDC connection and the web chat slug its callback is
+ * registered on. Without one a link could never be completed, so none is issued.
+ */
+export function stepUpSignIn(store: ConsumerIdentityStore, agentId: string): { connectionId: string; slug: string } | undefined {
+  for (const connection of store.listConnections()) {
+    if (connection.kind !== "oidc" || connection.status !== "active" || connection.agentId !== agentId || !connection.callbackPath) continue;
+    const slug = CALLBACK_PATH.exec(connection.callbackPath)?.[1];
+    if (slug) return { connectionId: connection.id, slug };
+  }
+  return undefined;
 }
 
 export class ConsumerStepUpRequired extends ConsumerAccessError {

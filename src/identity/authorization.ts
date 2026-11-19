@@ -1,6 +1,6 @@
 import { assuranceMeets, requiredAssurance } from "./assurance.js";
 import { admitChannelSender, ChannelSenderCache, type ChannelAdmission } from "./channel.js";
-import { ConsumerStepUpRequired, issueStepUp, peekStepUpAccount, resolveStepUpOrigin, tryCompleteStepUp } from "./stepUp.js";
+import { ConsumerStepUpRequired, issueStepUp, peekStepUpAccount, resolveStepUpOrigin, stepUpSignIn, tryCompleteStepUp, type StepUpOutcome } from "./stepUp.js";
 import { admitEmbeddedConsumer } from "./handoff.js";
 import { completeOidcSignIn, loopbackRequestUrl, prepareOidcConnection, refreshOidcEvidence, startOidcSignIn } from "./oidc.js";
 import { customerAdapterFromInput, orderInput, orderOwnership, type CustomerDataAdapter, type OrderDataAdapter } from "./customerApi.js";
@@ -36,7 +36,6 @@ import {
 export class ConsumerAuthorization {
   private readonly senderCache = new ChannelSenderCache();
   private readonly customer: CustomerDataAdapter;
-  resolveStepUpSlug?: (agentId: string) => string | undefined;
 
   constructor(private readonly store: ConsumerIdentityStore, private readonly engine: AuthorizationEngine,
     customer: CustomerDataAdapter | OrderDataAdapter, readonly policyRevision: string, private readonly oidcAllowLoopback = false,
@@ -94,17 +93,26 @@ export class ConsumerAuthorization {
     return admitChannelSender(this.store, this.senderCache, this.customer, input);
   }
 
-  completeStepUp(token: string, signedInAccountId: string): void {
-    tryCompleteStepUp(this.store, token, signedInAccountId);
+  completeStepUp(token: string, signedInAccountId: string): StepUpOutcome {
+    return tryCompleteStepUp(this.store, token, signedInAccountId);
   }
 
-  completeStepUpFromWebSession(token: string, webSessionId: string, agentId: string): void {
+  completeStepUpFromWebSession(token: string, webSessionId: string, agentId: string): StepUpOutcome {
     const authority = this.store.resolve(webSessionId, agentId);
-    tryCompleteStepUp(this.store, token, authority.principal.accountId);
+    return tryCompleteStepUp(this.store, token, authority.principal.accountId);
   }
 
   peekStepUpAccount(token: string): string | undefined {
     return peekStepUpAccount(this.store, token);
+  }
+
+  /** The agent a pending step-up link belongs to, or undefined when it is unknown, used or expired. */
+  stepUpAgent(token: string): string | undefined {
+    return this.store.peekStepUp(token)?.agentId;
+  }
+
+  stepUpSignIn(agentId: string): { connectionId: string; slug: string } | undefined {
+    return stepUpSignIn(this.store, agentId);
   }
 
   disableConnection(id: string): void {
@@ -402,7 +410,12 @@ export class ConsumerAuthorization {
       this.store.audit(authority.principal.id, conversation, "deny", "step_up_origin_missing");
       throw new ConsumerAccessError("identity.step_up_required");
     }
-    const slug = this.resolveStepUpSlug?.(authority.agentId) ?? authority.agentId;
+    const signIn = this.stepUpSignIn(authority.agentId);
+    if (!signIn) {
+      this.store.audit(authority.principal.id, conversation, "deny", "step_up_sign_in_missing");
+      throw new ConsumerAccessError("identity.step_up_required");
+    }
+    const slug = signIn.slug;
     const issued = issueStepUp(this.store, {
       channelSessionId: authority.sessionId,
       agentId: authority.agentId,

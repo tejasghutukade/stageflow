@@ -175,7 +175,7 @@ For an agent with `web_chat.access: authenticated` the same thread and message r
 | Method and path | Purpose |
 |-----------------|---------|
 | `POST /api/public/chat/:slug/admission` | Body `{ connectionId, assertion }`, the signed one-time handoff token. `201 { token, tokenType: "Bearer", expiresIn }` |
-| `GET /api/public/chat/:slug/step-up?token=` | `200 { requiresSignIn: true }`. Sets an `sf_step_up` cookie for the slug when the query token is valid; an invalid or missing token is `identity.verification_required` (401) |
+| `GET /api/public/chat/:slug/step-up?token=` | The link a channel customer opens from a step-up reply. A valid token sets the `sf_step_up` and `sf_oidc` cookies and redirects (302) to the agent's OIDC provider. The callback then raises the channel conversation and answers with a page, not a bearer. Every answer on this route, and on the callback after a step-up, is an HTML page: `401` for an unknown, used or expired link or a failed sign-in, `403` when the person signs in as a different account, `503` when sign-in cannot start |
 | `POST /api/public/chat/:slug/oidc/start` | Body `{ connectionId }`. `200 { authorizationUrl }` and an `sf_oidc` cookie. Send the browser to the URL |
 | `GET /api/public/chat/:slug/oidc/callback` | The provider's redirect. Returns the same `201 { token, … }` shape |
 

@@ -48,11 +48,11 @@ function ordersAdapter() {
   });
 }
 
-function channelHost(now: () => number) {
+function channelHost(now: () => number, options: { signIn?: boolean } = {}) {
   const store = new ConsumerIdentityStore(":memory:", "w", now);
   stores.push(store);
   const auth = new ConsumerAuthorization(store, createScopeAuthorizationEngine(), ordersAdapter(), "consumer_v1");
-  auth.resolveStepUpSlug = () => "helpslug";
+  if (options.signIn !== false) auth.stepUpSignIn = () => ({ connectionId: "directory", slug: "helpslug" });
   auth.registerChannel({
     id: "mail-id", channelConnectionId: "inbox", agentId: "help", provider: "agentmail", unmappedReply: "no match",
     permission: { scope: "own", agents: ["help"], actions: ["conversation:use", "order:read"] },
@@ -81,12 +81,12 @@ describe("consumer step-up", () => {
     } catch (error) {
       if (error instanceof ConsumerStepUpRequired) {
         reply = error.reply;
-        token = reply.split("token=")[1] ?? "";
+        token = reply.split("token=")[1]?.split(/\s/)[0] ?? "";
       }
     }
-    expect(reply).toMatch(/^Sign in to continue: https?:\/\//);
+    expect(reply).toMatch(/^Please sign in before I share account details: https?:\/\//);
     expect(reply).toContain("/api/public/chat/helpslug/step-up?token=");
-    auth.completeStepUp(token, "cus_881");
+    expect(auth.completeStepUp(token, "cus_881")).toBe("completed");
     expect(store.sessionAssurance(admitted.sessionId)).toBe("signed_in");
     await auth.check("conv", admitted.sessionId, "help", "orders.status", { orderId: "ord_jane" }, AbortSignal.timeout(3_000));
     expect(store.listAudit(30).some((row) => row.reason === "step_up_completed")).toBe(true);
@@ -109,6 +109,22 @@ describe("consumer step-up", () => {
     expect(store.listAudit(20).some((row) => row.reason === "step_up_issued")).toBe(false);
   });
 
+  it("issues no link when the agent has no active OIDC sign-in to complete it", async () => {
+    setRequiredAssuranceForTests("orders.status", "signed_in");
+    const { store, auth } = channelHost(() => Date.now(), { signIn: false });
+    expect(auth.stepUpSignIn("help")).toBeUndefined();
+    const admitted = await auth.admitChannelSender({
+      agentId: "help", channelConnectionId: "inbox", provider: "agentmail", sender: JANE, dmarcPass: true, signal: AbortSignal.timeout(3_000),
+    });
+    if (admitted.outcome !== "admitted") throw new Error("not admitted");
+    auth.bind("conv", admitted.sessionId, "help", 1);
+    const failure = await auth.check("conv", admitted.sessionId, "help", "orders.status", { orderId: "ord_jane" }, AbortSignal.timeout(3_000)).catch((error) => error);
+    expect(failure).toBeInstanceOf(ConsumerAccessError);
+    expect(failure).not.toBeInstanceOf(ConsumerStepUpRequired);
+    expect(store.listAudit(20).some((row) => row.reason === "step_up_sign_in_missing")).toBe(true);
+    expect(store.listAudit(20).some((row) => row.reason === "step_up_issued")).toBe(false);
+  });
+
   it("does not elevate the channel session when a different account completes the link", async () => {
     setRequiredAssuranceForTests("orders.status", "signed_in");
     const { store, auth } = channelHost(() => Date.now());
@@ -121,9 +137,9 @@ describe("consumer step-up", () => {
     try {
       await auth.check("conv", admitted.sessionId, "help", "orders.status", { orderId: "ord_jane" }, AbortSignal.timeout(3_000));
     } catch (error) {
-      if (error instanceof ConsumerStepUpRequired) token = error.reply.split("token=")[1] ?? "";
+      if (error instanceof ConsumerStepUpRequired) token = error.reply.split("token=")[1]?.split(/\s/)[0] ?? "";
     }
-    auth.completeStepUp(token, "cus_other");
+    expect(auth.completeStepUp(token, "cus_other")).toBe("account_mismatch");
     expect(store.sessionAssurance(admitted.sessionId)).toBe("address_only");
     expect(store.listAudit(20).some((row) => row.reason === "step_up_denied_account_mismatch")).toBe(true);
     expect(peekStepUpAccount(store, token)).toBe("cus_881");
@@ -144,7 +160,7 @@ describe("consumer step-up", () => {
     try {
       await auth.check("conv", admitted.sessionId, "help", "orders.status", { orderId: "ord_jane" }, AbortSignal.timeout(3_000));
     } catch (error) {
-      if (error instanceof ConsumerStepUpRequired) token = error.reply.split("token=")[1] ?? "";
+      if (error instanceof ConsumerStepUpRequired) token = error.reply.split("token=")[1]?.split(/\s/)[0] ?? "";
     }
     auth.completeStepUp(token, "cus_881");
     auth.completeStepUp(token, "cus_881");
@@ -159,7 +175,7 @@ describe("consumer step-up", () => {
     try {
       await second.auth.check("c2", admitted2.sessionId, "help", "orders.status", { orderId: "ord_jane" }, AbortSignal.timeout(3_000));
     } catch (error) {
-      if (error instanceof ConsumerStepUpRequired) token2 = error.reply.split("token=")[1] ?? "";
+      if (error instanceof ConsumerStepUpRequired) token2 = error.reply.split("token=")[1]?.split(/\s/)[0] ?? "";
     }
     now += STEP_UP_LINK_MS + 1;
     second.auth.completeStepUp(token2, "cus_881");

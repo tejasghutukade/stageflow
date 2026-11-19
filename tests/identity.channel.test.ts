@@ -294,7 +294,7 @@ describe("protected channel consumer turns", () => {
     const fixture = await agentsFixture();
     fixtures.push(fixture);
     const { store, auth } = host(() => ({ status: 200, body: { accountId: "cus_881" } }));
-    auth.resolveStepUpSlug = () => "helpslug";
+    auth.stepUpSignIn = () => ({ connectionId: "directory", slug: "helpslug" });
     const backend = scriptedBackend(async (messages, ctx) => {
       const result = await ctx.tool("orders.status", { orderId: "ord_jane" });
       return result.output;
