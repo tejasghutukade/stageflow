@@ -77,6 +77,8 @@ export type ProviderMeta = {
   icon: string;
   /** Set when the provider works through another service, such as "Photon". */
   via?: string;
+  /** Not yet tested end to end; its shape may still change. The console marks it Exp. */
+  experimental?: boolean;
   note?: string;
   fields: ProviderField[];
   recipient: { label: string; placeholder: string; multiple: boolean; cc: boolean; template: boolean };

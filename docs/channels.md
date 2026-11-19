@@ -1,6 +1,6 @@
 # Communication channels
 
-WhatsApp is experimental; its shape may still change. The other providers are stable.
+Slack and WhatsApp are experimental: they have not been tested end to end and their shape may still change. The console marks them **Exp**. The other providers are stable.
 
 Channels let a stage send a message over an external service. You define a **connection** once (in the console or in `connections.yaml`), then a stage lists it under [`channels:`](yaml-catalog.md#stage-channels) with the recipient pinned. The agent gets one tool, `send_message`, and cannot pick a different recipient.
 
@@ -146,6 +146,8 @@ Sends plain-text mail from one **existing** AgentMail inbox through the REST API
 Provider reference: <https://docs.agentmail.to/>.
 
 ### Slack
+
+> Experimental. Not yet tested end to end; its shape may still change.
 
 Posts as a Slack bot with `chat.postMessage`. Stageflow does not install the app; create it in your workspace and give Stageflow the bot token. A stage cannot receive messages. An [agent](agents.md#channels-inbound) can answer in Slack when the connection has an `inboundSecret` (the app signing secret) and Slack's Events API points at `POST /api/agent-inbound/<connection id>`; this needs a URL Slack can reach.
 

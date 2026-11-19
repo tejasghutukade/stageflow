@@ -1,5 +1,7 @@
 # Guide: an agent that answers in Slack
 
+> **Experimental.** The Slack channel has not been tested end to end and its shape may still change. It is for internal, allow-listed use: an agent with `channel.access: authenticated` cannot serve Slack senders.
+
 Slack agents receive messages by **webhook** (Slack Event Subscriptions), so the Host needs a URL Slack can reach.
 
 ## 1. Create the Slack app

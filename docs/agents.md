@@ -1,6 +1,6 @@
 # Agents
 
-Agents are stable: the definition file, `/api/agents`, the public chat API, `sf agents` and the agent MCP tools keep their shape between releases. [Consumer identity](consumer-identity.md) (customer sign-in, protected chat, and the customer resource API) is stable on a self-hosted Host. The Claude and Cursor backends stay experimental. See [who should talk to a channel agent](#who-should-talk-to-a-channel-agent) before you put one on a channel.
+Agents are stable: the definition file, `/api/agents`, the public chat API, `sf agents` and the agent MCP tools keep their shape between releases. [Consumer identity](consumer-identity.md) (customer sign-in, protected chat, and the customer resource API) is stable on a self-hosted Host. The Claude and Cursor backends and the Slack channel stay experimental. See [who should talk to a channel agent](#who-should-talk-to-a-channel-agent) before you put one on a channel.
 
 Project-owned agents live under `agents/<id>.agent.yaml`. An agent is a configured assistant: instructions, a model, the tools it may use, who may talk to it, and how it is recorded. They are separate from the stage `agent:` field (Pi vs Claude backend selection).
 

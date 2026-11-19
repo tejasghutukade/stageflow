@@ -61,6 +61,7 @@
       "label": "Slack",
       "blurb": "Not connected · post as a bot",
       "icon": "hash",
+      "experimental": true,
       "fields": [
         {
           "key": "botToken",
@@ -194,6 +195,7 @@
       "blurb": "Not connected · via Photon",
       "icon": "phone",
       "via": "Photon",
+      "experimental": true,
       "note": "Enable WhatsApp for the project in the Photon dashboard first. Uses the Spectrum SDK packages (optional dependencies). Stages pin an approved template per recipient.",
       "fields": [
         {

@@ -14,6 +14,7 @@ export const WHATSAPP_META: ProviderMeta = {
   blurb: "Not connected · via Photon",
   icon: "phone",
   via: "Photon",
+  experimental: true,
   note: "Enable WhatsApp for the project in the Photon dashboard first. Uses the Spectrum SDK packages (optional dependencies). Stages pin an approved template per recipient.",
   fields: PHOTON_FIELDS,
   recipient: { label: "Recipient", placeholder: "+14155550123", multiple: false, cc: false, template: true },

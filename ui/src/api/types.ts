@@ -1254,6 +1254,7 @@ export type ChannelProviderMeta = {
   blurb: string;
   icon: string;
   via?: string;
+  experimental?: boolean;
   note?: string;
   fields: ChannelProviderField[];
   recipient: { label: string; placeholder: string; multiple: boolean; cc: boolean; template: boolean };

@@ -90,6 +90,11 @@ describe("connections view model", () => {
     expect(rows.map((row) => row.checkable)).toEqual([true, false]);
   });
 
+  it("marks the untested providers (Slack, WhatsApp) experimental", () => {
+    const rows = channelRows([base, { ...base, id: "wa", provider: "whatsapp" }, { ...base, id: "t", provider: "telegram" }], [], meta);
+    expect(rows.map((row) => [row.provider, row.experimental ?? false])).toEqual([["slack", true], ["whatsapp", true], ["telegram", false]]);
+  });
+
   it("offers only providers that have no connection yet", () => {
     expect(availableProviders([], meta).map((provider) => provider.id)).toEqual(PROVIDERS.map((provider) => provider.id));
     const rows = channelRows([base, { ...base, id: "t", provider: "telegram" }], [], meta);
