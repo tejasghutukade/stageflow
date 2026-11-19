@@ -53,7 +53,7 @@ describe("AgentMail mail handling", () => {
 });
 
 describe("AgentMail listener", () => {
-  function setup(options: { recent?: AgentMailMessage[]; failConnects?: number } = {}) {
+  function setup(options: { recent?: AgentMailMessage[]; failConnects?: number; get?: AgentMailTransport["get"] } = {}) {
     const sockets: FakeSocket[] = [];
     let failures = options.failConnects ?? 0;
     const transport: AgentMailTransport = {
@@ -67,6 +67,7 @@ describe("AgentMail listener", () => {
         return socket;
       },
       recent: async () => options.recent ?? [],
+      ...(options.get ? { get: options.get } : {}),
     };
     const delivered: AgentInboundMessage[] = [];
     const listener = createAgentMailListener({ connectionId: "inbox", inbox: "support@agentmail.to" }, transport, {
@@ -90,6 +91,29 @@ describe("AgentMail listener", () => {
     expect(listener.state().received).toBe(1);
     await listener.stop();
     expect(listener.state().status).toBe("stopped");
+  });
+
+  it("reads the DMARC verdict from the stored message when the stream event leaves it out", async () => {
+    const fetched: string[] = [];
+    const { listener, sockets, delivered } = setup({
+      get: async (_inbox, messageId) => {
+        fetched.push(messageId);
+        if (messageId === "<down>") throw new Error("offline");
+        const domain = messageId === "<spoof>" ? "evil.com" : "x.com";
+        return mail({ messageId, authenticationResults: { dmarc: "pass", dmarcDomain: domain } });
+      },
+    });
+    await listener.start();
+    await vi.waitFor(() => expect(listener.state().status).toBe("connected"));
+    sockets[0]!.emit("message", { type: "event", eventType: "message.received", message: mail({ messageId: "<ok>" }) });
+    sockets[0]!.emit("message", { type: "event", eventType: "message.received", message: mail({ messageId: "<spoof>" }) });
+    sockets[0]!.emit("message", { type: "event", eventType: "message.received", message: mail({ messageId: "<down>" }) });
+    sockets[0]!.emit("message", { type: "event", eventType: "message.received", message: mail({ messageId: "<carried>", authenticationResults: { dmarc: "pass", dmarcDomain: "x.com" } }) });
+    await vi.waitFor(() => expect(delivered).toHaveLength(4));
+    const pass = Object.fromEntries(delivered.map((m) => [m.eventId, m.dmarcPass]));
+    expect(pass).toEqual({ "agentmail:<ok>": true, "agentmail:<spoof>": false, "agentmail:<down>": false, "agentmail:<carried>": true });
+    expect(fetched.sort()).toEqual(["<down>", "<ok>", "<spoof>"]);
+    await listener.stop();
   });
 
   it("answers mail that arrived while it was away, and reconnects after a drop", async () => {

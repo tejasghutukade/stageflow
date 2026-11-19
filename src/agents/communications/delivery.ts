@@ -1,6 +1,9 @@
 import { CHANNEL_ERROR_INFO } from "../../channels/errorInfo.js";
 import { ChannelError } from "../../channels/errors.js";
+import { isAuthenticatedChannelSource } from "../consumerSafety.js";
 import { AgentError } from "../errors.js";
+import type { ConsumerAuthorization } from "../../identity/authorization.js";
+import { ConsumerAccessError } from "../../identity/types.js";
 import type { DeliveryClaim, DeliveryInput } from "../ledgers.js";
 import type { AgentService } from "../service.js";
 import type { AgentDelivery } from "../store.js";
@@ -23,7 +26,6 @@ export function classifySendFailure(error: unknown): Outcome {
   }
   const code = String((error as { code?: unknown } | null)?.code ?? "SEND_FAILED");
   const message = (error instanceof Error ? error.message : String(error)).slice(0, 300);
-  // Something broke on this side before the send: nothing left, but retrying the same call will not fix it.
   return { kind: "failed", retryable: false, code, message };
 }
 
@@ -38,8 +40,10 @@ export class ReplyDelivery {
 
   constructor(
     private readonly options: {
-      service: Pick<AgentService, "deliveries" | "settleInterruptedDeliveries" | "setReplyDelivered" | "clockMs">;
+      service: Pick<AgentService, "deliveries" | "settleInterruptedDeliveries" | "setReplyDelivered" | "clockMs" | "get" | "getSession" | "completeTurn">;
+      projectRoot: string;
       reply: Reply;
+      consumerAuthorization?: ConsumerAuthorization | undefined;
       log?: (message: string) => void;
       backoffMs?: number[];
     },
@@ -58,18 +62,46 @@ export class ReplyDelivery {
     return this.attempt(input.turnId, "first");
   }
 
-  /**
-   * One send attempt. The right to send is claimed first, atomically (`pending`/`failed`/`unknown` -> `sending`), and
-   * the row is what is trusted, not any list the caller read earlier: an attempt that finds the delivery already
-   * claimed, sent or no longer due does nothing and returns it as it is. Overlapping sweeps and timers therefore
-   * cannot send the same reply twice.
-   */
+  private async assertAuthorized(turnId: string, sessionId: string): Promise<void> {
+    const auth = this.options.consumerAuthorization;
+    const { session } = await this.options.service.getSession(this.options.projectRoot, sessionId);
+    const definition = (await this.options.service.get(this.options.projectRoot, session.agentId)).definition;
+    if (!isAuthenticatedChannelSource(session.source, definition)) return;
+    if (!auth) throw new ConsumerAccessError("identity.not_available");
+    const binding = auth.bindingFor(session.id);
+    if (!binding) throw new ConsumerAccessError("identity.not_available");
+    await auth.validateConversation(session.id, binding.sessionId, binding.agentId, session.revision);
+  }
+
+  private async denyDelivery(turnId: string, sessionId: string, current: AgentDelivery): Promise<AgentDelivery> {
+    const saved = this.options.service.deliveries.patch(turnId, {
+      state: "failed",
+      errorCode: "identity.not_available",
+      errorMessage: "Authorization was revoked before delivery",
+      retryable: false,
+      nextAttemptAt: null,
+    })!;
+    this.options.service.setReplyDelivered(turnId, false);
+    await this.options.service.completeTurn(this.options.projectRoot, turnId, {
+      status: "failed",
+      errorCode: "identity.not_available",
+      assistantText: current.text,
+    }).catch(() => undefined);
+    this.options.log?.(`agent reply ${turnId} dropped (identity.not_available)`);
+    return saved;
+  }
+
   private async attempt(turnId: string, kind: DeliveryClaim): Promise<AgentDelivery> {
     const { service } = this.options;
     const automatic = kind !== "manual";
-    // Written before sending: a crash mid-send leaves "sending", which a restart turns into "unknown".
     const current = service.deliveries.claim(turnId, kind);
     if (!current) return service.deliveries.get(turnId)!;
+    try {
+      await this.assertAuthorized(turnId, current.sessionId);
+    } catch (error) {
+      if (error instanceof ConsumerAccessError) return this.denyDelivery(turnId, current.sessionId, current);
+      throw error;
+    }
     const attempts = current.attempts;
     try {
       await this.options.reply(current.connectionId, current.replyTo, current.text, `agent-reply:${current.sessionId}:${turnId}:${attempts}`);
@@ -79,7 +111,6 @@ export class ReplyDelivery {
       const delay = this.backoff[attempts - 1];
       const next = retry && delay !== undefined ? new Date(service.clockMs() + delay).toISOString() : null;
       const saved = service.deliveries.patch(turnId, { state: outcome.kind, errorCode: outcome.code, errorMessage: outcome.message, retryable: next !== null, nextAttemptAt: next })!;
-      // While a retry is coming the turn stays as it was; when none is, the turn failed.
       if (next === null) service.setReplyDelivered(turnId, false);
       else if (delay !== undefined) this.later(delay);
       this.options.log?.(`agent reply ${turnId} ${outcome.kind} (${outcome.code}) after attempt ${attempts}${next ? `, retrying at ${next}` : ""}`);
@@ -99,20 +130,17 @@ export class ReplyDelivery {
     this.timers.add(timer);
   }
 
-  /** A timer-driven sweep has no caller to report to; a failure (a store closing mid-sweep) must not escape as an unhandled rejection. */
   private sweepInBackground(): void {
     this.sweep().catch((error: unknown) => {
       this.options.log?.(`agent reply sweep failed: ${error instanceof Error ? error.message : String(error)}`);
     });
   }
 
-  /** Retry what is due. Also run on a timer, so retries survive a restart. */
   async sweep(): Promise<number> {
     const due = this.options.service.deliveries.due();
     let attempted = 0;
     for (const delivery of due) {
       const before = this.options.service.deliveries.get(delivery.turnId);
-      // The list may be stale: another sweep or timer may have taken this one since it was read.
       if (!before || before.state !== "failed") continue;
       const after = await this.attempt(delivery.turnId, "retry");
       if (after.attempts > before.attempts) attempted += 1;
@@ -120,7 +148,6 @@ export class ReplyDelivery {
     return attempted;
   }
 
-  /** On start: sends a restart cut off are now unknown; retries that were waiting are picked up by the sweep. */
   start(intervalMs = 15_000): void {
     const settled = this.options.service.settleInterruptedDeliveries();
     if (settled.length > 0) this.options.log?.(`agent replies: ${settled.length} send(s) were cut off by a restart and need a person to resend or mark delivered`);
@@ -135,7 +162,6 @@ export class ReplyDelivery {
     this.timers.clear();
   }
 
-  /** A person resends a reply that failed or whose outcome was unknown. One attempt; no automatic retries after it. */
   async resend(turnId: string): Promise<AgentDelivery> {
     const current = this.options.service.deliveries.get(turnId);
     if (!current) throw new AgentError("agent.not_found", "This turn has no reply to send");
@@ -143,7 +169,6 @@ export class ReplyDelivery {
     return this.attempt(turnId, "manual");
   }
 
-  /** A person confirms the reply did arrive (for example after an unknown outcome). */
   markDelivered(turnId: string): AgentDelivery {
     const current = this.options.service.deliveries.get(turnId);
     if (!current) throw new AgentError("agent.not_found", "This turn has no reply to send");

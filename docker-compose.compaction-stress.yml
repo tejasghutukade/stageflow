@@ -10,7 +10,7 @@ services:
     ports: !override
       - "127.0.0.1:3850:3847"
     environment:
-      STAGEFLOW_ENSURE_PROJECT_ROOTS: /opt/stageflow/catalog/triggers-readiness,/catalog/compaction-stress
+      STAGEFLOW_ENSURE_PROJECT_ROOTS: /catalog/compaction-stress
     volumes:
       - ./examples/compaction-stress:/catalog/compaction-stress:ro
       - ${COMPACTION_EVIDENCE_DIR:-./.compaction-evidence}:/seed/evidence:ro

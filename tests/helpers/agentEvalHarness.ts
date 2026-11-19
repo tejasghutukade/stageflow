@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentChatController } from "../../src/agents/chatTurn.js";
 import { EvalGateRegistry } from "../../src/agents/evalGate.js";
+import { EvalConsumerRegistry } from "../../src/evals/consumer/evalConsumerRegistry.js";
 import { AgentService } from "../../src/agents/service.js";
 import { AgentStore } from "../../src/agents/store.js";
 import { FakeEngine, type FakeEngineOptions } from "../../src/evals/engine/index.js";
@@ -145,10 +146,11 @@ export async function agentEvalHarness(
   const service = new AgentService({ store: agentStore });
   const backend = new FakeAgentBackend(opts.script ?? defaultAgentScript);
   const evalGates = new EvalGateRegistry();
-  const chat = new AgentChatController({ service, backend, evalGates });
+  const evalConsumers = new EvalConsumerRegistry();
+  const chat = new AgentChatController({ service, backend, evalGates, evalConsumers });
   const simulator = new FakeSimulatorModel(() => "Thanks, that is all.\n[[END:resolved]]");
   const agentRunner = createAgentCaseRunner({
-    host: () => ({ service, chat, evalGates, backend }),
+    host: () => ({ service, chat, evalGates, evalConsumers, backend }),
     simulatorModel: () => simulator,
   });
   const stageRunner: StageCaseRunner = {

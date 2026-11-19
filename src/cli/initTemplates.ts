@@ -20,7 +20,7 @@ export function isModelPlaceholder(model: string): boolean {
 
 const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
   anthropic: "anthropic/claude-sonnet-5-5",
-  openrouter: "openrouter/auto",
+  openrouter: "openrouter/anthropic/claude-sonnet-5.5",
   cursor: "cursor/auto",
 };
 

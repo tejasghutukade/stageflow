@@ -119,29 +119,29 @@ A stream that ends with neither `done` nor `error` was cut off (the CLI reports 
 
 ## Inbound webhooks
 
-`POST /api/agent-inbound/:connectionId` receives messages for Slack and Telegram connections and for AgentMail connections that use a webhook. It needs no control token; the provider's signature against the connection's `inboundSecret` is the credential. (AgentMail and iMessage are normally received over a stream the Host opens itself; see [Agents — the Host listens](agents.md#agentmail-and-imessage-the-host-listens).)
+`POST /api/agent-inbound/:connectionId` receives messages for Slack and Telegram connections. It needs no control token; the provider's signature against the connection's `inboundSecret` is the credential. (AgentMail and iMessage are received only over a stream the Host opens itself; see [Agents — the Host listens](agents.md#agentmail-and-imessage-the-host-listens).)
 
 | Provider | `inboundSecret` is | Header checked |
 |----------|--------------------|----------------|
 | Slack | App signing secret | `x-slack-signature` and `x-slack-request-timestamp` |
 | Telegram | `secret_token` given to `setWebhook` | `x-telegram-bot-api-secret-token` |
-| AgentMail | Webhook secret | `x-agentmail-signature` (HMAC-SHA256 of the raw body) |
 
 | Status | Body | Meaning |
 |--------|------|---------|
 | `200` | `{ "ok": true }` | Accepted; the agent answers in the background and the reply goes out on the same connection |
 | `200` | `{ "challenge": "…" }` | Slack `url_verification` |
-| `200` | `{ "ignored": true }` | Dropped on purpose: a bot's own message, no enabled agent on this connection, sender not in `allow_from`, or sender over 20 messages a minute. Nothing is retried, and the sender cannot tell the difference |
+| `200` | `{ "ignored": true }` | Dropped on purpose: a bot's own message, a Telegram group or a message with no sender, no enabled agent on this connection, an agent that is open to anyone and has tools, sender not in `allow_from`, or sender over 20 messages a minute. Nothing is retried, and the sender cannot tell the difference |
+| `200` | `{ "unmatched": true }` | Channel identity could not map the sender: the connection's fixed reply was sent and no agent turn ran. Nothing is retried |
 | `200` | `{ "duplicate": true }` | This event id was already handled |
 | `400` | | Body is not JSON, or not a message this provider recognises |
 | `401` | | Signature does not verify |
-| `404` | | No such connection, or it has no `inboundSecret` |
+| `404` | | No such connection, it has no `inboundSecret`, or it is not a Slack or Telegram connection |
 | `413` | | Body over 1 MiB |
 | `503` | `{ "code": "agent.store_unavailable" }` | The Host runs without the agent store |
 
 ## Public web chat API
 
-The anonymous chat page (`/chat/<slug>`, served from the Host) uses these routes for tool-less public agents without shared private context. The link slug is the public-access credential; there is no control token. They are only live while the agent is enabled and `web_chat.enabled` is true. Each visitor sends a stable id the page keeps in the browser as the `X-Visitor-Id` header (16–64 characters of `A–Z a–z 0–9 _ -`); conversations are scoped to it. Authenticated agents instead require verified admission and a bearer on every thread request. Their experimental embedded API, unsupported paths and migration limits are documented in [Consumer identity](consumer-identity.md); the existing page has no sign-in flow.
+The anonymous chat page (`/chat/<slug>`, served from the Host) uses these routes for tool-less public agents without shared private context. The link slug is the public-access credential; there is no control token. They are only live while the agent is enabled and `web_chat.enabled` is true. Each visitor sends a stable id the page keeps in the browser as the `X-Visitor-Id` header (16–64 characters of `A–Z a–z 0–9 _ -`); conversations are scoped to it. Authenticated agents instead require verified admission and a bearer on every thread request. Their embedded API, unsupported paths and migration limits are documented in [Consumer identity](consumer-identity.md); the built-in chat page has no sign-in flow.
 
 | Method and path | Response |
 |-----------------|----------|
@@ -175,6 +175,7 @@ For an agent with `web_chat.access: authenticated` the same thread and message r
 | Method and path | Purpose |
 |-----------------|---------|
 | `POST /api/public/chat/:slug/admission` | Body `{ connectionId, assertion }`, the signed one-time handoff token. `201 { token, tokenType: "Bearer", expiresIn }` |
+| `GET /api/public/chat/:slug/step-up?token=` | The link a channel customer opens from a step-up reply. A valid token sets the `sf_step_up` and `sf_oidc` cookies and redirects (302) to the agent's OIDC provider. The callback then raises the channel conversation and answers with a page, not a bearer. Every answer on this route, and on the callback after a step-up, is an HTML page: `401` for an unknown, used or expired link or a failed sign-in, `403` when the person signs in as a different account, `503` when sign-in cannot start |
 | `POST /api/public/chat/:slug/oidc/start` | Body `{ connectionId }`. `200 { authorizationUrl }` and an `sf_oidc` cookie. Send the browser to the URL |
 | `GET /api/public/chat/:slug/oidc/callback` | The provider's redirect. Returns the same `201 { token, … }` shape |
 

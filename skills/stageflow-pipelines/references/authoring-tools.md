@@ -26,7 +26,7 @@ MCP `write_pipeline` with `mode: create` also registers the folder in `stageflow
 
 Paths are relative to the Host project, with forward slashes, such as `pipelines/release/release.pipeline.yaml`. Each mutation validates with strict mode before writing. Nothing is written when validation fails unless `allow_invalid` is true. A failure returns `{ error, status }`. 422 is the validation failure: `error` is the first error message only, and the findings list is omitted. 409 means the file exists (`write_pipeline` with `mode: update`). 400 is a bad argument. Run `sf validate` to see every finding. Pass `allow_invalid: true` only while assembling a package that cannot validate yet, then remove it and validate.
 
-Always pass `model`. If you omit it, the tool writes the Host's last resolved default, or `openrouter/nvidia/nemotron-3.5-lightning:free` when none has been resolved. That string is not evidence the model is configured. Prefer an id from `list_catalog` with `kind: models`, or `CHANGE_ME/<provider-model>`.
+Always pass `model`. If you omit it, the tool writes the Host's last resolved default, or `openrouter/anthropic/claude-sonnet-5.5` when none has been resolved. That string is not evidence the model is configured. Prefer an id from `list_catalog` with `kind: models`, or `CHANGE_ME/<provider-model>`.
 
 | Tool | Parameters | What it writes |
 |---|---|---|

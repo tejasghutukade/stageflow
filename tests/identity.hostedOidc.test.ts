@@ -10,6 +10,7 @@ import { ConsumerIdentityStore } from "../src/identity/store.js";
 import { ConsumerAuthorization } from "../src/identity/authorization.js";
 import { createScopeAuthorizationEngine } from "../src/identity/scope.js";
 import { prepareOidcConnection } from "../src/identity/oidc.js";
+import { ConsumerStepUpRequired } from "../src/identity/stepUp.js";
 import { closeServer } from "./helpers/closeServer.js";
 import { scriptedBackend } from "./helpers/agentsHarness.js";
 import { startHostedOidcProvider, HOSTED_TEST_IDP_NAME } from "./helpers/hostedOidcProvider.js";
@@ -72,7 +73,7 @@ async function fixture(options: { provider?: LocalOidcProvider; workspace?: stri
     identities.activateOidc("directory");
   }
   const pub = (suffix: string, init: RequestInit = {}) => fetch(`${base}/api/public/chat/${slug}${suffix}`, init);
-  return { identities, provider, pub, base, slug, redirectUri, reads: () => reads };
+  return { identities, auth, provider, pub, base, slug, redirectUri, reads: () => reads };
 }
 
 async function login(host: Awaited<ReturnType<typeof fixture>>, cookie?: string) {
@@ -161,5 +162,63 @@ describe("hosted test identity provider", () => {
     expect(right.identities.listAudit(20).some((row) => row.reason === "oidc_verified")).toBe(false);
     expect(left.reads()).toBe(0);
     expect(right.reads()).toBe(0);
+  });
+
+  it("turns an email step-up link into a sign-in that raises the conversation, with pages instead of JSON", async () => {
+    const saved = process.env.STAGEFLOW_PUBLIC_CHAT_URL;
+    cleanups.push(async () => {
+      if (saved === undefined) delete process.env.STAGEFLOW_PUBLIC_CHAT_URL;
+      else process.env.STAGEFLOW_PUBLIC_CHAT_URL = saved;
+    });
+    const stepUpFor = async (host: Awaited<ReturnType<typeof fixture>>, account: string) => {
+      process.env.STAGEFLOW_PUBLIC_CHAT_URL = host.base;
+      host.identities.registerChannel({ id: "mail", channelConnectionId: "inbox", agentId: "support", provider: "agentmail", unmappedReply: "no match",
+        permission: { scope: "own", agents: ["support"], actions: ["conversation:use", "order:read"] } });
+      host.identities.assign("mail", "jane@acme.com", account, "import", { scope: "own", agents: ["support"], actions: ["conversation:use", "order:read"] });
+      const admitted = await host.auth.admitChannelSender({ agentId: "support", channelConnectionId: "inbox", provider: "agentmail", sender: "jane@acme.com", dmarcPass: true, signal: AbortSignal.timeout(3_000) });
+      if (admitted.outcome !== "admitted") throw new Error("not admitted");
+      host.auth.bind("mail-conv", admitted.sessionId, "support", 1);
+      const failure = await host.auth.check("mail-conv", admitted.sessionId, "support", "orders.status", { orderId: "alice-order" }, AbortSignal.timeout(3_000)).catch((error) => error);
+      expect(failure).toBeInstanceOf(ConsumerStepUpRequired);
+      const link = /https?:\/\/\S+/.exec((failure as ConsumerStepUpRequired).reply)![0];
+      expect(link).toContain(`/api/public/chat/${host.slug}/step-up?token=`);
+      return { sessionId: admitted.sessionId, link };
+    };
+    const follow = async (link: string) => {
+      const opened = await fetch(link, { redirect: "manual" });
+      expect(opened.status).toBe(302);
+      const cookies = opened.headers.getSetCookie().map((cookie) => cookie.split(";")[0]).join("; ");
+      expect(cookies).toContain("sf_step_up=");
+      expect(cookies).toContain("sf_oidc=");
+      const authorized = await fetch(opened.headers.get("location")!, { redirect: "manual" });
+      const completed = await fetch(authorized.headers.get("location")!, { headers: { Cookie: cookies }, redirect: "manual" });
+      return { completed, html: await completed.text() };
+    };
+
+    const host = await fixture();
+    const { sessionId, link } = await stepUpFor(host, "alice");
+    expect(host.identities.sessionAssurance(sessionId)).toBe("address_only");
+    const done = await follow(link);
+    expect(done.completed.status).toBe(200);
+    expect(done.completed.headers.get("content-type")).toContain("text/html");
+    expect(done.html).toContain("You're signed in");
+    expect(done.html).not.toContain("token");
+    expect(host.identities.sessionAssurance(sessionId)).toBe("signed_in");
+    await host.auth.check("mail-conv", sessionId, "support", "orders.status", { orderId: "alice-order" }, AbortSignal.timeout(3_000));
+
+    const reused = await fetch(link, { redirect: "manual" });
+    expect(reused.status).toBe(401);
+    expect(reused.headers.get("content-type")).toContain("text/html");
+    expect(await reused.text()).toContain("This link has expired");
+    const forged = await host.pub("/step-up?token=" + "x".repeat(43), { redirect: "manual" });
+    expect(forged.status).toBe(401);
+
+    const other = await fixture({ subject: "bob" });
+    other.identities.assign("directory", "bob", "bob", "business-directory:v1", { scope: "own", agents: ["support"], actions: ["conversation:use", "order:read"] });
+    const mismatch = await stepUpFor(other, "alice");
+    const wrong = await follow(mismatch.link);
+    expect(wrong.completed.status).toBe(403);
+    expect(wrong.html).toContain("different account");
+    expect(other.identities.sessionAssurance(mismatch.sessionId)).toBe("address_only");
   });
 });

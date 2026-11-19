@@ -4,6 +4,8 @@ import type { AgentHostContext } from "../../agents/hostContext.js";
 import type { AgentSessionDetail } from "../../agents/service.js";
 import type { AgentDefinition } from "../../config/loadAgent.js";
 import { EVAL_MAX_CONSECUTIVE_PROVIDER_FAILURES } from "../constants.js";
+import { casePrincipalId } from "../consumer/fixtureCatalog.js";
+import { createEvalConsumerSession } from "../consumer/evalConsumerSession.js";
 import { buildConversationSubject } from "./conversationSubject.js";
 import {
   createBackendSimulatorModel,
@@ -35,7 +37,7 @@ export const EVAL_CASE_WALL_CLOCK_GRACE_MS = 60_000;
 export const EVAL_TURN_STOP_GRACE_MS = 10_000;
 const SESSION_OVERHEAD_MINUTES = 5;
 
-export type AgentRunnerHost = Pick<AgentHostContext, "service" | "chat" | "evalGates" | "backend">;
+export type AgentRunnerHost = Pick<AgentHostContext, "service" | "chat" | "evalGates" | "evalConsumers" | "backend">;
 
 export type AgentCaseRunnerDeps = {
   /** Lazy: the manager is built before the agent host. Undefined means this Host cannot run agents. */
@@ -188,7 +190,7 @@ export function createAgentCaseRunner(deps: AgentCaseRunnerDeps): StageCaseRunne
       return failure("EVAL_ENGINE_ERROR", err instanceof DriverScenarioError ? err.message : "Scenario could not be prepared");
     }
 
-    const { service, chat, evalGates } = host;
+    const { service, chat, evalGates, evalConsumers } = host;
     const startedAt = clock();
     const sessionMinutes = Math.ceil((conversation.maxTurns * conversation.turnTimeoutMs) / 60_000) + SESSION_OVERHEAD_MINUTES;
     let sessionId: string;
@@ -226,6 +228,9 @@ export function createAgentCaseRunner(deps: AgentCaseRunnerDeps): StageCaseRunne
       turn: () => currentTurn,
     });
     evalGates.set(sessionId, gate);
+    const principalId = casePrincipalId(planCase);
+    let evalConsumer = principalId ? createEvalConsumerSession({ principalId, agentId: target.agentId, conversationSessionId: sessionId }) : undefined;
+    if (evalConsumer) evalConsumers?.set(sessionId, evalConsumer);
 
     const usage = { simCost: 0, simIn: 0, simOut: 0, simCalls: 0, simEstimated: false };
     const addSimulator = (u: DriverUsage | undefined): void => {
@@ -418,6 +423,8 @@ export function createAgentCaseRunner(deps: AgentCaseRunnerDeps): StageCaseRunne
         /* the runtime session is dropped with the Host at the latest */
       }
       evalGates.delete(sessionId);
+      evalConsumers?.delete(sessionId);
+      evalConsumer = undefined;
       state.active.delete(sessionId);
       resolveDone();
     }

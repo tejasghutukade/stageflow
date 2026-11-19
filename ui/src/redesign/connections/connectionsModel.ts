@@ -13,6 +13,7 @@ export type ConnectionRow = {
   name: string;
   secondary: string;
   via?: string;
+  experimental?: boolean;
   /** Icon key from the host description; the console maps it. */
   icon: string;
   status: ChannelStatus;
@@ -36,6 +37,7 @@ export function channelRows(
       name: providerLabel(meta, connection.provider),
       secondary: connection.identity ? `${connection.identity} · ${connection.id}` : connection.id,
       ...(via ? { via } : {}),
+      ...(described?.experimental ? { experimental: true } : {}),
       icon: described?.icon ?? "plug",
       status: channelStatus(connection, meta),
       ...(connection.health ? { checkedAt: connection.health.checkedAt } : {}),

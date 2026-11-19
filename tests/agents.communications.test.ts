@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { dispatchAgentEmail } from "../src/agents/communications/email.js";
-import { agentThreadKey } from "../src/agents/communications/port.js";
+import { sessionThreadKey } from "../src/agents/communications/port.js";
 import { parseSlackInbound, verifySlackSignature } from "../src/agents/communications/slack.js";
 import { agentInput, agentsFixture, type AgentsFixture } from "./helpers/agentsHarness.js";
 
@@ -80,7 +80,7 @@ describe("agent communications", () => {
       { source: "console" },
     );
     await service.setEnabled(project, "inbox", true, { source: "console" });
-    const threadKey = agentThreadKey({ provider: "email", connectionId: "mail-inbox", threadId: "thread-a" });
+    const threadKey = sessionThreadKey({ provider: "email", connectionId: "mail-inbox", threadId: "thread-a", from: "user@example.com" });
 
     const first = await service.receive(project, message("email:1"));
     expect(await service.receive(project, message("email:2"))).toEqual({ ...first, duplicate: false });
@@ -117,7 +117,7 @@ describe("agent communications", () => {
       { source: "console" },
     );
     await service.setEnabled(project, "inbox", true, { source: "console" });
-    const threadKey = agentThreadKey({ provider: "email", connectionId: "mail-inbox", threadId: "thread-a" });
+    const threadKey = sessionThreadKey({ provider: "email", connectionId: "mail-inbox", threadId: "thread-a", from: "user@example.com" });
 
     const first = await service.receive(project, message("email:1"));
     const turn = await service.beginTurn(project, first.sessionId, { text: "Hello" });

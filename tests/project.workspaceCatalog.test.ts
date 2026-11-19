@@ -32,6 +32,9 @@ describe("workspaceCatalog", () => {
       expect(result.path).toBe(path.join(home, "workspace"));
       const outcome = await loadStageflowManifestOutcome(result.path);
       expect(outcome.ok).toBe(true);
+      if (outcome.ok) {
+        expect(outcome.value.manifest.catalog.triggers).toBeUndefined();
+      }
     } finally {
       await rm(home, { recursive: true, force: true });
     }

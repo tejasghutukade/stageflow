@@ -38,10 +38,12 @@ Telegram sends `x-telegram-bot-api-secret-token`; the Host compares it with `inb
 ```yaml
 channel:
   connection_id: alerts-telegram
-  allow_from: ["@jane_doe"]
+  allow_from: ["123456789"]
 ```
 
-A Telegram sender is identified by **username**, so `allow_from` takes `@username` (case-insensitive) or `*`. A person with no Telegram username cannot be allowed by name; only `*` lets them in. Email, phone and `@domain` entries never match. One chat is one session; the reply goes to the same chat. The person must have opened a chat with the bot first.
+A Telegram sender is identified by their numeric **user id**, which never changes, so `allow_from` takes user ids or `*`. To find an id, have the person message the bot once: the Host log says `ignored a message from user id 123456789 (@jane_doe), who is not on the allow list`. A `@username` entry (case-insensitive) still works and matches the person's current username, but it warns (`agent.channel_username_entry`): a username can be given up and taken by someone else. Email, phone and `@domain` entries never match.
+
+The agent answers one-to-one chats only; messages in groups, supergroups and channels are ignored. One person's chat is one session and the reply goes to the same chat. The person must have opened a chat with the bot first.
 
 ## Troubleshooting
 
@@ -51,5 +53,5 @@ A Telegram sender is identified by **username**, so `allow_from` takes `@usernam
 | Webhook 401 | `secret_token` differs from `inboundSecret` |
 | Webhook 404 | Unknown connection id, or no `inboundSecret` |
 | Webhook 400 | Update has no text message (stickers, photos and edits are not handled) |
-| Agent never answers | Agent disabled; username not in `allow_from` (dropped silently); another agent already bound |
+| Agent never answers | Agent disabled; user id not in `allow_from` (dropped silently, the Host log names the id); the message was sent in a group; another agent already bound |
 | Reply not delivered | The user blocked the bot or never started it. See [Replies that do not arrive](agents.md#replies-that-do-not-arrive) |

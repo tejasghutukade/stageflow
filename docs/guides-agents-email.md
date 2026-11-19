@@ -43,9 +43,13 @@ When the agent is enabled the Host starts the listener (the agent page shows **L
 - A turn only counts as succeeded once the reply reached the sender. See [Replies that do not arrive](agents.md#replies-that-do-not-arrive).
 - `STAGEFLOW_AGENT_CHANNEL_LISTENERS=0` turns listening off for the whole Host.
 
-### Webhooks instead of the stream
+### No webhooks
 
-Set an optional **Webhook secret** (`inboundSecret`) on the connection and point AgentMail at `POST /api/agent-inbound/<connection id>`. The request must carry `x-agentmail-signature`, the HMAC-SHA256 of the raw body. The Host must be reachable from the internet and, if it sits behind a name, `STAGEFLOW_ALLOWED_HOSTS` must list it. The stream needs none of this and is the simpler choice.
+Mail reaches an agent only over the stream. AgentMail webhooks are not accepted: `POST /api/agent-inbound/<connection id>` answers `404` for an AgentMail connection, and a webhook secret saved on an older connection is ignored. The stream needs no public URL.
+
+### One conversation per sender
+
+An email thread is one session per sender. If a second allowed person replies into the same thread, they get their own session and the agent's answer to them is built only on what they wrote.
 
 ## Troubleshooting
 
@@ -54,7 +58,6 @@ Set an optional **Webhook secret** (`inboundSecret`) on the connection and point
 | Agent never answers | Agent disabled; sender not in `allow_from`; listeners off (`STAGEFLOW_AGENT_CHANNEL_LISTENERS=0`); or the mail looks automated (see the ignore list) |
 | **Reconnecting** / cannot connect | Bad key, wrong `region` (`us` or `eu`), or no network from the Host. Use **Check now** |
 | `agent.channel_in_use` | Another agent already answers on that inbox |
-| Webhook returns 401 | Signature does not verify: secret differs from the one AgentMail signs with |
-| Webhook returns 404 | The connection id is unknown, or it has no `inboundSecret` |
-| Webhook returns 400 | Body is not JSON or lacks an id, a thread id and text |
+| Webhook returns 404 | AgentMail webhooks are not accepted; mail arrives on the stream |
+| `agent.channel_open_with_tools` | `allow_from` is `*` or a public mail domain and the agent has tools, memories or project context. List senders or remove them |
 | Reply not delivered | See [Replies that do not arrive](agents.md#replies-that-do-not-arrive): **Resend** or **Mark as delivered** on the run page |

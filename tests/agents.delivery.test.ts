@@ -1,15 +1,24 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChannelError } from "../src/channels/errors.js";
 import { AgentChatController } from "../src/agents/chatTurn.js";
-import { AgentInboundRouter } from "../src/agents/communications/inbound.js";
+import { AgentInboundRouter, type InboundConnections } from "../src/agents/communications/inbound.js";
 import { classifySendFailure, ReplyDelivery } from "../src/agents/communications/delivery.js";
 import type { AgentInboundMessage } from "../src/agents/communications/port.js";
+import { AgentService } from "../src/agents/service.js";
+import { ConsumerAuthorization } from "../src/identity/authorization.js";
+import { createScopeAuthorizationEngine } from "../src/identity/scope.js";
+import { ConsumerIdentityStore } from "../src/identity/store.js";
 import { agentInput, agentsFixture, scriptedBackend, type AgentsFixture } from "./helpers/agentsHarness.js";
+import { orderCustomerStub } from "./helpers/customerAdapterStub.js";
 
 const fixtures: AgentsFixture[] = [];
+const identityStores: ConsumerIdentityStore[] = [];
 afterEach(async () => {
+  for (const store of identityStores.splice(0)) store.close();
   await Promise.all(fixtures.splice(0).map((fixture) => fixture.cleanup()));
 });
+
+const JANE = "+14155550123";
 
 const inbound = (id: string): AgentInboundMessage => ({ provider: "imessage", connectionId: "line", eventId: `imessage:${id}`, threadId: "+14155550123", text: `hello ${id}`, from: "+14155550123", replyTo: "+14155550123" });
 
@@ -27,7 +36,7 @@ async function setup(script: Array<unknown | undefined>) {
     if (next !== undefined) throw next;
   };
   const chat = new AgentChatController({ service, backend: scriptedBackend((m) => `re: ${m.at(-1)!.text}`) });
-  const delivery = new ReplyDelivery({ service, reply, backoffMs: [1, 1, 1] });
+  const delivery = new ReplyDelivery({ service, projectRoot: project, reply, backoffMs: [1, 1, 1] });
   const router = new AgentInboundRouter({ service, chat, connections: { find: () => undefined, reply }, projectRoot: project, delivery });
   const turnOf = async () => {
     const sessions = (await service.listSessions(project, "pal", { limit: 5 })).sessions;
@@ -118,6 +127,55 @@ describe("reply delivery", () => {
     expect(confirmed.deliveries[0]!.state).toBe("delivered");
     expect(confirmed.turns[0]).toMatchObject({ status: "succeeded", errorCode: null });
     expect(sends).toHaveLength(1);
+  });
+
+  it("does not send an authenticated channel reply when the identity binding is absent", async () => {
+    const fixture = await agentsFixture();
+    fixtures.push(fixture);
+    const store = new ConsumerIdentityStore(":memory:", "w", () => fixture.clock.now.getTime());
+    identityStores.push(store);
+    const auth = new ConsumerAuthorization(store, createScopeAuthorizationEngine(), orderCustomerStub({
+      resolveSender: async () => ({ status: "found", accountId: "cus_881" }),
+    }), "consumer_v1");
+    auth.registerChannel({
+      id: "sms-id", channelConnectionId: "sms", agentId: "help", provider: "imessage", unmappedReply: "unmapped",
+      permission: { scope: "own", agents: ["help"], actions: ["conversation:use"] },
+    });
+    const service = new AgentService({
+      store: fixture.store,
+      now: () => fixture.clock.now,
+      getConsumerPublication: () => ({ identityEnabled: true, hasChannelConnection: (agentId, connectionId) => auth.hasChannelConnection(agentId, connectionId) }),
+    });
+    const { project } = fixture;
+    await service.create(project, agentInput("help", {
+      channel: { access: "authenticated", connection_id: "sms", allow_from: [JANE] },
+    }), { source: "console" });
+    await service.setEnabled(project, "help", true, { source: "console" });
+    const sends: string[] = [];
+    const connections: InboundConnections = {
+      find: () => ({ provider: "imessage", secret: "x" }),
+      reply: async (_id, _to, text) => { sends.push(text); },
+    };
+    const backend = scriptedBackend((messages) => {
+      vi.spyOn(auth, "bindingFor").mockReturnValue(undefined);
+      return `re: ${messages.at(-1)!.text}`;
+    });
+    const chat = new AgentChatController({ service, backend, consumerAuthorization: auth });
+    const delivery = new ReplyDelivery({ service, projectRoot: project, reply: connections.reply!, consumerAuthorization: auth, backoffMs: [1, 1, 1] });
+    const router = new AgentInboundRouter({ service, chat, connections, projectRoot: project, consumerAuthorization: auth, delivery });
+    await router.deliver({
+      provider: "imessage", connectionId: "sms", eventId: "m-unbound", threadId: JANE, text: "hello", from: JANE, replyTo: JANE,
+    });
+    await vi.waitFor(async () => {
+      const sessions = (await service.listSessions(project, "help", { limit: 1 })).sessions;
+      if (sessions.length === 0) return;
+      const detail = await service.getSession(project, sessions[0]!.id);
+      expect(detail.deliveries[0]?.state).toBe("failed");
+    });
+    expect(sends).toEqual([]);
+    const detail = await service.getSession(project, (await service.listSessions(project, "help", { limit: 1 })).sessions[0]!.id);
+    expect(detail.deliveries[0]).toMatchObject({ state: "failed", errorCode: "identity.not_available", retryable: false });
+    expect(detail.turns[0]?.status).toBe("failed");
   });
 
   it("turns a send a restart cut off into an unconfirmed reply", async () => {
