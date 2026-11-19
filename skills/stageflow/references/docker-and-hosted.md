@@ -109,6 +109,8 @@ env -u GITHUB_TOKEN -u GH_TOKEN docker compose up -d
 
 Do not pass `--build`. There is nothing to build. Set `STAGEFLOW_CONTROL_TOKEN` before you change the port mapping away from `127.0.0.1`. `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND=1` is an explicit opt-in to start with no token; do not set it when the port is reachable beyond this machine.
 
+Publishing that port on a public hostname also publishes the console, because customer chat and the console are the same process. Run one container per data volume. Terminate TLS at the proxy, forward only `/chat/` and `/api/public/chat/` (plus `POST /api/agent-inbound/…` when a webhook must reach the container), and set `STAGEFLOW_ALLOWED_HOSTS` and `STAGEFLOW_PUBLIC_CHAT_URL` to that https origin. Leave the console on a private path. Behind the proxy every customer shares one address for the chat rate limit, and the proxy must stream `/api/public/chat/` instead of buffering it. Full steps: [Docker — Publishing customer chat](../../../docs/docker.md#publishing-customer-chat).
+
 After `curl -fsS http://127.0.0.1:3847/livez` returns 200, copy `Control token: <token>` from the container logs (first start only; later starts print the file path) and connect the harness as in `host-and-mcp.md`. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`.
 
 ## Checkout compose

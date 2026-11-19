@@ -37,6 +37,7 @@ Behind a reverse proxy every visitor shares the proxy's address, so the per-IP l
 - Add the public hostname to `STAGEFLOW_ALLOWED_HOSTS`.
 - The page works same-origin. To host the page elsewhere, list its origin in `STAGEFLOW_PUBLIC_CHAT_ORIGINS` (comma-separated) so the browser may call the API.
 - The console builds the shareable link from `STAGEFLOW_PUBLIC_CHAT_URL` when set, otherwise from `STAGEFLOW_PUBLIC_URL`, otherwise from the address you opened it from. Set `STAGEFLOW_PUBLIC_CHAT_URL` when public chat is served from its own hostname, so the copied link and the identity sign-in redirect point at that hostname.
+- A container on a cloud host follows the same rules. See [Docker — Publishing customer chat](docker.md#publishing-customer-chat) for the hostname settings, the private console path, the shared per-address limit, and response buffering.
 
 ## Safety
 
