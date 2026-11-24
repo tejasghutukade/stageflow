@@ -29,6 +29,7 @@ export type ArtifactListFilterState = {
   status: "" | "available" | "expired";
   sort: ArtifactListSort;
   order: ArtifactListOrder;
+  q: string;
 };
 
 export const DEFAULT_ARTIFACT_LIST_FILTERS: ArtifactListFilterState = {
@@ -39,6 +40,7 @@ export const DEFAULT_ARTIFACT_LIST_FILTERS: ArtifactListFilterState = {
   status: "",
   sort: "updated",
   order: "desc",
+  q: "",
 };
 
 export type ArtifactStatusPillVariant = "ok" | "fail" | "needs" | "running" | "muted";
@@ -168,6 +170,7 @@ export function artifactListFiltersActive(filters: ArtifactListFilterState): boo
   if (filters.status.length > 0) return true;
   if (filters.sort !== DEFAULT_ARTIFACT_LIST_FILTERS.sort) return true;
   if (filters.order !== DEFAULT_ARTIFACT_LIST_FILTERS.order) return true;
+  if (filters.q.trim().length > 0) return true;
   return false;
 }
 
@@ -194,7 +197,19 @@ export function artifactListFiltersToQuery(
   const tag = filters.tag.trim().toLowerCase();
   if (tag.length > 0) query.tag = tag;
   if (filters.status) query.status = filters.status;
+  const q = filters.q.trim();
+  if (q.length > 0) query.q = q;
   return query;
+}
+
+export function artifactMatchCountLabel(count: number): string {
+  return count === 1 ? "1 match" : `${count} matches`;
+}
+
+export const ARTIFACT_SEARCH_QUERY_HINT = "Try letters or numbers";
+
+export function artifactSearchQueryRejected(error: string | null | undefined): boolean {
+  return typeof error === "string" && error.toLowerCase().includes("query has no searchable terms");
 }
 
 export function parseArtifactListFiltersFromHash(hash = window.location.hash): {
@@ -227,6 +242,7 @@ export function parseArtifactListFiltersFromHash(hash = window.location.hash): {
       status,
       sort,
       order: sort === "title" && orderRaw == null ? "asc" : order,
+      q: params.get("q") ?? "",
     },
     projectRoot: params.get("project_root"),
   };
@@ -244,6 +260,7 @@ export function artifactsListHashPath(
   const tag = filters.tag.trim().toLowerCase();
   if (tag.length > 0) params.set("tag", tag);
   if (filters.status) params.set("status", filters.status);
+  if (filters.q.trim().length > 0) params.set("q", filters.q.trim());
   if (filters.sort !== "updated" || filters.order !== "desc") {
     params.set("sort", filters.sort);
     params.set("order", filters.order);

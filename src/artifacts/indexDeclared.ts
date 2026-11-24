@@ -19,6 +19,14 @@ import type { StageEnvelope } from "../types/envelope.js";
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
 import { contentTypeForKind, inferStaticKind } from "./kinds.js";
 import {
+  artifactSearchBodyKind,
+  artifactSearchOwnerText,
+  extractSearchBody,
+  readBoundedSearchFile,
+  syncArtifactSearch,
+  unindexArtifactSearch,
+} from "./search.js";
+import {
   ArtifactKeyError,
   artifactIdFromRelative,
   artifactStorageKey,
@@ -58,6 +66,8 @@ type PreparedArtifact = {
   size: number;
   hash: string | null;
   key: string;
+  body: string;
+  bodyIncomplete: boolean;
 };
 
 function exclusionReason(relativePath: string): string | undefined {
@@ -114,18 +124,20 @@ function deleteIndexed(
   params: Record<string, string | number>,
   keepIds: readonly string[],
 ): void {
-  if (keepIds.length === 0) {
-    db.prepare(`DELETE FROM artifacts WHERE origin = 'indexed' AND ${clause}`).run(params);
-    return;
-  }
-  const names = keepIds.map((_, index) => `@keep${index}`);
-  const keep: Record<string, string> = {};
+  const keep =
+    keepIds.length === 0
+      ? ""
+      : ` AND id NOT IN (${keepIds.map((_, index) => `@keep${index}`).join(", ")})`;
+  const keepParams: Record<string, string> = {};
   keepIds.forEach((id, index) => {
-    keep[`keep${index}`] = id;
+    keepParams[`keep${index}`] = id;
   });
-  db.prepare(
-    `DELETE FROM artifacts WHERE origin = 'indexed' AND ${clause} AND id NOT IN (${names.join(", ")})`,
-  ).run({ ...params, ...keep });
+  const bound = { ...params, ...keepParams };
+  const keys = db
+    .prepare(`SELECT key FROM artifacts WHERE origin = 'indexed' AND ${clause}${keep}`)
+    .all(bound) as { key: string }[];
+  for (const row of keys) unindexArtifactSearch(db, row.key);
+  db.prepare(`DELETE FROM artifacts WHERE origin = 'indexed' AND ${clause}${keep}`).run(bound);
 }
 
 function clearAttemptRows(db: Database.Database, runId: string, stageId: string, attempt: number): void {
@@ -257,6 +269,20 @@ async function prepareOne(input: {
   const absolute = await resolveContainedRelativePath(input.artifactsDir, relative, ARTIFACT_MESSAGES);
   const { size, hash } = await sizeAndHash(absolute);
   const kind = inferStaticKind(relative);
+  let body = "";
+  let bodyIncomplete = false;
+  if (artifactSearchBodyKind(kind)) {
+    try {
+      body = extractSearchBody(kind, await readBoundedSearchFile(absolute));
+    } catch (error) {
+      bodyIncomplete = true;
+      console.error(
+        `artifact search: body read failed for ${relative}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
   return {
     id,
     title: path.posix.basename(relative),
@@ -266,6 +292,8 @@ async function prepareOne(input: {
     size,
     hash,
     key: artifactStorageKey(input.projectId, input.ownerKey, id),
+    body,
+    bodyIncomplete,
   };
 }
 
@@ -366,4 +394,39 @@ function writeRow(
     now: input.now,
     relative_path: row.relative,
   });
+  const storedNow = db
+    .prepare(
+      `SELECT owner_kind, owner_pipeline, owner_stage, owner_agent, hidden, status, deleted_at
+       FROM artifacts WHERE key = ?`,
+    )
+    .get(row.key) as
+    | {
+        owner_kind: string;
+        owner_pipeline: string | null;
+        owner_stage: string | null;
+        owner_agent: string | null;
+        hidden: number;
+        status: string | null;
+        deleted_at: string | null;
+      }
+    | undefined;
+  if (storedNow === undefined) return;
+  syncArtifactSearch(
+    db,
+    {
+      key: row.key,
+      title: row.title,
+      description: null,
+      tagsJson: "[]",
+      summary: null,
+      ownerText: artifactSearchOwnerText(storedNow),
+      projectRootId: input.projectId,
+      kind: row.kind,
+      body: row.body,
+      hidden: storedNow.hidden,
+      status: storedNow.status,
+      deleted: storedNow.deleted_at != null,
+    },
+    { bodyIncomplete: row.bodyIncomplete },
+  );
 }

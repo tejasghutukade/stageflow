@@ -26,7 +26,6 @@ import { createRunStoreAfterHostEnsure, sqliteConnectionFromStore } from "../run
 import type { RunStore } from "../runstore/port.js";
 import { ensureGlobalService } from "../server/ensureGlobalService.js";
 import {
-  applyClientFilters,
   formatArtifactListTable,
   formatArtifactShow,
   parseArtifactShowKey,
@@ -65,9 +64,6 @@ type ParsedListArgs = {
   limit: number;
   json: boolean;
 };
-
-const CLIENT_QUERY_PAGE_SIZE = 100;
-const CLIENT_QUERY_MAX_PAGES = 20;
 
 type ParsedShowArgs = {
   help: boolean;
@@ -267,6 +263,7 @@ function requireFlag(value: string | undefined, flag: string): string {
 }
 
 function parsePublishOwner(raw: string): ArtifactOwner {
+  if (raw.startsWith("eval:")) throw new Error("owner must not use the eval namespace");
   if (raw.startsWith("agent:")) {
     const agent = raw.slice("agent:".length);
     if (agent.length === 0) throw new Error("Owner must be <pipeline>:<stage> or agent:<id>");
@@ -394,6 +391,7 @@ function serverListQuery(parsed: ParsedListArgs): Omit<ArtifactListQuery, "limit
     live: parsed.live === true ? true : undefined,
     sort: parsed.sort !== undefined ? parseArtifactListSort(parsed.sort) : undefined,
     order: parsed.order !== undefined ? parseArtifactListOrder(parsed.order) : undefined,
+    q: parsed.q?.trim() ? parsed.q.trim() : undefined,
   };
 }
 
@@ -406,32 +404,7 @@ async function fetchArtifactList(
     throw new ArtifactQueryError(503, "artifact.store_unavailable", "Artifact index is unavailable");
   }
   const roots = await catalogRootsForArtifacts(store);
-  const filters = serverListQuery(parsed);
-  const q = parsed.q?.trim() ?? "";
-  if (q.length === 0) {
-    return listArtifacts(db, { ...filters, limit: parsed.limit }, roots);
-  }
-  const collected: ArtifactRecord[] = [];
-  let cursor: string | undefined;
-  for (let pageNumber = 0; pageNumber < CLIENT_QUERY_MAX_PAGES && collected.length < parsed.limit; pageNumber++) {
-    const page = listArtifacts(
-      db,
-      {
-        ...filters,
-        limit: CLIENT_QUERY_PAGE_SIZE,
-        cursor,
-      },
-      roots,
-    );
-    const filtered = applyClientFilters(page.artifacts, { q });
-    for (const record of filtered) {
-      collected.push(record);
-      if (collected.length >= parsed.limit) break;
-    }
-    if (page.next_cursor === null) break;
-    cursor = page.next_cursor;
-  }
-  return { artifacts: collected, next_cursor: null };
+  return listArtifacts(db, { ...serverListQuery(parsed), limit: parsed.limit }, roots);
 }
 
 async function runListSubcommand(

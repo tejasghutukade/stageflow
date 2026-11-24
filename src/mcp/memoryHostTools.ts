@@ -27,7 +27,7 @@ export function registerMemoryHostTools(server: McpServer, deps: McpToolDeps): v
   server.registerTool(
     "get_memory",
     {
-      description: "List host memories without id, or read one memory's description, cover page, and card keys.",
+      description: "List host memories without id, or read one memory.",
       inputSchema: getMemoryFlatSchema,
       annotations: { readOnlyHint: true },
     },

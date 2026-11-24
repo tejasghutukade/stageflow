@@ -173,6 +173,7 @@ const STAGE_BODY_ORDER = [
   "io",
   "verify",
   "gate_kinds",
+  "artifacts",
   "skill",
   "mcp",
 ] as const;

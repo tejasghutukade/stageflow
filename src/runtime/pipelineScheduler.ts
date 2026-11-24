@@ -1616,6 +1616,7 @@ export async function runPipelineDag(
           stage,
           factoryCwd,
           workspaceDir: run.workspaceDir,
+          pipelineId: loaded.pipeline.id,
           attempt,
           env: stageBinding.env,
           bindingKind: stageBinding.kind,

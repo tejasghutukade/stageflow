@@ -17,6 +17,8 @@ import {
   artifactScopeQuery,
   artifactStatusPillForRecord,
   artifactExpiryNote,
+  artifactMatchCountLabel,
+  artifactSearchQueryRejected,
   initialArtifactCursorState,
   serializeArtifactListFiltersRoundTrip,
   tabToListQuery,
@@ -176,6 +178,23 @@ describe("artifacts page model", () => {
       order: "desc" as const,
     };
     expect(serializeArtifactListFiltersRoundTrip(filters, "workspace")).toEqual(filters);
+  });
+
+  it("keeps q in the hash with the other filters", () => {
+    const filters = {
+      ...DEFAULT_ARTIFACT_LIST_FILTERS,
+      q: "revenue",
+      kind: "static.markdown",
+    };
+    expect(serializeArtifactListFiltersRoundTrip(filters, "workspace")).toEqual(filters);
+    expect(artifactListFiltersToQuery(filters).q).toBe("revenue");
+    expect(artifactListFiltersActive(filters)).toBe(true);
+    expect(artifactMatchCountLabel(3)).toBe("3 matches");
+    expect(artifactMatchCountLabel(1)).toBe("1 match");
+    expect(artifactMatchCountLabel(0)).toBe("0 matches");
+    expect(artifactSearchQueryRejected("query has no searchable terms")).toBe(true);
+    expect(artifactSearchQueryRejected("artifact store is down")).toBe(false);
+    expect(artifactListFiltersActive(DEFAULT_ARTIFACT_LIST_FILTERS)).toBe(false);
   });
 
   it("derives expiry notes from expires_at with a fixed now", () => {

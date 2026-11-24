@@ -983,6 +983,10 @@ export type CapacityHealth = {
     repos_bytes: number;
     state_db_bytes: number;
     a2a_artifacts_bytes: number;
+    artifacts_bytes: number;
+    published_artifact_count: number;
+    published_version_count: number;
+    cache_bytes?: number;
     free_bytes: number;
   };
 };

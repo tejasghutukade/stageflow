@@ -35,6 +35,7 @@ import type { StageBrowserSupport } from "../browser/browserHost.js";
 import { consoleStageBrowserSupport } from "../browser/stageBrowserEnv.js";
 import { createHostProfileCatalog, type ProfileCatalog } from "../browser/profileCatalog.js";
 import { createRunLiveness } from "../browser/runLiveness.js";
+import { ensureArtifactSearchIndex, repairArtifactSearchOnHostStart, stopArtifactSearchRepair } from "../artifacts/search.js";
 import { RunManager } from "../runtime/runManager.js";
 import { EvalRunManager } from "../evals/manager.js";
 import { createStageCaseRunner } from "../evals/runner/stageCaseRunner.js";
@@ -445,6 +446,17 @@ export async function bootstrapStageflowHost(
   const runChangeBus =
     options.runChangeBus ?? boundBus ?? createRunChangeBus();
   const store = wrapRunStoreWithChangeBus(rawStore, runChangeBus);
+  if (sqliteConnection !== undefined) {
+    try {
+      ensureArtifactSearchIndex(sqliteConnection);
+      await repairArtifactSearchOnHostStart(sqliteConnection, (runId) => store.getWorkspaceDir(runId));
+    } catch (error) {
+      bootLog.error(
+        "artifact.search.repair",
+        `artifact search repair failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
   await ensureProjectRootsFromEnv(env, store);
   const workspaceCatalog = ensureWorkspaceCatalog(ctx.globalHome);
   if (!workspaceCatalog.ok) {
@@ -475,6 +487,9 @@ export async function bootstrapStageflowHost(
     operatorCatalog: { cwd, agentDir },
     a2aStore,
     browser: options.browser ?? consoleStageBrowserSupport(),
+  });
+  manager.onShutdown(() => {
+    stopArtifactSearchRepair();
   });
   await manager.attachWaitingStages();
   await manager.reconcileOrphanedStages();
@@ -760,6 +775,7 @@ export async function bootstrapStageflowHost(
     ...(boundPort !== undefined ? { boundPort } : {}),
   };
   } catch (err) {
+    stopArtifactSearchRepair();
     stopGcInterval();
     stopScheduleSource();
     stopGithubPollSource();

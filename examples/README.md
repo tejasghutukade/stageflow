@@ -8,6 +8,8 @@ Upgrading older YAML: [`sf migrate-yaml`](../docs/cli-reference.md#sf-migrate-ya
 
 [Clone Chain](../docs/yaml-catalog.md#clone-chain) (one Clone Instance per Clone Array element) is documented in the YAML catalog. Walkthrough: [`feature-loop/`](feature-loop/). Canonical shapes: [`tests/fixtures/pipelines/clone-chain-*.pipeline.yaml`](../tests/fixtures/pipelines/).
 
+A stage can opt in to published artifacts with an `artifacts: { publish: true }` block on the stage body. The fixture shape is [`tests/fixtures/pipelines/publish-note.pipeline.yaml`](../tests/fixtures/pipelines/publish-note.pipeline.yaml). See [Stage artifacts](../docs/yaml-catalog.md#stage-artifacts).
+
 ## Featured example: Archify on PR
 
 **[`archify-on-pr/`](archify-on-pr/)** is the flagship CI dogfood walkthrough. It shows what configurable stages look like in production:

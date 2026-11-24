@@ -148,7 +148,7 @@ describe("migration 015", () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-evals-fresh-"));
     createRunStore({ rootDir: root, kind: "sqlite" });
     const db = new Database(path.join(storeRootFor(root), "state.db"));
-    expect(CURRENT_SCHEMA_VERSION).toBe(26);
+    expect(CURRENT_SCHEMA_VERSION).toBe(28);
     expect(db.pragma("user_version", { simple: true })).toBe(CURRENT_SCHEMA_VERSION);
     const objects = db.prepare(`SELECT type, name, sql FROM sqlite_master`).all() as Array<{
       type: string;

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -13,7 +14,8 @@ import {
   setFreeSpaceReaderForTests,
   warnDurableRootDiskIfNeeded,
 } from "../src/runstore/diskUsage.js";
-import { createRunStore } from "../src/runstore/createStore.js";
+import { artifactKeyHash } from "../src/artifacts/store.js";
+import { createRunStore, sqliteConnectionFromStore } from "../src/runstore/createStore.js";
 import { startUiServer } from "../src/server/http.js";
 import { bootstrapStageflowHost } from "../src/server/bootstrap.js";
 import {
@@ -116,12 +118,44 @@ describe("durableRootDiskBreakdown + GET /api/health", () => {
     expect(breakdown.repos_bytes).toBeGreaterThanOrEqual(0);
     expect(breakdown.state_db_bytes).toBeGreaterThanOrEqual(0);
     expect(breakdown.a2a_artifacts_bytes).toBeGreaterThanOrEqual(0);
+    expect(breakdown.artifacts_bytes).toBeGreaterThanOrEqual(0);
+    expect(breakdown.published_artifact_count).toBeGreaterThanOrEqual(0);
+    expect(breakdown.published_version_count).toBeGreaterThanOrEqual(0);
     expect(breakdown.cache_bytes).toBeGreaterThanOrEqual(0);
     expect(breakdown.free_bytes).toBeGreaterThanOrEqual(0);
     expect(breakdown.runs_bytes).toBeGreaterThan(0);
     expect(breakdown.worktrees_bytes).toBeGreaterThan(0);
 
     const store = createRunStore({ rootDir: home, openerMode: "migrate" });
+    const artifactBody = Buffer.from("published-artifact-body\n");
+    const artifactKey = "examples::stage:sales:summarize/note";
+    const versionDir = path.join(home, "artifacts", artifactKeyHash(artifactKey), "v1");
+    await mkdir(versionDir, { recursive: true });
+    await writeFile(path.join(versionDir, "body.md"), artifactBody);
+    const db = sqliteConnectionFromStore(store)!;
+    const now = "2026-11-24T12:00:00.000Z";
+    db.prepare(
+      `INSERT INTO artifacts (
+         key, owner_kind, owner_pipeline, owner_stage, project_root_id, id,
+         title, tags_json, kind, origin, current_version, status, hidden, created_at, updated_at
+       ) VALUES (
+         @key, 'stage', 'sales', 'summarize', 'examples', 'note',
+         'Note', '[]', 'static.markdown', 'published', 1, 'available', 0, @now, @now
+       )`,
+    ).run({ key: artifactKey, now });
+    db.prepare(
+      `INSERT INTO artifact_versions (
+         key, version, size_bytes, content_hash, manifest_json, created_at, pinned, relative_path, storage
+       ) VALUES (
+         @key, 1, @size, @hash, '{"kind":"static.markdown"}', @now, 0, 'body.md', 'store'
+       )`,
+    ).run({
+      key: artifactKey,
+      size: artifactBody.length,
+      hash: createHash("sha256").update(artifactBody).digest("hex"),
+      now,
+    });
+    const artifactBytes = await diskUsageOf(path.join(home, "artifacts"));
     const afterStore = await durableRootDiskBreakdown(home);
     expect(afterStore.state_db_bytes).toBeGreaterThan(0);
     const started = await startUiServer({
@@ -157,6 +191,9 @@ describe("durableRootDiskBreakdown + GET /api/health", () => {
       expect(body.disk.repos_bytes).toBeGreaterThanOrEqual(0);
       expect(body.disk.state_db_bytes).toBeGreaterThanOrEqual(0);
       expect(body.disk.a2a_artifacts_bytes).toBeGreaterThanOrEqual(0);
+      expect(body.disk.artifacts_bytes).toBe(artifactBytes);
+      expect(body.disk.published_artifact_count).toBe(1);
+      expect(body.disk.published_version_count).toBe(1);
       expect(body.disk.cache_bytes).toBeGreaterThanOrEqual(0);
       expect(body.disk.free_bytes).toBeGreaterThanOrEqual(0);
       expect((body as unknown as { activity: unknown }).activity).toEqual({

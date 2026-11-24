@@ -49,7 +49,7 @@ export function registerConnectionTools(server: McpServer, deps: McpToolDeps): v
     "save_connection",
     {
       description:
-        "Create or update a host connection. Returns { id, health } on create and { health } when enabled after update. Secret values are stored and never returned.",
+        "Create or update a host connection. Secret values are stored and never returned.",
       inputSchema: saveConnectionFlatSchema,
     },
     async (args) => {
@@ -84,7 +84,7 @@ export function registerConnectionTools(server: McpServer, deps: McpToolDeps): v
     "remove_connection",
     {
       description:
-        "Remove one connection and its stored secrets. Returns { removed: true }.",
+        "Remove one connection and its stored secrets.",
       inputSchema: saveConnectionUpdateSchema.pick({ id: true }),
     },
     async ({ id }) => run(async (service) => {

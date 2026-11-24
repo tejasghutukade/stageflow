@@ -183,7 +183,7 @@ export function registerAgentTools(server: McpServer, deps: McpToolDeps): void {
   server.registerTool(
     "archive_agent",
     {
-      description: "Archive an agent: its definition leaves the project and new sessions are refused. Past sessions are kept.",
+      description: "Archive an agent. New sessions are refused. Past sessions are kept.",
       inputSchema: z.object({ id: agentId }),
     },
     ({ id }) => call(async () => { await service().archive(root(), id); return { archived: true }; }),

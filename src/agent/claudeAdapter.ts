@@ -74,6 +74,7 @@ import {
 import { readActivityVerbose } from "./activity.js";
 import { readCheckoutAgentsContext } from "./checkoutContext.js";
 import { composeStageUserPrompt } from "./piAdapter.js";
+import { appendArtifactPublishPrompt } from "../tools/publishArtifact.js";
 import {
   claudeSessionMarkerPath,
   clearClaudeSessionMarker,
@@ -367,6 +368,12 @@ async function runTurn(
           stageId: runtimeStageId(input),
           attempt: input.roots.attempt ?? 1,
         },
+        ...(input.stage.artifacts?.expect !== undefined
+          ? {
+              expectedArtifactIds: input.stage.artifacts.expect,
+              readPublishedArtifactIds: input.publishedArtifactIds,
+            }
+          : {}),
       },
       feedbackLoopEmitContext: input.feedbackLoopEmitContext,
       writeStageArtifact: {
@@ -379,6 +386,16 @@ async function runTurn(
             askOperator: {
               capture: askCapture,
               allowedKinds: gateKinds,
+            },
+          }
+        : {}),
+      ...(input.stage.artifacts?.publish === true && input.publishArtifact !== undefined
+        ? {
+            publishArtifact: {
+              runWorkspaceDir: input.roots.runWorkspaceDir,
+              stageId: runtimeStageId(input),
+              attempt: input.roots.attempt ?? 1,
+              publish: input.publishArtifact,
             },
           }
         : {}),
@@ -409,7 +426,14 @@ async function runTurn(
         abortController: controller,
         cwd: input.roots.cwd,
         model,
-        systemPrompt: { type: "custom", prompt: input.stage.system_prompt },
+        systemPrompt: {
+          type: "custom",
+          prompt: appendArtifactPublishPrompt(
+            input.stage.system_prompt,
+            input.stage.artifacts?.expect,
+            input.stage.artifacts?.publish === true,
+          ),
+        },
         settingSources: [],
         settings: { autoCompactEnabled: true },
         tools: CLAUDE_BUILTIN_TOOLS,

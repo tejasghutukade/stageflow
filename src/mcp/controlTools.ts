@@ -72,7 +72,7 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
     "list_waiting",
     {
       description:
-        "Stages waiting for operator input. detail: full (default) includes pending_prompt and waiting_* fields; detail: summary returns only count and run/stage identity. Optional runId filter; optional path scopes to one project when runId is omitted.",
+        "Stages waiting for operator input. detail full (default) includes pending_prompt and waiting_* fields; summary returns count and run/stage identity. Optional runId, or path for one project when runId is omitted.",
       inputSchema: listWaitingFlatSchema,
     },
     async ({ runId, path: scopePath, detail }) => {
@@ -185,7 +185,7 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
     "get_stage",
     {
       description:
-        "Read stage detail for a run. view: events — persisted log events; log — live assistant text since a byte cursor; envelope — full StageEnvelope (404 when absent); verification — attempt history and completion checks.",
+        "Read stage detail. view events: persisted log events. log: assistant text since a byte cursor. envelope: StageEnvelope (404 when absent). verification: attempt history and completion checks.",
       inputSchema: getStageFlatSchema,
     },
     async ({ runId, stageId, view, attempt, since_offset }) => {
@@ -366,7 +366,7 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
     "cancel_run",
     {
       description:
-        "Cancel a non-terminal run (marks it cancelled, terminalizes pending/running/waiting stages, releases the checkout lease). Signals live stage workers via process-group kill (SIGTERM, then SIGKILL escalation) so agent grandchildren are included. Reason is required free-text and stored on the run as cancel_reason.",
+        "Cancel a non-terminal run. Marks it cancelled, terminalizes pending/running/waiting stages, and releases the checkout lease. Signals workers with process-group kill (SIGTERM, then SIGKILL). Reason is required and stored as cancel_reason.",
       inputSchema: z.object({
         runId: z.string(),
         reason: z.string().min(1),

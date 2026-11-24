@@ -91,6 +91,7 @@ describe("TOOL_META toolsets", () => {
       toolsInToolset("triggers"),
       toolsInToolset("connections"),
       toolsInToolset("memories"),
+      toolsInToolset("artifacts"),
     ));
     expect(ids.size).toBe(Object.keys(TOOL_META).length);
     for (const meta of Object.values(TOOL_META)) {

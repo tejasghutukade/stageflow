@@ -27,6 +27,7 @@ function baseClass(toolId: string): ToolClass {
   }
   const builtin = BUILTIN_TOOL_GROUP_OF[toolId];
   if (builtin) return builtin;
+  if (toolId === "publish_artifact") return "write";
   return "mcp_unknown";
 }
 

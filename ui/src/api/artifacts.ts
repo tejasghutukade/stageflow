@@ -50,11 +50,13 @@ export type ArtifactListQueryParams = {
   live?: boolean;
   sort?: ArtifactListSort;
   order?: ArtifactListOrder;
+  q?: string;
 };
 
 export type ArtifactListPage = {
   artifacts: ArtifactRecord[];
   next_cursor: string | null;
+  match_count?: number;
 };
 
 export function artifactListSearchParams(
@@ -73,16 +75,18 @@ export function artifactListSearchParams(
   if (options?.live === false) params.set("live", "false");
   if (options?.sort) params.set("sort", options.sort);
   if (options?.order) params.set("order", options.order);
+  if (options?.q) params.set("q", options.q);
   return params;
 }
 
 export function fetchArtifacts(
   projectRoot?: string,
   options?: ArtifactListQueryParams,
+  init?: RequestInit,
 ): Promise<ArtifactListPage> {
   const params = artifactListSearchParams(projectRoot, options);
   const query = params.toString();
-  return api(`/api/artifacts${query ? `?${query}` : ""}`);
+  return api(`/api/artifacts${query ? `?${query}` : ""}`, init);
 }
 
 export class ArtifactRequestError extends Error {

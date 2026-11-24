@@ -50,7 +50,7 @@ If you create an agent without an `id`, one is made from the name (lowercase, ot
 | `tools.mcp` | map: server name → list of tool names | `{}` | Names match `^[A-Za-z0-9_.-]{1,64}$`. Each list needs at least one tool; `"*"` allows every tool of the server. `stageflow` is reserved. |
 | `tools.skills` | list of skill names | `[]` | Skills must be installed, or a session fails to start. |
 | `tools.browser` | boolean | `false` | Stored but not wired to anything yet. |
-| `tools.stageflow.groups` | list of group ids | `[]` | See [Stageflow tools](agent-runtime.md#stageflow-tools). |
+| `tools.stageflow.groups` | list of group ids | `[]` | See [Stageflow tools](agent-runtime.md#stageflow-tools). Artifact groups: `artifacts.read` (`get_artifact`, read), `artifacts.write` (`save_artifact`, write), `artifacts.cleanup` (`delete_artifact`, destructive). `artifacts.refresh` is a group with no tool yet. |
 | `tools.stageflow.tools` | list of tool names | `[]` | Single Stageflow tools on top of the groups. |
 
 The console shows one checkbox per tool and stores the compact form: a full group as the group, a partial one as single tools.

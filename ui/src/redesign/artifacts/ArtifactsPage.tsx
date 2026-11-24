@@ -19,6 +19,9 @@ import {
   artifactListFiltersActive,
   artifactListFiltersToQuery,
   artifactListRows,
+  ARTIFACT_SEARCH_QUERY_HINT,
+  artifactMatchCountLabel,
+  artifactSearchQueryRejected,
   artifactProjectScopeOptions,
   artifactScopeQuery,
   artifactStatusPillClass,
@@ -49,12 +52,20 @@ function KindIcon({ kind }: { kind: string }) {
   return <Icon aria-hidden className="size-4 shrink-0 text-[var(--sf-text-2)]" />;
 }
 
-function EmptyState({ filtered, onClearFilters }: { filtered: boolean; onClearFilters?: () => void }) {
+function EmptyState({
+  filtered,
+  onClearFilters,
+  hint,
+}: {
+  filtered: boolean;
+  onClearFilters?: () => void;
+  hint?: string;
+}) {
   if (filtered) {
     return (
       <div className="mx-5 mt-6 flex max-w-[640px] flex-col gap-3 rounded-lg border border-[var(--sf-hairline)] px-6 py-8" data-testid="artifacts-empty-filtered">
         <h2 className="text-[15px] font-semibold text-[var(--sf-text-1)]">{ARTIFACTS_FILTERED_EMPTY_TITLE}</h2>
-        <p className="text-[13px] leading-[1.5] text-[var(--sf-text-2)]">{ARTIFACTS_FILTERED_EMPTY_BODY}</p>
+        <p className="text-[13px] leading-[1.5] text-[var(--sf-text-2)]">{hint ?? ARTIFACTS_FILTERED_EMPTY_BODY}</p>
         {onClearFilters ? (
           <button
             type="button"
@@ -123,6 +134,10 @@ export function ArtifactsPageView({
   showLoadMore,
   onLoadMore,
   tabCounts,
+  search,
+  onSearch,
+  onClearSearch,
+  matchCount,
 }: {
   rows: ArtifactListRow[] | null;
   error: string | null;
@@ -136,7 +151,12 @@ export function ArtifactsPageView({
   showLoadMore: boolean;
   onLoadMore?: () => void;
   tabCounts: { all: number; live: number; static: number };
+  search?: string;
+  onSearch?: (value: string) => void;
+  onClearSearch?: () => void;
+  matchCount?: number | null;
 }) {
+  const invalidQuery = artifactSearchQueryRejected(error);
   const tabs = [
     { id: "all", label: "All", count: tabCounts.all },
     { id: "live", label: "Live", count: tabCounts.live },
@@ -172,6 +192,28 @@ export function ArtifactsPageView({
         onChange={(id) => onFiltersChange({ ...filters, tab: id as ArtifactListTab })}
       />
       <div className="flex flex-wrap items-center gap-2 border-b border-b-[#ffffff12] px-5 py-2" data-testid="artifacts-filter-bar">
+        <input
+          aria-label="Search artifacts"
+          placeholder="Search"
+          className="h-8 w-[220px] rounded-lg border border-[var(--sf-hairline)] bg-[var(--sf-raised)] px-2 text-[13px] text-[var(--sf-text-1)]"
+          value={search ?? filters.q}
+          onChange={(event) => onSearch?.(event.target.value)}
+        />
+        {(search ?? filters.q).length > 0 ? (
+          <button
+            type="button"
+            aria-label="Clear search"
+            className="h-8 rounded-lg border border-[var(--sf-hairline)] bg-[var(--sf-raised)] px-2 text-[13px] text-[var(--sf-text-1)]"
+            onClick={onClearSearch}
+          >
+            Clear
+          </button>
+        ) : null}
+        {filters.q.trim().length > 0 && matchCount != null && !loading ? (
+          <span className="text-[13px] text-[var(--sf-text-2)]" data-testid="artifacts-match-count">
+            {artifactMatchCountLabel(matchCount)}
+          </span>
+        ) : null}
         <input
           aria-label="Kind"
           placeholder="Kind"
@@ -225,7 +267,9 @@ export function ArtifactsPageView({
           <option value="size:asc">Size (smallest)</option>
         </select>
       </div>
-      {error ? (
+      {invalidQuery ? (
+        <EmptyState filtered hint={ARTIFACT_SEARCH_QUERY_HINT} onClearFilters={onClearFilters} />
+      ) : error ? (
         <p className="px-5 py-4 text-[13px] text-[var(--sf-fail)]">{error}</p>
       ) : loading || rows === null ? (
         <p className="px-5 py-4 text-[13px] text-[var(--sf-text-3)]">Loading artifacts…</p>
@@ -259,6 +303,8 @@ export function ArtifactsPage() {
   const [roots, setRoots] = useState<ArtifactProjectRoot[]>([]);
   const [scope, setScope] = useState<string | null>(null);
   const [filters, setFilters] = useState<ArtifactListFilterState>(() => parseArtifactListFiltersFromHash().filters);
+  const [draftQ, setDraftQ] = useState(() => parseArtifactListFiltersFromHash().filters.q);
+  const [matchCount, setMatchCount] = useState<number | null>(null);
   const [cursor, setCursor] = useState<ArtifactCursorState>(initialArtifactCursorState());
   const [runsById, setRunsById] = useState<ReadonlyMap<string, ArtifactRunRef>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -289,6 +335,7 @@ export function ArtifactsPage() {
       if (skipHashSync.current) return;
       const parsed = parseArtifactListFiltersFromHash();
       setFilters(parsed.filters);
+      setDraftQ(parsed.filters.q);
       if (parsed.projectRoot != null) setScope(parsed.projectRoot);
     };
     window.addEventListener("hashchange", onHash);
@@ -315,6 +362,14 @@ export function ArtifactsPage() {
   );
 
   useEffect(() => {
+    if (draftQ === filters.q) return;
+    const handle = window.setTimeout(() => {
+      applyFilters({ ...filters, q: draftQ });
+    }, 200);
+    return () => window.clearTimeout(handle);
+  }, [draftQ, filters, applyFilters]);
+
+  useEffect(() => {
     if (scope === null) return;
     let cancelled = false;
     setLoading(true);
@@ -324,12 +379,14 @@ export function ArtifactsPage() {
       .then((page) => {
         if (cancelled) return;
         setCursor(applyArtifactPage(initialArtifactCursorState(), page, "replace"));
+        setMatchCount(page.match_count ?? null);
         setLoading(false);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : String(err));
         setCursor(initialArtifactCursorState());
+        setMatchCount(null);
         setLoading(false);
       });
     return () => {
@@ -360,7 +417,17 @@ export function ArtifactsPage() {
       }}
       filters={filters}
       onFiltersChange={applyFilters}
-      onClearFilters={() => applyFilters({ ...DEFAULT_ARTIFACT_LIST_FILTERS })}
+      onClearFilters={() => {
+        setDraftQ("");
+        applyFilters({ ...DEFAULT_ARTIFACT_LIST_FILTERS });
+      }}
+      search={draftQ}
+      onSearch={setDraftQ}
+      onClearSearch={() => {
+        setDraftQ("");
+        applyFilters({ ...filters, q: "" });
+      }}
+      matchCount={matchCount}
       showLoadMore={!loading && cursor.nextCursor !== null}
       tabCounts={tabCounts}
       onLoadMore={() => {

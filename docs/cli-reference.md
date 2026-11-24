@@ -121,7 +121,7 @@ sf run --task examples/hello-world/my-task.task.yaml \
   --json --include stages > sf-run.json
 ```
 
-Each `stages[]` item is a `StageProjection` (snake_case): `stage_id`, `status`, `envelope`, `artifacts`, and optional `last_at`, `pending_prompt`. That `--include stages` schema is unchanged for diamond runs — it does not add `pipeline_track` or join-input fields. The multi-edge graph (a diamond join has two inbound `pipeline_track` edges; `blocked_by` lists unresolved parents) is on `sf runs show --json`, MCP `get_run`, and `sf export-run`.
+Each `stages[]` item is a `StageProjection` (snake_case): `stage_id`, `status`, `envelope`, `artifacts`, and optional `last_at`, `pending_prompt`. When a stage published artifacts during the run, the item also has `published_artifacts`: an array of `{ key, version, kind, title }`. The field is absent when that stage published nothing, including every stage that did not opt in with `artifacts.publish: true`. `sf runs show --json` uses the same addition on each stage. Exit codes are unchanged. That `--include stages` schema is otherwise unchanged for diamond runs — it does not add `pipeline_track` or join-input fields. The multi-edge graph (a diamond join has two inbound `pipeline_track` edges; `blocked_by` lists unresolved parents) is on `sf runs show --json`, MCP `get_run`, and `sf export-run`.
 
 `--include stages` without `--json` exits `1`. See [CI / headless](ci.md#including-stage-projections).
 
@@ -638,7 +638,7 @@ Output is UTF-8 JSON (not a `.tgz`). Does not take `--json`.
 Consistent live snapshot of the durable store (`VACUUM INTO`), written under `$STAGEFLOW_HOME/backups/` by default. Default archives include provider credentials (mode `0600`) and must be treated as secrets. See [Docker and self-hosting](docker.md).
 
 ```bash
-sf backup [--out <file>] [--db-only] [--no-credentials] [--include-a2a-artifacts] [--json]
+sf backup [--out <file>] [--db-only] [--no-credentials] [--no-artifacts] [--include-a2a-artifacts] [--json]
 ```
 
 | Flag | Description |
@@ -646,6 +646,7 @@ sf backup [--out <file>] [--db-only] [--no-credentials] [--include-a2a-artifacts
 | `--out` | Destination path (refuses `$STAGEFLOW_HOME/worktrees/` and `runs/`) |
 | `--db-only` | Bare DB snapshot instead of tar.gz |
 | `--no-credentials` | Omit `agent/auth.json` |
+| `--no-artifacts` | Omit published artifact bytes under `artifacts/` (default includes them) |
 | `--include-a2a-artifacts` | Include A2A artifact bytes |
 | `--json` | Print metadata JSON |
 
@@ -687,6 +688,10 @@ sf restore <file> [--force] [--json]
 
 HTTP: `POST /api/restore` with `{ "backup": "<name>" }` (drive) → `202` then drain; boot applies before opening the store.
 
+A backup that contains published artifact bytes is staged beside the data directory and checked before it replaces `artifacts/`. The database is copied first. The previous `artifacts/` tree is then renamed aside, the staged tree is renamed into place, and the aside copy is deleted. If that swap fails, or if taking the store lock fails, the staged `.artifacts-incoming-<stamp>` directory is removed and the previous tree and the previous `state.db` are put back. Restore then reports `restore_failed` or `restore_store_busy`. A backup with no artifact bytes (`--no-artifacts`, `--db-only`, or an older archive) leaves the current `artifacts/` tree in place. `sf restore --json` then includes `warnings: [{ "code": "artifacts_not_in_backup", "message": "..." }]`, and the same integrity check lists rows whose content is missing. A directory member, or any member that cannot be written as a file because the name already exists, is `restore_bad_member`. A device, FIFO, character, or block member is `restore_unsafe_member`. This path reads the whole decompressed tar into memory (the same `readFileSync` pattern as before). The practical limit is 1.5 GiB of decompressed member bytes; past that, restore fails with `restore_failed` and does not load the archive.
+
+Restoring onto a build whose SQLite cannot create FTS5 does not crash the Host. Search logs once and uses the text scan until a later start can create the table; body text is indexed again as the repair pass runs. See [Search](artifacts.md#search).
+
 An archive restore verifies every file against the manifest's size and SHA-256 and every entry against the allowed names before it touches anything. Files the archive carries are placed in the data directory, and a file that already exists is moved aside as `<name>.pre-restore-<ISO>`; files the archive does not carry stay as they are. Secret files are restored only when the archive contains them (`--include-secrets` when it was made). A symbolic link is restored only when it stays inside the data directory; others are skipped and listed. An archive from a newer Stageflow minor version is refused, and `--force` does not change that; a different major version is refused unless `--force` is given. It stops early when the staging area lacks room. The store is replaced last; if anything fails while the files are being put in place, every file moved or placed so far is put back, and the old store stays where it was.
 
 ## `sf export`
@@ -715,7 +720,7 @@ sf artifact list [--q <text>] [--kind <kind>] [--owner <pipeline:stage|agent:id>
 
 | Flag | Description |
 |------|-------------|
-| `--q` | Client-side filter: matches `title`, `id`, or owner text (full-text search arrives later). The command reads further index pages, up to 20, until `--limit` matches are collected or the pages run out. |
+| `--q` | Passed to the index search (`q`). Matches title, description, tags, summary, owner, and extracted text (Markdown, text, CSV, JSON; first 64 KiB). HTML, images, and live snapshots are not searched. See [Search](artifacts.md#search). |
 | `--kind` | Passed to the index (`kind`). A value without a dot matches that prefix (`static` matches `static.markdown`). |
 | `--owner` | Passed to the index. `pipeline:stage` or `stage:<pipeline>:<stage>` for a stage, or `agent:<id>`. |
 | `--tag` | Passed to the index (`tag`). |
@@ -725,7 +730,7 @@ sf artifact list [--q <text>] [--kind <kind>] [--owner <pipeline:stage|agent:id>
 | `--order` | Passed to the index: `asc` or `desc`. Default is `desc`, except `title`, which defaults to `asc`. |
 | `--project-root` | Catalog wire id or absolute path; passed through to the index query. |
 | `--limit` | Max rows (`1`–`100`, default `50`). |
-| `--json` | Print `{ "artifacts": […], "next_cursor": string \| null }` (same field names as `GET /api/artifacts`). With `--q`, `next_cursor` is `null`. |
+| `--json` | Print `{ "artifacts": […], "next_cursor": string \| null }` (same field names as `GET /api/artifacts`). With `--q`, the page also includes `match_count`, and `next_cursor` continues the ranked search. |
 
 Human output is a compact table: `KEY`, `KIND`, `TITLE`, `OWNER`, `RUN` (the same short run id the console uses, so a timestamp-prefixed id is not cut to `2026-11-`), `STATUS` (blank, or `expired`), `UPDATED` (UTC). Newest first. Empty index: `No artifacts.`
 
@@ -1017,7 +1022,7 @@ Exit `0` whether or not the engine is installed. `sf eval engine install` exits 
 sf doctor [--json] [--pipeline <path>] [--strict]
 ```
 
-Operator preflight: shared `/readyz` checks (store, home, migrations, git), plus bash, Node, credentials presence/source, TLS CA path existence, free disk, and `.mcp.json` commands on PATH. With `--pipeline`, also diffs that pipeline's `requires:` / `secrets:` / stage MCP against the toolchain manifest and curated stage env (same check as MCP `validate` with `preflight: true` / `start_run`). With `--pipeline`, stages that declare [`channels:`](channels.md) also get a live check of each connection (it never sends a message); a failure is `channel_check_failed` with the connection and reason. `--strict` treats `unknown_version` as failure. Exits non-zero when any check is `fail`.
+Operator preflight: shared `/readyz` checks (store, home, migrations, git), plus bash, Node, credentials presence/source, TLS CA path existence, free disk, and `.mcp.json` commands on PATH. The published artifact store check reports every drift class it finds (hash mismatch, missing content, orphan directory, stale staging), each with a count and up to five example paths, and prints the store size in B, KiB, MiB, or GiB. A separate line, `search index: N artifacts pending`, is the number of artifacts whose body text is not indexed yet. With `--pipeline`, also diffs that pipeline's `requires:` / `secrets:` / stage MCP against the toolchain manifest and curated stage env (same check as MCP `validate` with `preflight: true` / `start_run`). With `--pipeline`, stages that declare [`channels:`](channels.md) also get a live check of each connection (it never sends a message); a failure is `channel_check_failed` with the connection and reason. `--strict` treats `unknown_version` as failure. Exits non-zero when any check is `fail`.
 
 **Never use `sf doctor` as a container `HEALTHCHECK`.** Use `GET /livez` for liveness; doctor is a human/CI preflight tool.
 

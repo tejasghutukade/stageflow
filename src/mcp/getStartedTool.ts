@@ -31,7 +31,7 @@ export function registerGetStartedTool(server: McpServer, deps: McpToolDeps): vo
     "get_started",
     {
       description:
-        "First-run orientation for remote harnesses: host version, providers, toolchain hints, catalog roots with counts, loaded and unloaded MCP toolsets (reconnect URLs), and a three-call next_steps list. No arguments.",
+        "Host version, providers, toolchain, catalog roots, and loaded and unloaded MCP toolsets.",
       inputSchema: z.object({}),
     },
     async () => {

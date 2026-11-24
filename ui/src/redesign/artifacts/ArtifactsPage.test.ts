@@ -116,4 +116,35 @@ describe("ArtifactsPageView", () => {
     expect(html).toContain("Clear filters");
     expect(html).toContain("No matches");
   });
+
+  it("uses the singular match label and the invalid-query empty state", () => {
+    const one = renderToStaticMarkup(createElement(ArtifactsPageView, {
+      ...defaultViewProps,
+      filters: { ...DEFAULT_ARTIFACT_LIST_FILTERS, q: "revenue", kind: "static.markdown" },
+      rows: [],
+      error: null,
+      loading: false,
+      scopeOptions: [],
+      scopeId: "workspace",
+      showLoadMore: false,
+      matchCount: 1,
+    }));
+    expect(one).toContain("1 match");
+    expect(one).not.toContain("1 matches");
+    const none = renderToStaticMarkup(createElement(ArtifactsPageView, {
+      ...defaultViewProps,
+      filters: { ...DEFAULT_ARTIFACT_LIST_FILTERS, q: "((", kind: "static.markdown" },
+      rows: [],
+      error: "query has no searchable terms",
+      loading: false,
+      scopeOptions: [],
+      scopeId: "workspace",
+      showLoadMore: false,
+      onClearFilters: () => {},
+    }));
+    expect(none).toContain("No matches");
+    expect(none).toContain("Try letters or numbers");
+    expect(none).toContain("data-testid=\"artifacts-filter-bar\"");
+    expect(none).not.toContain("query has no searchable terms");
+  });
 });

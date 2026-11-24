@@ -15,6 +15,7 @@ import { globalStageflowHome } from "../project/globalHome.js";
 import { backupsDir, checkOutPath, verifyDbSnapshot } from "../runstore/backup.js";
 import { readFilesystemSize } from "../runstore/diskUsage.js";
 import type { RunStore } from "../runstore/port.js";
+import { publishedArtifactArchiveSkip } from "../artifacts/storeInventory.js";
 import { ARCHIVE_RULES, isDeniedRunPath, ruleFor, ruleMentions, type ArchiveRule } from "./inventory.js";
 import { redactModelsJson } from "./redactModels.js";
 import { TarStream } from "./tarStream.js";
@@ -133,6 +134,17 @@ export async function planArchive(homeDir: string, options: { includeSecrets: bo
   const visit = async (relative: string, absolute: string): Promise<void> => {
     if (relative === "runs" || relative.startsWith("runs/")) return;
     if (SIDECAR.test(relative) || LEFTOVER.test(relative)) return;
+    const artifactSkip = publishedArtifactArchiveSkip(relative);
+    if (artifactSkip !== undefined) {
+      const found = await lstatOrGone(absolute);
+      if (found) {
+        leftOut.push({
+          path: found.isDirectory() ? `${relative}/` : relative,
+          reason: artifactSkip,
+        });
+      }
+      return;
+    }
     const found = await lstatOrGone(absolute);
     if (!found) return;
     const rule = ruleFor(found.isDirectory() ? `${relative}/` : relative) ?? ruleFor(relative);

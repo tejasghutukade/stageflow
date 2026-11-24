@@ -19,6 +19,16 @@ export const STAGE_GATE_KINDS = [
 
 export type StageGateKind = (typeof STAGE_GATE_KINDS)[number];
 
+/**
+ * Present only when the stage opted in (`artifacts.publish: true`).
+ * Omitted and `publish: false` leave the stage without this field.
+ */
+export type StageArtifactsConfig = {
+  publish: true;
+  /** Ids that must be published by this attempt before a success envelope. */
+  expect?: string[];
+};
+
 /** Target YAML `io:` block. Compiles onto StageConfig.payload_schema / clone_input_schema. */
 export type StageIoYaml = {
   input: { schema: unknown };
@@ -102,6 +112,8 @@ export type StageConfig = {
   requires?: ToolRequirement[];
   /** Browser session settings for this stage; adds the agent-browser requirement. */
   browser?: StageBrowserConfig;
+  /** Opt-in published artifacts. Absent unless `publish` is true. */
+  artifacts?: StageArtifactsConfig;
   tools?: { functions: Array<{ id: string; grants: FunctionGrant[] }> };
   /**
    * Selects the StagePort backend for this stage, overriding pipeline/global.

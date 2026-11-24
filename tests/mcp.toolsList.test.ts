@@ -12,7 +12,7 @@ import { TOOL_META, toolsInToolset } from "../src/toolkit/meta.js";
 import { FIXTURES_ROOT } from "./helpers/fixturePaths.js";
 import { MCP_TOOLSETS_ALL_QUERY, mcpUrl } from "./helpers/mcpCall.js";
 
-/** Measured 2026-11-14 after Plan 3 get_started toolset copy: 46,348 bytes for 57 tools (≤ 60,800 = 60% of 101,347 baseline). */
+/** Measured 2026-11-24 fix pass F: 46,673 bytes for 60 tools and 17,425 bytes for the 17 core tools. */
 const TOOLS_LIST_MAX_BYTES = 47_000;
 
 /** Measured 2026-11-14 after Plan 3 core toolsets: 17,918 bytes for 17 tools (≤ 20,269 = 20% of 101,347 baseline). */
@@ -78,6 +78,9 @@ const APPENDIX_TOOL_NAMES = [
   "calibrate_eval_grader",
   "cancel_eval_run",
   "delete_eval_run",
+  "get_artifact",
+  "save_artifact",
+  "delete_artifact",
 ] as const;
 
 const TOOLS_WITH_UNION_INPUT = new Set<string>([]);
@@ -161,10 +164,10 @@ describe("MCP tools/list", () => {
     expect(coreTools).toHaveLength(17);
   });
 
-  it("lists exactly the 57 Appendix tools", () => {
+  it("lists exactly the 60 Appendix tools", () => {
     expect(tools.map((tool) => tool.name).sort()).toEqual([...APPENDIX_TOOL_NAMES].sort());
     expect(tools.map((tool) => tool.name).sort()).toEqual(Object.keys(TOOL_META).sort());
-    expect(tools).toHaveLength(57);
+    expect(tools).toHaveLength(60);
   });
 
   it("labels every tool with annotations that match its risk", () => {

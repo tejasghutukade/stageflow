@@ -82,7 +82,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "list_catalog",
     {
       description:
-        "List pipelines, tasks, skills, models, MCP servers, providers, or host health. Pick kind; optional project_root or runId (skills only).",
+        "List pipelines, tasks, skills, models, MCP servers, providers, or host health. kind required. Optional project_root, or runId for skills.",
       inputSchema: listCatalogFlatSchema,
     },
     async (args) => {
@@ -247,7 +247,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "start_run",
     {
       description:
-        "Start a pipeline run. Accepted params: pipeline (catalog-relative path or inline { id, stages: [...] } — stages are YAML stage bodies, no uses: refs), task_path XOR task (inline task may include repository/ref or checkout; repository XOR checkout with code task.binding_conflict), project_root, checkout (catalog-relative; prefer this name; absolute → absolute_path_not_allowed), checkout_override (alias of checkout), skip_gates, git_sha, ci_pr_url, ci_job_url, skills (name → { relativePath: utf-8 contents }; requires SKILL.md; materialised under runs/<runId>/skills/, never the worktree). Returns { runId } or { runId, queued: true, queuePosition }. Errors: busy_capacity, busy_checkout, insufficient_disk, start.token_rejected, skills_*, inline_pipeline_too_large, catalog path-contract codes.",
+        "Start a pipeline run. pipeline: catalog-relative path or inline { id, stages: [...] } (YAML bodies, no uses: refs). task_path XOR task (inline task may set repository/ref or checkout; repository XOR checkout is task.binding_conflict). project_root, checkout (catalog-relative; prefer this name; absolute is absolute_path_not_allowed), checkout_override (alias of checkout), skip_gates, git_sha, ci_pr_url, ci_job_url, skills (name → { relativePath: utf-8 contents }; requires SKILL.md; under runs/<runId>/skills/, never the worktree). Returns { runId } or { runId, queued: true, queuePosition }. Errors: busy_capacity, busy_checkout, insufficient_disk, start.token_rejected, skills_*, inline_pipeline_too_large, catalog path-contract codes.",
       inputSchema: startRunFlatSchema,
     },
     async (args) => {
@@ -563,7 +563,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "get_run",
     {
       description:
-        "List runs without runId; poll one run with runId; view: export returns the full export payload. Stage detail lives in get_stage.",
+        "List runs without runId; poll one run with runId; view: export returns the full export payload.",
       inputSchema: getRunFlatSchema,
     },
     async ({ runId, view, status, since, pipeline, caller_id }) => {

@@ -14,7 +14,8 @@ import {
   STALE_STAGING_DIRECTORY_MS,
 } from "../src/artifacts/store.js";
 import { artifactKeyHash, artifactStoreRoot } from "../src/artifacts/store.js";
-import { setArtifactKeyOperationTraceForTests } from "../src/artifacts/publish.js";
+import { publishArtifact, setArtifactKeyOperationTraceForTests, setPublishVersionInsertFailureForTests } from "../src/artifacts/publish.js";
+import { catalogRootsForArtifacts } from "../src/artifacts/projectScope.js";
 import { setPruneFailureForTests } from "../src/artifacts/versions.js";
 import { agentProjectKey } from "../src/agents/store.js";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
@@ -25,6 +26,7 @@ import { json } from "../src/server/createHttpHost.js";
 import { decodeBase64, handleArtifactRoutes } from "../src/server/artifactRoutes.js";
 import { STATIC_HTML_CONTENT_SECURITY_POLICY } from "../src/artifacts/content.js";
 import Database from "better-sqlite3";
+import { applySchemaThrough } from "./helpers/schemaAtVersion.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 const previousHome = process.env.STAGEFLOW_HOME;
@@ -35,6 +37,7 @@ afterEach(async () => {
   setPublishWriteFailureForTests(false);
   setPublishRenameFailureForTests(false);
   setPublishCommitFailureForTests(false);
+  setPublishVersionInsertFailureForTests(false);
   setArtifactKeyOperationTraceForTests(undefined);
   setPruneFailureForTests(undefined);
   if (previousKeep === undefined) delete process.env.STAGEFLOW_ARTIFACT_VERSIONS_KEEP;
@@ -244,6 +247,52 @@ describe("publish and version artifacts", () => {
         expect(response.body.issues?.[0]?.path).toBe("description");
       }
     }
+  });
+
+  it("rejects an eval: owner on the REST body", async () => {
+    const { store, project } = await openStore();
+    const response = await publish(store, project, {
+      owner: { kind: "stage", pipeline: "eval:sales", stage: "summarize" },
+      content: "nope",
+    });
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe("artifact.invalid_shape");
+  });
+
+  it("ignores hidden on the REST body", async () => {
+    const { store, project } = await openStore();
+    const response = await publish(store, project, { hidden: 1, content: "visible" });
+    expect(response.status).toBe(200);
+    const db = sqliteConnectionFromStore(store)!;
+    expect(db.prepare(`SELECT hidden, source FROM artifacts WHERE id = 'weekly'`).get()).toEqual({
+      hidden: 0,
+      source: "api",
+    });
+  });
+
+  it("rolls back version, source, and attempt rows when the insert fails", async () => {
+    const { store, project } = await openStore();
+    const db = sqliteConnectionFromStore(store)!;
+    const roots = await catalogRootsForArtifacts(store);
+    setPublishVersionInsertFailureForTests(true);
+    await expect(
+      publishArtifact(db, {
+        owner: { kind: "stage", pipeline: "sales", stage: "summarize" },
+        projectRoot: project,
+        id: "weekly",
+        kind: "static.markdown",
+        title: "Weekly",
+        bytes: Buffer.from("one"),
+        publishSource: "api",
+        source: { kind: "stage", runId: "run-crash", stageId: "summarize", attempt: 1 },
+        roots,
+      }),
+    ).rejects.toThrow(/injected publish version insert failure/);
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM artifacts`).get()).toEqual({ n: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM artifact_versions`).get()).toEqual({ n: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM artifact_attempt_publishes`).get()).toEqual({ n: 0 });
+    const storageKey = artifactStorageKey(project, stageOwnerKey("sales", "summarize"), "weekly");
+    expect(existsSync(path.join(artifactStoreRoot(), artifactKeyHash(storageKey)))).toBe(false);
   });
 
   it("leaves no version directory or row when the write fails before rename", async () => {
@@ -525,7 +574,7 @@ describe("publish and version artifacts", () => {
   it("applies migration 026 on a fresh store and on a store that was at version 24", async () => {
     const fresh = await openStore();
     const freshDb = sqliteConnectionFromStore(fresh.store)!;
-    expect(freshDb.pragma("user_version", { simple: true })).toBe(26);
+    expect(freshDb.pragma("user_version", { simple: true })).toBe(28);
     const artifactCols = freshDb.prepare(`PRAGMA table_info(artifacts)`).all() as Array<{ name: string }>;
     const versionCols = freshDb.prepare(`PRAGMA table_info(artifact_versions)`).all() as Array<{ name: string }>;
     expect(artifactCols.map((col) => col.name)).toContain("source");
@@ -537,20 +586,22 @@ describe("publish and version artifacts", () => {
       expect.objectContaining({ name: "026_artifact_publish" }),
     ]);
 
-    const home = fresh.home;
     await fresh.store.close();
+    const home = await mkdtemp(path.join(tmpdir(), "sf-pub-v24-"));
+    process.env.STAGEFLOW_HOME = home;
+    resetGlobalStageflowHomeForTests();
     const dbPath = path.join(home, "state.db");
     const db = new Database(dbPath);
-    db.exec(`ALTER TABLE artifacts DROP COLUMN source`);
-    db.exec(`ALTER TABLE artifact_versions DROP COLUMN storage`);
-    db.prepare(`DELETE FROM schema_migrations WHERE version >= 25`).run();
-    db.pragma("user_version = 24");
+    applySchemaThrough(db, 24);
     db.close();
+    cleanups.push(async () => {
+      await rm(home, { recursive: true, force: true });
+    });
     resetGlobalStageflowHomeForTests();
     const migrated = createRunStore({ rootDir: home });
     cleanups.push(() => migrated.close());
     const migratedDb = sqliteConnectionFromStore(migrated)!;
-    expect(migratedDb.pragma("user_version", { simple: true })).toBe(26);
+    expect(migratedDb.pragma("user_version", { simple: true })).toBe(28);
     expect((migratedDb.prepare(`PRAGMA table_info(artifacts)`).all() as Array<{ name: string }>).map((col) => col.name)).toContain(
       "source",
     );

@@ -13,6 +13,8 @@ import { indexedExpiresAt } from "../src/runstore/artifactRetention.js";
 import { createRunStore, createRunStoreWithConnection, sqliteConnectionFromStore } from "../src/runstore/createStore.js";
 import type { RunStore } from "../src/runstore/port.js";
 import { storeRootFor } from "../src/runstore/paths.js";
+import { applySchemaThrough } from "./helpers/schemaAtVersion.js";
+import { mkdirSync } from "node:fs";
 import { DAY_MS, retentionWindowsFromEnv } from "../src/runstore/retention.js";
 import { attemptArtifactsDir } from "../src/runstore/workspaceLayout.js";
 import { deleteRunEverywhere } from "../src/runtime/runDeletion.js";
@@ -577,7 +579,7 @@ describe("indexed artifacts follow run retention", () => {
     const freshRoot = await temp("sf-art-m24-fresh-");
     const fresh = createRunStore({ rootDir: freshRoot, kind: "sqlite" });
     const freshDb = sqliteConnectionFromStore(fresh)!;
-    expect(freshDb.pragma("user_version", { simple: true })).toBe(26);
+    expect(freshDb.pragma("user_version", { simple: true })).toBe(28);
     const freshCols = freshDb.prepare(`PRAGMA table_info(artifacts)`).all() as Array<{ name: string }>;
     expect(freshCols.map((col) => col.name)).toEqual(expect.arrayContaining(["status", "expired_at", "expired_reason"]));
     expect(
@@ -585,24 +587,26 @@ describe("indexed artifacts follow run retention", () => {
     ).toBeTruthy();
     await fresh.close();
 
-    const project = await temp("sf-art-m24-proj-");
     const existingRoot = await temp("sf-art-m24-old-");
-    const existing = createRunStore({ rootDir: existingRoot, kind: "sqlite" });
-    const runId = await indexFiles(existing, { "kept.txt": "k" }, project);
-    await existing.close();
     const dbPath = path.join(storeRootFor(existingRoot), "state.db");
+    mkdirSync(path.dirname(dbPath), { recursive: true });
     const db = new Database(dbPath);
-    db.exec(`DROP INDEX IF EXISTS artifacts_indexed_run_status`);
-    db.exec(`ALTER TABLE artifacts DROP COLUMN expired_reason`);
-    db.exec(`ALTER TABLE artifacts DROP COLUMN expired_at`);
-    db.exec(`ALTER TABLE artifacts DROP COLUMN status`);
-    db.prepare(`DELETE FROM schema_migrations WHERE version >= 24`).run();
-    db.pragma("user_version = 23");
+    applySchemaThrough(db, 23);
+    const runId = "run-kept";
+    db.prepare(
+      `INSERT INTO artifacts (
+         key, owner_kind, owner_pipeline, owner_stage, project_root_id, id, title, tags_json,
+         kind, origin, current_version, source_run_id, hidden, created_at, updated_at
+       ) VALUES (
+         'examples::stage:sales:summarize/kept', 'stage', 'sales', 'summarize', 'examples', 'kept',
+         'Kept', '[]', 'static.text', 'indexed', 1, ?, 0, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+       )`,
+    ).run(runId);
     db.close();
 
     const migrated = createRunStore({ rootDir: existingRoot, kind: "sqlite" });
     const migratedDb = sqliteConnectionFromStore(migrated)!;
-    expect(migratedDb.pragma("user_version", { simple: true })).toBe(26);
+    expect(migratedDb.pragma("user_version", { simple: true })).toBe(28);
     const row = migratedDb
       .prepare(`SELECT status, expired_at, expired_reason, source_run_id FROM artifacts`)
       .get() as { status: string; expired_at: string | null; expired_reason: string | null; source_run_id: string };

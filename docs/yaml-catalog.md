@@ -83,9 +83,11 @@ Each stage is an object with one of:
 
 **Wiring** (any entry, including `uses:`): `route`, `function`, `entry`, `uses`, `on_verify_fail`, `replay_safe`. A Clone Chain emitter also takes `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`) — see [Clone Chain](#clone-chain). `mcp`, `browser`, `secrets`, and `requires` may sit on a `uses:` wrapper or on the body — see [Stage MCP](#stage-mcp), [Stage browser](#stage-browser), [Stage secrets](#stage-secrets), and [Toolchain requires](#toolchain-requires). `skill` is body-only — see [Skill binding](#skill-binding). `needs`, `fork`, `feedback_loop`, `route_select`, `allow_none`, `clonable`, and `clone_actions` are rejected. `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter also fail load.
 
-**Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `independence` (**optional** — `strict`, `persistent`, or `open`; omitted means `persistent`; see [Independence](#independence)), `checkout_context` (**optional** boolean, stage body only; omitted means off; see [Checkout context](#checkout-context)), `io` (**required** — both `io.input.schema` and `io.output.schema`), `verify`, `gate_kinds`, `skill`, `mcp`, `secrets`, `requires`, `timeout_ms`. Effective `model` is materialized at pipeline load — see [Model defaults and precedence](#model-defaults-and-precedence). `io.output.schema` is the producer contract for success `payload`; `io.input.schema` is what the stage requires to start. Omitting `io`, a side, or `schema` fails load (`stage.invalid_io`). JSON Schema subset: [Envelopes — io schemas](envelopes.md#io-schemas). `io.output.schema` implies emit-time payload validation on success. `verify` is one list of checks with `when: [emit]`, `[after]`, or both — see [Verify](#verify). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted). When the budget elapses the attempt fails with `stage timed out after …ms` and the session is kept so the operator can resume the same attempt (`sf runs resume` / Resume session) instead of retrying from scratch. `clonable` and `clone_actions` are not accepted. `clone_cap` and `clone_mode` belong on the pipeline entry of a Clone Chain emitter, not on the reusable stage body — see [Clone Chain](#clone-chain) and [Rejected clone fields](#rejected-clone-fields).
+**Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `independence` (**optional** — `strict`, `persistent`, or `open`; omitted means `persistent`; see [Independence](#independence)), `checkout_context` (**optional** boolean, stage body only; omitted means off; see [Checkout context](#checkout-context)), `io` (**required** — both `io.input.schema` and `io.output.schema`), `verify`, `gate_kinds`, `artifacts`, `skill`, `mcp`, `secrets`, `requires`, `timeout_ms`. Effective `model` is materialized at pipeline load — see [Model defaults and precedence](#model-defaults-and-precedence). `io.output.schema` is the producer contract for success `payload`; `io.input.schema` is what the stage requires to start. Omitting `io`, a side, or `schema` fails load (`stage.invalid_io`). JSON Schema subset: [Envelopes — io schemas](envelopes.md#io-schemas). `io.output.schema` implies emit-time payload validation on success. `verify` is one list of checks with `when: [emit]`, `[after]`, or both — see [Verify](#verify). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted). When the budget elapses the attempt fails with `stage timed out after …ms` and the session is kept so the operator can resume the same attempt (`sf runs resume` / Resume session) instead of retrying from scratch. `clonable` and `clone_actions` are not accepted. `clone_cap` and `clone_mode` belong on the pipeline entry of a Clone Chain emitter, not on the reusable stage body — see [Clone Chain](#clone-chain) and [Rejected clone fields](#rejected-clone-fields).
 
 `gate_kinds` controls whether `ask_operator` is registered on the sealed stage session: omit or `gate_kinds: []` → tool **off**; a non-empty list → tool **on** with that kinds allowlist. See [HITL — Gate kinds](hitl.md#gate-kinds).
+
+`artifacts` is optional and body-only (there is no pipeline default). Omit it, or set `publish: false`, and the stage prompt and tool list stay as they are today. `publish: true` registers `publish_artifact` and a system-prompt section. See [Stage artifacts](#stage-artifacts).
 
 `uses:` plus any body key except `mcp`, `secrets`, and `requires` is rejected (`pipeline.stage_uses_inline_conflict`). `mcp`, `secrets`, and `requires` may sit on the `uses:` wrapper. `skill:` on a `uses:` wrapper is rejected (`pipeline.stage_wrapper_skill_rejected`) — put it on the stage file or inline body.
 
@@ -986,6 +988,33 @@ Stages of one run that name the same `profile` share one browser, each in its ow
 
 Unknown keys fail load with `stage.invalid_browser`. So do `path`, `scope`, and `secret`: the Host chooses where profiles live and which scope owns them, never YAML. A stage with `browser` automatically requires the `agent-browser` binary; it merges with an explicit `requires` entry for the same tool, and `sf validate` reports a missing binary with the distinct toolchain error (see [Toolchain requires](#toolchain-requires)).
 
+### Stage artifacts {#stage-artifacts}
+
+The word **artifacts** means three different things:
+
+| Meaning | Where it appears | What it is |
+|---|---|---|
+| Envelope artifact list | `emit_stage_envelope` `artifacts: string[]` | Run-relative paths handed to the next stage. A success envelope indexes those files. See [Envelopes](envelopes.md). |
+| Function access | `access.artifacts` on a function | Which run files a function may read. Not a published artifact. |
+| Published artifacts | stage body `artifacts:` | Opt-in, titled, versioned artifacts stored for a person to open later. |
+
+`artifacts` sits on the stage body (inline stage or stage file), like `gate_kinds`. It is not a pipeline-level default, and it is not valid on a `uses:` wrapper by itself (`pipeline.stage_uses_inline_conflict`).
+
+| Key | Required | Meaning |
+|---|---|---|
+| `publish` | yes when the block is present | Boolean. `true` registers `publish_artifact` and appends a short section to the stage system prompt. `false` changes nothing. |
+| `expect` | no | Artifact ids this attempt must publish before a success envelope. At most 20. Each id matches `^[a-z][a-z0-9_-]{0,63}$`. Ids are unique. |
+
+`expect` without `publish: true` is `stage.invalid_artifacts`. So is a non-boolean `publish`, a non-array `expect`, a bad or duplicate id, more than 20 ids, or an unknown key. `sf validate` reports that code through the same findings list as other stage load errors.
+
+```yaml
+artifacts:
+  publish: true
+  expect: [weekly-note]
+```
+
+`publish_artifact` does not end the turn. Parameters: `id`, `kind` (`static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`), `title`, optional `description`, `tags`, and `summary`, and one of `path` (a run-relative path inside this attempt's artifacts directory), `content` (inline text), or `content_base64` (an image). A validation error is a tool error with `code` and `issues`, so the model can correct the call and try again. Publishing the same id again writes the next version. A missing `expect` id rejects the success envelope with `artifact.expected_missing`. The check is per attempt: an unchanged republish in this attempt counts, and a later attempt that does not publish is still missing. See [Artifacts — Authoring from a stage](artifacts.md#authoring-from-a-stage).
+
 ```yaml
 stages:
   - id: read-feed
@@ -1117,7 +1146,7 @@ Optional when a pipeline or manifest default can fill it:
 
 `checkout_context` is an optional boolean on the stage body. Omitted means off. Nothing fills it from the pipeline or the manifest. See [Checkout context](#checkout-context).
 
-Required on the file (not on the `uses:` wrapper): `io.input.schema` and `io.output.schema`. Optional body fields: `model` (when inherited from a higher default), `independence` (omitted means `persistent`), `checkout_context` (omitted means off; stage body only), `verify`, `gate_kinds`, `timeout_ms`, `skill` — see [Envelopes — io schemas](envelopes.md#io-schemas), [Independence](#independence), [Checkout context](#checkout-context), [Verify](#verify), and [Skill binding](#skill-binding). The loader also accepts `mcp:` here; prefer binding MCP on the pipeline entry (see [Stage MCP](#stage-mcp)). `io.input.schema` is the successor assignment contract (not the child's later `io.output.schema`). Wiring keys (`route`, `function`, `entry`, `on_verify_fail`, `needs`, `fork`, `route_select`, `allow_none`, `clonable`, `clone_cap`, `clone_mode`) are errors on an external stage file (body only — put wiring on the pipeline entry). `timeout_ms` is an optional positive integer millisecond attempt budget (default 60 minutes). When it elapses the attempt fails and the session is kept for `sf runs resume`.
+Required on the file (not on the `uses:` wrapper): `io.input.schema` and `io.output.schema`. Optional body fields: `model` (when inherited from a higher default), `independence` (omitted means `persistent`), `checkout_context` (omitted means off; stage body only), `verify`, `gate_kinds`, `artifacts` (see [Stage artifacts](#stage-artifacts)), `timeout_ms`, `skill` — see [Envelopes — io schemas](envelopes.md#io-schemas), [Independence](#independence), [Checkout context](#checkout-context), [Verify](#verify), and [Skill binding](#skill-binding). The loader also accepts `mcp:` here; prefer binding MCP on the pipeline entry (see [Stage MCP](#stage-mcp)). `io.input.schema` is the successor assignment contract (not the child's later `io.output.schema`). Wiring keys (`route`, `function`, `entry`, `on_verify_fail`, `needs`, `fork`, `route_select`, `allow_none`, `clonable`, `clone_cap`, `clone_mode`) are errors on an external stage file (body only — put wiring on the pipeline entry). `timeout_ms` is an optional positive integer millisecond attempt budget (default 60 minutes). When it elapses the attempt fails and the session is kept for `sf runs resume`.
 
 Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixtures/stages/plan-review.yaml).
 

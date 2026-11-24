@@ -245,6 +245,7 @@ export async function reconstructTimedOutAndContinue(
             stageId,
             rootDir: factoryCwd,
             factoryCwd,
+            pipelineId: meta.pipeline_id,
             stage,
             workspaceDir,
             ...(browserEnv !== undefined ? { browserEnv } : {}),

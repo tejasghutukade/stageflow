@@ -48,6 +48,7 @@ describe("toolkit registry", () => {
         ...toolsInToolset("triggers"),
         ...toolsInToolset("connections"),
         ...toolsInToolset("memories"),
+        ...toolsInToolset("artifacts"),
       ].sort(),
     ).toEqual(Object.keys(TOOL_META).sort());
   });

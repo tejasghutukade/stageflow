@@ -1,10 +1,14 @@
 import {
   chmodSync,
+  closeSync,
   copyFileSync,
   createReadStream,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
+  readdirSync,
   renameSync,
   rmSync,
   statSync,
@@ -24,6 +28,11 @@ import { isUsableAuthFile } from "../runtime/credentialBinding.js";
 import { CURRENT_SCHEMA_VERSION } from "./sqlite/migrations/index.js";
 import { StoreSchemaError } from "./sqlite/storeSchemaError.js";
 import { assertStoreQuickCheck } from "./sqlite/applyStorePragmas.js";
+import {
+  verifyPublishedArtifactIntegrityAfterRestore,
+  type RestoreIntegrityFinding,
+} from "../artifacts/storeInventory.js";
+import { ensureArtifactSearchIndex } from "../artifacts/search.js";
 import { verifyDbSnapshot } from "./backup.js";
 import { acquireHostLock, HostLockError, type HostLock } from "../server/hostLock.js";
 import {
@@ -38,6 +47,7 @@ export type RestoreErrorCode =
   | "restore_schema_too_new"
   | "restore_version_mismatch"
   | "restore_unsafe_member"
+  | "restore_bad_member"
   | "restore_failed"
   | "restore_not_found"
   | "restore_insufficient_space";
@@ -76,12 +86,21 @@ export type VerifiedRestoreArchive = {
   missingA2aArtifactRows: number;
 };
 
-const ALLOWED_MEMBERS = new Set([
+/** Practical ceiling for the in-memory ustar reader. Larger archives are refused before the file is loaded. */
+export const RESTORE_DECOMPRESSED_MAX_BYTES = Math.floor(1.5 * 1024 * 1024 * 1024);
+
+const ALLOWED_TOP_LEVEL = new Set([
   "state.db",
   "settings.json",
   "agent/auth.json",
   "manifest.json",
 ]);
+
+function isAllowedRestoreMember(name: string): boolean {
+  if (ALLOWED_TOP_LEVEL.has(name)) return true;
+  if (name.startsWith("artifacts/")) return true;
+  return false;
+}
 
 export function restorePendingDir(
   homeDir: string = globalStageflowHome(),
@@ -127,7 +146,40 @@ async function gunzipToFile(src: string, dest: string): Promise<void> {
   await pipeline(createReadStream(src), createGunzip(), createWriteStream(dest));
 }
 
+function tarMemberSize(header: Buffer): number {
+  const sizeOctal = header.subarray(124, 135).toString("utf8").replace(/\0| /g, "");
+  return Number.parseInt(sizeOctal, 8) || 0;
+}
+
+function assertDecompressedTarLimit(tarPath: string): void {
+  const fd = openSync(tarPath, "r");
+  try {
+    const sizeOnDisk = statSync(tarPath).size;
+    const header = Buffer.alloc(512);
+    let offset = 0;
+    let total = 0;
+    while (offset + 512 <= sizeOnDisk) {
+      const read = readSync(fd, header, 0, 512, offset);
+      if (read < 512) break;
+      offset += 512;
+      if (header.every((byte) => byte === 0)) break;
+      const size = tarMemberSize(header);
+      total += size;
+      if (total > RESTORE_DECOMPRESSED_MAX_BYTES) {
+        throw new RestoreError(
+          "restore_failed: decompressed archive exceeds 1.5 GiB",
+          "restore_failed",
+        );
+      }
+      offset += size + ((512 - (size % 512)) % 512);
+    }
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function parseUstarMembers(tarPath: string, destDir: string): string[] {
+  assertDecompressedTarLimit(tarPath);
   const buf = readFileSync(tarPath);
   const written: string[] = [];
   let offset = 0;
@@ -136,8 +188,7 @@ function parseUstarMembers(tarPath: string, destDir: string): string[] {
     offset += 512;
     if (header.every((b) => b === 0)) break;
     const name = header.subarray(0, 100).toString("utf8").replace(/\0.*$/, "");
-    const sizeOctal = header.subarray(124, 135).toString("utf8").replace(/\0| /g, "");
-    const size = Number.parseInt(sizeOctal, 8) || 0;
+    const size = tarMemberSize(header);
     const type = header[156];
     if (name.includes("..") || path.isAbsolute(name) || name.startsWith("/")) {
       throw new RestoreError(
@@ -151,7 +202,19 @@ function parseUstarMembers(tarPath: string, destDir: string): string[] {
         "restore_unsafe_member",
       );
     }
-    if (!ALLOWED_MEMBERS.has(name) && name !== "") {
+    if (type === 0x33 || type === 0x34 || type === 0x36) {
+      throw new RestoreError(
+        `restore_unsafe_member: ${name}`,
+        "restore_unsafe_member",
+      );
+    }
+    if (type === 0x35 /* directory */ || name.endsWith("/")) {
+      throw new RestoreError(
+        `restore_bad_member: directory ${name}`,
+        "restore_bad_member",
+      );
+    }
+    if (!isAllowedRestoreMember(name) && name !== "") {
       throw new RestoreError(
         `restore_unsafe_member: ${name} not in allowlist`,
         "restore_unsafe_member",
@@ -162,7 +225,21 @@ function parseUstarMembers(tarPath: string, destDir: string): string[] {
     if (name === "") continue;
     const outPath = path.join(destDir, name);
     mkdirSync(path.dirname(outPath), { recursive: true });
-    writeFileSync(outPath, data);
+    if (existsSync(outPath)) {
+      throw new RestoreError(`restore_bad_member: ${name}`, "restore_bad_member");
+    }
+    try {
+      writeFileSync(outPath, data);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR" || code === "EEXIST" || code === "EISDIR") {
+        throw new RestoreError(
+          `restore_bad_member: ${name}`,
+          "restore_bad_member",
+        );
+      }
+      throw error;
+    }
     written.push(name);
   }
   return written;
@@ -314,7 +391,10 @@ function moveAsideTriplet(homeDir: string, stamp: string): () => void {
     moved.push([from, to]);
   }
   return () => {
-    for (const [from, to] of moved.reverse()) renameSync(to, from);
+    for (const [from, to] of moved.reverse()) {
+      if (existsSync(from)) rmSync(from, { force: true });
+      renameSync(to, from);
+    }
   };
 }
 
@@ -332,10 +412,17 @@ function assertNoSidecars(dbPath: string): void {
   }
 }
 
+export type RestoreWarning = {
+  code: string;
+  message: string;
+};
+
 export type ApplyRestoreResult = {
   schema_version: number;
   missing_a2a_artifact_rows: number;
   pre_restore_stamp: string;
+  warnings?: RestoreWarning[];
+  published_artifact_integrity?: RestoreIntegrityFinding[];
   /** Set when the file was an `sf archive` archive rather than a backup. */
   kind?: "archive";
   files_restored?: number;
@@ -343,6 +430,111 @@ export type ApplyRestoreResult = {
   links_skipped?: string[];
   secrets_restored?: number;
 };
+
+function stagingHasPublishedArtifacts(stagingDir: string): boolean {
+  const root = path.join(stagingDir, "artifacts");
+  if (!existsSync(root)) return false;
+  try {
+    return readdirSync(root).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+const ARTIFACTS_LEFT_IN_PLACE: RestoreWarning = {
+  code: "artifacts_not_in_backup",
+  message:
+    "Backup has no published artifact content. Existing artifact files were left in place. Restored rows may reference content that is missing.",
+};
+
+let artifactSwapFault: (() => void) | undefined;
+
+export function setRestoreArtifactSwapFaultForTests(fn?: () => void): void {
+  artifactSwapFault = fn;
+}
+
+function verifyTreeCopy(src: string, dest: string): void {
+  const walk = (relative: string): void => {
+    const from = relative.length === 0 ? src : path.join(src, relative);
+    const to = relative.length === 0 ? dest : path.join(dest, relative);
+    const st = statSync(from);
+    if (st.isDirectory()) {
+      if (!existsSync(to) || !statSync(to).isDirectory()) {
+        throw new RestoreError(
+          `restore_verify_failed: staged artifact tree missing ${relative || "."}`,
+          "restore_verify_failed",
+        );
+      }
+      for (const name of readdirSync(from)) walk(relative.length === 0 ? name : path.join(relative, name));
+      return;
+    }
+    if (!st.isFile()) return;
+    if (!existsSync(to) || !statSync(to).isFile() || statSync(to).size !== st.size) {
+      throw new RestoreError(
+        `restore_verify_failed: staged artifact file mismatch ${relative}`,
+        "restore_verify_failed",
+      );
+    }
+  };
+  walk("");
+}
+
+function removeStagedArtifacts(staged: string | undefined): void {
+  if (staged !== undefined && existsSync(staged)) rmSync(staged, { recursive: true, force: true });
+}
+
+function stageArtifactTree(homeDir: string, stagingDir: string, stamp: string): string {
+  const srcRoot = path.join(stagingDir, "artifacts");
+  const staged = path.join(homeDir, `.artifacts-incoming-${stamp}`);
+  try {
+    if (existsSync(staged)) rmSync(staged, { recursive: true, force: true });
+    copyTreeSync(srcRoot, staged);
+    verifyTreeCopy(srcRoot, staged);
+    return staged;
+  } catch (error) {
+    removeStagedArtifacts(staged);
+    throw error;
+  }
+}
+
+function commitRestoredArtifactTree(homeDir: string, staged: string, stamp: string): void {
+  const dest = path.join(homeDir, "artifacts");
+  const aside = `${dest}.pre-restore-${stamp}`;
+  const had = existsSync(dest);
+  if (had) renameSync(dest, aside);
+  try {
+    artifactSwapFault?.();
+    renameSync(staged, dest);
+  } catch (error) {
+    if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
+    if (had && existsSync(aside)) renameSync(aside, dest);
+    const message = error instanceof Error ? error.message : String(error);
+    throw error instanceof RestoreError
+      ? error
+      : new RestoreError(`restore_failed: ${message}`, "restore_failed");
+  }
+  if (had && existsSync(aside)) rmSync(aside, { recursive: true, force: true });
+}
+
+function copyTreeSync(src: string, dest: string): void {
+  mkdirSync(dest, { recursive: true });
+  for (const name of readdirSync(src)) {
+    const from = path.join(src, name);
+    const to = path.join(dest, name);
+    const st = statSync(from);
+    if (st.isDirectory()) {
+      copyTreeSync(from, to);
+    } else if (st.isFile()) {
+      mkdirSync(path.dirname(to), { recursive: true });
+      copyFileSync(from, to);
+      try {
+        chmodSync(to, st.mode);
+      } catch {
+        // best-effort
+      }
+    }
+  }
+}
 
 export async function applyRestoreArchive(options: {
   archivePath: string;
@@ -414,12 +606,20 @@ export async function applyRestoreArchive(options: {
 
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const restoreCredentials = options.restoreCredentials !== false;
+    const hasArtifactContent = stagingHasPublishedArtifacts(verified.stagingDir);
+    const stagedArtifacts = hasArtifactContent ? stageArtifactTree(homeDir, verified.stagingDir, stamp) : undefined;
+    const warnings: RestoreWarning[] = hasArtifactContent ? [] : [ARTIFACTS_LEFT_IN_PLACE];
 
+    try {
     withExclusiveStoreLock(homeDir, () => {
-      moveAsideTriplet(homeDir, stamp);
+      const rollbackDb = moveAsideTriplet(homeDir, stamp);
+      try {
       const destDb = path.join(homeDir, "state.db");
       copyFileSync(verified.dbPath, destDb);
       assertNoSidecars(destDb);
+      if (stagedArtifacts !== undefined) {
+        commitRestoredArtifactTree(homeDir, stagedArtifacts, stamp);
+      }
 
       if (restoreCredentials) {
         const settingsSrc = path.join(verified.stagingDir, "settings.json");
@@ -447,11 +647,31 @@ export async function applyRestoreArchive(options: {
           }
         }
       }
+      } catch (error) {
+        try {
+          rollbackDb();
+        } catch (rollbackError) {
+          const detail = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+          throw new RestoreError(
+            `restore_failed: ${detail}`,
+            "restore_failed",
+          );
+        }
+        removeStagedArtifacts(stagedArtifacts);
+        throw error;
+      }
     });
+    } catch (error) {
+      removeStagedArtifacts(stagedArtifacts);
+      throw error;
+    }
 
     const check = new Database(path.join(homeDir, "state.db"));
+    let published_artifact_integrity: RestoreIntegrityFinding[] = [];
     try {
       assertStoreQuickCheck(check);
+      ensureArtifactSearchIndex(check);
+      published_artifact_integrity = await verifyPublishedArtifactIntegrityAfterRestore(check, homeDir);
     } finally {
       check.close();
     }
@@ -460,6 +680,8 @@ export async function applyRestoreArchive(options: {
       schema_version: verified.schemaVersion,
       missing_a2a_artifact_rows: verified.missingA2aArtifactRows,
       pre_restore_stamp: stamp,
+      ...(warnings.length > 0 ? { warnings } : {}),
+      ...(published_artifact_integrity.length > 0 ? { published_artifact_integrity } : {}),
     };
   } finally {
     hostLock.release();

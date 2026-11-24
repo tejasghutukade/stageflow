@@ -190,7 +190,7 @@ There is **no** mandatory `boot` catalog root from Host cwd. Cold Host with an e
 
 ## Tools
 
-The Host exposes **57** MCP tools. The previous 124 per-endpoint names are removed with no aliases. Merged tools pick behavior with flat fields:
+The Host exposes **60** MCP tools. The previous 124 per-endpoint names are removed with no aliases. Merged tools pick behavior with flat fields:
 
 ### Toolsets {#toolsets}
 
@@ -207,8 +207,9 @@ Each tool belongs to one **toolset**. A client that connects to `/mcp` with no `
 | `triggers` | Trigger CRUD and fire |
 | `connections` | Host send channels |
 | `memories` | Host memories and cards |
+| `artifacts` | Publish, read and delete artifacts. Off unless the URL asks for it, same as `functions` and `memories` |
 
-**Parse rules.** `toolsets` is comma-separated; names are trimmed and lowercased; duplicates collapse. An empty or missing value means core only. `all` anywhere selects every toolset (all 57 tools). Repeated `toolsets` parameters merge. Any unknown name fails the whole request with HTTP **400** and a JSON-RPC error body `{ "jsonrpc": "2.0", "error": { "code": -32000, "message": "…" }, "id": null }` listing valid names (`core`, the table above, and `all`).
+**Parse rules.** `toolsets` is comma-separated; names are trimmed and lowercased; duplicates collapse. An empty or missing value means core only. `all` anywhere selects every toolset (all 60 tools). Repeated `toolsets` parameters merge. Any unknown name fails the whole request with HTTP **400** and a JSON-RPC error body `{ "jsonrpc": "2.0", "error": { "code": -32000, "message": "…" }, "id": null }` listing valid names (`core`, the table above, and `all`).
 
 **Session binding.** The selection is fixed when a **stateful** session starts at `initialize`. Later requests on that session ignore their query string — sending `?toolsets=all` on a follow-up `tools/list` or `tools/call` does **not** upgrade a core-only session. Open a **new** session (new `initialize` against a URL that includes the toolsets you need), or use the reconnect URL from `get_started`. In **stateless** mode (`sf mcp --mcp-stateless`), each request is parsed again. Toolsets are not permissions: they only change what the external MCP endpoint registers for that session. The toolkit recorder, agent grants, Guide, and eval gates still see the full registry.
 
@@ -330,6 +331,33 @@ Compose with `wait_run`: when `waiting_kind` is `feedback_loop_decision`, call `
 | `get_memory` | list or `id` |
 | `save_memory` | `mode: create` \| `update`; `card: true` replaces one card |
 | `delete_memory_card` | Destructive |
+
+### Artifact tools {#artifact-tools}
+
+Toolset `artifacts`. A bare `/mcp` session does not load it. Groups: `artifacts.read` (read), `artifacts.write` (write), `artifacts.cleanup` (destructive). `artifacts.refresh` is registered for later refresh and has no tool yet.
+
+| Tool | Grant | Parameters and result |
+|------|-------|------------------------|
+| `get_artifact` | `artifacts.read` | `list: true` with `kind`, `owner`, `tag`, `status` (`available` or `expired`), `live`, `sort` (`updated`, `title`, `size`), `order`, `project_root`, `limit` (1–100, default 50), `cursor`. Returns `{ artifacts, next_cursor }`. `q` is passed to the same list search as the index (title, description, tags, summary, id, and owner). Or `key` (`<ownerKey>/<id>`) with `view`: `record` (default; optional `version`), `versions`, `content`, `data`. `content` returns text for text kinds, capped at 200 KiB on a character boundary with `truncated` and `size_bytes` (the full size). Images include `base64` only at or under 256 KiB; larger images return `artifact.content_too_large_for_mcp` (use the console or CLI). `data` returns `artifact.not_live` until live snapshots exist. Hidden artifacts are omitted. |
+| `save_artifact` | `artifacts.write` | Same body as publish: `owner` (`stage` with `pipeline` and `stage`, or `agent` with `agent`), `project_root`, `id`, `kind`, `title`, optional `description`, `tags`, `summary`, and `content` or `content_base64`. Returns `{ key, version, unchanged, project_root }`. Source stored is `mcp`. Same size and shape caps as publish. |
+| `delete_artifact` | `artifacts.cleanup` | `key`, optional `project_root`. Removes every version. Irreversible. An indexed artifact is `artifact.not_deletable`. |
+
+Read calls do not write. `project_root` is the catalog wire id, and omitting it when the owner and id exist in more than one project returns `artifact.ambiguous` with `project_roots`.
+
+| Code | When |
+|------|------|
+| `artifact.invalid_id` | id or key is missing, contains `::`, or is not a slug |
+| `artifact.invalid_kind` | kind is not a static kind |
+| `artifact.invalid_shape` | body failed validation (`issues` lists paths) |
+| `artifact.invalid_filter` | `sort`, `order`, `kind`, `tag`, `live`, or `status` is not a list filter |
+| `artifact.too_large` | content is over 5 MiB |
+| `artifact.not_found` | key or version does not exist, including a hidden artifact |
+| `artifact.ambiguous` | owner and id exist in several projects and `project_root` was omitted (`project_roots`) |
+| `artifact.not_deletable` | delete of an indexed artifact |
+| `artifact.not_live` | `view: data` |
+| `artifact.content_too_large_for_mcp` | image content over 256 KiB |
+| `artifact.store_unavailable` | the index database is not open |
+| `invalid_arguments` | the tool arguments failed the input schema |
 
 Full parameter and REST parity for each family remain in [Agent API](agent-api.md), [Evals HTTP API](evals.md#http-api), and [function-api](function-api.md). The rename table in `docs/plans/2026-11-14-1206-refactor-mcp-tool-consolidation-plan.md` lists every old name.
 

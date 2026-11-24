@@ -96,7 +96,7 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
     "read_pipeline",
     {
       description:
-        "Read a pipeline package (view package) or its stage DAG (view dag). Package read includes validation and file hashes.",
+        "Read a pipeline package (view package) or its stage DAG (view dag).",
       inputSchema: readPipelineFlatSchema,
     },
     async (args) => {

@@ -83,10 +83,25 @@ The cursor is base64url-encoded JSON: `{ "sort", "order", "primary", "key" }`. `
 | `live` | `true` — only kinds starting with `live.`; `false` — exclude live kinds. |
 | `sort` | `updated` (default), `title`, or `size`. Default order is `desc` for `updated` and `size`, `asc` for `title`. Title order is ASCII case-insensitive. |
 | `order` | `asc` or `desc` (overrides the default for the chosen `sort`). |
+| `q` | Search text. See [Search](#search). |
 
-Invalid `sort`, `order`, `kind`, `tag`, `live`, or `status` values return `400` with code `artifact.invalid_filter`. Malformed cursors return `artifact.invalid_shape`; a cursor whose sort or order does not match the request returns `artifact.invalid_filter`.
+Invalid `sort`, `order`, `kind`, `tag`, `live`, `status`, or `q` values return `400` with code `artifact.invalid_filter`. A query that is only punctuation or search operators is `artifact.invalid_filter` ("query has no searchable terms"). Malformed cursors return `artifact.invalid_shape`; a cursor whose sort, order, or search text does not match the request returns `artifact.invalid_filter`.
 
-A local list call against about 1,000 rows should stay under 200 ms on a typical laptop; CI tests use a 500 ms bound.
+A local list call against about 1,000 rows should stay under 200 ms on a typical laptop; CI tests use a 500 ms bound. A search of 1,000 artifacts uses the same 500 ms CI bound.
+
+## Search
+
+`q` matches title, description, tags, summary, the owner label (`stage:<pipeline>:<stage>` or `agent:<id>`, plus the pipeline, stage, and agent ids), and extracted body text. The id is included only in the text-scan fallback.
+
+Body text is the first 64 KiB of UTF-8, cut on a character boundary, with control characters turned into spaces. That covers `static.markdown`, `static.text`, and `static.table` (CSV and JSON, as text). HTML text, image bytes, and live data snapshots are not indexed. Hidden artifacts (`hidden = 1`, including eval artifacts) are not indexed and are not returned. An expired, deleted, or hidden artifact is removed from the index in the same transaction as that change. A new publish replaces the indexed text, so the previous version's words stop matching.
+
+The index is a regular FTS5 table, `artifact_fts`, not a contentless one. A regular table stores `key` (unindexed) so a row can be deleted and replaced by key. The tokenizer is `unicode61` with `remove_diacritics 2`, so `café` matches `cafe`, and prefix indexes of 2 and 3 characters serve prefix queries. Rank is `bm25` with weights title 10, tags 10, summary 5, description 5, owner 2, body 1. A smaller score ranks first, so a title hit stays above a body hit.
+
+The query is split into words. Operators (`AND`, `OR`, `NOT`, `NEAR`), quotes, parentheses, asterisks, and `column:` filters are dropped, not passed through. The remaining words are quoted and combined with `AND`. The last word is a prefix (`revenue` matches `revenue` and `revenues`). If nothing remains, the response is `400` `artifact.invalid_filter`.
+
+Search pages with an offset cursor (`{ "mode": "search", "q", "offset", ...filters }`), ordered by rank then `key`. Walking `next_cursor` returns each hit once and then stops. `sort` is not applied while `q` is set. The page includes `match_count`. Filters (`project_root`, `kind`, `owner`, `tag`, `status`, `live`) still apply. Omitting `status` matches every status, including expired, the same way the list does. `status=expired` returns expired hits. An expired artifact is removed from the search index when it expires, same as delete or hide. After that, title, description, tags, summary, and owner still match through the text scan; body text does not. Rank order is unchanged: indexed hits use `bm25`, and a row that is no longer in the index sorts after those hits.
+
+If FTS5 cannot be created, migration 027 still succeeds and records `artifact_search_meta.fts = unavailable`. If the table is missing later, or the meta value is `unavailable`, the Host tries the same `CREATE VIRTUAL TABLE` again when it starts and after `sf restore`. Success marks every artifact dirty and logs once; the repair pass then reindexes titles and bodies. If creation still fails, search logs once per process and scans `title`, `description`, `tags`, `summary`, `owner`, and `id` with bound `LIKE` patterns (`%` and `_` are literal). That scan does not read body text and orders by `updated_at` descending, then `key`. A later start on a build that has FTS5 recreates the table and body search fills in as the repair pass runs. An index update that fails does not fail publish, indexing, retention, or delete. The key is stored in `artifact_search_dirty`. Repair handles 200 keys per pass. A key whose body cannot be read is moved behind the others and the pass resumes after the last key it examined, so one stuck key does not block the rest. At Host start the repair runs in slices until the dirty table is empty or 3 seconds have passed, yielding between slices, and continues on a later tick when the pass made progress. `sf doctor` prints `search index: N artifacts pending`. After an upgrade, body search is complete once that count reaches 0.
 
 ## Opening an artifact
 
@@ -134,7 +149,7 @@ Send `content` or `content_base64`, not both. Decoded content is at most 5 MiB. 
 
 A stage owner's pipeline and stage ids use the catalog id pattern: lowercase kebab-case, 1–64 characters (`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`). An agent id uses `^[a-z][a-z0-9_]{0,63}$` and must already exist in that project. A value with a path separator, `..`, NUL, or the wrong shape is `400` `artifact.invalid_shape` with an `issues` path. If the agent table cannot be read, the publish is accepted and the response includes `agent_unverified: true`.
 
-The response is `{ "key", "version", "project_root", "url", "unchanged" }`. `key` is `stage:<pipeline>:<stage>/<id>` or `agent:<id>/<id>`. Publishing the same owner and id again writes version N+1. Previous versions stay as they were. If the bytes and kind match the current published version, the response is that version with `unchanged: true` and no new version is written. Title, description, tags, and summary are still updated.
+The response is `{ "key", "version", "project_root", "url", "unchanged" }`. `key` is `stage:<pipeline>:<stage>/<id>` or `agent:<id>/<id>`. Publishing the same owner and id again writes version N+1. Previous versions stay as they were. If the bytes and kind match the current published version, the response is that version with `unchanged: true` and no new version is written. Title, description, tags, and summary are still updated. Provenance is not. `artifacts.source` is the publisher kind of the latest changed version (`console`, `api`, `mcp`, `stage`, or `agent`). Each version row stores the run, stage, attempt, and session of the publisher that wrote that version. An unchanged republish does not rewrite those columns and does not touch older version rows. The artifact row's run, stage, attempt, and session follow that same latest changed version.
 
 An indexed row with the same key becomes `published`. The new bytes are version N+1 in the keep store. The old indexed version row stays and still points at the run file until that version is pruned or the run file is gone. `expires_at` is cleared and the row is `available`. Run retention does not expire it after that.
 
@@ -162,10 +177,54 @@ Validation errors are `{ "error", "code", "issues": [{ "path", "message" }] }`.
 | `artifact.not_deletable` | delete was asked for an indexed artifact |
 | `artifact.ambiguous` | owner and id, or a missing `project_root`, match more than one project |
 
+## Authoring from a stage
+
+A stage publishes by opting in. Add an `artifacts` block to the stage body (the stage file or an inline stage, not a pipeline-level default):
+
+```yaml
+artifacts:
+  publish: true
+  expect: [weekly-note]
+```
+
+`publish: true` gives that stage the `publish_artifact` tool and a short section in its system prompt. Omit the block, or set `publish: false`, and the prompt and tool list are unchanged. `expect` lists ids the attempt must publish before a success envelope. A missing id is `artifact.expected_missing`. `expect` without `publish: true` is `stage.invalid_artifacts`. A publish in that attempt counts even when the bytes and kind are unchanged and no new version is written. An attempt that never calls the tool does not count, including a retry after an earlier attempt published the same id.
+
+The tool takes `id`, `kind`, `title`, and one of `path`, `content`, or `content_base64`. `path` has to stay inside that attempt's artifacts directory. A symlink is refused. The file size is checked before the bytes are read, and a file over 5 MiB is `artifact.too_large` without reading the whole file. Kinds are `static.markdown`, `static.image`, `static.table`, `static.text`, and `static.html`. Publishing the same id again writes the next version. Text is scrubbed for secrets before it is stored. The call does not finish the stage; the stage still emits an envelope. The stored source is `stage`, with that run, stage, and attempt on the version that this call created.
+
+A stage eval run (`origin: eval`) publishes with `hidden = 1`. Those rows stay out of the list, search, MCP, and CLI. A normal run publishes a visible row. `hidden` is not a field on the REST or MCP body.
+
+This is separate from the envelope `artifacts` string list (those paths are indexed when the envelope succeeds) and from function `access.artifacts` (which run files a function may read). See [Stage artifacts](yaml-catalog.md#stage-artifacts).
+
+`sf run --json --include stages` and `sf runs show --json` add `published_artifacts` (`key`, `version`, `kind`, `title`) on a stage that published during that run. The list is the versions that run published, including an unchanged republish of a version another run created. `version` is the version that attempt published, not a later current version. A later run that republishes the same id does not remove an earlier run's entry. The field is left off when the list is empty. Hidden eval publishes are left off.
+
 ## CLI
 
-- `sf artifact list` — table or `--json` page of indexed artifacts. Server-side filters match the list query above (`--project-root`, `--limit`, `--kind`, `--owner`, `--tag`, `--status`, `--live`, `--sort`, `--order`). `--q` stays client-side until search ships: the command keeps requesting pages until the limit is filled or 20 pages have been read. The human table includes a `STATUS` column (`expired` or blank) and a short run id. See [CLI reference](cli-reference.md#sf-artifact).
+- `sf artifact list` — table or `--json` page of indexed artifacts. Server-side filters match the list query above (`--project-root`, `--limit`, `--kind`, `--owner`, `--tag`, `--status`, `--live`, `--sort`, `--order`, `--q`). `--q` is the same search as `GET /api/artifacts?q=`. The human table includes a `STATUS` column (`expired` or blank) and a short run id. See [CLI reference](cli-reference.md#sf-artifact).
 - `sf artifact show <ownerKey>/<id>` — a readable summary (key, title, kind, status, owner, source, updated, and expires or the expired reason). `--json` prints the record. Use `--project-root` when the key is ambiguous across projects.
 - `sf artifact publish` — copy a file into the keep store. See [Publishing](#publishing) and [CLI reference](cli-reference.md#sf-artifact-publish).
 - `sf artifact delete <ownerKey>/<id>` — remove a published artifact and every version. See [CLI reference](cli-reference.md#sf-artifact-delete).
 - `sf artifact read --run --path` — read a run workspace file by path (not the index). Unchanged from before the index shipped.
+
+## MCP
+
+The Host MCP server exposes an `artifacts` toolset. It is not loaded on a bare `/mcp` connection. Add `toolsets=artifacts` (core stays included) or `toolsets=all`. The run-file tool `run_files` is unchanged.
+
+| Tool | Group | Risk |
+|------|-------|------|
+| `get_artifact` | `artifacts.read` | read |
+| `save_artifact` | `artifacts.write` | write |
+| `delete_artifact` | `artifacts.cleanup` | destructive |
+
+`artifacts.refresh` is a group with no tool yet. Refresh is not part of this toolset.
+
+`get_artifact` with `list: true` uses the same filters as the list above (`kind`, `owner`, `tag`, `status`, `live`, `sort`, `order`, `project_root`, `limit`, `cursor`). `q` is passed to the same list search as [Search](#search). Without `list`, pass `key` as `<ownerKey>/<id>` and `view`: `record` (optional `version`), `versions`, `content`, or `data`.
+
+`content` returns UTF-8 text for text kinds. A body over 200 KiB is cut to that cap, with `truncated: true` and `size_bytes` set to the full size. An image at or under 256 KiB includes `base64`. A larger image is `artifact.content_too_large_for_mcp`; read it from the console or the CLI. `view: data` is `artifact.not_live` until live snapshots exist.
+
+`save_artifact` publishes a static artifact with the same fields as [Publishing](#publishing) (`owner`, `project_root`, `id`, `kind`, `title`, `description`, `tags`, `summary`, `content` or `content_base64`). The stored source is `mcp`. The result is `{ key, version, unchanged, project_root }`. The same bytes keep the current version (`unchanged: true`).
+
+`delete_artifact` removes a published artifact and every version. It is irreversible. An indexed artifact is `artifact.not_deletable`.
+
+Hidden artifacts never appear. `project_root` matches the other artifact routes: omit it and the same owner and id in more than one project is `artifact.ambiguous` with `project_roots`. Read calls do not write.
+
+Details and error codes are in [MCP — Artifact tools](mcp.md#artifact-tools).

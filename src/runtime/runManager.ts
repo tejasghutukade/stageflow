@@ -600,6 +600,7 @@ export class RunManager {
   private readonly projectRoot: string;
   private readonly isGitProject: boolean;
   private acceptingWork = true;
+  private publishedStoreHealthCache?: { home: string; at: number; disk: import("../runstore/diskUsage.js").DiskBreakdown };
 
   constructor(
     private readonly options: {
@@ -848,7 +849,31 @@ export class RunManager {
   async getHealthWithDisk(): Promise<CapacityHealth> {
     const base = this.getHealth();
     try {
-      const disk = await durableRootDiskBreakdown(globalStageflowHome());
+      const home = globalStageflowHome();
+      const now = Date.now();
+      const cached = this.publishedStoreHealthCache;
+      const { PUBLISHED_ARTIFACT_REPORT_TTL_MS } = await import("../artifacts/storeInventory.js");
+      if (cached !== undefined && cached.home === home && now - cached.at < PUBLISHED_ARTIFACT_REPORT_TTL_MS) {
+        return { ...base, disk: { ...cached.disk, artifact_store_stale: false } };
+      }
+      let disk = await durableRootDiskBreakdown(home);
+      const connection = (
+        this.options.store as {
+          connection?: import("better-sqlite3").Database;
+        }
+      ).connection;
+      if (connection !== undefined) {
+        const { readPublishedArtifactStoreReport, enrichDiskBreakdownWithPublishedArtifactCounts } =
+          await import("../artifacts/storeInventory.js");
+        const report = await readPublishedArtifactStoreReport(connection, home);
+        disk = enrichDiskBreakdownWithPublishedArtifactCounts(disk, report);
+      }
+      disk = {
+        ...disk,
+        artifact_store_computed_at: new Date().toISOString(),
+        artifact_store_stale: false,
+      };
+      this.publishedStoreHealthCache = { home, at: Date.now(), disk };
       return { ...base, disk };
     } catch {
       return {
@@ -859,6 +884,9 @@ export class RunManager {
           repos_bytes: 0,
           state_db_bytes: 0,
           a2a_artifacts_bytes: 0,
+          artifacts_bytes: 0,
+          published_artifact_count: 0,
+          published_version_count: 0,
           cache_bytes: 0,
           free_bytes: 0,
         },
@@ -2910,6 +2938,7 @@ export class RunManager {
           stageId,
           rootDir: runProjectRoot,
           factoryCwd: runProjectRoot,
+          pipelineId: meta.pipeline_id,
           stage: resumedStage,
           workspaceDir,
           ...(browserEnv !== undefined ? { browserEnv } : {}),

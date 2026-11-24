@@ -68,6 +68,10 @@ An agent can be given Stageflow's own tools (the ones in [MCP tools](mcp.md#tool
 | `connections.cleanup` | `remove_connection` | Destructive. |
 | `memories` | `get_memory` with `list: true` (read), `get_memory`, `save_memory` with `mode: create`, `mode: update`, or `card: true` (write) | |
 | `memories.cleanup` | `delete_memory_card` | Destructive. |
+| `artifacts.read` | `get_artifact` with `list: true`, `get_artifact` with `view: record`, `versions`, or `content` | Read. `view: data` is not available yet. |
+| `artifacts.write` | `save_artifact` | Write. |
+| `artifacts.cleanup` | `delete_artifact` | Destructive. |
+| `artifacts.refresh` | none yet | External. The group is reserved for refresh. |
 
 Rules:
 

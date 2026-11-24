@@ -9,6 +9,14 @@ import {
 import { assertArtifactId, parseOwnerKey, type ParsedOwner } from "./keys.js";
 import { ARTIFACT_TAG_PATTERN } from "./limits.js";
 import { canonicalProjectWireId } from "./projectScope.js";
+import {
+  ARTIFACT_SEARCH_BM25,
+  artifactFtsReady,
+  artifactSearchQueryFailsForTests,
+  artifactSearchTerms,
+  ftsMatchExpression,
+  noteArtifactFtsQueryFailed,
+} from "./search.js";
 
 const SELECT_COLS = `
   a.key, a.owner_kind, a.owner_pipeline, a.owner_stage, a.owner_agent, a.project_root_id,
@@ -40,11 +48,13 @@ export type ArtifactListQuery = {
   live?: boolean;
   sort?: ArtifactListSort;
   order?: ArtifactListOrder;
+  q?: string;
 };
 
 export type ArtifactListPage = {
   artifacts: ArtifactRecord[];
   next_cursor: string | null;
+  match_count?: number;
 };
 
 export class ArtifactQueryError extends Error {
@@ -201,6 +211,55 @@ export function parseArtifactStatus(raw: string | null): ArtifactStatus | undefi
   invalidFilter("status must be available or expired");
 }
 
+export function parseArtifactTextQuery(raw: string | null): string | undefined {
+  if (raw == null) return undefined;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return undefined;
+  if (trimmed.length > 500) invalidFilter("query is too long");
+  if (ftsMatchExpression(trimmed) === null) invalidFilter("query has no searchable terms");
+  return trimmed;
+}
+
+type SearchCursor = {
+  mode: "search";
+  q: string;
+  offset: number;
+  project: string | null;
+  status: string | null;
+  kind: string | null;
+  owner: string | null;
+  tag: string | null;
+  live: boolean | null;
+};
+
+function encodeSearchCursor(cursor: SearchCursor): string {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+function decodeSearchCursor(cursor: string): SearchCursor | undefined {
+  try {
+    const raw = Buffer.from(cursor, "base64url").toString("utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+    const obj = parsed as Record<string, unknown>;
+    if (obj.mode !== "search") return undefined;
+    if (typeof obj.q !== "string" || obj.q.length === 0) return undefined;
+    if (typeof obj.offset !== "number" || !Number.isInteger(obj.offset) || obj.offset < 0) return undefined;
+    const project = obj.project === null || typeof obj.project === "string" ? (obj.project as string | null) : undefined;
+    const status = obj.status === null || obj.status === "available" || obj.status === "expired" ? obj.status : undefined;
+    const kind = obj.kind === null || typeof obj.kind === "string" ? (obj.kind as string | null) : undefined;
+    const owner = obj.owner === null || typeof obj.owner === "string" ? (obj.owner as string | null) : undefined;
+    const tag = obj.tag === null || typeof obj.tag === "string" ? (obj.tag as string | null) : undefined;
+    const live = obj.live === null || typeof obj.live === "boolean" ? obj.live : undefined;
+    if (project === undefined || status === undefined || kind === undefined || owner === undefined || tag === undefined || live === undefined) {
+      return undefined;
+    }
+    return { mode: "search", q: obj.q, offset: obj.offset, project, status, kind, owner, tag, live };
+  } catch {
+    return undefined;
+  }
+}
+
 export function parseArtifactLimit(raw: string | null): number {
   if (raw == null || raw.trim() === "") return 50;
   if (!/^\d+$/.test(raw)) {
@@ -260,6 +319,179 @@ function orderByClause(sort: ArtifactListSort, order: ArtifactListOrder): string
   return `ORDER BY ${sortPrimaryExpr(sort)} ${dir}, a.key ASC`;
 }
 
+function listArtifactsBySearch(
+  db: Database.Database,
+  query: ArtifactListQuery,
+  roots: readonly CatalogRoot[],
+  projectId: string | undefined,
+  textQuery: string,
+): ArtifactListPage {
+  const match = ftsMatchExpression(textQuery);
+  if (match === null) invalidFilter("query has no searchable terms");
+  let kindPattern: string | null = null;
+  if (query.kind !== undefined) {
+    const literal = escapeLike(query.kind);
+    kindPattern = query.kind.includes(".") ? literal : `${literal}.%`;
+  }
+  const ownerFilter = query.owner !== undefined ? parseOwnerFilter(query.owner) : undefined;
+  const live = query.live === true ? true : query.live === false ? false : null;
+  const cursor = query.cursor !== undefined ? decodeSearchCursor(query.cursor) : undefined;
+  if (query.cursor !== undefined && cursor === undefined) {
+    throw new ArtifactQueryError(400, "artifact.invalid_shape", "cursor is not valid");
+  }
+  const fingerprint = {
+    q: textQuery,
+    project: projectId ?? null,
+    status: query.status ?? null,
+    kind: query.kind ?? null,
+    owner: query.owner ?? null,
+    tag: query.tag ?? null,
+    live,
+  };
+  if (
+    cursor !== undefined &&
+    (cursor.q !== fingerprint.q ||
+      cursor.project !== fingerprint.project ||
+      cursor.status !== fingerprint.status ||
+      cursor.kind !== fingerprint.kind ||
+      cursor.owner !== fingerprint.owner ||
+      cursor.tag !== fingerprint.tag ||
+      cursor.live !== fingerprint.live)
+  ) {
+    invalidFilter("cursor does not match query");
+  }
+  const offset = cursor?.offset ?? 0;
+  const whereParts = [
+    "a.deleted_at IS NULL",
+    "a.hidden = 0",
+    "(@project IS NULL OR a.project_root_id = @project)",
+    "(@status IS NULL OR a.status = @status)",
+    "(@kind_pattern IS NULL OR a.kind LIKE @kind_pattern ESCAPE '\\')",
+    "(@live IS NULL OR (@live = 1 AND a.kind LIKE 'live.%') OR (@live = 0 AND a.kind NOT LIKE 'live.%'))",
+    "(@tag IS NULL OR EXISTS (SELECT 1 FROM json_each(a.tags_json) je WHERE je.value = @tag))",
+  ];
+  if (ownerFilter?.mode === "stage") {
+    whereParts.push(
+      "a.owner_kind = 'stage' AND a.owner_pipeline = @owner_pipeline AND a.owner_stage = @owner_stage",
+    );
+  } else if (ownerFilter?.mode === "agent") {
+    whereParts.push("a.owner_kind = 'agent' AND a.owner_agent = @owner_agent");
+  } else if (ownerFilter?.mode === "substring") {
+    whereParts.push(
+      `instr(lower(trim(coalesce(a.owner_pipeline, '') || ' ' || coalesce(a.owner_stage, '') || ' ' || coalesce(a.owner_agent, ''))), @owner_sub) > 0`,
+    );
+  }
+  const params: Record<string, string | number | null> = {
+    project: projectId ?? null,
+    status: query.status ?? null,
+    kind_pattern: kindPattern,
+    live: live === null ? null : live ? 1 : 0,
+    tag: query.tag ?? null,
+    owner_pipeline: ownerFilter?.mode === "stage" ? ownerFilter.pipeline : null,
+    owner_stage: ownerFilter?.mode === "stage" ? ownerFilter.stage : null,
+    owner_agent: ownerFilter?.mode === "agent" ? ownerFilter.agent : null,
+    owner_sub: ownerFilter?.mode === "substring" ? ownerFilter.value : null,
+  };
+  const terms = artifactSearchTerms(textQuery);
+  terms.forEach((term, index) => {
+    params[`like_${index}`] = `%${escapeLike(term.toLowerCase())}%`;
+  });
+  const likeSql = terms
+    .map(
+      (_, index) => `(
+         lower(a.title) LIKE @like_${index} ESCAPE '\\'
+         OR lower(COALESCE(a.description, '')) LIKE @like_${index} ESCAPE '\\'
+         OR lower(a.tags_json) LIKE @like_${index} ESCAPE '\\'
+         OR lower(COALESCE(a.summary, '')) LIKE @like_${index} ESCAPE '\\'
+         OR lower(a.id) LIKE @like_${index} ESCAPE '\\'
+         OR lower(
+           CASE a.owner_kind
+             WHEN 'agent' THEN 'agent:' || COALESCE(a.owner_agent, '') || ' ' || COALESCE(a.owner_agent, '')
+             ELSE 'stage:' || COALESCE(a.owner_pipeline, '') || ':' || COALESCE(a.owner_stage, '')
+               || ' ' || COALESCE(a.owner_pipeline, '') || ' ' || COALESCE(a.owner_stage, '')
+           END
+         ) LIKE @like_${index} ESCAPE '\\'
+       )`,
+    )
+    .join("\n         AND ");
+
+  const runLike = (): ArtifactListPage => {
+    const sqlWhere = `${whereParts.join("\n         AND ")}\n         AND ${likeSql}`;
+    const total = db
+      .prepare(`SELECT COUNT(*) AS n FROM artifacts a WHERE ${sqlWhere}`)
+      .get(params) as { n: number };
+    const rows = db
+      .prepare(
+        `SELECT ${SELECT_COLS} ${FROM}
+         WHERE ${sqlWhere}
+         ORDER BY a.updated_at DESC, a.key ASC
+         LIMIT @limit OFFSET @offset`,
+      )
+      .all({ ...params, limit: query.limit + 1, offset }) as ArtifactRow[];
+    return pageFromRows(rows, roots, query.limit, offset, fingerprint, total.n);
+  };
+
+  if (artifactFtsReady(db)) {
+    try {
+      if (artifactSearchQueryFailsForTests()) throw new Error("injected fts query failure");
+      const ftsParams = { ...params, match, limit: query.limit + 1, offset };
+      const sharedWhere = whereParts.join("\n         AND ");
+      const ranked = `
+        SELECT a.key AS hit_key, ${ARTIFACT_SEARCH_BM25} AS search_rank
+        FROM artifacts a
+        JOIN artifact_fts ON artifact_fts.key = a.key
+        WHERE ${sharedWhere}
+          AND artifact_fts MATCH @match
+        UNION ALL
+        SELECT a.key AS hit_key, 1000000000000000000 AS search_rank
+        FROM artifacts a
+        WHERE ${sharedWhere}
+          AND a.status = 'expired'
+          AND ${likeSql}
+          AND NOT EXISTS (SELECT 1 FROM artifact_fts f WHERE f.key = a.key)
+      `;
+      const total = db
+        .prepare(`SELECT COUNT(*) AS n FROM (${ranked}) hits`)
+        .get(ftsParams) as { n: number };
+      const rows = db
+        .prepare(
+          `SELECT ${SELECT_COLS}, hits.search_rank AS search_rank
+           FROM (${ranked}) hits
+           JOIN artifacts a ON a.key = hits.hit_key
+           LEFT JOIN artifact_versions v ON v.key = a.key AND v.version = a.current_version
+           ORDER BY hits.search_rank ASC, a.key ASC
+           LIMIT @limit OFFSET @offset`,
+        )
+        .all(ftsParams) as ArtifactRow[];
+      return pageFromRows(rows, roots, query.limit, offset, fingerprint, total.n);
+    } catch (error) {
+      noteArtifactFtsQueryFailed(error);
+    }
+  }
+  return runLike();
+}
+
+function pageFromRows(
+  rows: ArtifactRow[],
+  roots: readonly CatalogRoot[],
+  limit: number,
+  offset: number,
+  fingerprint: Omit<SearchCursor, "mode" | "offset">,
+  matchCount: number,
+): ArtifactListPage {
+  const page = rows.slice(0, limit);
+  const registered = registeredIds(roots);
+  const nextOffset = offset + page.length;
+  return {
+    artifacts: page.map((row) => toRecord(row, registered)),
+    next_cursor:
+      rows.length > limit
+        ? encodeSearchCursor({ mode: "search", ...fingerprint, offset: nextOffset })
+        : null,
+    match_count: matchCount,
+  };
+}
+
 export function listArtifacts(
   db: Database.Database,
   query: ArtifactListQuery,
@@ -271,6 +503,10 @@ export function listArtifacts(
       : undefined;
   if (projectId?.includes("::")) {
     throw new ArtifactQueryError(400, "artifact.invalid_id", `Project id must not contain "::"`);
+  }
+  const textQuery = query.q?.trim() ?? "";
+  if (textQuery.length > 0) {
+    return listArtifactsBySearch(db, query, roots, projectId, textQuery);
   }
   const sort = query.sort ?? "updated";
   const order = query.order ?? (sort === "title" ? "asc" : "desc");

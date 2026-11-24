@@ -1,3 +1,4 @@
+import { stopArtifactSearchRepair } from "../artifacts/search.js";
 import { stageflowHomeId } from "../diagnostics/checks.js";
 import {
   createServer,
@@ -319,6 +320,7 @@ export async function createHttpHost(
   server.maxConnections = maxConnections;
 
   server.on("close", () => {
+    stopArtifactSearchRepair();
     boot.stopGcInterval();
     boot.stopScheduleSource();
     boot.stopGithubPollSource();

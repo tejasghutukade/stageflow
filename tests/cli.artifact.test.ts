@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { artifactIdFromRelative, artifactStorageKey, publicArtifactKey, stageOwnerKey } from "../src/artifacts/keys.js";
+import { reindexArtifactSearchKey } from "../src/artifacts/search.js";
 import {
   runArtifactCommand,
 } from "../src/cli/artifactCommand.js";
@@ -359,7 +360,7 @@ describe("runArtifactCommand", () => {
     });
   });
 
-  it("list filters by kind, owner, --q, and --live client-side", async () => {
+  it("list filters by kind, owner, --q, and --live", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-art-list-filter-"));
     await indexEnvelopeArtifacts(projectRoot, {
       pipelineId: "sales",
@@ -466,7 +467,7 @@ describe("runArtifactCommand", () => {
     expect(badErr).toEqual([]);
   });
 
-  it("keeps paging a client-side --q until the match is found", async () => {
+  it("passes --q to the index and finds a renamed artifact", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-art-list-q-"));
     await indexEnvelopeArtifacts(projectRoot, {
       files: { "report.md": "a" },
@@ -476,6 +477,8 @@ describe("runArtifactCommand", () => {
     const db = sqliteConnectionFromStore(store)!;
     const sample = db.prepare(`SELECT * FROM artifacts LIMIT 1`).get() as Record<string, unknown>;
     db.prepare(`UPDATE artifacts SET title = 'needle-report', updated_at = '2020-01-01T00:00:00.000Z'`).run();
+    const renamed = db.prepare(`SELECT key FROM artifacts WHERE title = 'needle-report'`).get() as { key: string };
+    reindexArtifactSearchKey(db, renamed.key, "a");
     const insertColumns = Object.keys(sample);
     const insert = db.prepare(
       `INSERT INTO artifacts (${insertColumns.join(", ")}) VALUES (${insertColumns.map((column) => `@${column}`).join(", ")})`,

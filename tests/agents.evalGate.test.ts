@@ -74,6 +74,8 @@ describe("tool classification", () => {
     expect(classifyTool(definition, "billing.lookup_invoice")).toEqual({ class: "mcp_unknown", readOnly: false });
     expect(classifyTool(definition, "agent:helper")).toEqual({ class: "sub_agent", readOnly: false });
     expect(classifyTool(definition, "browser")).toEqual({ class: "browser", readOnly: false });
+    expect(classifyTool(definition, "publish_artifact")).toEqual({ class: "write", readOnly: false });
+    expect(classifyTool(definition, "publish_artifact", ["publish_artifact"]).readOnly).toBe(false);
   });
 
   it("treats an author-listed tool or server wildcard as read-only, but never a sub-agent or operator-only tool", () => {
@@ -138,7 +140,7 @@ describe("eval gate: read_only", () => {
 describe("eval gate: declared read-only cannot upgrade builtin or Stageflow tools", () => {
   it("classifies declared write, shell, destructive and external tools as not read-only", () => {
     const definition = { tools: { builtin: [], mcp: {}, stageflow: { groups: [], tools: [] } }, sub_agents: [] } as never;
-    for (const tool of ["write", "edit", "bash", "browser", "stageflow.archive_agent", "stageflow.fire_trigger", "stageflow.save_agent"]) {
+    for (const tool of ["write", "edit", "bash", "browser", "publish_artifact", "stageflow.archive_agent", "stageflow.fire_trigger", "stageflow.save_agent"]) {
       expect(classifyTool(definition, tool, [tool]).readOnly).toBe(false);
     }
   });

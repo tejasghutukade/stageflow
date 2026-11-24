@@ -32,6 +32,10 @@ export type PreEmitCheckOptions = {
   runId?: string;
   stageId?: string;
   attempt?: number;
+  /** Ids from stage `artifacts.expect`. Checked after the other emit checks. */
+  expectedArtifactIds?: readonly string[];
+  /** Published ids for this run, stage, and attempt. Required when `expectedArtifactIds` is non-empty. */
+  readPublishedArtifactIds?: () => Promise<readonly string[]>;
 };
 
 function artifactListsBasename(artifact: string, basename: string): boolean {
@@ -74,6 +78,27 @@ function candidateEnvelope(
   };
 }
 
+async function assertExpectedArtifacts(options: PreEmitCheckOptions | undefined): Promise<void> {
+  const ids = options?.expectedArtifactIds;
+  if (ids === undefined || ids.length === 0) return;
+  if (options?.readPublishedArtifactIds === undefined) {
+    throw new EnvelopeError("artifact.expected_missing: published artifacts cannot be verified");
+  }
+  let published: readonly string[];
+  try {
+    published = await options.readPublishedArtifactIds();
+  } catch {
+    throw new EnvelopeError("artifact.expected_missing: published artifacts cannot be verified");
+  }
+  const have = new Set(published);
+  const missing = ids.filter((id) => !have.has(id));
+  if (missing.length > 0) {
+    throw new EnvelopeError(
+      `artifact.expected_missing: required published artifacts missing: ${missing.join(", ")}`,
+    );
+  }
+}
+
 export async function assertPreEmitChecks(
   envelope: Pick<StageEnvelope, "artifacts" | "payload"> & Partial<StageEnvelope>,
   options: PreEmitCheckOptions | undefined,
@@ -81,6 +106,7 @@ export async function assertPreEmitChecks(
   if (envelope.status === "failure") return;
   const checks = options?.checks;
   if (checks === undefined || checks.length === 0) {
+    await assertExpectedArtifacts(options);
     return;
   }
 
@@ -158,4 +184,5 @@ export async function assertPreEmitChecks(
       throw new EnvelopeError(issue);
     }
   }
+  await assertExpectedArtifacts(options);
 }

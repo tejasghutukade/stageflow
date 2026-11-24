@@ -1,0 +1,14 @@
+id: publish-note
+system_prompt: Publish the weekly note.
+model: anthropic/claude-sonnet-4-5
+artifacts:
+  publish: true
+  expect:
+    - weekly-note
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

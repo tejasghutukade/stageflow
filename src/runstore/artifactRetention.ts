@@ -2,6 +2,14 @@ import { stat } from "node:fs/promises";
 import type Database from "better-sqlite3";
 import type { ArtifactExpiredReason } from "../artifacts/record.js";
 import { PATH_DENIED_MESSAGE, resolveContainedRelativePath } from "../runread/readArtifact.js";
+import {
+  artifactSearchBodyKind,
+  extractSearchBody,
+  readBoundedSearchFile,
+  reindexArtifactSearchKey,
+  repairDirtyArtifactSearch,
+  unindexArtifactSearch,
+} from "../artifacts/search.js";
 import { retentionWindowsFromEnv } from "./retention.js";
 import { attemptArtifactsDir } from "./workspaceLayout.js";
 
@@ -81,16 +89,28 @@ export function expireIndexedRun(
   reason: ArtifactExpiredReason,
   now: string,
 ): void {
-  db.prepare(
-    `UPDATE artifacts
-     SET status = 'expired',
-         expired_at = COALESCE(expired_at, @now),
-         expired_reason = COALESCE(expired_reason, @reason)
-     WHERE origin = 'indexed'
-       AND source_run_id = @run_id
-       AND status = 'available'
-       AND deleted_at IS NULL`,
-  ).run({ run_id: runId, reason, now });
+  db.transaction(() => {
+    const keys = db
+      .prepare(
+        `SELECT key FROM artifacts
+         WHERE origin = 'indexed'
+           AND source_run_id = ?
+           AND status = 'available'
+           AND deleted_at IS NULL`,
+      )
+      .all(runId) as { key: string }[];
+    db.prepare(
+      `UPDATE artifacts
+       SET status = 'expired',
+           expired_at = COALESCE(expired_at, @now),
+           expired_reason = COALESCE(expired_reason, @reason)
+       WHERE origin = 'indexed'
+         AND source_run_id = @run_id
+         AND status = 'available'
+         AND deleted_at IS NULL`,
+    ).run({ run_id: runId, reason, now });
+    for (const row of keys) unindexArtifactSearch(db, row.key);
+  })();
 }
 
 function expireKeys(
@@ -107,16 +127,28 @@ function expireKeys(
       params[`k${index}`] = key;
     });
     const names = slice.map((_, index) => `@k${index}`).join(", ");
-    db.prepare(
-      `UPDATE artifacts
-       SET status = 'expired',
-           expired_at = COALESCE(expired_at, @now),
-           expired_reason = COALESCE(expired_reason, @reason)
-       WHERE key IN (${names})
-         AND origin = 'indexed'
-         AND status = 'available'
-         AND deleted_at IS NULL`,
-    ).run(params);
+    db.transaction(() => {
+      const keys = db
+        .prepare(
+          `SELECT key FROM artifacts
+           WHERE key IN (${names})
+             AND origin = 'indexed'
+             AND status = 'available'
+             AND deleted_at IS NULL`,
+        )
+        .all(params) as { key: string }[];
+      db.prepare(
+        `UPDATE artifacts
+         SET status = 'expired',
+             expired_at = COALESCE(expired_at, @now),
+             expired_reason = COALESCE(expired_reason, @reason)
+         WHERE key IN (${names})
+           AND origin = 'indexed'
+           AND status = 'available'
+           AND deleted_at IS NULL`,
+      ).run(params);
+      for (const row of keys) unindexArtifactSearch(db, row.key);
+    })();
   }
 }
 
@@ -205,7 +237,7 @@ export async function restorePresentSlimmedIndexed(
 ): Promise<void> {
   if (keys.length === 0) return;
   const lookup = db.prepare(
-    `SELECT a.key, a.source_stage_id, a.source_attempt, v.relative_path
+    `SELECT a.key, a.kind, a.source_stage_id, a.source_attempt, v.relative_path
      FROM artifacts a
      LEFT JOIN artifact_versions v ON v.key = a.key AND v.version = a.current_version
      WHERE a.key = ?
@@ -213,14 +245,31 @@ export async function restorePresentSlimmedIndexed(
        AND a.expired_reason = 'run_slimmed'
        AND a.deleted_at IS NULL`,
   );
-  const present: string[] = [];
+  const present: Array<IndexedFileRow & { kind: string }> = [];
   for (const key of keys) {
-    const row = lookup.get(key) as IndexedFileRow | undefined;
+    const row = lookup.get(key) as (IndexedFileRow & { kind: string }) | undefined;
     if (row === undefined) continue;
     const file = await containedFile(workspaceDir, row);
-    if (file !== undefined) present.push(key);
+    if (file !== undefined) present.push(row);
   }
-  clearExpiredKeys(db, present);
+  const bodies = new Map<string, string>();
+  for (const row of present) {
+    if (!artifactSearchBodyKind(row.kind) || row.relative_path == null) continue;
+    try {
+      const absolute = await resolveContainedRelativePath(
+        attemptArtifactsDir(workspaceDir, row.source_stage_id ?? "", row.source_attempt ?? 0),
+        row.relative_path,
+        PATH_MESSAGES,
+      );
+      bodies.set(row.key, extractSearchBody(row.kind, await readBoundedSearchFile(absolute)));
+    } catch (error) {
+      logArtifactIndexFailure(`artifact search body ${row.key}`, error);
+    }
+  }
+  db.transaction(() => {
+    clearExpiredKeys(db, present.map((row) => row.key));
+    for (const row of present) reindexArtifactSearchKey(db, row.key, bodies.get(row.key) ?? "");
+  })();
 }
 
 type RepairRow = IndexedFileRow & {
@@ -291,6 +340,11 @@ export async function repairMissingIndexed(
   }
   expireKeys(db, missing, "file_missing", now);
   expireKeys(db, runGone, "run_deleted", now);
+  try {
+    await repairDirtyArtifactSearch(db, workspaceDirForRun);
+  } catch (error) {
+    logArtifactIndexFailure("artifact search repair", error);
+  }
   if (rows.length === 0 || rows.length < limit) return "";
   return rows[rows.length - 1]!.key;
 }

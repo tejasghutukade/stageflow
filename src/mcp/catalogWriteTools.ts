@@ -49,7 +49,7 @@ export function registerCatalogWriteTools(server: McpServer, deps: CatalogWriteD
     "import_task",
     {
       description:
-        "Import a GitHub issue as a standalone catalog task file. The issue title becomes the goal and the task id.",
+        "Import a GitHub issue as a standalone catalog task file.",
       inputSchema: z.object({
         project_root: projectRootField,
         repo: z.string().describe("GitHub owner/repo"),

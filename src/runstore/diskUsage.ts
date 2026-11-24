@@ -11,6 +11,13 @@ export type DiskBreakdown = {
   repos_bytes: number;
   state_db_bytes: number;
   a2a_artifacts_bytes: number;
+  artifacts_bytes: number;
+  published_artifact_count: number;
+  published_version_count: number;
+  /** When the published-artifact store report in this payload was computed. */
+  artifact_store_computed_at?: string;
+  /** True when this payload is a previous report served while a newer one is due. */
+  artifact_store_stale?: boolean;
   /** Shared dependency cache ($STAGEFLOW_HOME/cache); excluded from slim GC / per-run quotas. */
   cache_bytes: number;
   free_bytes: number;
@@ -143,13 +150,14 @@ export async function durableRootDiskBreakdown(
   options?: { freeSpace?: FreeSpaceReader },
 ): Promise<DiskBreakdown> {
   const freeSpace = options?.freeSpace ?? readFilesystemSize;
-  const [runs_bytes, worktrees_bytes, repos_bytes, state_db_bytes, a2a_artifacts_bytes, cache_bytes, size] =
+  const [runs_bytes, worktrees_bytes, repos_bytes, state_db_bytes, a2a_artifacts_bytes, artifacts_bytes, cache_bytes, size] =
     await Promise.all([
       usageOfMissingOk(path.join(durableRoot, "runs")),
       usageOfMissingOk(path.join(durableRoot, "worktrees")),
       usageOfMissingOk(path.join(durableRoot, "repos")),
       stateDbBytes(durableRoot),
       usageOfMissingOk(path.join(durableRoot, "a2a-artifacts")),
+      usageOfMissingOk(path.join(durableRoot, "artifacts")),
       usageOfMissingOk(path.join(durableRoot, "cache")),
       freeSpace(durableRoot),
     ]);
@@ -159,6 +167,9 @@ export async function durableRootDiskBreakdown(
     repos_bytes,
     state_db_bytes,
     a2a_artifacts_bytes,
+    artifacts_bytes,
+    published_artifact_count: 0,
+    published_version_count: 0,
     cache_bytes,
     free_bytes: size.freeBytes,
   };

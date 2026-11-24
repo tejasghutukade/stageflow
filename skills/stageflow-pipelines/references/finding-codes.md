@@ -84,6 +84,7 @@ These come from `scripts/check-catalog-keys.mjs`, not from `sf validate`.
 | `stage.invalid_channels` | error | More than one channel, or a bad channel object. | One channel. Split the stage if you need two. |
 | `stage.channel_unavailable` | error | The connection is missing, disabled, or the target is invalid for that provider. | Fix the connection in `stageflow-operate`, or the `to` value. |
 | `stage.invalid_browser` | error | A forbidden key (`path`, `scope`, `secret`, launch options) or a bad `check`. | Use only `profile`, `headed`, `allow_domains`, `login_url` and `check`. |
+| `stage.invalid_artifacts` | error | The stage `artifacts` block is not `{ publish: boolean, expect?: ids }`, `expect` is set without `publish: true`, or an id is duplicated, too long a list, or not a slug. | Set `publish: true` to opt in. `expect` ids match `^[a-z][a-z0-9_-]{0,63}$`, are unique, and there are at most 20. |
 | `stage.invalid_secrets` | error | Not a list of names or `{ name, as: env }`, or a duplicate. | Fix the list. |
 | `stage.unknown_secret` | error | The name is not in the Host secret registry. | Register it, or fix the spelling. `GITHUB_TOKEN`, `GH_TOKEN`, `NPM_TOKEN` and `NODE_AUTH_TOKEN` are always known. |
 | `stage.denied_secret` | error | `STAGEFLOW_CONTROL_TOKEN` or a `STAGEFLOW_CONTROL_TOKEN_` name. | Remove it. It cannot be granted. |

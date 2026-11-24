@@ -15,6 +15,10 @@ The page lists indexed deliverables. The project control defaults to the active 
 
 Filter controls for kind, owner, tag, and status, plus a sort menu (updated, title, size), call the list API with the same query parameters as [Listing artifacts](artifacts.md#listing-artifacts). Title sort is ASCII case-insensitive, with the artifact key breaking ties. Kind filters treat `_` and `%` as literal characters. A tag uses the same `[a-z0-9_-]{1,32}` rule as publish, including tags that start with a digit or `_`. Filter and tab choices are stored in the hash query (`#/artifacts?…`) so reload and back/forward keep them. The project control writes `project_root` into that query when it is not **All projects**. **Load more** sends the list cursor, which is base64url JSON and can carry a title that contains a newline, a quote, `|`, or `:`.
 
+The search box sends `q` after a short pause and stores that text in the same hash query. **Clear** removes it. While a search is showing, the bar says `1 match` or `N matches` (`match_count` from the list). A query with no letters or numbers, such as `((`, shows the same empty state as any other search that matches nothing, with the hint "Try letters or numbers". The filters stay in place. An expired artifact is removed from the search index when it expires. What is indexed, and what is left out, is [Search](artifacts.md#search).
+
+**⌘K** adds an **Artifacts** group when the palette query is at least two characters. It requests the top five matches (`q` and `limit=5`). Choosing one opens that artifact. Changing the query clears the previous hits immediately. A slow response that belongs to an older query is ignored. If the request fails, the group stays empty and the rest of the palette still works.
+
 Each row opens the artifact detail page (`#/artifacts/<ownerKey>/<id>`, with `project_root` when the row has a project). The row shows:
 
 - a kind icon and a kind pill (Markdown, image, table, HTML, or text)

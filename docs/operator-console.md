@@ -64,13 +64,14 @@ Below the groups, **Pinned pipelines** lists pipelines you pinned. The Workshop 
 
 ### Command palette
 
-**⌘K** (Ctrl+K) opens the palette from any page; **Esc** closes it. Type to filter, **↑/↓** to move, **Enter** to run. **Tab** cycles the result type (All, Actions, Runs, Pipelines, Navigation); **Shift+Tab** cycles the other way. Option, Command, or Shift with an arrow, and Home or End, stay in the search text.
+**⌘K** (Ctrl+K) opens the palette from any page; **Esc** closes it. Type to filter, **↑/↓** to move, **Enter** to run. **Tab** cycles the result type (All, Actions, Runs, Pipelines, Artifacts, Navigation); **Shift+Tab** cycles the other way. Option, Command, or Shift with an arrow, and Home or End, stay in the search text. The Artifacts type lists search hits once the query is at least two characters.
 
 | Group | Entries |
 |-------|---------|
 | Actions | **Start a run**; **Answer next gate** (when a run waits on you); **Retry failed stage** (when a run failed) |
 | Runs | Recent runs, with status |
 | Pipelines | Every pipeline, by id |
+| Artifacts | Top five artifact matches for the current query (two or more characters). Choosing one opens the artifact. The group clears as soon as the query changes. A slow or failed lookup leaves this group empty. |
 | Navigation | Overview, Inbox, Pipeline runs, Artifacts, Agent sessions, Agents, Pipelines, Workshop, Tasks, Catalog, Triggers, Settings |
 
 ### Keyboard shortcuts

@@ -16,6 +16,7 @@ import {
   parseArtifactOwnerFilter,
   parseArtifactStatus,
   parseArtifactTagFilter,
+  parseArtifactTextQuery,
   readArtifact,
 } from "../artifacts/query.js";
 import { catalogRootsForArtifacts } from "../artifacts/projectScope.js";
@@ -333,6 +334,7 @@ export async function handleArtifactRoutes(
           live: parseArtifactLiveFilter(url.searchParams.get("live")),
           sort: parseArtifactListSort(url.searchParams.get("sort")),
           order: parseArtifactListOrder(url.searchParams.get("order")),
+          q: parseArtifactTextQuery(url.searchParams.get("q")),
         },
         roots,
       );

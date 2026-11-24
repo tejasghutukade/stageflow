@@ -31,6 +31,7 @@ Run \`validate\` (with \`kind: draft\`, \`agent\`, or \`eval\`, or \`preflight: 
 | \`stage.invalid_channels\` / \`pipeline.invalid_channels\` | Bad \`channels\` shape, or more than one channel on a stage. |
 | \`stage.channel_unavailable\` | Connection missing or disabled, operation unsupported, or recipient invalid for the provider. |
 | \`stage.invalid_browser\` | Unknown \`browser\` key, or \`path\`, \`scope\`, \`secret\`, launch options in YAML. |
+| \`stage.invalid_artifacts\` | \`artifacts\` is not \`{ publish, expect? }\`, or \`expect\` is set without \`publish: true\`. |
 | \`stage.invalid_requires\` / \`pipeline.invalid_requires\` / \`pipeline.requires_conflict\` | Bad \`requires\` entries, or version ranges that cannot both hold. |
 | \`stage.unknown_secret\` | A \`secrets\` name that is neither a console MCP secret nor a registered Host secret. |
 | "Unknown MCP server" | A stage \`mcp\` name in neither \`.mcp.json\` nor the console list. |

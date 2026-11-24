@@ -18,6 +18,8 @@ import { json } from "../src/server/createHttpHost.js";
 import { handleArtifactRoutes } from "../src/server/artifactRoutes.js";
 import { startTestService } from "./helpers/testInProcessService.js";
 import Database from "better-sqlite3";
+import { mkdirSync } from "node:fs";
+import { applySchemaThrough } from "./helpers/schemaAtVersion.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -312,31 +314,28 @@ describe("artifact index", () => {
     const freshRoot = await temp("sf-art-fresh-");
     const fresh = createRunStore({ rootDir: freshRoot, kind: "sqlite" });
     const freshDb = sqliteConnectionFromStore(fresh)!;
-    expect(freshDb.pragma("user_version", { simple: true })).toBe(26);
+    expect(freshDb.pragma("user_version", { simple: true })).toBe(28);
     expect(
       freshDb.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('artifacts', 'artifact_versions')`).all(),
     ).toHaveLength(2);
     await fresh.close();
 
     const existingRoot = await temp("sf-art-existing-");
-    const existing = createRunStore({ rootDir: existingRoot, kind: "sqlite" });
-    const created = await existing.createRun({
-      pipelineId: "sales",
-      taskYaml: "id: t\ngoal: g\n",
-      projectRoot: existingRoot,
-    });
-    await existing.close();
     const dbPath = path.join(storeRootFor(existingRoot), "state.db");
+    mkdirSync(path.dirname(dbPath), { recursive: true });
     const db = new Database(dbPath);
-    db.exec(`DROP TABLE artifact_versions; DROP TABLE artifacts;`);
-    db.prepare(`DELETE FROM schema_migrations WHERE version >= 23`).run();
-    db.pragma("user_version = 22");
+    applySchemaThrough(db, 22);
+    const runId = "run-kept";
+    db.prepare(
+      `INSERT INTO runs (run_id, pipeline_id, task_yaml, status, created_at, updated_at)
+       VALUES (?, 'sales', 'id: t\ngoal: g\n', 'running', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+    ).run(runId);
     db.close();
     const migrated = createRunStore({ rootDir: existingRoot, kind: "sqlite" });
     const migratedDb = sqliteConnectionFromStore(migrated)!;
-    expect(migratedDb.pragma("user_version", { simple: true })).toBe(26);
+    expect(migratedDb.pragma("user_version", { simple: true })).toBe(28);
     expect(migratedDb.prepare(`SELECT name FROM sqlite_master WHERE name = 'artifacts'`).get()).toBeTruthy();
-    expect(migratedDb.prepare(`SELECT run_id FROM runs`).all()).toEqual([{ run_id: created.runId }]);
+    expect(migratedDb.prepare(`SELECT run_id FROM runs`).all()).toEqual([{ run_id: runId }]);
     await migrated.close();
   });
 
