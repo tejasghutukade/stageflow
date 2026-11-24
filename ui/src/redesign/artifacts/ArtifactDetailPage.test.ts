@@ -39,6 +39,7 @@ describe("artifact detail", () => {
     expect(meta.stagePath).toBe("/runs/run_abcdef123456/stages/summarize");
     expect(meta.hashLabel).toBe("abcdef123456…");
     expect(meta.ownerLabel).toBe("sales / summarize");
+    expect(meta.ownerPath).toBeNull();
     expect(meta.sizeLabel).toBe("24 B");
     const html = renderToStaticMarkup(createElement(ArtifactDetailView, {
       meta,
@@ -58,6 +59,23 @@ describe("artifact detail", () => {
     expect(html).toContain("summarize");
     expect(html).toContain("abcdef123456…");
     expect(html).toContain("Hello");
+  });
+
+  it("links an agent owner to the agent page", () => {
+    const meta = artifactDetailMeta(record({
+      owner: { kind: "agent", agent: "helper" },
+      source: { run_id: null, stage_id: null, attempt: null, session_id: "sess_1" },
+    }));
+    expect(meta.ownerLabel).toBe("agent · helper");
+    expect(meta.ownerPath).toBe("/agents/helper");
+    const html = renderToStaticMarkup(createElement(ArtifactDetailView, {
+      meta,
+      preview: { mode: "markdown", text: "# Hello" },
+      onBack: () => undefined,
+      onOpenOwner: () => undefined,
+    }));
+    expect(html).toContain("agent · helper");
+    expect(artifactDetailMeta(record({ owner: { kind: "agent", agent: "helper" } }), null, new Set()).ownerPath).toBeNull();
   });
 
   it("keeps the side panel when the file is expired", () => {

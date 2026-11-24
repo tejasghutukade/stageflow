@@ -119,6 +119,7 @@ export function ArtifactDetailView({
   onBack,
   onOpenRun,
   onOpenStage,
+  onOpenOwner,
   versions,
   onOpenVersion,
   viewing,
@@ -136,6 +137,7 @@ export function ArtifactDetailView({
   onBack: () => void;
   onOpenRun?: () => void;
   onOpenStage?: () => void;
+  onOpenOwner?: () => void;
   versions?: ArtifactVersionRowModel[];
   onOpenVersion?: (version: number) => void;
   viewing?: { version: number; latest: number } | null;
@@ -177,7 +179,13 @@ export function ArtifactDetailView({
                 <span className="sf-pill__label">{meta.kindLabel}</span>
               </span>
             </MetaLine>
-            <MetaLine label="Owner">{meta.ownerLabel}</MetaLine>
+            <MetaLine label="Owner">
+              {meta.ownerPath && onOpenOwner ? (
+                <LinkButton label={meta.ownerLabel} onClick={onOpenOwner} />
+              ) : (
+                meta.ownerLabel
+              )}
+            </MetaLine>
             <MetaLine label="Size">{meta.sizeLabel}</MetaLine>
             <MetaLine label="Content type">{meta.contentType}</MetaLine>
             <MetaLine label="Created">{meta.createdLabel}</MetaLine>
@@ -382,6 +390,7 @@ export function ArtifactDetailPage({
       onBack={() => navigate(artifactsPath())}
       onOpenRun={meta.runPath ? () => navigate(meta.runPath!) : undefined}
       onOpenStage={meta.stagePath ? () => navigate(meta.stagePath!) : undefined}
+      onOpenOwner={meta.ownerPath ? () => navigate(meta.ownerPath!) : undefined}
       versions={versionRows}
       onOpenVersion={(next) => navigate(artifactDetailPath(ownerKey, id, projectRoot, next))}
       viewing={viewing}

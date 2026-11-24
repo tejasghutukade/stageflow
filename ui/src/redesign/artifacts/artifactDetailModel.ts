@@ -1,5 +1,5 @@
 import type { ArtifactRecord } from "../../api/artifacts";
-import { artifactKindLabel, artifactOwnerLabel } from "./artifactsPageModel";
+import { artifactKindLabel, artifactOwnerLabel, artifactOwnerPath } from "./artifactsPageModel";
 import { runStagePath, runStreamPath } from "../../routes";
 
 export type ArtifactDetailMeta = {
@@ -7,6 +7,7 @@ export type ArtifactDetailMeta = {
   kind: string;
   kindLabel: string;
   ownerLabel: string;
+  ownerPath: string | null;
   sizeLabel: string;
   contentType: string;
   createdLabel: string;
@@ -39,6 +40,7 @@ export function shortContentHash(hash: string | null | undefined): string {
 export function artifactDetailMeta(
   record: ArtifactRecord,
   contentHash?: string | null,
+  knownAgentIds?: ReadonlySet<string>,
 ): ArtifactDetailMeta {
   const runId = record.source.run_id;
   const stageId = record.source.stage_id;
@@ -47,6 +49,7 @@ export function artifactDetailMeta(
     kind: record.kind,
     kindLabel: artifactKindLabel(record.kind),
     ownerLabel: artifactOwnerLabel(record.owner),
+    ownerPath: artifactOwnerPath(record.owner, knownAgentIds),
     sizeLabel: formatArtifactSize(record.size_bytes),
     contentType: record.content_type ?? "—",
     createdLabel: formatArtifactTimestamp(record.created_at),

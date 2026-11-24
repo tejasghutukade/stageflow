@@ -68,10 +68,10 @@ An agent can be given Stageflow's own tools (the ones in [MCP tools](mcp.md#tool
 | `connections.cleanup` | `remove_connection` | Destructive. |
 | `memories` | `get_memory` with `list: true` (read), `get_memory`, `save_memory` with `mode: create`, `mode: update`, or `card: true` (write) | |
 | `memories.cleanup` | `delete_memory_card` | Destructive. |
-| `artifacts.read` | `get_artifact` with `list: true`, `get_artifact` with `view: record`, `versions`, or `content` | Read. `view: data` is not available yet. |
-| `artifacts.write` | `save_artifact` | Write. |
-| `artifacts.cleanup` | `delete_artifact` | Destructive. |
-| `artifacts.refresh` | none yet | External. The group is reserved for refresh. |
+| `artifacts.read` | `stageflow_get_artifact` with `list: true`, `stageflow_get_artifact` with `view: record`, `versions`, or `content` | Read. Ask-first id `stageflow.get_artifact`. The model calls `stageflow_get_artifact`. Reading is project-wide. `view: data` is not available yet. |
+| `artifacts.write` | `publish_artifact` | Write. Ask-first id `publish_artifact`. The model calls `publish_artifact`. The session tool is bound to this agent and to this session's project. The Host MCP tool `save_artifact` is not given to the agent, because that tool lets the caller choose an owner. |
+| `artifacts.cleanup` | `stageflow_delete_artifact` | Destructive. Ask-first id `stageflow.delete_artifact`. The model calls `stageflow_delete_artifact`. An agent can delete only an artifact it owns in the session's project. Another owner's key, or a `project_root` other than that project, is `artifact.not_found` and nothing is deleted. Omitting `project_root` still deletes only in the session's project. |
+| `artifacts.refresh` | none yet | The group is accepted and grants no tool until refresh exists. |
 
 Rules:
 
@@ -94,6 +94,14 @@ Agent definitions and Stageflow state are never writable through a tool that nam
 Relative paths resolve against the project root. This is a check on arguments, not a sandbox.
 
 **`bash` is not path-confined.** The runtime sees a command string, not what it does, so an agent granted `bash` can still change agent files and Stageflow state. The editor warns (`agent.shell_not_path_confined`). So that a person reads each command first, **every `bash` call is ask-first**, whether or not `bash` is in `approvals.ask_first`. Do not grant `bash` to an agent that must stay confined.
+
+**`publish_artifact` reads a `path` only from a file the agent could already read.** The path is relative to the project root. An absolute path, a `..` segment, a symlink, an `*.agent.yaml` file under `agents/`, and anything under `$STAGEFLOW_HOME` outside the project are refused before the bytes are read. The file size is checked with `lstat` first. Over 5 MiB is `artifact.too_large` and the file is not read. `content` and `content_base64` are the other ways to pass bytes. For every kind except `static.image`, the bytes are checked as UTF-8 and scrubbed with the same secret scrubber as a stage publish, whether they came from `content`, `content_base64`, or `path`. Bytes that are not valid UTF-8 are `artifact.invalid_shape`. Image bytes are stored unchanged. An error from the tool does not include the secret.
+
+An agent that holds `artifacts.write` gets a short section in its system prompt (kinds, the id rule, the size cap, that publishing the same id again creates a new version, that the artifact is owned by this agent, and that the prompt does not list other agents' artifacts). An agent that holds `artifacts.read` gets one sentence naming `stageflow_get_artifact`. An agent that holds `artifacts.cleanup` gets one sentence naming `stageflow_delete_artifact`. An agent with none of those grants keeps the same system prompt and the same tool list. Compaction does not rewrite that section; it lives only in the system prompt.
+
+### Artifacts in an eval session
+
+An eval session (`source: eval`) that publishes stores the row with `hidden = 1` under `eval:agent:<id>/<artifact id>`. It does not replace a visible artifact with the same id. List, search, MCP, and the console omit it. `publish_artifact` is class `write` and `stageflow.delete_artifact` is class `destructive`, so the default `read_only` policy stubs both and writes nothing. `stageflow.get_artifact` is read and runs. Under `real`, the write and delete tools follow the same rules as other tools of those classes. An eval session under `real` can delete a visible artifact owned by that agent, because `real` runs the real tools. No approval row is created for an eval session. A sub-agent does not inherit the caller's artifact grants; it uses its own definition.
 
 ## Asking first
 

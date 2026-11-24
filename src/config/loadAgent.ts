@@ -427,7 +427,11 @@ export function grantedToolIds(definition: Pick<AgentDefinition, "tools" | "sub_
   for (const [server, tools] of Object.entries(definition.tools.mcp)) {
     for (const tool of tools) ids.add(`${server}.${tool}`);
   }
-  for (const tool of grantedStageflowTools(definition.tools.stageflow)) ids.add(stageflowGrantId(tool));
+  for (const tool of grantedStageflowTools(definition.tools.stageflow)) {
+    // The operator MCP tool save_artifact takes an owner. An agent session publishes with publish_artifact, bound to itself.
+    if (tool === "save_artifact") ids.add("publish_artifact");
+    else ids.add(stageflowGrantId(tool));
+  }
   for (const attachment of definition.tools.functions ?? []) ids.add(`function.${attachment.id}`);
   for (const agentId of definition.sub_agents) ids.add(`agent:${agentId}`);
   return ids;

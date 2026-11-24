@@ -129,7 +129,7 @@ describe("describeToolkit catalog", () => {
     for (const group of catalog.groups) {
       const expected = Object.entries(TOOL_META)
         .filter(([, meta]) => meta.groups.includes(group.id as ToolGroupId))
-        .map(([name]) => name)
+        .map(([name]) => (name === "save_artifact" ? "publish_artifact" : name))
         .sort();
       expect(group.tools.map((tool) => tool.name).sort()).toEqual(expected);
       expect(group.operatorOnly).toBe(TOOL_GROUPS.find((entry) => entry.id === group.id)?.operatorOnly === true);

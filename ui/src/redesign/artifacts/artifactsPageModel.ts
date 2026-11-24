@@ -7,7 +7,7 @@ import type {
 } from "../../api/artifacts";
 import { displayCatalogPath, runTaskLabel } from "../../catalog/displayCatalogPath";
 import { runShortId } from "../../catalogJoin";
-import { artifactDetailPath } from "../../routes";
+import { agentPath, artifactDetailPath } from "../../routes";
 
 export const ARTIFACTS_EMPTY_TITLE = "No artifacts yet";
 
@@ -79,6 +79,7 @@ export type ArtifactListRow = {
   kind: string;
   kindLabel: string;
   ownerLabel: string;
+  ownerPath: string | null;
   runId: string | null;
   runLabel: string;
   updatedLabel: string;
@@ -377,8 +378,18 @@ export function artifactOwnerKey(owner: ArtifactRecord["owner"]): string {
 }
 
 export function artifactOwnerLabel(owner: ArtifactRecord["owner"]): string {
-  if (owner.kind === "agent") return owner.agent;
+  if (owner.kind === "agent") return `agent · ${owner.agent}`;
   return `${owner.pipeline} / ${owner.stage}`;
+}
+
+/** Agent page path when the owner is an agent. Pass known ids to omit the link after the agent is gone. */
+export function artifactOwnerPath(
+  owner: ArtifactRecord["owner"],
+  knownAgentIds?: ReadonlySet<string>,
+): string | null {
+  if (owner.kind !== "agent") return null;
+  if (knownAgentIds !== undefined && !knownAgentIds.has(owner.agent)) return null;
+  return agentPath(owner.agent);
 }
 
 export function formatArtifactUpdated(iso: string, now = Date.now()): string {
@@ -408,7 +419,7 @@ export function artifactRunLabel(
 export function artifactListRows(
   records: readonly ArtifactRecord[],
   now = Date.now(),
-  options?: { runs?: ReadonlyMap<string, ArtifactRunRef>; showProject?: boolean },
+  options?: { runs?: ReadonlyMap<string, ArtifactRunRef>; showProject?: boolean; knownAgentIds?: ReadonlySet<string> },
 ): ArtifactListRow[] {
   const showProject = options?.showProject === true;
   return records.map((record) => ({
@@ -417,6 +428,7 @@ export function artifactListRows(
     kind: record.kind,
     kindLabel: artifactKindLabel(record.kind),
     ownerLabel: artifactOwnerLabel(record.owner),
+    ownerPath: artifactOwnerPath(record.owner, options?.knownAgentIds),
     runId: record.source.run_id,
     runLabel: artifactRunLabel(record.source.run_id, options?.runs),
     updatedLabel: formatArtifactUpdated(record.updated_at, now),

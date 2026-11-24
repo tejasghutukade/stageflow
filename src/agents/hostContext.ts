@@ -12,6 +12,9 @@ import { AgentChatController } from "./chatTurn.js";
 import { otlpSinkFromEnv, type OtlpSink } from "./otlpSink.js";
 import type { ContactInfo } from "../channels/types.js";
 import type { McpToolDeps } from "../mcp/deps.js";
+import { catalogRootsForArtifacts } from "../artifacts/projectScope.js";
+import { publishSessionArtifact } from "../artifacts/sessionPublish.js";
+import { sqliteConnectionFromStore } from "../runstore/createStore.js";
 import { buildToolkit, type ToolkitTool } from "../toolkit/index.js";
 import { createPiAgentRuntime } from "./runtime/piRuntime.js";
 import { AgentService, type AgentEnvironment } from "./service.js";
@@ -138,6 +141,16 @@ export function createAgentHostContext(options: {
                 agentService: service,
                 ...(chatRef ? { agentChat: chatRef } : {}),
               })),
+            publishAgentArtifact: async ({ agentId, sessionId, projectRoot, body }) => {
+              const db = sqliteConnectionFromStore(options.toolkitDeps!.store);
+              if (!db) throw new Error("artifact publish is not available");
+              const roots = await catalogRootsForArtifacts(options.toolkitDeps!.store);
+              return publishSessionArtifact(
+                { db, roots },
+                { owner: { kind: "agent", agent: agentId }, projectRoot, source: { sessionId } },
+                body,
+              );
+            },
           }
         : {}),
     });

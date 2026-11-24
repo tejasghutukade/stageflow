@@ -113,7 +113,23 @@ export function describeToolkit(): ToolkitCatalog {
       operatorOnly: group.operatorOnly === true,
       tools: Object.entries(TOOL_META)
         .filter(([, meta]) => meta.groups.includes(group.id))
-        .map(([name, meta]) => ({ name, grantId: stageflowGrantId(name), risk: meta.risk, description: plainDescription(byName.get(name) ?? ""), operatorOnly: isOperatorOnlyTool(name) })),
+        .map(([name, meta]) =>
+          name === "save_artifact"
+            ? {
+                name: "publish_artifact",
+                grantId: "publish_artifact",
+                risk: meta.risk,
+                description: "Publish a titled, versioned artifact owned by this agent.",
+                operatorOnly: false,
+              }
+            : {
+                name,
+                grantId: stageflowGrantId(name),
+                risk: meta.risk,
+                description: plainDescription(byName.get(name) ?? ""),
+                operatorOnly: isOperatorOnlyTool(name),
+              },
+        ),
     })),
     toolsets: TOOLSETS.map((entry) => ({
       id: entry.id,

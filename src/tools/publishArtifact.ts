@@ -18,7 +18,7 @@ import type { StaticArtifactKind } from "../artifacts/kinds.js";
 import { SessionPublishError, type SessionPublishBody, type SessionPublishSuccess } from "../artifacts/sessionPublish.js";
 import { PUBLISH_ARTIFACT_TOOL_NAME } from "./stageToolNames.js";
 
-const STATIC_KINDS = [
+export const STATIC_KINDS = [
   "static.markdown",
   "static.image",
   "static.table",
@@ -94,6 +94,7 @@ export function appendArtifactPublishPrompt(
 }
 
 let publishPathBytesRead = 0;
+let beforePublishFileOpen: (() => void) | undefined;
 
 export function publishPathBytesReadForTests(): number {
   return publishPathBytesRead;
@@ -101,6 +102,10 @@ export function publishPathBytesReadForTests(): number {
 
 export function resetPublishPathBytesReadForTests(): void {
   publishPathBytesRead = 0;
+}
+
+export function setPublishFileOpenHookForTests(hook: (() => void) | undefined): void {
+  beforePublishFileOpen = hook;
 }
 
 const ARTIFACT_MESSAGES = {
@@ -148,31 +153,84 @@ async function readArtifactPath(
       [{ path: "path", message: `content is larger than ${STATIC_CONTENT_MAX_BYTES} bytes` }],
     );
   }
-  return readCappedFile(presence.absolutePath, STATIC_CONTENT_MAX_BYTES);
+  return readCappedPublishFile(presence.absolutePath, STATIC_CONTENT_MAX_BYTES);
 }
 
-function readCappedFile(file: string, cap: number): Buffer {
-  const fd = fs.openSync(file, "r");
+function denyPublishPath(): never {
+  throw new ArtifactPublishError(403, "artifact.invalid_shape", PATH_DENIED_MESSAGE, [
+    { path: "path", message: PATH_DENIED_MESSAGE },
+  ]);
+}
+
+function publishTooLarge(cap: number): never {
+  throw new ArtifactPublishError(413, "artifact.too_large", `content is larger than ${cap} bytes`, [
+    { path: "path", message: `content is larger than ${cap} bytes` },
+  ]);
+}
+
+export function readCappedPublishFile(file: string, cap: number): Buffer {
+  let listed: fs.Stats;
   try {
+    listed = fs.lstatSync(file);
+  } catch {
+    denyPublishPath();
+  }
+  if (listed.isFile() && listed.size > cap) publishTooLarge(cap);
+  beforePublishFileOpen?.();
+  let fd: number;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  } catch {
+    denyPublishPath();
+  }
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) denyPublishPath();
+    if (stat.size > cap) publishTooLarge(cap);
     const buf = Buffer.alloc(cap + 1);
     const bytesRead = fs.readSync(fd, buf, 0, cap + 1, 0);
     publishPathBytesRead += bytesRead;
-    if (bytesRead > cap) {
-      throw new ArtifactPublishError(
-        413,
-        "artifact.too_large",
-        `content is larger than ${cap} bytes`,
-        [{ path: "path", message: `content is larger than ${cap} bytes` }],
-      );
-    }
+    if (bytesRead > cap) publishTooLarge(cap);
     return buf.subarray(0, bytesRead);
   } finally {
     fs.closeSync(fd);
   }
 }
 
-function scrubText(bytes: Buffer): Buffer {
-  return Buffer.from(scrubSecrets(bytes.toString("utf8")), "utf8");
+function utf8Text(bytes: Buffer, issuePath: "path" | "content"): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new ArtifactPublishError(400, "artifact.invalid_shape", "content is not valid UTF-8", [
+      { path: issuePath, message: "content is not valid UTF-8" },
+    ]);
+  }
+}
+
+function scrubPublishBytes(bytes: Buffer, kind: string, issuePath: "path" | "content"): Buffer {
+  if (kind === "static.image") return bytes;
+  return Buffer.from(scrubSecrets(utf8Text(bytes, issuePath)), "utf8");
+}
+
+export function publishArtifactParameterSchema() {
+  return Type.Object(
+    {
+      id: Type.String({ minLength: 1 }),
+      kind: Type.Union(STATIC_KINDS.map((kind) => Type.Literal(kind)) as [
+        ReturnType<typeof Type.Literal>,
+        ReturnType<typeof Type.Literal>,
+        ...ReturnType<typeof Type.Literal>[],
+      ]),
+      title: Type.String({ minLength: 1 }),
+      description: Type.Optional(Type.String()),
+      tags: Type.Optional(Type.Array(Type.String())),
+      summary: Type.Optional(Type.String()),
+      path: Type.Optional(Type.String()),
+      content: Type.Optional(Type.String()),
+      content_base64: Type.Optional(Type.String()),
+    },
+    { additionalProperties: false },
+  );
 }
 
 export function createPublishArtifactTool(options: PublishArtifactToolOptions) {
@@ -180,31 +238,14 @@ export function createPublishArtifactTool(options: PublishArtifactToolOptions) {
     name: PUBLISH_ARTIFACT_TOOL_NAME,
     label: "Publish artifact",
     description: `Publish a titled, versioned artifact a person can open later. Kinds: ${STATIC_KINDS.join(", ")}. Content at most ${Math.floor(STATIC_CONTENT_MAX_BYTES / (1024 * 1024))} MiB. Pass path (inside this attempt's artifacts directory), content, or content_base64. Publishing the same id again creates a new version. This call does not end the turn. A validation error returns a code and issues; fix the arguments and call again.`,
-    parameters: Type.Object(
-      {
-        id: Type.String({ minLength: 1 }),
-        kind: Type.Union(STATIC_KINDS.map((kind) => Type.Literal(kind)) as [
-          ReturnType<typeof Type.Literal>,
-          ReturnType<typeof Type.Literal>,
-          ...ReturnType<typeof Type.Literal>[],
-        ]),
-        title: Type.String({ minLength: 1 }),
-        description: Type.Optional(Type.String()),
-        tags: Type.Optional(Type.Array(Type.String())),
-        summary: Type.Optional(Type.String()),
-        path: Type.Optional(Type.String()),
-        content: Type.Optional(Type.String()),
-        content_base64: Type.Optional(Type.String()),
-      },
-      { additionalProperties: false },
-    ),
+    parameters: publishArtifactParameterSchema(),
     execute: async (_toolCallId: string, params: unknown): Promise<{
       content: Array<{ type: "text"; text: string }>;
       details: Record<string, unknown>;
       isError?: true;
     }> => {
       try {
-        const body = await preparePublishBody(options, params);
+        const body = await publishBodyFromToolParams(params, (rawPath) => readArtifactPath(options, rawPath));
         const result = await options.publish(body);
         return toolOk(result);
       } catch (error) {
@@ -217,9 +258,9 @@ export function createPublishArtifactTool(options: PublishArtifactToolOptions) {
   };
 }
 
-async function preparePublishBody(
-  options: PublishArtifactToolOptions,
+export async function publishBodyFromToolParams(
   params: unknown,
+  readPath: (rawPath: string) => Promise<Buffer>,
 ): Promise<SessionPublishBody> {
   if (params === null || typeof params !== "object" || Array.isArray(params)) {
     throw new ArtifactPublishError(400, "artifact.invalid_shape", "parameters must be an object", [
@@ -244,9 +285,10 @@ async function preparePublishBody(
     ]);
   }
   let bytes: Buffer;
+  let bytePath: "path" | "content" = "content";
   if (typeof record.path === "string") {
-    bytes = await readArtifactPath(options, record.path);
-    if (record.kind !== "static.image") bytes = scrubText(bytes);
+    bytes = await readPath(record.path);
+    bytePath = "path";
   } else if (typeof record.content === "string") {
     if (Buffer.byteLength(record.content, "utf8") > STATIC_CONTENT_MAX_BYTES) {
       throw new ArtifactPublishError(
@@ -256,7 +298,7 @@ async function preparePublishBody(
         [{ path: "content", message: `content is larger than ${STATIC_CONTENT_MAX_BYTES} bytes` }],
       );
     }
-    bytes = scrubText(Buffer.from(record.content, "utf8"));
+    bytes = Buffer.from(record.content, "utf8");
   } else if (typeof record.content_base64 === "string") {
     if (record.content_base64.length > Math.ceil(STATIC_CONTENT_MAX_BYTES / 3) * 4) {
       throw new ArtifactPublishError(
@@ -272,11 +314,20 @@ async function preparePublishBody(
       ]);
     }
     bytes = Buffer.from(record.content_base64, "base64");
+    if (bytes.length > STATIC_CONTENT_MAX_BYTES) {
+      throw new ArtifactPublishError(
+        413,
+        "artifact.too_large",
+        `content is larger than ${STATIC_CONTENT_MAX_BYTES} bytes`,
+        [{ path: "content_base64", message: `content is larger than ${STATIC_CONTENT_MAX_BYTES} bytes` }],
+      );
+    }
   } else {
     throw new ArtifactPublishError(400, "artifact.invalid_shape", "pass one of path, content, or content_base64", [
       { path: "content", message: "pass one of path, content, or content_base64" },
     ]);
   }
+  bytes = scrubPublishBytes(bytes, record.kind, bytePath);
   const tags = record.tags;
   if (tags !== undefined && (!Array.isArray(tags) || tags.some((tag) => typeof tag !== "string"))) {
     throw new ArtifactPublishError(400, "artifact.invalid_shape", "tags must be an array of strings", [

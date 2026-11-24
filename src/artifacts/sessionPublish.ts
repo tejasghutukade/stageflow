@@ -71,7 +71,7 @@ function sessionPublishHidden(db: Database.Database, context: SessionPublishCont
         | undefined;
       if (row?.origin === "eval") return true;
     } catch {
-      return false;
+      return true;
     }
   }
   const sessionId = context.source.sessionId;
@@ -82,7 +82,7 @@ function sessionPublishHidden(db: Database.Database, context: SessionPublishCont
         | undefined;
       if (row?.source === "eval") return true;
     } catch {
-      return false;
+      return true;
     }
   }
   return false;

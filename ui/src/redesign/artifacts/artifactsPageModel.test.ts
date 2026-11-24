@@ -12,6 +12,7 @@ import {
   artifactListFiltersActive,
   artifactListFiltersToQuery,
   artifactListRows,
+  artifactOwnerPath,
   artifactLiveStatusPill,
   artifactProjectScopeOptions,
   artifactScopeQuery,
@@ -245,5 +246,21 @@ describe("artifacts page model", () => {
     const [live] = artifactListRows([record()]);
     expect(live?.expired).toBe(false);
     expect(live?.expiredReason).toBeNull();
+  });
+
+  it("labels an agent owner and links to the agent page while that agent exists", () => {
+    const owner = { kind: "agent" as const, agent: "helper" };
+    const [row] = artifactListRows([
+      record({
+        key: "agent:helper/weekly",
+        owner,
+        source: { run_id: null, stage_id: null, attempt: null, session_id: "sess_1" },
+      }),
+    ]);
+    expect(row?.ownerLabel).toBe("agent · helper");
+    expect(row?.ownerPath).toBe("/agents/helper");
+    expect(artifactOwnerPath(owner, new Set(["helper"]))).toBe("/agents/helper");
+    expect(artifactOwnerPath(owner, new Set(["other"]))).toBeNull();
+    expect(artifactOwnerPath({ kind: "stage", pipeline: "sales", stage: "summarize" })).toBeNull();
   });
 });

@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -25,7 +26,9 @@ import { appendArtifactPublishPrompt } from "../src/tools/publishArtifact.js";
 import {
   createPublishArtifactTool,
   publishPathBytesReadForTests,
+  readCappedPublishFile,
   resetPublishPathBytesReadForTests,
+  setPublishFileOpenHookForTests,
 } from "../src/tools/publishArtifact.js";
 import { createEmitStageEnvelopeTool } from "../src/tools/emitStageEnvelope.js";
 import { PUBLISH_ARTIFACT_TOOL_NAME } from "../src/tools/stageToolNames.js";
@@ -43,6 +46,7 @@ const cleanups: Array<() => Promise<void>> = [];
 const previousHome = process.env.STAGEFLOW_HOME;
 
 afterEach(async () => {
+  setPublishFileOpenHookForTests(undefined);
   resetGlobalStageflowHomeForTests();
   if (previousHome === undefined) delete process.env.STAGEFLOW_HOME;
   else process.env.STAGEFLOW_HOME = previousHome;
@@ -297,6 +301,102 @@ describe("publish_artifact tool", () => {
     });
     expect(error.isError).toBe(true);
     expect(error.content[0]?.text).not.toContain(secret);
+    const encoded = await tool.execute("call", {
+      id: "encoded",
+      kind: "static.markdown",
+      title: "Encoded",
+      content_base64: Buffer.from(`token ${secret}`, "utf8").toString("base64"),
+    });
+    expect(encoded.isError).toBeUndefined();
+    expect(stored[2]?.bytes.toString("utf8")).not.toContain(secret);
+    expect(stored[2]?.bytes.toString("utf8")).toContain("[redacted]");
+    const pem = ["-----BEGIN EC PRIVATE KEY-----", "MIIBogIBAAJBALFakeKeyMaterialForTestsOnly1234567890", "-----END EC PRIVATE KEY-----"].join("\n");
+    await tool.execute("call", {
+      id: "key",
+      kind: "static.text",
+      title: "Key",
+      content_base64: Buffer.from(pem, "utf8").toString("base64"),
+    });
+    expect(stored.at(-1)?.bytes.toString("utf8")).toBe("[redacted]");
+    expect(stored.at(-1)?.bytes.toString("utf8")).not.toContain("FakeKeyMaterial");
+    const imageText = Buffer.from(`token ${secret}`, "utf8");
+    await tool.execute("call", {
+      id: "pixels",
+      kind: "static.image",
+      title: "Pixels",
+      content_base64: imageText.toString("base64"),
+    });
+    expect(stored.at(-1)?.bytes.equals(imageText)).toBe(true);
+  });
+
+  it("rejects text that is not valid UTF-8 from a path or from base64", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "sf-pub-utf8-"));
+    cleanups.push(() => rm(workspace, { recursive: true, force: true }));
+    const artifacts = attemptArtifactsDir(workspace, "publish-note", 1);
+    await mkdir(artifacts, { recursive: true });
+    const binary = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff]);
+    await writeFile(path.join(artifacts, "note.md"), binary);
+    let stored = 0;
+    const tool = publishTool(async () => {
+      stored += 1;
+      return { key: "stage:publish-note:publish-note/note", version: 1, project_root: "proj" };
+    }, workspace);
+    const fromPath = await tool.execute("call", {
+      id: "note",
+      kind: "static.markdown",
+      title: "Note",
+      path: "stages/publish-note/attempts/1/artifacts/note.md",
+    });
+    expect(fromPath.isError).toBe(true);
+    const pathPayload = JSON.parse(fromPath.content[0]!.text) as { code: string; issues: Array<{ path: string }> };
+    expect(pathPayload.code).toBe("artifact.invalid_shape");
+    expect(pathPayload.issues[0]?.path).toBe("path");
+    const fromBase64 = await tool.execute("call", {
+      id: "note",
+      kind: "static.text",
+      title: "Note",
+      content_base64: binary.toString("base64"),
+    });
+    expect(fromBase64.isError).toBe(true);
+    const base64Payload = JSON.parse(fromBase64.content[0]!.text) as { code: string; issues: Array<{ path: string }> };
+    expect(base64Payload.code).toBe("artifact.invalid_shape");
+    expect(base64Payload.issues[0]?.path).toBe("content");
+    expect(stored).toBe(0);
+    const image = await tool.execute("call", {
+      id: "shot",
+      kind: "static.image",
+      title: "Shot",
+      content_base64: binary.toString("base64"),
+    });
+    expect(image.isError).toBeUndefined();
+    expect(stored).toBe(1);
+  });
+
+  it("does not follow a symlink or a fifo swapped in before open", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-pub-follow-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const file = path.join(dir, "note.txt");
+    const secret = path.join(dir, "secret.txt");
+    const linked = path.join(dir, "linked.txt");
+    const fifo = path.join(dir, "pipe");
+    await writeFile(file, "visible");
+    await writeFile(secret, "hidden-secret");
+    await symlink(secret, linked);
+    execFileSync("mkfifo", [fifo]);
+    resetPublishPathBytesReadForTests();
+    expect(() => readCappedPublishFile(linked, 100)).toThrow(/Artifact path denied/);
+    expect(publishPathBytesReadForTests()).toBe(0);
+    resetPublishPathBytesReadForTests();
+    expect(() => readCappedPublishFile(fifo, 100)).toThrow(/Artifact path denied/);
+    expect(publishPathBytesReadForTests()).toBe(0);
+    setPublishFileOpenHookForTests(() => {
+      fs.rmSync(file);
+      fs.symlinkSync(secret, file);
+    });
+    resetPublishPathBytesReadForTests();
+    expect(() => readCappedPublishFile(file, 100)).toThrow(/Artifact path denied/);
+    expect(publishPathBytesReadForTests()).toBe(0);
+    expect(fs.readFileSync(secret, "utf8")).toBe("hidden-secret");
   });
 });
 

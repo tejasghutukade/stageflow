@@ -31,6 +31,8 @@ import { AgentError } from "../errors.js";
 import { MEMORY_STORE_BASH_DENIED, memoryStorePathInCommand } from "../../memory/bashDeny.js";
 import { compactionUsageCost, type CompactionEndSessionEvent } from "../../agent/compactionEvents.js";
 import { memoryHome } from "../../memory/host.js";
+import { appendAgentArtifactPrompt, bindAgentArtifactDelete, createAgentPublishArtifactTool, type AgentPublishTool } from "../artifactTools.js";
+import { SessionPublishError, type SessionPublishBody, type SessionPublishSuccess } from "../../artifacts/sessionPublish.js";
 import { forbiddenWriteTarget } from "../policy.js";
 import { prepareExecutionLaunch, type SandboxRunner } from "../sandbox.js";
 import { grantedStageflowTools, isOperatorOnlyTool, type ToolkitTool } from "../../toolkit/index.js";
@@ -43,6 +45,13 @@ export type PiRuntimeOptions = {
   sandbox?: SandboxRunner;
   /** Stageflow's own tools, built lazily because they need Host services that start after the runtime. */
   toolkit?: () => ToolkitTool[];
+  /** Publishes as this agent. The owner and session source are applied here, not from the model. */
+  publishAgentArtifact?: (input: {
+    agentId: string;
+    sessionId: string;
+    projectRoot: string;
+    body: SessionPublishBody;
+  }) => Promise<SessionPublishSuccess>;
   /**
    * How long a session may sit unused before its Pi session and isolated MCP processes are released. A later message
    * reopens it from the stored transcript. Default 30 minutes; 0 keeps sessions until released or disposed.
@@ -62,8 +71,10 @@ export type OpenSessionInput = {
   /** Runs before each tool call; the session wires it to `pi.on("tool_call")`. */
   gate: (call: { toolCallId: string; toolName: string; input: Record<string, unknown> }) => Promise<{ block: true; reason: string; terminate?: boolean } | undefined>;
   delegateTool?: (agentId: string, message: string, callId: string) => Promise<string>;
-  /** Stageflow tools this agent is granted. */
+  /** Stageflow tools this agent is granted. save_artifact is never included. */
   stageflowTools?: ToolkitTool[];
+  /** In-session publish tool, present only when the agent holds artifacts.write. */
+  agentPublishTool?: AgentPublishTool;
   memory?: StageMemory;
   /** Defaults to true; one-shot judge sessions have no use for it. */
   workingState?: boolean;
@@ -281,6 +292,21 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
       if (!toolNames.includes(tool.name)) toolNames.push(tool.name);
     }
 
+    if (input.agentPublishTool) {
+      const tool = input.agentPublishTool;
+      customTools.push(
+        defineTool({
+          name: tool.name,
+          label: tool.label,
+          description: tool.description,
+          parameters: tool.parameters,
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+          execute: async (callId: string, args: unknown) => tool.execute(callId, args),
+        }),
+      );
+      if (!toolNames.includes(tool.name)) toolNames.push(tool.name);
+    }
+
     for (const tool of input.stageflowTools ?? []) {
       customTools.push(
         defineTool({
@@ -433,7 +459,29 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
     const mcpServers = Object.keys(definition.tools.mcp);
     const subAgents = [...definition.sub_agents];
     const grantedSf = new Set(grantedStageflowTools(definition.tools.stageflow));
-    const stageflowTools = (options.toolkit?.() ?? []).filter((tool) => grantedSf.has(tool.name) && !isOperatorOnlyTool(tool.name));
+    const stageflowTools = (options.toolkit?.() ?? [])
+      .filter((tool) => grantedSf.has(tool.name) && tool.name !== "save_artifact" && !isOperatorOnlyTool(tool.name))
+      .map((tool) =>
+        tool.name === "delete_artifact" ? bindAgentArtifactDelete(tool, definition.id, projectRoot) : tool,
+      );
+    const agentPublishTool = grantedSf.has("save_artifact")
+      ? createAgentPublishArtifactTool({
+          agentId: definition.id,
+          projectRoot,
+          stageflowHome: globalStageflowHome(),
+          publish: (body) => {
+            if (!options.publishAgentArtifact) {
+              return Promise.reject(new SessionPublishError("artifact.invalid_shape", "artifact publish is not available"));
+            }
+            return options.publishAgentArtifact({
+              agentId: definition.id,
+              sessionId: input.sessionId,
+              projectRoot,
+              body,
+            });
+          },
+        })
+      : undefined;
     const state: Bound = { opened: undefined as never, definitionKey: definition.id, hooks: undefined, mcpServers, subAgents, functionTools };
     const context = definition.project_context ? await projectContext(projectRoot) : "";
     let memory: StageMemory | undefined;
@@ -445,17 +493,25 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
         throw new AgentError("agent.invalid", `Memory could not be opened (${code})`);
       }
     }
-    const systemPrompt = `${definition.instructions}${context}${memory ? `\n\n${memorySession(memory).prompt}` : ""}`;
+    const systemPrompt = appendAgentArtifactPrompt(
+      `${definition.instructions}${context}${memory ? `\n\n${memorySession(memory).prompt}` : ""}`,
+      definition,
+    );
     state.opened = await open({
       projectRoot,
       definition,
       systemPrompt,
-      toolNames: [...piToolNames(definition), ...functionTools.map((tool) => tool.name)],
+      toolNames: [
+        ...piToolNames(definition),
+        ...functionTools.map((tool) => tool.name),
+        ...(agentPublishTool ? [agentPublishTool.name] : []),
+      ],
       ...(functionTools.length > 0 ? { functionTools } : {}),
       hooks: () => state.hooks,
       ...(input.consumerTools !== undefined ? { consumerTools: input.consumerTools } : {}),
       ...(memory ? { memory } : {}),
       ...(stageflowTools.length > 0 ? { stageflowTools } : {}),
+      ...(agentPublishTool ? { agentPublishTool } : {}),
       ...(subAgents.length > 0 ? { delegateTool: (agentId, message, callId) => state.hooks!.delegate(agentId, message, callId) } : {}),
       gate: async (call) => {
         const hooks = state.hooks;
