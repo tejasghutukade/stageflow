@@ -95,6 +95,10 @@ CONTEXT.md
 .pi/
 .pi/skills/
 artifacts/
+!/src/artifacts/
+!/src/artifacts/**
+!/ui/src/redesign/artifacts/
+!/ui/src/redesign/artifacts/**
 naming-candidate-conflicts.json
 sf-differentiation-research.json
 software-factory-naming-research.json

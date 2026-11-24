@@ -88,6 +88,7 @@ import { applyStorePragmas } from "./applyStorePragmas.js";
 import type { OverviewRunRow } from "../overviewSummary.js";
 import { RunSubmissionExistsError, type RunSubmissionRecord } from "../submission.js";
 import { nextFinishedAt } from "../runStatusClock.js";
+import { indexDeclaredDeliverables } from "../../artifacts/indexDeclared.js";
 
 type SqliteRunStoreOpenerMode = "assert" | "migrate";
 
@@ -1160,6 +1161,19 @@ export class SqliteRunStore implements RunStore {
       });
 
     await this.updateStageExecution(runId, stageId, attempt, { envelope });
+    try {
+      await indexDeclaredDeliverables({
+        db: this.db,
+        store: this,
+        runId,
+        stageId,
+        attempt,
+        envelope,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Artifact index failed for ${runId}/${stageId}: ${message}`);
+    }
   }
 
   async readEnvelope(

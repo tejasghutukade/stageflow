@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  artifactsPath,
   agentPath,
   agentCreatePath,
   agentRunPath,
@@ -257,6 +258,14 @@ describe("parseHash", () => {
       taskPath: "pipelines/demo.task.yaml",
       projectRoot: "/repo/examples",
     });
+  });
+});
+
+describe("artifact routes", () => {
+  it("opens the artifacts list", () => {
+    expect(artifactsPath()).toBe("/artifacts");
+    expect(parseHash("#/artifacts")).toEqual({ name: "artifacts" });
+    expect(parseHash(`#${artifactsPath()}`)).toEqual({ name: "artifacts" });
   });
 });
 

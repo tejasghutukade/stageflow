@@ -6,6 +6,8 @@ Terms that are easy to mix up.
 |------|-------|-------------------------|
 | **Pipeline** | A DAG of stages defined in `*.pipeline.yaml` | An agent |
 | **Run** / **Pipeline run** | One execution of a pipeline. Listed on the **Pipeline runs** page | An agent session or agent run |
+| **Artifact** | A published, indexed output with an owner and a stable id. Declared deliverables from a success envelope are indexed automatically and listed on **Artifacts**. See [Artifacts](artifacts.md) | A run file, an A2A artifact |
+| **Run file** | A file in a stage attempt's `artifacts/` folder. It is not an artifact unless it is indexed | An artifact |
 | **Stage** | One step of a pipeline, executed by a model | An agent |
 | **Agent** | A project-owned conversational definition in `agents/<id>.agent.yaml` that answers people over time. See [Agents](agents.md) | The stage `agent:` field (below) |
 | **Agent backend** | The stage field `agent: pi \| claude` and the agent `model.backend` that choose which model runtime executes | An Agent |

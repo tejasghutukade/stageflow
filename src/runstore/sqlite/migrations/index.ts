@@ -22,6 +22,7 @@ import { MIGRATION_019 } from "./019-agent-session-rollover.js";
 import { MIGRATION_020 } from "./020-functions.js";
 import { MIGRATION_021 } from "./021-function-invocations.js";
 import { MIGRATION_022 } from "./022-function-route.js";
+import { MIGRATION_023 } from "./023-artifacts.js";
 
 export type SqliteMigration = {
   version: number;
@@ -53,6 +54,7 @@ const DEFAULT_MIGRATIONS: SqliteMigration[] = [
   MIGRATION_020,
   MIGRATION_021,
   MIGRATION_022,
+  MIGRATION_023,
 ];
 
 export const CURRENT_SCHEMA_VERSION =

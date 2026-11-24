@@ -27,6 +27,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Hosted runtime](hosted.md) | Public library contract for embedding one inline pipeline run |
 | [Context and compaction](context-and-compaction.md) | What happens when a stage or agent fills its context window: assignment in the system prompt, tool-output caps, `working_state`, automatic compaction, cost and visibility |
 | [Envelopes](envelopes.md) | Stage handoff contract (`emit_stage_envelope`, artifacts) |
+| [Artifacts](artifacts.md) | Indexed deliverables: what is recorded, what is left out, and how projects scope the index |
 | [Verified Stage Execution](verified-stage-execution.md) | After-phase `verify`, evidence, and `on_verify_fail` repair / manual recovery |
 | [Human-in-the-loop](hitl.md) | Gate kinds, operator replies, `--skip-gates`, exit code `2` |
 | [Agents](agents.md) | Project-owned agents (`agents/*.agent.yaml`): overview and where the pieces live |
@@ -62,6 +63,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Console: Overview](console-overview.md) | Control center: what needs you, what is running, system health, run trends |
 | [Console: Inbox](console-inbox.md) | Gates and agent approvals waiting on you, desktop notifications |
 | [Console: Pipeline runs](console-runs.md) | Run list, Start a run, run detail (Timeline, Graph, List; Transcript, Events, Envelope, Artifacts) |
+| [Console: Artifacts](console-artifacts.md) | Artifacts list in the Activity rail: kind, owner, source run |
 | [Console: Pipelines, tasks and catalog](console-pipelines-catalog.md) | Pipeline editor, Tasks, Catalog, Triggers, Workshop |
 | [Console: Evals](console-evals.md) | Evals list, New eval wizard (stage or agent), Datasets and scenarios, Run dialog and live progress, run switcher, results, suggested failure sorting, case drawer and conversation transcript, Compare, Edit eval |
 | [Console: Agents](console-agents.md) | Directory, create and edit, sessions, run inspector |

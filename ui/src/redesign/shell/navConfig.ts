@@ -12,6 +12,7 @@ import {
   LuShield,
   LuBookOpen,
   LuCompass,
+  LuFiles,
   LuSparkles,
   LuSquareFunction,
   LuZap,
@@ -46,6 +47,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Activity",
     items: [
       { id: "runs", label: "Pipeline runs", href: "#/runs", icon: LuList, badge: "inFlight" },
+      { id: "artifacts", label: "Artifacts", href: "#/artifacts", icon: LuFiles },
       { id: "agent-sessions", label: "Agent sessions", href: "#/agent-sessions", icon: LuMessagesSquare, badge: "agentsActive", experimental: true },
     ],
   },

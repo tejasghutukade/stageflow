@@ -16,6 +16,7 @@ const NAV_ITEMS: PaletteNavDef[] = [
   { id: "overview", label: "Overview", path: "/overview" },
   { id: "inbox", label: "Inbox", path: "/inbox" },
   { id: "runs", label: "Pipeline runs", path: "/runs" },
+  { id: "artifacts", label: "Artifacts", path: "/artifacts" },
   { id: "agent-sessions", label: "Agent sessions", path: "/agent-sessions" },
   { id: "agents", label: "Agents", path: "/agents" },
   { id: "pipelines", label: "Pipelines", path: "/pipelines" },

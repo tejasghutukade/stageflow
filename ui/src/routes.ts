@@ -15,6 +15,7 @@ export type Route =
   | { name: "overview" }
   | { name: "inbox"; tab?: InboxTabId }
   | { name: "runs" }
+  | { name: "artifacts" }
   | { name: "new"; pipelineId?: string; taskPath?: string; projectRoot?: string }
   | { name: "detail"; runId: string; view: DetailView }
   | { name: "pipelines" }
@@ -77,6 +78,10 @@ export function navigate(to: string): void {
 
 export function runStreamPath(runId: string): string {
   return `/runs/${encodeURIComponent(runId)}`;
+}
+
+export function artifactsPath(): string {
+  return "/artifacts";
 }
 
 export function runStagePath(runId: string, stageId: string): string {
@@ -436,6 +441,7 @@ export function parseHash(hash = window.location.hash): Route {
     return tab ? { name: "inbox", tab } : { name: "inbox" };
   }
   if (path === "runs") return { name: "runs" };
+  if (path === "artifacts") return { name: "artifacts" };
   if (path === "evals" || path.startsWith("evals/") || path === "datasets" || path.startsWith("datasets/")) {
     const evalRoute = parseEvalRoute(path, params);
     if (evalRoute) return evalRoute;

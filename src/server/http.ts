@@ -220,6 +220,7 @@ import { handleChannelRoutes } from "./channelRoutes.js";
 import { handleBrowserProfileRoutes } from "./browserProfileRoutes.js";
 import { handleEvalInternalRoutes, isEvalInternalPath, type EvalServices } from "./evalInternalRoutes.js";
 import { handleMemoryRoutes } from "./memoryRoutes.js";
+import { handleArtifactRoutes } from "./artifactRoutes.js";
 import { EmailTriggers } from "../email/triggers.js";
 import {
   bootstrapStageflowHost,
@@ -719,6 +720,9 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: method !== "GET" })) return true;
           if (!boot.memories) { json(res, 503, { code: "memory.unavailable" }); return true; }
           if (await handleMemoryRoutes(req, method, pathname, boot.memories, res, json)) return true;
+        }
+        if (pathname === "/api/artifacts" || pathname.startsWith("/api/artifacts/")) {
+          if (await handleArtifactRoutes(req, method, pathname, url, store, res, json)) return true;
         }
         if (pathname.startsWith("/api/a2a/")) {
           if (!boot.a2aManagement) { json(res, 503, { code: "a2a_unavailable", error: "A2A management is unavailable" }); return true; }
