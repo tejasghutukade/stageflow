@@ -53,6 +53,7 @@ import { applyRedesignAttribute, useRedesign } from "./redesign/flag";
 import { AgentsRedesign } from "./redesign/agents/AgentsRedesign";
 import { FunctionsRedesign } from "./redesign/functions/FunctionsRedesign";
 import { ArtifactsPage } from "./redesign/artifacts/ArtifactsPage";
+import { ArtifactDetailPage } from "./redesign/artifacts/ArtifactDetailPage";
 import { agentsRouteProps, railActiveId } from "./routeNav";
 import { AgentSessionsPage } from "./redesign/agents/sessions/AgentSessionsPage";
 import { useAgentApprovals } from "./redesign/agents/model/useAgentApprovals";
@@ -206,6 +207,10 @@ function ConsoleRoot() {
     );
   } else if (route.name === "artifacts") {
     content = <ArtifactsPage />;
+  } else if (route.name === "artifact") {
+    content = (
+      <ArtifactDetailPage ownerKey={route.ownerKey} id={route.id} projectRoot={route.projectRoot} />
+    );
   } else if (route.name === "functions") {
     content = <FunctionsRedesign functionId={route.functionId} creating={route.creating === true} kind={route.kind} />;
   } else if (route.name === "pipelines") {

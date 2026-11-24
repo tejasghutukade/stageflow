@@ -22,6 +22,9 @@ function record(patch: Partial<ArtifactRecord> = {}): ArtifactRecord {
     created_at: "2026-11-24T12:00:00.000Z",
     updated_at: "2026-11-24T12:00:00.000Z",
     expires_at: null,
+    status: "available",
+    expired_at: null,
+    expired_reason: null,
     project: { id: "examples", registered: true },
     ...patch,
   };
@@ -56,5 +59,28 @@ describe("ArtifactsPageView", () => {
     }));
     expect(html).toContain(unregisteredProjectLabel(rows[0]!)!);
     expect(html).toContain("sf-pill--needs");
+  });
+
+  it("renders an Expired pill with the short reason", () => {
+    const rows = artifactListRows([
+      record({
+        status: "expired",
+        expired_at: "2026-11-01T00:00:00.000Z",
+        expired_reason: "run_purged",
+      }),
+    ]);
+    expect(rows[0]?.expired).toBe(true);
+    expect(rows[0]?.expiredReason).toBe("Run was purged");
+    const html = renderToStaticMarkup(createElement(ArtifactsPageView, {
+      rows,
+      error: null,
+      loading: false,
+      scopeOptions: [],
+      scopeId: "examples",
+      showLoadMore: false,
+    }));
+    expect(html).toContain("sf-pill--fail");
+    expect(html).toContain("Expired");
+    expect(html).toContain("Run was purged");
   });
 });

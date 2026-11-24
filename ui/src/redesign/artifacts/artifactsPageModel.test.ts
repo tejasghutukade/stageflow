@@ -7,6 +7,7 @@ import {
   ARTIFACTS_EMPTY_TITLE,
   activeArtifactProjectWireId,
   applyArtifactPage,
+  artifactExpiredShortReason,
   artifactListRows,
   artifactProjectScopeOptions,
   artifactScopeQuery,
@@ -31,6 +32,9 @@ function record(patch: Partial<ArtifactRecord> = {}): ArtifactRecord {
     created_at: "2026-11-24T12:00:00.000Z",
     updated_at: "2026-11-24T12:00:00.000Z",
     expires_at: null,
+    status: "available",
+    expired_at: null,
+    expired_reason: null,
     project: { id: "examples", registered: true },
     ...patch,
   };
@@ -73,6 +77,7 @@ describe("artifacts page model", () => {
     expect(unregisteredProjectLabel({ unregistered: false, projectId: "examples" })).toBeNull();
     expect(row?.runLabel).toBe(runShortId("run_abcdef123456"));
     expect(row?.projectLabel).toBe("root");
+    expect(row?.detailPath).toBe("/artifacts/stage%3Asales%3Asummarize/weekly?project_root=%2Fgone%2Froot");
   });
 
   it("builds project scope options and a short project label", () => {
@@ -119,5 +124,20 @@ describe("artifacts page model", () => {
     ]);
     const [row] = artifactListRows([record()], Date.parse("2026-11-24T12:00:00.000Z"), { runs });
     expect(row?.runLabel).toBe(`${runShortId("run_abcdef123456")} · weekly-digest`);
+  });
+
+  it("marks an expired row and keeps a short reason", () => {
+    const [row] = artifactListRows([
+      record({ status: "expired", expired_at: "2026-11-01T00:00:00.000Z", expired_reason: "file_missing" }),
+    ]);
+    expect(row?.expired).toBe(true);
+    expect(row?.expiredReason).toBe("File is missing");
+    expect(artifactExpiredShortReason("run_slimmed")).toBe("Cleaned up to save space");
+    expect(artifactExpiredShortReason("run_purged")).toBe("Run was purged");
+    expect(artifactExpiredShortReason("run_deleted")).toBe("Run was deleted");
+    expect(artifactExpiredShortReason("custom_code")).toBe("custom_code");
+    const [live] = artifactListRows([record()]);
+    expect(live?.expired).toBe(false);
+    expect(live?.expiredReason).toBeNull();
   });
 });

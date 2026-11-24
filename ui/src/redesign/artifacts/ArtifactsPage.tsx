@@ -3,7 +3,7 @@ import { LuCode, LuFile, LuFileText, LuImage, LuTable } from "react-icons/lu";
 import type { IconType } from "react-icons";
 import { fetchCatalogRoots, fetchRuns } from "../../api/client";
 import { fetchArtifacts } from "../../api/artifacts";
-import { navigate, runStreamPath } from "../../routes";
+import { navigate } from "../../routes";
 import { DataTable, DataTableRow } from "../shell/DataTable";
 import { PageHeader } from "../shell/PageHeader";
 import {
@@ -49,9 +49,7 @@ function EmptyState() {
 function ArtifactRow({ row }: { row: ArtifactListRow }) {
   const unregistered = unregisteredProjectLabel(row);
   return (
-    <DataTableRow
-      onClick={row.runId ? () => navigate(runStreamPath(row.runId!)) : undefined}
-    >
+    <DataTableRow onClick={() => navigate(row.detailPath)}>
       <span className="flex items-center gap-3">
         <KindIcon kind={row.kind} />
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--sf-text-1)]">{row.title}</span>
@@ -59,10 +57,15 @@ function ArtifactRow({ row }: { row: ArtifactListRow }) {
         <span className="sf-pill shrink-0">
           <span className="sf-pill__label">{row.kindLabel}</span>
         </span>
+        {row.expired ? (
+          <span className="sf-pill sf-pill--fail shrink-0" title={row.expiredReason ?? "Expired"}>
+            <span className="sf-pill__label">Expired</span>
+          </span>
+        ) : null}
         {row.showProject ? (
           <span className="shrink-0 text-xs text-[var(--sf-text-2)]">{row.projectLabel}</span>
         ) : null}
-        <span className="shrink-0 text-xs text-[var(--sf-text-2)] underline decoration-[var(--sf-hairline)]">
+        <span className="shrink-0 text-xs text-[var(--sf-text-2)]">
           {row.runLabel}
         </span>
         <span className="shrink-0 text-xs text-[var(--sf-text-3)]">{row.updatedLabel}</span>

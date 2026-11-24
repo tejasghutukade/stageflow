@@ -1,6 +1,7 @@
 import type { ArtifactRecord } from "../../api/artifacts";
 import { displayCatalogPath, runTaskLabel } from "../../catalog/displayCatalogPath";
 import { runShortId } from "../../catalogJoin";
+import { artifactDetailPath } from "../../routes";
 
 export const ARTIFACTS_EMPTY_TITLE = "No artifacts yet";
 
@@ -39,10 +40,13 @@ export type ArtifactListRow = {
   runId: string | null;
   runLabel: string;
   updatedLabel: string;
+  expired: boolean;
+  expiredReason: string | null;
   unregistered: boolean;
   projectId: string;
   projectLabel: string;
   showProject: boolean;
+  detailPath: string;
 };
 
 export type ArtifactCursorState = {
@@ -62,6 +66,19 @@ const KIND_LABELS: Record<string, string> = {
 
 export function artifactKindLabel(kind: string): string {
   return KIND_LABELS[kind] ?? kind;
+}
+
+const EXPIRED_SHORT: Record<string, string> = {
+  run_slimmed: "Cleaned up to save space",
+  run_purged: "Run was purged",
+  run_deleted: "Run was deleted",
+  file_missing: "File is missing",
+};
+
+export function artifactExpiredShortReason(reason: string | null | undefined): string {
+  const code = reason?.trim() ?? "";
+  if (code.length === 0) return "Expired";
+  return EXPIRED_SHORT[code] ?? code;
 }
 
 export function activeArtifactProjectWireId(roots: readonly ArtifactProjectRoot[]): string {
@@ -116,6 +133,11 @@ export function applyArtifactPage(
   };
 }
 
+export function artifactOwnerKey(owner: ArtifactRecord["owner"]): string {
+  if (owner.kind === "agent") return `agent:${owner.agent}`;
+  return `stage:${owner.pipeline}:${owner.stage}`;
+}
+
 export function artifactOwnerLabel(owner: ArtifactRecord["owner"]): string {
   if (owner.kind === "agent") return owner.agent;
   return `${owner.pipeline} / ${owner.stage}`;
@@ -160,10 +182,13 @@ export function artifactListRows(
     runId: record.source.run_id,
     runLabel: artifactRunLabel(record.source.run_id, options?.runs),
     updatedLabel: formatArtifactUpdated(record.updated_at, now),
+    expired: record.status === "expired",
+    expiredReason: record.status === "expired" ? artifactExpiredShortReason(record.expired_reason) : null,
     unregistered: record.project.registered === false,
     projectId: record.project.id,
     projectLabel: artifactProjectLabel(record.project.id),
     showProject,
+    detailPath: artifactDetailPath(artifactOwnerKey(record.owner), record.id, record.project.id),
   }));
 }
 

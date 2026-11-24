@@ -16,6 +16,7 @@ export type Route =
   | { name: "inbox"; tab?: InboxTabId }
   | { name: "runs" }
   | { name: "artifacts" }
+  | { name: "artifact"; ownerKey: string; id: string; projectRoot?: string }
   | { name: "new"; pipelineId?: string; taskPath?: string; projectRoot?: string }
   | { name: "detail"; runId: string; view: DetailView }
   | { name: "pipelines" }
@@ -82,6 +83,12 @@ export function runStreamPath(runId: string): string {
 
 export function artifactsPath(): string {
   return "/artifacts";
+}
+
+export function artifactDetailPath(ownerKey: string, id: string, projectRoot?: string): string {
+  const path = `/artifacts/${encodeURIComponent(ownerKey)}/${encodeURIComponent(id)}`;
+  if (!projectRoot) return path;
+  return `${path}?project_root=${encodeURIComponent(projectRoot)}`;
 }
 
 export function runStagePath(runId: string, stageId: string): string {
@@ -442,6 +449,27 @@ export function parseHash(hash = window.location.hash): Route {
   }
   if (path === "runs") return { name: "runs" };
   if (path === "artifacts") return { name: "artifacts" };
+  if (path.startsWith("artifacts/")) {
+    const rest = path.slice("artifacts/".length);
+    const slash = rest.indexOf("/");
+    if (slash > 0 && slash < rest.length - 1 && !rest.slice(slash + 1).includes("/")) {
+      try {
+        const ownerKey = decodeURIComponent(rest.slice(0, slash));
+        const id = decodeURIComponent(rest.slice(slash + 1));
+        if (ownerKey && id) {
+          const projectRoot = params.get("project_root") ?? undefined;
+          return {
+            name: "artifact",
+            ownerKey,
+            id,
+            ...(projectRoot ? { projectRoot } : {}),
+          };
+        }
+      } catch {
+        return { name: "inbox" };
+      }
+    }
+  }
   if (path === "evals" || path.startsWith("evals/") || path === "datasets" || path.startsWith("datasets/")) {
     const evalRoute = parseEvalRoute(path, params);
     if (evalRoute) return evalRoute;

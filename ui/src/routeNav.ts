@@ -10,6 +10,7 @@ const EVALS = "evals";
 const RAIL_ID: Partial<Record<RouteName, string>> = {
   connect: "settings",
   detail: "runs",
+  artifact: "artifacts",
   new: "inbox",
   pipeline: "pipelines",
   workshop: "pipelines",

@@ -49,3 +49,30 @@ Ids must not contain `::`. That separator is reserved for the storage key.
 ## Where the index lives
 
 Rows are in `state.db` (`artifacts` and `artifact_versions`). See [Data directory](data-directory.md). Indexed files still live under the run workspace and follow run retention; the index row records when the run's retention window will drop them once the run has finished.
+
+## When an indexed artifact expires
+
+The row stays in the list after the run file is gone. `status` is `available` or `expired`. An expired row has `expired_at` (when it expired) and `expired_reason`:
+
+| `expired_reason` | When it is set |
+|---|---|
+| `run_slimmed` | Retention slim dropped that file because it was over the slim size limit. Smaller indexed files of the same run stay `available`. |
+| `run_purged` | Retention purge removed the run. |
+| `run_deleted` | The run was deleted. |
+| `file_missing` | The run has finished and the indexed file is no longer a contained file in that attempt's `artifacts/` directory. |
+
+A later sweep does not change `expired_at`. Origin `published` is not expired by run retention. Each sweep repairs at most 100 available rows (the batch can be overridden in process). It resumes after the last key it examined and starts again at the first key after the end, so a long list of healthy rows does not hide a later missing file. A repair marks `run_deleted` when the run row is gone, and `file_missing` when the run row is still there but the file is not. If a slim does not finish, rows it marked `run_slimmed` whose files are still on disk go back to `available`.
+
+`expires_at` is the time the run's retention window will purge the run. It is set once, when the run reaches `succeeded`, `failed`, or `cancelled`, from that status's purge window (including `STAGEFLOW_PURGE_*_MS`). It stays null while the run has not finished, and it is not updated after it is set. The list query accepts `status=available` or `status=expired`.
+
+## Opening an artifact
+
+`GET /api/artifacts/<ownerKey>/<id>` returns the record. `GET /api/artifacts/<ownerKey>/<id>/content` returns the bytes of the indexed file. Both accept `project_root`. When that query is omitted and the same owner and id exist in more than one project, the response is `409` with code `artifact.ambiguous`.
+
+The content route reads the file through the same contained-path rules as a run file. The stored path is resolved against that attempt's `artifacts/` directory, so a path that stays inside the run workspace but leaves `artifacts/` (a `..` segment, an absolute path, or a symlink to a sibling file) is `403` `artifact.content_unavailable` with "Artifact path denied". An unknown key is `404` `artifact.not_found`. When the run or the file is gone, the response is `404` `artifact.content_unavailable`. An expired row is the same `404`, and the message names the reason (`run_slimmed`, `run_purged`, `run_deleted`, or `file_missing`), even when the file is still on disk. Text, Markdown, CSV, JSON, and HTML are `text/plain; charset=utf-8` with `X-Content-Type-Options: nosniff`. HTML is not served as `text/html` here. Images are the image bytes with their image type. A non-image larger than 5 MiB is `413` `artifact.too_large` and is not sent. Images may be larger than that.
+
+## CLI
+
+- `sf artifact list` — table or `--json` page of indexed artifacts (`--project-root`, `--limit`; `--q`, `--kind`, `--owner`, and `--live` filter client-side for now). The human table includes a `STATUS` column (`expired` or blank) and a short run id. See [CLI reference](cli-reference.md#sf-artifact).
+- `sf artifact show <ownerKey>/<id>` — a readable summary (key, title, kind, status, owner, source, updated, and expires or the expired reason). `--json` prints the record. Use `--project-root` when the key is ambiguous across projects.
+- `sf artifact read --run --path` — read a run workspace file by path (not the index). Unchanged from before the index shipped.
