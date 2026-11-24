@@ -7,7 +7,7 @@ import type Database from "better-sqlite3";
 import { TOOL_OUTPUT_ARTIFACT_DIR } from "../agent/toolOutputSpill.js";
 import { WORKSPACE_CATALOG_ID } from "../project/workspaceCatalog.js";
 import { acceptArtifactListedPath } from "../runtime/artifactPath.js";
-import { retentionWindowsFromEnv } from "../runstore/retention.js";
+import { indexedExpiresAt } from "../runstore/artifactRetention.js";
 import type { RunStore } from "../runstore/port.js";
 import { attemptArtifactsDir } from "../runstore/workspaceLayout.js";
 import {
@@ -69,23 +69,6 @@ function exclusionReason(relativePath: string): string | undefined {
   }
   if (segments.some((segment) => segment === TOOL_OUTPUT_ARTIFACT_DIR)) return "tool-output";
   return undefined;
-}
-
-function expiresAt(status: string, finishedAt: string | null): string | null {
-  if (finishedAt == null) return null;
-  const windows = retentionWindowsFromEnv();
-  const window =
-    status === "succeeded"
-      ? windows.succeeded
-      : status === "failed"
-        ? windows.failed
-        : status === "cancelled"
-          ? windows.cancelled
-          : undefined;
-  if (window === undefined) return null;
-  const ms = Date.parse(finishedAt);
-  if (!Number.isFinite(ms)) return null;
-  return new Date(ms + window.purgeMs).toISOString();
 }
 
 function capTitle(value: string): string {
@@ -193,7 +176,7 @@ export async function indexDeclaredDeliverables(input: {
   const workspaceDir = input.store.getWorkspaceDir(input.runId);
   const artifactsDir = attemptArtifactsDir(workspaceDir, input.stageId, input.attempt);
   const now = new Date().toISOString();
-  const expires = expiresAt(run.status, run.finished_at);
+  const expires = indexedExpiresAt(run.status, run.finished_at);
   const prepared: PreparedArtifact[] = [];
 
   for (const listed of input.envelope.artifacts) {
@@ -305,12 +288,12 @@ function writeRow(
        key, owner_kind, owner_pipeline, owner_stage, owner_agent, project_root_id, id,
        title, description, tags_json, summary, kind, origin, current_version,
        source_run_id, source_stage_id, source_attempt, source_session_id, hidden,
-       expires_at, created_at, updated_at, deleted_at
+       expires_at, status, expired_at, expired_reason, created_at, updated_at, deleted_at
      ) VALUES (
        @key, 'stage', @pipeline, @stage, NULL, @project, @id,
        @title, NULL, '[]', NULL, @kind, 'indexed', 1,
        @run_id, @stage_id, @attempt, NULL, 0,
-       @expires_at, @now, @now, NULL
+       @expires_at, 'available', NULL, NULL, @now, @now, NULL
      )
      ON CONFLICT(key) DO UPDATE SET
        title = excluded.title,
@@ -322,7 +305,10 @@ function writeRow(
        source_attempt = excluded.source_attempt,
        source_session_id = NULL,
        hidden = 0,
-       expires_at = excluded.expires_at,
+       expires_at = COALESCE(artifacts.expires_at, excluded.expires_at),
+       status = 'available',
+       expired_at = NULL,
+       expired_reason = NULL,
        updated_at = excluded.updated_at,
        deleted_at = NULL
      WHERE artifacts.origin = 'indexed'

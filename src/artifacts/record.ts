@@ -2,6 +2,17 @@ export type ArtifactOwner =
   | { kind: "stage"; pipeline: string; stage: string }
   | { kind: "agent"; agent: string };
 
+export const ARTIFACT_STATUSES = ["available", "expired"] as const;
+export type ArtifactStatus = (typeof ARTIFACT_STATUSES)[number];
+
+export const ARTIFACT_EXPIRED_REASONS = [
+  "run_slimmed",
+  "run_purged",
+  "run_deleted",
+  "file_missing",
+] as const;
+export type ArtifactExpiredReason = (typeof ARTIFACT_EXPIRED_REASONS)[number];
+
 export type ArtifactRecord = {
   key: string;
   id: string;
@@ -23,6 +34,9 @@ export type ArtifactRecord = {
   created_at: string;
   updated_at: string;
   expires_at: string | null;
+  status: ArtifactStatus;
+  expired_at: string | null;
+  expired_reason: ArtifactExpiredReason | null;
   project: { id: string; registered: boolean };
 };
 
@@ -47,6 +61,9 @@ export type ArtifactRow = {
   source_session_id: string | null;
   hidden: number;
   expires_at: string | null;
+  status: string;
+  expired_at: string | null;
+  expired_reason: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -89,6 +106,21 @@ export function artifactRecord(row: ArtifactRow, registered: boolean): ArtifactR
     created_at: row.created_at,
     updated_at: row.updated_at,
     expires_at: row.expires_at,
+    status: row.status === "expired" ? "expired" : "available",
+    expired_at: row.expired_at,
+    expired_reason: expiredReason(row.expired_reason),
     project: { id: row.project_root_id, registered },
   };
+}
+
+function expiredReason(value: string | null): ArtifactExpiredReason | null {
+  if (
+    value === "run_slimmed" ||
+    value === "run_purged" ||
+    value === "run_deleted" ||
+    value === "file_missing"
+  ) {
+    return value;
+  }
+  return null;
 }

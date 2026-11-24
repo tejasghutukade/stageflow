@@ -88,7 +88,16 @@ import { applyStorePragmas } from "./applyStorePragmas.js";
 import type { OverviewRunRow } from "../overviewSummary.js";
 import { RunSubmissionExistsError, type RunSubmissionRecord } from "../submission.js";
 import { nextFinishedAt } from "../runStatusClock.js";
+import type { ArtifactExpiredReason } from "../../artifacts/record.js";
 import { indexDeclaredDeliverables } from "../../artifacts/indexDeclared.js";
+import {
+  expireIndexedRun,
+  expireSlimmedIndexed,
+  logArtifactIndexFailure,
+  repairMissingIndexed,
+  restorePresentSlimmedIndexed,
+  stampIndexedExpiresAt,
+} from "../artifactRetention.js";
 
 type SqliteRunStoreOpenerMode = "assert" | "migrate";
 
@@ -395,6 +404,7 @@ function forkGenerationFromRow(row: ForkGenerationRow): ForkGenerationRecord {
 export class SqliteRunStore implements RunStore {
   private readonly db: Database.Database;
   private migratePromise: Promise<void>;
+  private indexedRepairAfterKey = "";
 
   constructor(
     private readonly storeRoot: string,
@@ -608,6 +618,13 @@ export class SqliteRunStore implements RunStore {
          WHERE run_id = @run_id${expectedClause}`,
       )
       .run(params);
+    if (result.changes > 0 && decision.action === "stamp") {
+      try {
+        stampIndexedExpiresAt(this.db, runId, status, decision.finishedAt);
+      } catch (error) {
+        logArtifactIndexFailure(`updateRunStatus ${runId}`, error);
+      }
+    }
     return result.changes;
   }
 
@@ -767,6 +784,43 @@ export class SqliteRunStore implements RunStore {
     if (result.changes === 0) {
       throw new Error(`Run not found: ${runId}`);
     }
+  }
+
+  async markIndexedArtifactsExpired(
+    runId: string,
+    reason: ArtifactExpiredReason,
+    now: string,
+  ): Promise<void> {
+    await this.ready();
+    expireIndexedRun(this.db, runId, reason, now);
+  }
+
+  async markSlimmedIndexedArtifacts(
+    runId: string,
+    maxBytes: number,
+    now: string,
+  ): Promise<string[]> {
+    await this.ready();
+    return expireSlimmedIndexed(this.db, this.getWorkspaceDir(runId), runId, maxBytes, now);
+  }
+
+  async restorePresentSlimmedIndexedArtifacts(
+    runId: string,
+    keys: readonly string[],
+  ): Promise<void> {
+    await this.ready();
+    await restorePresentSlimmedIndexed(this.db, this.getWorkspaceDir(runId), keys);
+  }
+
+  async repairMissingIndexedArtifacts(now: string, limit?: number): Promise<void> {
+    await this.ready();
+    this.indexedRepairAfterKey = await repairMissingIndexed(
+      this.db,
+      (runId) => this.getWorkspaceDir(runId),
+      now,
+      limit,
+      this.indexedRepairAfterKey,
+    );
   }
 
   async deleteRun(runId: string): Promise<void> {

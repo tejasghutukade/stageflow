@@ -39,7 +39,7 @@ See also [CLI reference — Storage locations](cli-reference.md#storage-location
 | `secrets/mcp-secrets.json` | **keep** | Write-only store for the values behind those `${NAME}` references (directory `0700`, file `0600`, plaintext at the same trust level as `channel-secrets.json`) |
 | `secrets/mcp-oauth.key` | **keep** | Host key for the encrypted OAuth store (`0600`); `PI_MCP_ADAPTER_OAUTH_FILE_KEY` overrides it |
 | `workspace/` | **keep** | The workspace catalog: pipelines and tasks that belong to no project (`stageflow.yaml` written on first start). A new install also gets `workspace/starters/`, copied once when a provider is first connected (see [Quick start — Starter pipelines](quickstart.md#starter-pipelines)); `workspace/.starters-pending` marks that the copy has not happened yet |
-| `runs/` | disposable | Per-run workspaces, stage attempts, artifacts |
+| `runs/` | disposable | Per-run workspaces, stage attempts, and artifact files. Slim, purge, and delete remove those files on the retention schedule. Indexed artifact rows stay in `state.db` and are marked expired; see [Artifacts](artifacts.md) |
 | `eval-engine/` | disposable | The eval engine installed by `sf eval engine install`: `eval-engine/<promptfoo-version>/` (about 1.2 GB, pinned version `0.124.0`). Re-installable. The Docker image bakes it in. See [Evals](evals.md#the-engine) |
 | `eval-runs/` | disposable | Work directory of an eval run in progress (`eval-runs/<evalRunId>/`: generated engine config, results, logs). Removed when the run ends unless `STAGEFLOW_EVALS_KEEP_WORKDIR=1`. Eval results themselves are in `state.db` |
 | `a2a-artifacts/` | disposable | A2A artifact bytes |

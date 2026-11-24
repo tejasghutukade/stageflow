@@ -1,6 +1,11 @@
 import type Database from "better-sqlite3";
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
-import { artifactRecord, type ArtifactRecord, type ArtifactRow } from "./record.js";
+import {
+  artifactRecord,
+  type ArtifactRecord,
+  type ArtifactRow,
+  type ArtifactStatus,
+} from "./record.js";
 import { assertArtifactId, parseOwnerKey, type ParsedOwner } from "./keys.js";
 import { canonicalProjectWireId } from "./projectScope.js";
 
@@ -8,7 +13,7 @@ const SELECT_COLS = `
   a.key, a.owner_kind, a.owner_pipeline, a.owner_stage, a.owner_agent, a.project_root_id,
   a.id, a.title, a.description, a.tags_json, a.summary, a.kind, a.origin, a.current_version,
   a.source_run_id, a.source_stage_id, a.source_attempt, a.source_session_id, a.hidden,
-  a.expires_at, a.created_at, a.updated_at, a.deleted_at,
+  a.expires_at, a.status, a.expired_at, a.expired_reason, a.created_at, a.updated_at, a.deleted_at,
   v.content_type, v.size_bytes
 `;
 
@@ -21,6 +26,7 @@ export type ArtifactListQuery = {
   projectRoot?: string;
   limit: number;
   cursor?: string;
+  status?: ArtifactStatus;
 };
 
 export type ArtifactListPage = {
@@ -53,6 +59,12 @@ export function decodeArtifactCursor(cursor: string): { updatedAt: string; key: 
   } catch {
     return undefined;
   }
+}
+
+export function parseArtifactStatus(raw: string | null): ArtifactStatus | undefined {
+  if (raw == null || raw.trim() === "") return undefined;
+  if (raw === "available" || raw === "expired") return raw;
+  throw new ArtifactQueryError(400, "artifact.invalid_shape", "status must be available or expired");
 }
 
 export function parseArtifactLimit(raw: string | null): number {
@@ -96,6 +108,7 @@ export function listArtifacts(
       `SELECT ${SELECT_COLS} ${FROM}
        WHERE a.deleted_at IS NULL AND a.hidden = 0
          AND (@project IS NULL OR a.project_root_id = @project)
+         AND (@status IS NULL OR a.status = @status)
          AND (
            @cursor_at IS NULL
            OR a.updated_at < @cursor_at
@@ -106,6 +119,7 @@ export function listArtifacts(
     )
     .all({
       project: projectId ?? null,
+      status: query.status ?? null,
       cursor_at: cursor?.updatedAt ?? null,
       cursor_key: cursor?.key ?? null,
       limit: query.limit + 1,

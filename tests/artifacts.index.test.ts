@@ -312,7 +312,7 @@ describe("artifact index", () => {
     const freshRoot = await temp("sf-art-fresh-");
     const fresh = createRunStore({ rootDir: freshRoot, kind: "sqlite" });
     const freshDb = sqliteConnectionFromStore(fresh)!;
-    expect(freshDb.pragma("user_version", { simple: true })).toBe(23);
+    expect(freshDb.pragma("user_version", { simple: true })).toBe(24);
     expect(
       freshDb.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('artifacts', 'artifact_versions')`).all(),
     ).toHaveLength(2);
@@ -329,12 +329,12 @@ describe("artifact index", () => {
     const dbPath = path.join(storeRootFor(existingRoot), "state.db");
     const db = new Database(dbPath);
     db.exec(`DROP TABLE artifact_versions; DROP TABLE artifacts;`);
-    db.prepare(`DELETE FROM schema_migrations WHERE version = 23`).run();
+    db.prepare(`DELETE FROM schema_migrations WHERE version >= 23`).run();
     db.pragma("user_version = 22");
     db.close();
     const migrated = createRunStore({ rootDir: existingRoot, kind: "sqlite" });
     const migratedDb = sqliteConnectionFromStore(migrated)!;
-    expect(migratedDb.pragma("user_version", { simple: true })).toBe(23);
+    expect(migratedDb.pragma("user_version", { simple: true })).toBe(24);
     expect(migratedDb.prepare(`SELECT name FROM sqlite_master WHERE name = 'artifacts'`).get()).toBeTruthy();
     expect(migratedDb.prepare(`SELECT run_id FROM runs`).all()).toEqual([{ run_id: created.runId }]);
     await migrated.close();
