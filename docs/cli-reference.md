@@ -699,9 +699,48 @@ sf export --all [--status <status>] [--since <iso>] [--pipeline <id-or-path>] [-
 
 HTTP: `GET /api/export` (**read** scope) with the same query filters.
 
-## `sf artifact read`
+## `sf artifact`
 
-Read a run workspace artifact as UTF-8 text (same path rules as MCP `run_files` with `view: artifact`).
+List and show indexed artifacts (the artifact index in `state.db`), or read a run workspace file as UTF-8 text.
+
+Like other store read verbs, `list` and `show` open `$STAGEFLOW_HOME` SQLite directly. When the database is missing or its schema is behind this binary, they start the Host to apply migrations, then open again (same as `sf runs list` and `sf artifact read`).
+
+### `sf artifact list`
+
+```bash
+sf artifact list [--q <text>] [--kind <kind>] [--owner <pipeline:stage|agent:id>] [--live]
+  [--project-root <wire id or path>] [--limit <n>] [--json]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--q` | Client-side filter: matches `title`, `id`, or owner text (full-text search arrives later). |
+| `--kind` | Client-side filter on artifact `kind` (for example `static.markdown`). |
+| `--owner` | Client-side filter: `pipeline:stage` for stage artifacts, or `agent:<id>` (also accepts a full `stage:…` owner key). |
+| `--live` | Client-side filter: only artifacts whose kind starts with `live.`. |
+| `--project-root` | Catalog wire id or absolute path; passed through to the index query. |
+| `--limit` | Max rows (`1`–`100`, default `50`). |
+| `--json` | Print `{ "artifacts": […], "next_cursor": string \| null }` (same field names as `GET /api/artifacts`). With client-side filters, `next_cursor` is always `null`. |
+
+Human output is a compact table: `KEY`, `KIND`, `TITLE`, `OWNER`, `RUN` (the same short run id the console uses, so a timestamp-prefixed id is not cut to `2026-11-`), `STATUS` (blank, or `expired`), `UPDATED` (UTC). Newest first. Empty index: `No artifacts.`
+
+**Exit codes:** `0` success; `1` usage error, invalid query, or store unavailable.
+
+### `sf artifact show <key>`
+
+```bash
+sf artifact show <ownerKey>/<id> [--project-root <wire id or path>] [--json]
+```
+
+`key` is the same form as in list output and the REST route: `stage:<pipeline>:<stage>/<id>` or `agent:<id>/<id>` (no project prefix). When the same owner and id exist in several projects, pass `--project-root` to disambiguate.
+
+**Exit codes:** `0` success; `1` not found (`artifact.not_found`), ambiguous owner/id across projects (`artifact.ambiguous`, project roots listed on stderr), invalid key, or other error.
+
+Human output is one field per line: `key`, `title`, `kind`, `status`, `owner`, `source` (run, stage, attempt), `updated`, and `expires` or `expired` (reason and time). With `--json`, stdout is the artifact record object, or `{ "error", "code" }` (and `project_roots` when ambiguous) on failure. `--json` is unchanged by the human summary.
+
+### `sf artifact read`
+
+Read a run workspace artifact as UTF-8 text (same path rules as MCP `run_files` with `view: artifact`). Does not use the artifact index.
 
 ```bash
 sf artifact read --run <runId> --path <relPath> [--out <file>]

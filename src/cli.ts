@@ -136,6 +136,8 @@ const USAGE = `Usage:
   sf starters list|install [--json]
   sf graph --pipeline <path> [--json]
   sf migrate-yaml [path] [--root <path>] [--write] [--json] [--force]
+  sf artifact list [--q <text>] [--kind <kind>] [--owner <pipeline:stage|agent:id>] [--live] [--project-root <wire id or path>] [--limit <n>] [--json]
+  sf artifact show <key> [--project-root <wire id or path>] [--json]
   sf artifact read --run <runId> --path <relPath> [--out <file>]
   sf envelope get --run <runId> --stage <stageId> [--json] [--from <sf-run.json>] [--detect-stage <id>] [--format envelope|handoff]
   sf export-run --run <runId> [--from <sf-run.json>] [--out <file>]
