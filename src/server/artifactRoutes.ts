@@ -1,38 +1,287 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RunStore } from "../runstore/port.js";
 import { sqliteConnectionFromStore } from "../runstore/createStore.js";
-import { ArtifactContentError, readArtifactContent } from "../artifacts/content.js";
-import { ArtifactQueryError, listArtifacts, parseArtifactLimit, parseArtifactStatus, readArtifact } from "../artifacts/query.js";
+import { ArtifactContentError, readArtifactContent, STATIC_HTML_CONTENT_SECURITY_POLICY } from "../artifacts/content.js";
+import { artifactStorageKey, stageOwnerKey } from "../artifacts/keys.js";
+import { ArtifactPublishError, STATIC_CONTENT_MAX_BYTES } from "../artifacts/limits.js";
+import { deletePublishedArtifact, publishArtifact, type PublishRequest } from "../artifacts/publish.js";
+import {
+  ArtifactQueryError,
+  listArtifacts,
+  parseArtifactKindFilter,
+  parseArtifactLimit,
+  parseArtifactListOrder,
+  parseArtifactListSort,
+  parseArtifactLiveFilter,
+  parseArtifactOwnerFilter,
+  parseArtifactStatus,
+  parseArtifactTagFilter,
+  readArtifact,
+} from "../artifacts/query.js";
 import { catalogRootsForArtifacts } from "../artifacts/projectScope.js";
+import type { ArtifactOwner } from "../artifacts/record.js";
+import { artifactVersionKind, listArtifactVersions, readArtifactVersionRow } from "../artifacts/versions.js";
 
 type Json = (res: ServerResponse, status: number, body: unknown) => void;
+
+const MAX_PUBLISH_BODY_BYTES = 8 * 1024 * 1024;
 
 function sendError(
   json: Json,
   res: ServerResponse,
-  error: ArtifactQueryError | ArtifactContentError,
+  error: ArtifactQueryError | ArtifactContentError | ArtifactPublishError,
 ): void {
-  const projectRoots = error instanceof ArtifactQueryError ? error.projectRoots : undefined;
+  const projectRoots =
+    error instanceof ArtifactQueryError || error instanceof ArtifactPublishError ? error.projectRoots : undefined;
+  const issues = error instanceof ArtifactPublishError ? error.issues : undefined;
   json(res, error.status, {
     error: error.message,
     code: error.code,
+    ...(issues !== undefined && issues.length > 0 ? { issues } : {}),
     ...(projectRoots !== undefined ? { project_roots: projectRoots } : {}),
   });
 }
 
-function sendContent(res: ServerResponse, bytes: Buffer, contentType: string, contentHash: string | null): void {
+function sendContent(
+  res: ServerResponse,
+  bytes: Buffer,
+  contentType: string,
+  contentHash: string | null,
+  kind: string,
+): void {
   const headers: Record<string, string | number> = {
     "Content-Type": contentType,
     "Content-Length": bytes.length,
     "X-Content-Type-Options": "nosniff",
   };
+  if (kind === "static.html") headers["Content-Security-Policy"] = STATIC_HTML_CONTENT_SECURITY_POLICY;
   if (contentHash) headers["X-Artifact-Content-Hash"] = contentHash;
   res.writeHead(200, headers);
   res.end(bytes);
 }
 
+function parseVersionQuery(raw: string | null): number | undefined {
+  if (raw == null || raw.trim() === "") return undefined;
+  if (!/^[1-9]\d*$/.test(raw)) {
+    throw new ArtifactQueryError(400, "artifact.invalid_shape", "version must be a positive integer");
+  }
+  return Number(raw);
+}
+
+async function readLimitedJson(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let received = 0;
+  for await (const chunk of req) {
+    const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    received += buffer.length;
+    if (received > MAX_PUBLISH_BODY_BYTES) {
+      throw new ArtifactPublishError(413, "artifact.too_large", "Request body is too large", [
+        { path: "content", message: "request body is too large" },
+      ]);
+    }
+    chunks.push(buffer);
+  }
+  if (chunks.length === 0) return {};
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw new ArtifactPublishError(400, "artifact.invalid_shape", "Request body is not JSON", [
+      { path: "body", message: "must be JSON" },
+    ]);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+const MAX_BASE64_CHARS = Math.ceil(STATIC_CONTENT_MAX_BYTES / 3) * 4;
+
+function invalidBase64(): never {
+  throw new ArtifactPublishError(400, "artifact.invalid_shape", "content_base64 is not valid base64", [
+    { path: "content_base64", message: "must be base64" },
+  ]);
+}
+
+function base64TooLarge(): never {
+  throw new ArtifactPublishError(
+    413,
+    "artifact.too_large",
+    `content is larger than ${STATIC_CONTENT_MAX_BYTES} bytes`,
+    [{ path: "content_base64", message: `decoded content is larger than ${STATIC_CONTENT_MAX_BYTES} bytes` }],
+  );
+}
+
+function isBase64Char(code: number): boolean {
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    code === 43 ||
+    code === 47
+  );
+}
+
+export function decodeBase64(value: string): Buffer {
+  if (value.length > MAX_BASE64_CHARS) base64TooLarge();
+  if ((value.length & 3) !== 0) invalidBase64();
+  const length = value.length;
+  let pad = 0;
+  if (length > 0 && value.charCodeAt(length - 1) === 61) {
+    pad = 1;
+    if (length > 1 && value.charCodeAt(length - 2) === 61) pad = 2;
+  }
+  if (pad === 2 && length > 2 && value.charCodeAt(length - 3) === 61) invalidBase64();
+  const dataLength = length - pad;
+  if (pad === 1 && (dataLength & 3) !== 3) invalidBase64();
+  if (pad === 2 && (dataLength & 3) !== 2) invalidBase64();
+  for (let i = 0; i < length; i++) {
+    const code = value.charCodeAt(i);
+    if (i >= dataLength) {
+      if (code !== 61) invalidBase64();
+      continue;
+    }
+    if (!isBase64Char(code)) invalidBase64();
+  }
+  const decoded = Buffer.from(value, "base64");
+  if (decoded.length > STATIC_CONTENT_MAX_BYTES) base64TooLarge();
+  return decoded;
+}
+
+function ownerFromBody(value: unknown): ArtifactOwner {
+  if (!isRecord(value)) {
+    throw new ArtifactPublishError(400, "artifact.invalid_shape", "owner is required", [
+      { path: "owner", message: "owner is required" },
+    ]);
+  }
+  if (value.kind === "stage") {
+    if (typeof value.pipeline !== "string" || typeof value.stage !== "string") {
+      throw new ArtifactPublishError(400, "artifact.invalid_shape", "stage owner requires pipeline and stage", [
+        { path: "owner", message: "stage owner requires pipeline and stage" },
+      ]);
+    }
+    return { kind: "stage", pipeline: value.pipeline, stage: value.stage };
+  }
+  if (value.kind === "agent") {
+    if (typeof value.agent !== "string") {
+      throw new ArtifactPublishError(400, "artifact.invalid_shape", "agent owner requires agent", [
+        { path: "owner", message: "agent owner requires agent" },
+      ]);
+    }
+    return { kind: "agent", agent: value.agent };
+  }
+  throw new ArtifactPublishError(400, "artifact.invalid_shape", "owner.kind must be stage or agent", [
+    { path: "owner.kind", message: "must be stage or agent" },
+  ]);
+}
+
+function bytesFromBody(body: Record<string, unknown>): Buffer {
+  const hasContent = Object.prototype.hasOwnProperty.call(body, "content");
+  const hasBase64 = Object.prototype.hasOwnProperty.call(body, "content_base64");
+  if (hasContent === hasBase64) {
+    throw new ArtifactPublishError(400, "artifact.invalid_shape", "Send content or content_base64", [
+      { path: "content", message: "send content or content_base64" },
+    ]);
+  }
+  if (body.kind === "static.image" && !hasBase64) {
+    throw new ArtifactPublishError(400, "artifact.invalid_shape", "Image content must be content_base64", [
+      { path: "content_base64", message: "image content must be base64" },
+    ]);
+  }
+  if (hasBase64) {
+    if (typeof body.content_base64 !== "string") {
+      throw new ArtifactPublishError(400, "artifact.invalid_shape", "content_base64 must be a string", [
+        { path: "content_base64", message: "must be a string" },
+      ]);
+    }
+    return decodeBase64(body.content_base64);
+  }
+  if (typeof body.content !== "string") {
+    throw new ArtifactPublishError(400, "artifact.invalid_shape", "content must be a string", [
+      { path: "content", message: "must be a string" },
+    ]);
+  }
+  return Buffer.from(body.content, "utf8");
+}
+
+function optionalString(body: Record<string, unknown>, key: string): string | null | undefined {
+  if (!Object.prototype.hasOwnProperty.call(body, key) || body[key] === null) return null;
+  if (typeof body[key] !== "string") {
+    throw new ArtifactPublishError(400, "artifact.invalid_shape", `${key} must be a string`, [
+      { path: key, message: "must be a string" },
+    ]);
+  }
+  return body[key] as string;
+}
+
+function publishRequestFromBody(
+  body: unknown,
+  roots: PublishRequest["roots"],
+): PublishRequest {
+  if (!isRecord(body)) {
+    throw new ArtifactPublishError(400, "artifact.invalid_shape", "Request body must be an object", [
+      { path: "body", message: "must be an object" },
+    ]);
+  }
+  const tags = body.tags;
+  if (tags !== undefined && (!Array.isArray(tags) || tags.some((tag) => typeof tag !== "string"))) {
+    throw new ArtifactPublishError(400, "artifact.invalid_shape", "tags must be an array of strings", [
+      { path: "tags", message: "must be an array of strings" },
+    ]);
+  }
+  if (typeof body.id !== "string") {
+    throw new ArtifactPublishError(400, "artifact.invalid_id", "id is required", [
+      { path: "id", message: "id is required" },
+    ]);
+  }
+  if (typeof body.kind !== "string") {
+    throw new ArtifactPublishError(400, "artifact.invalid_kind", "kind is required", [
+      { path: "kind", message: "kind is required" },
+    ]);
+  }
+  if (typeof body.title !== "string") {
+    throw new ArtifactPublishError(400, "artifact.invalid_shape", "title is required", [
+      { path: "title", message: "title is required" },
+    ]);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(body, "project_root") &&
+    body.project_root !== undefined &&
+    typeof body.project_root !== "string"
+  ) {
+    throw new ArtifactPublishError(400, "artifact.invalid_shape", "project_root must be a string", [
+      { path: "project_root", message: "must be a string" },
+    ]);
+  }
+  return {
+    owner: ownerFromBody(body.owner),
+    projectRoot: typeof body.project_root === "string" ? body.project_root : undefined,
+    id: body.id,
+    kind: body.kind,
+    title: body.title,
+    description: optionalString(body, "description"),
+    tags: tags as string[] | undefined,
+    summary: optionalString(body, "summary"),
+    bytes: bytesFromBody(body),
+    publishSource: body.source === "console" ? "console" : "api",
+    roots,
+  };
+}
+
+function storageKeyFor(record: {
+  id: string;
+  project: { id: string };
+  owner: { kind: string; pipeline?: string; stage?: string; agent?: string };
+}): string {
+  const ownerKey =
+    record.owner.kind === "agent"
+      ? `agent:${record.owner.agent ?? ""}`
+      : stageOwnerKey(record.owner.pipeline ?? "", record.owner.stage ?? "");
+  return artifactStorageKey(record.project.id, ownerKey, record.id);
+}
+
 export async function handleArtifactRoutes(
-  _req: IncomingMessage,
+  req: IncomingMessage,
   method: string,
   pathname: string,
   url: URL,
@@ -41,10 +290,19 @@ export async function handleArtifactRoutes(
   json: Json,
 ): Promise<boolean> {
   const list = pathname === "/api/artifacts";
+  const versions = /^\/api\/artifacts\/([^/]+)\/([^/]+)\/versions$/.exec(pathname);
   const content = /^\/api\/artifacts\/([^/]+)\/([^/]+)\/content$/.exec(pathname);
   const record = /^\/api\/artifacts\/([^/]+)\/([^/]+)$/.exec(pathname);
-  if (!list && content === null && record === null) return false;
-  if (method !== "GET") {
+  if (!list && versions === null && content === null && record === null) return false;
+  if (list && method !== "GET" && method !== "POST") {
+    json(res, 405, { error: "Method not allowed", code: "artifact.invalid_shape" });
+    return true;
+  }
+  if (record && method !== "GET" && method !== "DELETE") {
+    json(res, 405, { error: "Method not allowed", code: "artifact.invalid_shape" });
+    return true;
+  }
+  if ((versions || content) && method !== "GET") {
     json(res, 405, { error: "Method not allowed", code: "artifact.invalid_shape" });
     return true;
   }
@@ -55,6 +313,12 @@ export async function handleArtifactRoutes(
   }
   try {
     const roots = await catalogRootsForArtifacts(store);
+    if (list && method === "POST") {
+      const request = publishRequestFromBody(await readLimitedJson(req), roots);
+      const published = await publishArtifact(db, request);
+      json(res, 200, published);
+      return true;
+    }
     if (list) {
       const page = listArtifacts(
         db,
@@ -63,31 +327,78 @@ export async function handleArtifactRoutes(
           limit: parseArtifactLimit(url.searchParams.get("limit")),
           cursor: url.searchParams.get("cursor") ?? undefined,
           status: parseArtifactStatus(url.searchParams.get("status")),
+          kind: parseArtifactKindFilter(url.searchParams.get("kind")),
+          owner: parseArtifactOwnerFilter(url.searchParams.get("owner")),
+          tag: parseArtifactTagFilter(url.searchParams.get("tag")),
+          live: parseArtifactLiveFilter(url.searchParams.get("live")),
+          sort: parseArtifactListSort(url.searchParams.get("sort")),
+          order: parseArtifactListOrder(url.searchParams.get("order")),
         },
         roots,
       );
       json(res, 200, page);
       return true;
     }
-    const match = content ?? record;
+    const match = versions ?? content ?? record;
     const ownerKey = decodeURIComponent(match![1]!);
     const id = decodeURIComponent(match![2]!);
     const projectRoot = url.searchParams.get("project_root") ?? undefined;
+    if (record && method === "DELETE") {
+      const deleted = await deletePublishedArtifact(db, ownerKey, id, projectRoot, roots);
+      json(res, 200, deleted);
+      return true;
+    }
+    const version = parseVersionQuery(url.searchParams.get("version"));
+    if (versions) {
+      const artifact = readArtifact(db, ownerKey, id, projectRoot, roots);
+      json(res, 200, { versions: listArtifactVersions(db, storageKeyFor(artifact), artifact.version) });
+      return true;
+    }
     if (content) {
-      const body = await readArtifactContent(db, store, ownerKey, id, projectRoot, roots);
-      sendContent(res, body.bytes, body.contentType, body.contentHash);
+      const body = await readArtifactContent(db, store, ownerKey, id, projectRoot, roots, version);
+      sendContent(res, body.bytes, body.contentType, body.contentHash, body.kind);
       return true;
     }
     const artifact = readArtifact(db, ownerKey, id, projectRoot, roots);
-    json(res, 200, artifact);
+    if (version === undefined) {
+      json(res, 200, artifact);
+      return true;
+    }
+    const row = readArtifactVersionRow(db, storageKeyFor(artifact), version);
+    if (!row) {
+      throw new ArtifactQueryError(404, "artifact.not_found", "Artifact version not found");
+    }
+    const versionKind = artifactVersionKind(row.manifest_json);
+    json(res, 200, {
+      ...artifact,
+      version: row.version,
+      size_bytes: row.size_bytes,
+      content_type: row.content_type,
+      content_hash: row.content_hash,
+      ...(versionKind !== null ? { kind: versionKind } : {}),
+    });
     return true;
   } catch (error) {
     if (error instanceof URIError) {
       json(res, 400, { error: "Malformed path", code: "artifact.invalid_id" });
       return true;
     }
-    if (error instanceof ArtifactQueryError || error instanceof ArtifactContentError) {
+    if (
+      error instanceof ArtifactQueryError ||
+      error instanceof ArtifactContentError ||
+      error instanceof ArtifactPublishError
+    ) {
       sendError(json, res, error);
+      return true;
+    }
+    if (method === "POST" || method === "DELETE") {
+      console.error(
+        `artifact ${method} failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      json(res, 500, {
+        error: method === "DELETE" ? "Delete failed" : "Publish failed",
+        code: method === "DELETE" ? "artifact.delete_failed" : "artifact.publish_failed",
+      });
       return true;
     }
     throw error;

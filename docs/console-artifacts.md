@@ -11,6 +11,10 @@ The page lists indexed deliverables. The project control defaults to the active 
 
 **Load more** requests the next page with `next_cursor` when the list is longer than one page.
 
+**All / Live / Static** tabs set a `live` or `static` kind filter. Tab counts on the loaded page only (there is no separate count endpoint).
+
+Filter controls for kind, owner, tag, and status, plus a sort menu (updated, title, size), call the list API with the same query parameters as [Listing artifacts](artifacts.md#listing-artifacts). Title sort is ASCII case-insensitive, with the artifact key breaking ties. Kind filters treat `_` and `%` as literal characters. A tag uses the same `[a-z0-9_-]{1,32}` rule as publish, including tags that start with a digit or `_`. Filter and tab choices are stored in the hash query (`#/artifacts?…`) so reload and back/forward keep them. The project control writes `project_root` into that query when it is not **All projects**. **Load more** sends the list cursor, which is base64url JSON and can carry a title that contains a newline, a quote, `|`, or `:`.
+
 Each row opens the artifact detail page (`#/artifacts/<ownerKey>/<id>`, with `project_root` when the row has a project). The row shows:
 
 - a kind icon and a kind pill (Markdown, image, table, HTML, or text)
@@ -18,17 +22,22 @@ Each row opens the artifact detail page (`#/artifacts/<ownerKey>/<id>`, with `pr
 - the owner (pipeline and stage)
 - the source run. When the run is in the console's run list, the label is the short run id and the task label; otherwise it is the short run id. The link to that run is on the detail page
 - when the row was updated
-- an **Expired** pill when the indexed row is expired. The pill's tooltip is a short reason: cleaned up to save space (`run_slimmed`), run was purged, run was deleted, or file is missing. An unknown reason code is shown as itself.
+- a status pill: **Available** (ok) for indexed rows; **Expired** (fail) when the indexed row is expired, with a tooltip for the short reason (cleaned up to save space, run was purged, run was deleted, or file is missing). Live artifacts use **Fresh** (ok), **Stale** (needs attention), **Error** (fail), and **Refreshing** (running) when they exist in the index.
+- when `expires_at` is set, a short note such as **expires today**, **expires in N days**, or **expired** (after the retention date)
 
 An artifact whose project is no longer registered is marked **Unregistered project**. Those rows show up under All projects.
 
-The empty state explains that rows appear when a stage lists files in its success envelope, and that tool-output spill files are not listed. See [Artifacts](artifacts.md).
+When there are no rows and no filters are active, the empty state explains that rows appear when a stage lists files in its success envelope, and that tool-output spill files are not listed (see [Artifacts](artifacts.md)). When filters are active and nothing matches, a separate empty state offers **Clear filters**.
 
 ## Detail
 
 The detail page has a back crumb to **Artifacts**, the file in the main area, and a **Details** side panel.
 
 The panel shows the title, kind, owner (pipeline and stage), size, content type, created and updated times, a short content hash, and links to the source run and stage.
+
+Published artifacts also list **Versions** in that panel: version number, created time, size, a short hash, and a Current marker on the latest one. A pinned version is marked Pinned. Choosing an older version opens it read-only at `#/artifacts/<ownerKey>/<id>?v=<N>` (and `project_root` when the page already has one). A banner says `Viewing version N of M` and links back to the latest. The main area renders that version with the kind stored for it, so an older markdown version stays on the markdown view after a later publish uses another kind. There is no editor.
+
+A published artifact has **Delete**. The dialog names the artifact and says that every version and the stored files will be removed, and that this cannot be undone. After it is deleted, the console returns to the list. If the delete fails, the dialog closes and the error is shown next to **Delete**. Indexed artifacts do not show Delete.
 
 Rendering:
 
@@ -38,8 +47,18 @@ Rendering:
 | Image | The image, loaded with the console control token |
 | Table | A CSV file, or a JSON array of objects. Column headers sort the visible rows. The first click sorts ascending, the second descending, and the third returns to file order. The header exposes that state. Numbers sort numerically, and equal values keep their order. The table shows the first 500 rows and says `showing first 500 of N` when the file has more |
 | Text | Monospace text, including an extension the index stores as text |
-| HTML | The source, with a note that an HTML preview comes in a later update |
+| HTML | A static preview. See [Static HTML](#static-html) below |
 
 A file the console cannot preview (unknown kind, or binary content) shows a card with the file info. Invalid CSV or JSON is shown as text with a note. When the record is expired, the main area explains the reason in a sentence (slimmed to save space, purged, deleted, or the file is missing) and the side panel still shows the metadata. An unknown reason code is included in that sentence. The content route answers an expired row with `404` `artifact.content_unavailable` and names the reason, including when the file is still on disk.
 
 The console does not load non-image content larger than 5 MiB through this page.
+
+## Static HTML
+
+`static.html` (a `.html` or `.htm` file) renders in the detail page inside a frame. The frame shows the document's text and inline styles, and images whose source is a `data:` URL. A **Rendered** / **Source** toggle defaults to Rendered. Source is the same monospace text view as other text files.
+
+This is not the live-HTML kind. Live HTML is a later kind, with scripts and a data channel. The preview puts the artifact in an iframe with an empty `sandbox` attribute and prepends a document whose head starts with the Content-Security-Policy meta (`default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'none'`). The empty sandbox stops scripts, reading or writing the console page, its storage, or the control token, form submission, popups, and navigation of the console tab. The policy meta, first in that head, stops network loads of images, fonts, stylesheets, frames, and fetches, and blocks form actions and `<base>` URLs. The sandbox does not stop the frame from navigating itself, so the preview removes `href` and `xlink:href` on links and image maps unless the value starts with `#`, removes `ping`, and sets the title "Link disabled in static preview" when a removed link had no title. The same `href` and `xlink:href` removal applies to `<use>`, `<image>`, `<feImage>`, and `<script>` inside `<svg>`. A fragment link such as `#top` or `#icon` still works. Comments end at `-->`, `--!>`, `<!-->`, or `<!--->`; other `<!`, `<?`, CDATA, and `</` sequences that are not an end tag are skipped until the next `>`. Tags inside comments, or inside `<script>`, `<style>`, `<textarea>`, or `<title>`, are left as written. The preparer reads the text once, including an unterminated tag or quote, so a large document stays linear in its length. Meta refresh and `<base>`, `<iframe>`, `<object>`, `<embed>`, and external stylesheets are removed before the frame is filled.
+
+The preview says "Static preview: scripts and network access are disabled." The same frame is used from a run's Files tab for `.html` and `.htm`. Markdown, images, and other files on that tab are unchanged.
+
+The Host still serves the bytes as `text/plain` with `nosniff`, so opening the content URL directly does not render the file as a page. For `static.html` it also sends `Content-Security-Policy: sandbox; default-src 'none'`. The run file route sends that same header for `.html` and `.htm`.

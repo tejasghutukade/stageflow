@@ -58,3 +58,56 @@ export function artifactDetailMeta(
     stagePath: runId && stageId ? runStagePath(runId, stageId) : null,
   };
 }
+
+export type ArtifactVersionListItem = {
+  version: number;
+  size_bytes: number | null;
+  content_hash: string | null;
+  created_at: string;
+  pinned: boolean;
+  current: boolean;
+  kind?: string | null;
+};
+
+export function recordForViewedVersion<T extends { kind: string }>(
+  record: T,
+  versions: readonly { version: number; kind?: string | null }[],
+  version: number | undefined,
+): T {
+  if (version === undefined) return record;
+  const match = versions.find((item) => item.version === version);
+  if (typeof match?.kind !== "string" || match.kind.length === 0) return record;
+  return { ...record, kind: match.kind };
+}
+
+export type ArtifactVersionRowModel = {
+  version: number;
+  createdLabel: string;
+  sizeLabel: string;
+  hashLabel: string;
+  current: boolean;
+  pinned: boolean;
+};
+
+export function artifactVersionRows(versions: readonly ArtifactVersionListItem[]): ArtifactVersionRowModel[] {
+  return versions.map((version) => ({
+    version: version.version,
+    createdLabel: formatArtifactTimestamp(version.created_at),
+    sizeLabel: formatArtifactSize(version.size_bytes),
+    hashLabel: shortContentHash(version.content_hash),
+    current: version.current,
+    pinned: version.pinned,
+  }));
+}
+
+export function viewingVersionBanner(version: number, latest: number): string {
+  return `Viewing version ${version} of ${latest}`;
+}
+
+export function deleteArtifactConfirm(title: string, versionCount: number): { title: string; body: string } {
+  const count = versionCount === 1 ? "1 version" : `${versionCount} versions`;
+  return {
+    title: `Delete ${title}?`,
+    body: `This removes the published artifact "${title}" and all of its versions (${count}), including the files kept in the artifact store. This cannot be undone.`,
+  };
+}

@@ -3,7 +3,17 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ArtifactRecord } from "../../api/artifacts";
 import { ArtifactsPageView } from "./ArtifactsPage";
-import { artifactListRows, unregisteredProjectLabel } from "./artifactsPageModel";
+import {
+  DEFAULT_ARTIFACT_LIST_FILTERS,
+  artifactListRows,
+  unregisteredProjectLabel,
+} from "./artifactsPageModel";
+
+const defaultViewProps = {
+  filters: DEFAULT_ARTIFACT_LIST_FILTERS,
+  onFiltersChange: () => {},
+  tabCounts: { all: 0, live: 0, static: 0 },
+};
 
 function record(patch: Partial<ArtifactRecord> = {}): ArtifactRecord {
   return {
@@ -33,6 +43,7 @@ function record(patch: Partial<ArtifactRecord> = {}): ArtifactRecord {
 describe("ArtifactsPageView", () => {
   it("renders the empty state", () => {
     const html = renderToStaticMarkup(createElement(ArtifactsPageView, {
+      ...defaultViewProps,
       rows: [],
       error: null,
       loading: false,
@@ -50,6 +61,8 @@ describe("ArtifactsPageView", () => {
       record({ project: { id: "/gone/root", registered: false } }),
     ]);
     const html = renderToStaticMarkup(createElement(ArtifactsPageView, {
+      ...defaultViewProps,
+      tabCounts: { all: 1, live: 0, static: 1 },
       rows,
       error: null,
       loading: false,
@@ -72,6 +85,8 @@ describe("ArtifactsPageView", () => {
     expect(rows[0]?.expired).toBe(true);
     expect(rows[0]?.expiredReason).toBe("Run was purged");
     const html = renderToStaticMarkup(createElement(ArtifactsPageView, {
+      ...defaultViewProps,
+      tabCounts: { all: 1, live: 0, static: 1 },
       rows,
       error: null,
       loading: false,
@@ -82,5 +97,23 @@ describe("ArtifactsPageView", () => {
     expect(html).toContain("sf-pill--fail");
     expect(html).toContain("Expired");
     expect(html).toContain("Run was purged");
+  });
+
+  it("renders filter bar and filtered empty state", () => {
+    const html = renderToStaticMarkup(createElement(ArtifactsPageView, {
+      ...defaultViewProps,
+      filters: { ...DEFAULT_ARTIFACT_LIST_FILTERS, kind: "static.markdown" },
+      rows: [],
+      error: null,
+      loading: false,
+      scopeOptions: [],
+      scopeId: "workspace",
+      showLoadMore: false,
+      onClearFilters: () => {},
+    }));
+    expect(html).toContain("data-testid=\"artifacts-filter-bar\"");
+    expect(html).toContain("data-testid=\"artifacts-empty-filtered\"");
+    expect(html).toContain("Clear filters");
+    expect(html).toContain("No matches");
   });
 });

@@ -209,7 +209,12 @@ function ConsoleRoot() {
     content = <ArtifactsPage />;
   } else if (route.name === "artifact") {
     content = (
-      <ArtifactDetailPage ownerKey={route.ownerKey} id={route.id} projectRoot={route.projectRoot} />
+      <ArtifactDetailPage
+        ownerKey={route.ownerKey}
+        id={route.id}
+        projectRoot={route.projectRoot}
+        version={route.version}
+      />
     );
   } else if (route.name === "functions") {
     content = <FunctionsRedesign functionId={route.functionId} creating={route.creating === true} kind={route.kind} />;

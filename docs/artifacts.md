@@ -2,7 +2,7 @@
 
 An **artifact** is a published, indexed output with an owner and a stable id. A **run file** is any file in a stage attempt's `artifacts/` folder. A run file becomes an artifact only when it is indexed.
 
-This page covers the index that is filled in automatically. Publishing live artifacts is not part of this yet.
+This page covers the index and publishing static artifacts through the Host. Live artifacts are not part of this yet.
 
 ## What gets indexed
 
@@ -65,14 +65,107 @@ A later sweep does not change `expired_at`. Origin `published` is not expired by
 
 `expires_at` is the time the run's retention window will purge the run. It is set once, when the run reaches `succeeded`, `failed`, or `cancelled`, from that status's purge window (including `STAGEFLOW_PURGE_*_MS`). It stays null while the run has not finished, and it is not updated after it is set. The list query accepts `status=available` or `status=expired`.
 
+## Listing artifacts
+
+`GET /api/artifacts` returns `{ "artifacts": […], "next_cursor": string | null }`. Pagination is keyset on the active sort column with `key` ascending as a stable tiebreak in both orders. Pass `cursor` from `next_cursor` to continue; the cursor must match the same `sort` and `order`.
+
+The cursor is base64url-encoded JSON: `{ "sort", "order", "primary", "key" }`. `primary` is a number for `size` (a missing size is `-1`) and a string for `title` and `updated`, so a title may contain newlines, quotes, `|`, or `:`. `updated` compares the ISO timestamp as text. `title` compares with SQLite `NOCASE` (ASCII case-insensitive) and breaks ties on `key`. `size` compares the numeric byte size. An older cursor that is two newline-separated fields still means `updated` descending.
+
+| Query | Meaning |
+|---|---|
+| `project_root` | Catalog wire id (same resolution as other artifact routes). Omit for all projects. |
+| `limit` | Page size, 1–100 (default 50). |
+| `cursor` | Opaque page token from `next_cursor`. |
+| `status` | `available` or `expired` (indexed row status). |
+| `kind` | Exact kind (`static.markdown`) or family prefix (`static`, `live`). `_` and `%` are literal. A value with no `.` matches kinds that start with that name and a dot. A value that contains a `.` matches that kind only. |
+| `owner` | `stage:<pipeline>:<stage>`, `agent:<id>`, or a case-insensitive substring matched against owner fields. |
+| `tag` | Exact lowercase tag. The pattern is the publish rule `[a-z0-9_-]{1,32}`, so a tag may start with a digit or `_`. |
+| `live` | `true` — only kinds starting with `live.`; `false` — exclude live kinds. |
+| `sort` | `updated` (default), `title`, or `size`. Default order is `desc` for `updated` and `size`, `asc` for `title`. Title order is ASCII case-insensitive. |
+| `order` | `asc` or `desc` (overrides the default for the chosen `sort`). |
+
+Invalid `sort`, `order`, `kind`, `tag`, `live`, or `status` values return `400` with code `artifact.invalid_filter`. Malformed cursors return `artifact.invalid_shape`; a cursor whose sort or order does not match the request returns `artifact.invalid_filter`.
+
+A local list call against about 1,000 rows should stay under 200 ms on a typical laptop; CI tests use a 500 ms bound.
+
 ## Opening an artifact
 
 `GET /api/artifacts/<ownerKey>/<id>` returns the record. `GET /api/artifacts/<ownerKey>/<id>/content` returns the bytes of the indexed file. Both accept `project_root`. When that query is omitted and the same owner and id exist in more than one project, the response is `409` with code `artifact.ambiguous`.
 
-The content route reads the file through the same contained-path rules as a run file. The stored path is resolved against that attempt's `artifacts/` directory, so a path that stays inside the run workspace but leaves `artifacts/` (a `..` segment, an absolute path, or a symlink to a sibling file) is `403` `artifact.content_unavailable` with "Artifact path denied". An unknown key is `404` `artifact.not_found`. When the run or the file is gone, the response is `404` `artifact.content_unavailable`. An expired row is the same `404`, and the message names the reason (`run_slimmed`, `run_purged`, `run_deleted`, or `file_missing`), even when the file is still on disk. Text, Markdown, CSV, JSON, and HTML are `text/plain; charset=utf-8` with `X-Content-Type-Options: nosniff`. HTML is not served as `text/html` here. Images are the image bytes with their image type. A non-image larger than 5 MiB is `413` `artifact.too_large` and is not sent. Images may be larger than that.
+The content route reads the file through the same contained-path rules as a run file. The stored path is resolved against that attempt's `artifacts/` directory, so a path that stays inside the run workspace but leaves `artifacts/` (a `..` segment, an absolute path, or a symlink to a sibling file) is `403` `artifact.content_unavailable` with "Artifact path denied". An unknown key is `404` `artifact.not_found`. When the run or the file is gone, the response is `404` `artifact.content_unavailable`. An expired row is the same `404`, and the message names the reason (`run_slimmed`, `run_purged`, `run_deleted`, or `file_missing`), even when the file is still on disk. Text, Markdown, CSV, JSON, and HTML are `text/plain; charset=utf-8` with `X-Content-Type-Options: nosniff`. HTML is not served as `text/html` here. When the artifact kind is `static.html`, the response also sends `Content-Security-Policy: sandbox; default-src 'none'`. Other kinds do not get that header. Images are the image bytes with their image type. A non-image larger than 5 MiB is `413` `artifact.too_large` and is not sent. Images may be larger than that.
+
+## Static HTML
+
+An indexed `.html` or `.htm` file has kind `static.html`. The console renders it in an iframe whose `sandbox` attribute is empty: no `allow-scripts`, no `allow-same-origin`, no `allow-forms`, no `allow-popups`, and no `allow-top-navigation`. That attribute stops scripts, access to the console page and its storage, forms, popups, and navigation of the console tab. It does not stop the frame from navigating itself when a link has an `href`.
+
+The frame document always starts with `<!doctype html><html><head>` and a Content-Security-Policy meta element as the first element in that head, then `</head><body>`, then the artifact markup:
+
+`default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'none'`
+
+A leading `<!doctype html>` on the artifact is removed before that wrapper. Other doctype declarations are left in place. The policy is in the document head even when the artifact's first tag is not `<head>`, including a `<head>` inside a `<textarea>` or a `<head>` after body content. `default-src 'none'` blocks subresource loads (images, fonts, stylesheets, and fetches) except `data:` images and inline styles. `form-action 'none'` blocks form submission targets. `base-uri 'none'` blocks `<base>` URLs. `default-src` does not block the iframe from navigating to a normal link.
+
+Before the frame is filled, the console removes `<meta http-equiv="refresh">`, `<base>`, `<iframe>`, `<object>`, `<embed>`, and `<link>` elements whose `href` is an absolute URL with a host or a protocol-relative URL. On `<a>` and `<area>`, it removes `href` and `xlink:href` unless the value starts with `#`, removes `ping`, and sets `title` to "Link disabled in static preview" when it removed one of those links and the element had no `title`. The same `href` and `xlink:href` removal applies to `<use>`, `<image>`, and `<feImage>`, and to `<script>` inside `<svg>`. Fragment links such as `<a href=#top>` and `<use href="#icon">` stay. The check is case-insensitive and covers quoted and unquoted values. It does not decode HTML entities, so an entity-obfuscated `javascript:` or `https` value does not start with `#` and loses its `href`. `<script>` elements are left in the file; the empty sandbox stops them from running. `<form action>` is left in place; the sandbox and `form-action 'none'` block submission. A comment ends at `-->`, at `--!>`, and immediately for `<!-->` and `<!--->`. `<!` that is not a comment or a doctype, `<?`, `<![CDATA[`, and `</` followed by a character that is not a letter are skipped until the next `>`, and a tag after that `>` is still neutralised. The pass does not look for tags inside a comment or inside `<script>`, `<style>`, `<textarea>`, or `<title>` (the end tag is matched without regard to case). An unterminated tag, comment, or quoted attribute is read once through to the end of the input, so the work is linear in the length of the text. Running the pass twice leaves the wrapper and the policy meta as they are.
+
+The preview can show text, structure, and inline styles, plus images that use a `data:` URL. The console fetches the file itself and passes the text into the frame. The frame does not request the content URL, because that request would need the control token.
+
+This is not live HTML. Live HTML is a separate kind and is not rendered by this preview.
+
+`GET /api/runs/<runId>/artifact` keeps the file body and `text/plain; charset=utf-8`. For a path whose name ends in `.html` or `.htm` it also sends `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox; default-src 'none'`.
+
+## Publishing
+
+`POST /api/artifacts` copies a static artifact into `$STAGEFLOW_HOME/artifacts/` and records a version. The body is:
+
+| Field | Required | Notes |
+|---|---|---|
+| `owner` | yes | `{ "kind": "stage", "pipeline", "stage" }` or `{ "kind": "agent", "agent" }` |
+| `project_root` | when more than one project is registered | Catalog wire id or path, resolved the same way as other artifact routes |
+| `id` | yes | `^[a-z][a-z0-9_-]{0,63}$`. `::` is rejected |
+| `kind` | yes | `static.markdown`, `static.image`, `static.table`, `static.text`, or `static.html` |
+| `title` | yes | At most 120 characters |
+| `description` | no | At most 2000 characters |
+| `tags` | no | At most 8, each lowercase `[a-z0-9_-]{1,32}` |
+| `summary` | no | At most 2000 characters |
+| `content` | text kinds | Inline text. Markdown and text must be valid UTF-8. HTML is stored as given |
+| `content_base64` | images, or any kind instead of `content` | Decoded bytes. An image must be png, jpeg, gif, or webp |
+| `source` | no | `console` or `api`. Omitted means `api` |
+
+Send `content` or `content_base64`, not both. Decoded content is at most 5 MiB. `content_base64` is standard base64 with no whitespace. The encoded length is checked before decoding (at most `ceil(5 MiB / 3) * 4` characters). Invalid characters or padding are `artifact.invalid_shape`. Non-zero bits in the unused trailing portion of a base64 group are accepted. A decoded body over 5 MiB is `413` `artifact.too_large`. A table is CSV with a consistent column count, or a JSON array of objects.
+
+A stage owner's pipeline and stage ids use the catalog id pattern: lowercase kebab-case, 1–64 characters (`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`). An agent id uses `^[a-z][a-z0-9_]{0,63}$` and must already exist in that project. A value with a path separator, `..`, NUL, or the wrong shape is `400` `artifact.invalid_shape` with an `issues` path. If the agent table cannot be read, the publish is accepted and the response includes `agent_unverified: true`.
+
+The response is `{ "key", "version", "project_root", "url", "unchanged" }`. `key` is `stage:<pipeline>:<stage>/<id>` or `agent:<id>/<id>`. Publishing the same owner and id again writes version N+1. Previous versions stay as they were. If the bytes and kind match the current published version, the response is that version with `unchanged: true` and no new version is written. Title, description, tags, and summary are still updated.
+
+An indexed row with the same key becomes `published`. The new bytes are version N+1 in the keep store. The old indexed version row stays and still points at the run file until that version is pruned or the run file is gone. `expires_at` is cleared and the row is `available`. Run retention does not expire it after that.
+
+Publishes and deletes of one key run one at a time in the Host process, in arrival order. Content is written to a unique staging directory under the key, then the next version number is claimed in an immediate database transaction and that directory is renamed to `v<N>`. A failure rolls the transaction back and removes only the staging directory or the `v<N>` directory that attempt created. At the start of a publish, staging directories named `.staging-*` under that key that are older than 10 minutes are removed. That sweep is best effort and does not fail the publish. A directory that is still in use is left alone.
+
+A crash after the rename and before the database commit leaves a `v<N>` directory with no `artifact_versions` row. The next publish of that key treats that directory as a stale orphan: it removes the directory (or, when the path is a symlink, the link only) and reuses N. Removal stays inside the key directory and does not follow symlinks. A version row whose directory is missing is kept. The next publish takes the next number after the highest row and does not overwrite that row.
+
+Bytes live in `$STAGEFLOW_HOME/artifacts/<keyHash>/v<N>/`, where `keyHash` is the first 32 hex characters of sha256 of the storage key. The directory holds the content file and `manifest.json`. The version row stores the sha256, the size, and `manifest_json` as `{"kind":"..."}` for that version.
+
+The Host keeps the latest `STAGEFLOW_ARTIFACT_VERSIONS_KEEP` versions (default 10, integer 1–1000) plus any version with `pinned = 1`. There is no API to set `pinned` yet. The current version is never pruned. A prune failure is logged and does not fail the publish.
+
+`GET /api/artifacts/<ownerKey>/<id>/versions` lists versions newest first: `version`, `size_bytes`, `content_hash`, `created_at`, `pinned`, `current`, and `kind` (the kind stored for that version). The record and content routes accept `version`. A record read with `version` returns that version's `kind`. An unknown version is `404` `artifact.not_found`. Published bytes are served with the same content types, `nosniff`, and size cap as indexed content, using the viewed version's kind.
+
+`DELETE /api/artifacts/<ownerKey>/<id>` removes every version, the rows, and the store directory. It is irreversible. It takes the same per-key lock as publish, so a publish and a delete of one key cannot interleave. A second delete, or a delete of a key that is already gone, is `404` `artifact.not_found`. A publish that runs after a delete creates the artifact again, and version numbers start again at 1. An indexed artifact is `409` `artifact.not_deletable`: those rows are removed only when their run is deleted. Deleting a run, agent, or pipeline does not delete published artifacts.
+
+Validation errors are `{ "error", "code", "issues": [{ "path", "message" }] }`.
+
+| Code | When |
+|---|---|
+| `artifact.invalid_id` | id, owner, or project id is missing, contains `::`, or is not a slug |
+| `artifact.invalid_kind` | kind is missing or not one of the static kinds |
+| `artifact.invalid_shape` | any other field is the wrong shape, including tags, title, description, summary, image bytes, table text, and UTF-8 |
+| `artifact.too_large` | decoded content is over 5 MiB |
+| `artifact.not_found` | key or version does not exist |
+| `artifact.not_deletable` | delete was asked for an indexed artifact |
+| `artifact.ambiguous` | owner and id, or a missing `project_root`, match more than one project |
 
 ## CLI
 
-- `sf artifact list` — table or `--json` page of indexed artifacts (`--project-root`, `--limit`; `--q`, `--kind`, `--owner`, and `--live` filter client-side for now). The human table includes a `STATUS` column (`expired` or blank) and a short run id. See [CLI reference](cli-reference.md#sf-artifact).
+- `sf artifact list` — table or `--json` page of indexed artifacts. Server-side filters match the list query above (`--project-root`, `--limit`, `--kind`, `--owner`, `--tag`, `--status`, `--live`, `--sort`, `--order`). `--q` stays client-side until search ships: the command keeps requesting pages until the limit is filled or 20 pages have been read. The human table includes a `STATUS` column (`expired` or blank) and a short run id. See [CLI reference](cli-reference.md#sf-artifact).
 - `sf artifact show <ownerKey>/<id>` — a readable summary (key, title, kind, status, owner, source, updated, and expires or the expired reason). `--json` prints the record. Use `--project-root` when the key is ambiguous across projects.
+- `sf artifact publish` — copy a file into the keep store. See [Publishing](#publishing) and [CLI reference](cli-reference.md#sf-artifact-publish).
+- `sf artifact delete <ownerKey>/<id>` — remove a published artifact and every version. See [CLI reference](cli-reference.md#sf-artifact-delete).
 - `sf artifact read --run --path` — read a run workspace file by path (not the index). Unchanged from before the index shipped.

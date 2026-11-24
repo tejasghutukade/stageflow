@@ -39,13 +39,26 @@ describe("StaticArtifactBody", () => {
     expect(body).toContain(">10<");
   });
 
-  it("renders monospace text and HTML source with the placeholder", () => {
+  it("renders monospace text", () => {
     const text = html({ mode: "text", text: "alpha", note: null });
     expect(text).toContain("sf-mono");
     expect(text).toContain("alpha");
-    const source = html({ mode: "html", text: "<p>hi</p>" });
-    expect(source).toContain("HTML preview comes with the next update; showing source");
-    expect(source).toContain("&lt;p&gt;hi&lt;/p&gt;");
+    expect(text).not.toContain("artifact-html-frame");
+  });
+
+  it("renders static HTML in a locked iframe with a source toggle", () => {
+    const source = html({ mode: "html", text: "<p>hi</p><script>bad()</script>" });
+    expect(source).toContain('data-testid="artifact-html-frame"');
+    expect(source).toContain('sandbox=""');
+    expect(source).not.toContain("allow-scripts");
+    expect(source).not.toContain("allow-same-origin");
+    expect(source).toContain("Content-Security-Policy");
+    expect(source).toContain("default-src");
+    expect(source).toContain("Static preview: scripts and network access are disabled.");
+    expect(source).toContain("artifact-html-toggle");
+    expect(source).toContain(">Rendered<");
+    expect(source).toContain(">Source<");
+    expect(source).toContain("min-h-[480px]");
   });
 
   it("renders an explanation instead of crashing on binary or unknown content", () => {

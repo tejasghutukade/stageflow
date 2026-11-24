@@ -11,10 +11,23 @@ import {
   resolveContainedRelativePath,
   type ContainedPathMessages,
 } from "../runread/readArtifact.js";
+import { artifactStorageKey, stageOwnerKey } from "./keys.js";
 import { readArtifact } from "./query.js";
+import { readStoredArtifactFile } from "./store.js";
+import { artifactVersionKind, readArtifactVersionRow, type ArtifactVersionRow } from "./versions.js";
 
 /** Text and table bodies larger than this are not sent on the content route. Images are exempt. */
 export const ARTIFACT_CONTENT_MAX_BYTES = 5 * 1024 * 1024;
+
+export const STATIC_HTML_CONTENT_SECURITY_POLICY = "sandbox; default-src 'none'";
+
+export function isHtmlContentPath(relativePath: string): boolean {
+  const name = relativePath.replace(/\\/g, "/").split("/").pop() ?? relativePath;
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return false;
+  const ext = name.slice(dot).toLowerCase();
+  return ext === ".html" || ext === ".htm";
+}
 
 const PATH_MESSAGES: ContainedPathMessages = {
   relativeRequired: "path must be relative to the run workspace",
@@ -38,6 +51,7 @@ export type ArtifactContentBody = {
   bytes: Buffer;
   contentType: string;
   contentHash: string | null;
+  kind: string;
 };
 
 type ContentRow = {
@@ -141,7 +155,21 @@ export async function readArtifactContent(
   id: string,
   projectRoot: string | undefined,
   roots: readonly CatalogRoot[],
+  version?: number,
 ): Promise<ArtifactContentBody> {
+  const published = await readPublishedArtifactContent(
+    db,
+    store,
+    ownerKey,
+    id,
+    projectRoot,
+    roots,
+    version,
+  );
+  if (published) return published;
+  if (version !== undefined) {
+    throw new ArtifactContentError(404, "artifact.not_found", "Artifact version not found");
+  }
   const record = readArtifact(db, ownerKey, id, projectRoot, roots);
   if (record.status === "expired") {
     throw unavailable(expiredContentMessage(record.expired_reason));
@@ -201,5 +229,107 @@ export async function readArtifactContent(
     bytes,
     contentType: servedArtifactMediaType(record.kind, row.relative_path, bytes),
     contentHash: row.content_hash,
+    kind: record.kind,
   };
+}
+
+function storageKeyForRecord(record: {
+  id: string;
+  project: { id: string };
+  owner: { kind: string; pipeline?: string; stage?: string; agent?: string };
+}): string {
+  const ownerKey =
+    record.owner.kind === "agent"
+      ? `agent:${record.owner.agent ?? ""}`
+      : stageOwnerKey(record.owner.pipeline ?? "", record.owner.stage ?? "");
+  return artifactStorageKey(record.project.id, ownerKey, record.id);
+}
+
+async function readRunVersionContent(
+  store: RunStore,
+  kind: string,
+  row: ArtifactVersionRow,
+): Promise<ArtifactContentBody> {
+  if (!row.relative_path) throw unavailable("The artifact file is no longer in the run workspace");
+  const runId = row.source_run_id;
+  const stageId = row.source_stage_id;
+  const attempt = row.source_attempt;
+  if (!runId || !stageId || attempt === null || !Number.isInteger(attempt) || attempt < 1) {
+    throw unavailable("The artifact file is no longer in the run workspace");
+  }
+  let absolute: string;
+  try {
+    await store.readRunMeta(runId);
+    const artifactsDir = attemptArtifactsDir(store.getWorkspaceDir(runId), stageId, attempt);
+    absolute = await resolveContainedRelativePath(artifactsDir, row.relative_path, PATH_MESSAGES);
+  } catch (error) {
+    throw mapPathError(error);
+  }
+  const info = await stat(absolute).catch(() => undefined);
+  if (!info?.isFile()) throw unavailable("The artifact file is no longer in the run workspace");
+  const image = kind === "static.image" || artifactMediaType(row.relative_path) !== undefined;
+  if (contentTooLarge(info.size, image)) {
+    throw new ArtifactContentError(
+      413,
+      "artifact.too_large",
+      `Artifact content is larger than ${ARTIFACT_CONTENT_MAX_BYTES} bytes`,
+    );
+  }
+  const bytes = await readFile(absolute);
+  return {
+    bytes,
+    contentType: servedArtifactMediaType(kind, row.relative_path, bytes),
+    contentHash: row.content_hash,
+    kind,
+  };
+}
+
+export async function readPublishedArtifactContent(
+  db: Database.Database,
+  store: RunStore,
+  ownerKey: string,
+  id: string,
+  projectRoot: string | undefined,
+  roots: readonly CatalogRoot[],
+  version?: number,
+): Promise<ArtifactContentBody | null> {
+  const record = readArtifact(db, ownerKey, id, projectRoot, roots);
+  if (version === undefined && record.origin !== "published") return null;
+  const row = readArtifactVersionRow(db, storageKeyForRecord(record), version ?? record.version);
+  if (!row) {
+    throw new ArtifactContentError(404, "artifact.not_found", "Artifact version not found");
+  }
+  if (row.storage === "store") {
+    if (!row.relative_path) {
+      throw new ArtifactContentError(404, "artifact.not_found", "Artifact version not found");
+    }
+    let bytes: Buffer;
+    try {
+      bytes = await readStoredArtifactFile(storageKeyForRecord(record), row.version, row.relative_path);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("escapes") || message === "Artifact path denied") throw denied();
+      throw new ArtifactContentError(404, "artifact.not_found", "Artifact version not found");
+    }
+    const kind = artifactVersionKind(row.manifest_json) ?? record.kind;
+    const image = kind === "static.image" || artifactMediaType(row.relative_path) !== undefined;
+    if (contentTooLarge(bytes.length, image)) {
+      throw new ArtifactContentError(
+        413,
+        "artifact.too_large",
+        `Artifact content is larger than ${ARTIFACT_CONTENT_MAX_BYTES} bytes`,
+      );
+    }
+    return {
+      bytes,
+      contentType: servedArtifactMediaType(kind, row.relative_path, bytes),
+      contentHash: row.content_hash,
+      kind,
+    };
+  }
+  if (row.storage !== "store" && record.status === "expired") {
+    throw unavailable(expiredContentMessage(record.expired_reason));
+  }
+  if (version === undefined) return null;
+  return readRunVersionContent(store, record.kind, row);
 }

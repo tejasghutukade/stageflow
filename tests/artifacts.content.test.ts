@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { realpathSync } from "node:fs";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
-import { ARTIFACT_CONTENT_MAX_BYTES, contentTooLarge, servedArtifactMediaType } from "../src/artifacts/content.js";
+import { ARTIFACT_CONTENT_MAX_BYTES, contentTooLarge, servedArtifactMediaType, STATIC_HTML_CONTENT_SECURITY_POLICY } from "../src/artifacts/content.js";
 import { artifactIdFromRelative } from "../src/artifacts/keys.js";
 import { createRunStore, sqliteConnectionFromStore } from "../src/runstore/createStore.js";
 import type { RunStore } from "../src/runstore/port.js";
@@ -170,6 +170,11 @@ describe("artifact content", () => {
       expect(response.headers["Content-Type"]).toBe(type);
       expect(response.headers["X-Content-Type-Options"]).toBe("nosniff");
       expect(String(response.headers["Content-Type"])).not.toContain("text/html");
+      if (file === "page.html") {
+        expect(response.headers["Content-Security-Policy"]).toBe(STATIC_HTML_CONTENT_SECURITY_POLICY);
+      } else {
+        expect(response.headers["Content-Security-Policy"]).toBeUndefined();
+      }
       expect(typeof response.headers["X-Artifact-Content-Hash"]).toBe("string");
     }
     expect((await getContent(store, contentUrl("report.md", root))).raw.toString("utf8")).toBe("# report");

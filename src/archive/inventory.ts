@@ -26,6 +26,7 @@ export const ARCHIVE_RULES: readonly ArchiveRule[] = [
   { path: "settings.json", kind: "copy", reason: "global settings" },
   { path: "workspace/", kind: "copy", reason: "workspace catalog" },
   { path: "memories/", kind: "copy", reason: "memories" },
+  { path: "artifacts/", kind: "copy", reason: "Published artifacts" },
   { path: "connections.yaml", kind: "copy", reason: "channel connections (references, never secret values)" },
   { path: "a2a.yaml", kind: "copy", reason: "A2A configuration (never a token)" },
   { path: "mcp/.mcp.json", kind: "copy", reason: "MCP servers added in Settings (references, never token values)" },

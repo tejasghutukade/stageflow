@@ -24,6 +24,8 @@ import { MIGRATION_021 } from "./021-function-invocations.js";
 import { MIGRATION_022 } from "./022-function-route.js";
 import { MIGRATION_023 } from "./023-artifacts.js";
 import { MIGRATION_024 } from "./024-artifact-retention.js";
+import { MIGRATION_025 } from "./025-reserved-search.js";
+import { MIGRATION_026 } from "./026-artifact-publish.js";
 
 export type SqliteMigration = {
   version: number;
@@ -57,6 +59,8 @@ const DEFAULT_MIGRATIONS: SqliteMigration[] = [
   MIGRATION_022,
   MIGRATION_023,
   MIGRATION_024,
+  MIGRATION_025,
+  MIGRATION_026,
 ];
 
 export const CURRENT_SCHEMA_VERSION =

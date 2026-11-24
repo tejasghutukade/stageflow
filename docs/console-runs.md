@@ -36,7 +36,7 @@ Select a stage to open its workspace. The center of the workspace has four tabs:
 | **Envelope** | The handoff envelope: `summary`, `payload`, artifact paths, without reading logs |
 | **Artifacts** | Files the stage produced |
 
-`#/runs/<runId>/stages/<stageId>` selects that stage; `.../envelope` opens the envelope; `#/runs/<runId>/artifacts?path=…` opens one artifact. When a stage has an envelope the first Files row is **Handoff envelope**.
+`#/runs/<runId>/stages/<stageId>` selects that stage; `.../envelope` opens the envelope; `#/runs/<runId>/artifacts?path=…` opens one artifact. `.html` and `.htm` files open in the static HTML preview, with scripts and network access disabled. Other files are unchanged. When a stage has an envelope the first Files row is **Handoff envelope**.
 
 ### Stage actions
 

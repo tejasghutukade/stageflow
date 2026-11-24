@@ -135,6 +135,7 @@ import {
 } from "../config/installSkillRequest.js";
 import { validateCatalog } from "../config/validateCatalog.js";
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
+import { isHtmlContentPath, STATIC_HTML_CONTENT_SECURITY_POLICY } from "../artifacts/content.js";
 import {
   artifactMediaType,
   classifyArtifactContent,
@@ -973,7 +974,17 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
               res.end(bytes);
             } else {
               const content = await readRunArtifact(store, runId, artifactPath);
-              textPlain(res, 200, content);
+              if (isHtmlContentPath(artifactPath)) {
+                res.writeHead(200, {
+                  "Content-Type": "text/plain; charset=utf-8",
+                  "Content-Length": Buffer.byteLength(content),
+                  "X-Content-Type-Options": "nosniff",
+                  "Content-Security-Policy": STATIC_HTML_CONTENT_SECURITY_POLICY,
+                });
+                res.end(content);
+              } else {
+                textPlain(res, 200, content);
+              }
             }
           } catch (err) {
             const mapped = mapStoreLookupError(err, { policy: "artifact" });

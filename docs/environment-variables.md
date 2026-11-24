@@ -63,6 +63,7 @@ Every variable the Host and CLI read, in one place. Details live in the page eac
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY` | Judge key for rubric graders when the credential file has no `api_key` entry for that provider. See [Evals: Judge models](evals.md#judge-models) |
 | `STAGEFLOW_GC_INTERVAL_MS` | Garbage-collection interval (default 1 h, `0` disables) |
 | `STAGEFLOW_BARE_CACHE_TTL_MS`, `STAGEFLOW_SLIM_ARTIFACT_MAX_BYTES`, `STAGEFLOW_SLIM_*`, `STAGEFLOW_PURGE_*` | Retention knobs |
+| `STAGEFLOW_ARTIFACT_VERSIONS_KEEP` | How many published versions to keep (default 10, integer 1–1000), plus any pinned version. See [Artifacts](artifacts.md#publishing) |
 | `STAGEFLOW_DISK_WARN_BYTES`, `STAGEFLOW_MIN_FREE_DISK_BYTES` | Free-disk warning and admission floor (bytes or `N%`) |
 | `STAGEFLOW_SQLITE_BUSY_TIMEOUT_MS`, `STAGEFLOW_SQLITE_SYNCHRONOUS`, `STAGEFLOW_SQLITE_WAL_AUTOCHECKPOINT` | SQLite pragmas |
 | `STAGEFLOW_ALLOW_NETWORK_STORE` | Escape hatch to boot on NFS/CIFS (unsupported) |

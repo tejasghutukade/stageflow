@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Markdown } from "@astryxdesign/core/Markdown";
+import { SandboxedHtml } from "./SandboxedHtml";
 import { nextTableSort, sortTableRows, type TableSort } from "./tableModel";
 import type { StaticPreview } from "./previewModel";
 
@@ -24,19 +25,6 @@ export function TextPreview({ text, note }: { text: string; note: string | null 
   return (
     <div data-testid="artifact-text" className="flex flex-col gap-2">
       {note ? <p className="text-[13px] text-[var(--sf-text-2)]">{note}</p> : null}
-      <pre className="sf-mono whitespace-pre-wrap text-[13px] leading-[1.5] text-[var(--sf-text-1)]">
-        {text}
-      </pre>
-    </div>
-  );
-}
-
-export function HtmlSourcePreview({ text }: { text: string }) {
-  return (
-    <div data-testid="artifact-html" className="flex flex-col gap-3">
-      <div className="rounded-lg border border-[var(--sf-hairline)] bg-[var(--sf-raised)] px-4 py-3 text-[13px] text-[var(--sf-text-1)]">
-        HTML preview comes with the next update; showing source
-      </div>
       <pre className="sf-mono whitespace-pre-wrap text-[13px] leading-[1.5] text-[var(--sf-text-1)]">
         {text}
       </pre>
@@ -142,7 +130,7 @@ export function StaticArtifactBody({
     case "text":
       return <TextPreview text={preview.text} note={preview.note} />;
     case "html":
-      return <HtmlSourcePreview text={preview.text} />;
+      return <SandboxedHtml text={preview.text} source={<TextPreview text={preview.text} note={null} />} />;
     case "unavailable":
       return <ExplanationCard testId="artifact-unavailable" title={preview.title} body={preview.body} />;
     case "too-large":

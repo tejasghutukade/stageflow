@@ -113,7 +113,7 @@ Hash-based routing (`ui/src/routes.ts`). A hash that matches no route falls back
 | `#/runs/<runId>` | Run detail |
 | `#/runs/<runId>/stages/<stageId>` | Run detail with that stage selected |
 | `#/runs/<runId>/stages/<stageId>/envelope` | Envelope inspector for a stage |
-| `#/runs/<runId>/artifacts?path=…` | Artifact viewer |
+| `#/runs/<runId>/artifacts?path=…` | Artifact viewer. `.html` and `.htm` open in the static HTML preview (scripts and network disabled). Other files are unchanged. See [Artifacts](console-artifacts.md#static-html) |
 | `#/new` | Start a run |
 | `#/pipelines` | Pipeline list |
 | `#/pipelines/<id>` | Opens that pipeline in the editor |

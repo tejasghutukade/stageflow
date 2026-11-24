@@ -1,12 +1,25 @@
 import { writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import * as readline from "node:readline";
+import { parseOwnerKey } from "../artifacts/keys.js";
+import { ArtifactPublishError } from "../artifacts/limits.js";
+import { deletePublishedArtifact, publishArtifact } from "../artifacts/publish.js";
 import {
   ArtifactQueryError,
   listArtifacts,
+  parseArtifactKindFilter,
   parseArtifactLimit,
+  parseArtifactListOrder,
+  parseArtifactListSort,
+  parseArtifactOwnerFilter,
+  parseArtifactStatus,
+  parseArtifactTagFilter,
   readArtifact,
+  type ArtifactListQuery,
 } from "../artifacts/query.js";
 import { catalogRootsForArtifacts } from "../artifacts/projectScope.js";
-import type { ArtifactRecord } from "../artifacts/record.js";
+import type { ArtifactOwner, ArtifactRecord } from "../artifacts/record.js";
 import { readRunArtifact } from "../runread/readArtifact.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import { createRunStoreAfterHostEnsure, sqliteConnectionFromStore } from "../runstore/createStore.js";
@@ -21,8 +34,10 @@ import {
 import { resolveSafeOutPath } from "./resolveSafeOutPath.js";
 
 export const ARTIFACT_USAGE = `Usage:
-  sf artifact list [--q <text>] [--kind <kind>] [--owner <pipeline:stage|agent:id>] [--live] [--project-root <wire id or path>] [--limit <n>] [--json]
+  sf artifact list [--q <text>] [--kind <kind>] [--owner <pipeline:stage|agent:id>] [--tag <tag>] [--status <available|expired>] [--live] [--sort <updated|title|size>] [--order <asc|desc>] [--project-root <wire id or path>] [--limit <n>] [--json]
   sf artifact show <key> [--project-root <wire id or path>] [--json]
+  sf artifact publish --owner <pipeline:stage|agent:id> --id <id> --kind <kind> --title <title> [--description <text>] [--tag <tag>]... [--summary <text>] [--project-root <wire id or path>] (--file <path> | --stdin) [--json]
+  sf artifact delete <key> [--project-root <wire id or path>] [--yes] [--json]
   sf artifact read --run <runId> --path <relPath> [--out <file>]`;
 
 export type ArtifactCommandIo = {
@@ -41,11 +56,18 @@ type ParsedListArgs = {
   q?: string;
   kind?: string;
   owner?: string;
+  tag?: string;
+  status?: string;
   live?: boolean;
+  sort?: string;
+  order?: string;
   projectRoot?: string;
   limit: number;
   json: boolean;
 };
+
+const CLIENT_QUERY_PAGE_SIZE = 100;
+const CLIENT_QUERY_MAX_PAGES = 20;
 
 type ParsedShowArgs = {
   help: boolean;
@@ -63,11 +85,38 @@ type ParsedReadArgs = {
   outPath?: string;
 };
 
+type ParsedPublishArgs = {
+  help: boolean;
+  subcommand: "publish";
+  owner?: string;
+  id?: string;
+  kind?: string;
+  title?: string;
+  description?: string;
+  tags: string[];
+  summary?: string;
+  projectRoot?: string;
+  file?: string;
+  stdin: boolean;
+  json: boolean;
+};
+
+type ParsedDeleteArgs = {
+  help: boolean;
+  subcommand: "delete";
+  key: string;
+  projectRoot?: string;
+  yes: boolean;
+  json: boolean;
+};
+
 type ParsedArtifactArgs =
   | { help: true; json?: boolean }
   | ParsedListArgs
   | ParsedShowArgs
   | ParsedReadArgs
+  | ParsedPublishArgs
+  | ParsedDeleteArgs
   | { help: false };
 
 function parseLimitFlag(value: string): number {
@@ -81,11 +130,21 @@ function parseLimitFlag(value: string): number {
   }
 }
 
+function requireListValue(args: string[], index: number, flag: string): string {
+  const value = args[index];
+  if (value === undefined || value.length === 0) throw new Error(`Missing value for ${flag}`);
+  return value;
+}
+
 function parseListArgs(args: string[]): ParsedListArgs {
   let q: string | undefined;
   let kind: string | undefined;
   let owner: string | undefined;
+  let tag: string | undefined;
+  let status: string | undefined;
   let live: boolean | undefined;
+  let sort: string | undefined;
+  let order: string | undefined;
   let projectRoot: string | undefined;
   let limit = 50;
   let json = false;
@@ -104,13 +163,17 @@ function parseListArgs(args: string[]): ParsedListArgs {
       if (value === undefined) throw new Error("Missing value for --q");
       q = value;
     } else if (arg === "--kind") {
-      const value = args[++i];
-      if (value === undefined || value.length === 0) throw new Error("Missing value for --kind");
-      kind = value;
+      kind = requireListValue(args, ++i, "--kind");
     } else if (arg === "--owner") {
-      const value = args[++i];
-      if (value === undefined || value.length === 0) throw new Error("Missing value for --owner");
-      owner = value;
+      owner = requireListValue(args, ++i, "--owner");
+    } else if (arg === "--tag") {
+      tag = requireListValue(args, ++i, "--tag");
+    } else if (arg === "--status") {
+      status = requireListValue(args, ++i, "--status");
+    } else if (arg === "--sort") {
+      sort = requireListValue(args, ++i, "--sort");
+    } else if (arg === "--order") {
+      order = requireListValue(args, ++i, "--order");
     } else if (arg === "--project-root") {
       const value = args[++i];
       if (value === undefined || value.length === 0) throw new Error("Missing value for --project-root");
@@ -126,7 +189,15 @@ function parseListArgs(args: string[]): ParsedListArgs {
     }
   }
 
-  return { help, subcommand: "list", q, kind, owner, live, projectRoot, limit, json };
+  return { help, subcommand: "list", q, kind, owner, tag, status, live, sort, order, projectRoot, limit, json };
+}
+
+function ownerListFilter(owner: string): string {
+  const trimmed = owner.trim();
+  if (trimmed.startsWith("stage:") || trimmed.startsWith("agent:")) return trimmed;
+  const colon = trimmed.indexOf(":");
+  if (colon > 0 && trimmed.indexOf(":", colon + 1) === -1) return `stage:${trimmed}`;
+  return trimmed;
 }
 
 function parseShowArgs(args: string[]): ParsedShowArgs {
@@ -190,6 +261,88 @@ function parseReadArgs(args: string[]): ParsedReadArgs {
   return { help, subcommand: "read", runId, artifactPath, outPath };
 }
 
+function requireFlag(value: string | undefined, flag: string): string {
+  if (value === undefined || value.length === 0) throw new Error(`Missing value for ${flag}`);
+  return value;
+}
+
+function parsePublishOwner(raw: string): ArtifactOwner {
+  if (raw.startsWith("agent:")) {
+    const agent = raw.slice("agent:".length);
+    if (agent.length === 0) throw new Error("Owner must be <pipeline>:<stage> or agent:<id>");
+    return { kind: "agent", agent };
+  }
+  if (raw.startsWith("stage:")) {
+    const parsed = parseOwnerKey(raw);
+    if (parsed?.kind !== "stage") throw new Error("Owner must be <pipeline>:<stage> or agent:<id>");
+    return parsed;
+  }
+  const colon = raw.indexOf(":");
+  if (colon <= 0 || colon === raw.length - 1) {
+    throw new Error("Owner must be <pipeline>:<stage> or agent:<id>");
+  }
+  return { kind: "stage", pipeline: raw.slice(0, colon), stage: raw.slice(colon + 1) };
+}
+
+function parsePublishArgs(args: string[]): ParsedPublishArgs {
+  let owner: string | undefined;
+  let id: string | undefined;
+  let kind: string | undefined;
+  let title: string | undefined;
+  let description: string | undefined;
+  const tags: string[] = [];
+  let summary: string | undefined;
+  let projectRoot: string | undefined;
+  let file: string | undefined;
+  let stdin = false;
+  let json = false;
+  let help = false;
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--help" || arg === "-h") help = true;
+    else if (arg === "--json") json = true;
+    else if (arg === "--stdin") stdin = true;
+    else if (arg === "--owner") owner = requireFlag(args[++i], "--owner");
+    else if (arg === "--id") id = requireFlag(args[++i], "--id");
+    else if (arg === "--kind") kind = requireFlag(args[++i], "--kind");
+    else if (arg === "--title") title = requireFlag(args[++i], "--title");
+    else if (arg === "--description") description = requireFlag(args[++i], "--description");
+    else if (arg === "--tag") tags.push(requireFlag(args[++i], "--tag"));
+    else if (arg === "--summary") summary = requireFlag(args[++i], "--summary");
+    else if (arg === "--project-root") projectRoot = requireFlag(args[++i], "--project-root");
+    else if (arg === "--file") file = requireFlag(args[++i], "--file");
+    else if (arg?.startsWith("-")) throw new Error(`Unknown flag: ${arg}`);
+    else throw new Error(`Unexpected argument: ${arg}`);
+  }
+  if (!help) {
+    requireFlag(owner, "--owner");
+    requireFlag(id, "--id");
+    requireFlag(kind, "--kind");
+    requireFlag(title, "--title");
+    if (Boolean(file) === stdin) throw new Error("Pass exactly one of --file or --stdin");
+  }
+  return { help, subcommand: "publish", owner, id, kind, title, description, tags, summary, projectRoot, file, stdin, json };
+}
+
+function parseDeleteArgs(args: string[]): ParsedDeleteArgs {
+  if (args.length < 2) throw new Error("Missing artifact key");
+  const key = args[1]!;
+  let projectRoot: string | undefined;
+  let yes = false;
+  let json = false;
+  let help = false;
+  for (let i = 2; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--help" || arg === "-h") help = true;
+    else if (arg === "--json") json = true;
+    else if (arg === "--yes") yes = true;
+    else if (arg === "--project-root") projectRoot = requireFlag(args[++i], "--project-root");
+    else if (arg?.startsWith("-")) throw new Error(`Unknown flag: ${arg}`);
+    else throw new Error(`Unexpected argument: ${arg}`);
+  }
+  return { help, subcommand: "delete", key, projectRoot, yes, json };
+}
+
 export function parseArtifactArgs(args: string[]): ParsedArtifactArgs {
   if (args.length === 0) {
     return { help: false };
@@ -202,6 +355,8 @@ export function parseArtifactArgs(args: string[]): ParsedArtifactArgs {
   if (subcommand === "list") return parseListArgs(args);
   if (subcommand === "show") return parseShowArgs(args);
   if (subcommand === "read") return parseReadArgs(args);
+  if (subcommand === "publish") return parsePublishArgs(args);
+  if (subcommand === "delete") return parseDeleteArgs(args);
   throw new Error(`Unknown artifact subcommand: ${subcommand}`);
 }
 
@@ -229,13 +384,17 @@ function reportQueryError(
   return 1;
 }
 
-function hasClientFilters(parsed: ParsedListArgs): boolean {
-  return (
-    (parsed.q !== undefined && parsed.q.trim().length > 0) ||
-    (parsed.kind !== undefined && parsed.kind.trim().length > 0) ||
-    (parsed.owner !== undefined && parsed.owner.trim().length > 0) ||
-    parsed.live === true
-  );
+function serverListQuery(parsed: ParsedListArgs): Omit<ArtifactListQuery, "limit" | "cursor"> {
+  return {
+    projectRoot: parsed.projectRoot,
+    kind: parsed.kind !== undefined ? parseArtifactKindFilter(parsed.kind) : undefined,
+    owner: parsed.owner !== undefined ? parseArtifactOwnerFilter(ownerListFilter(parsed.owner)) : undefined,
+    tag: parsed.tag !== undefined ? parseArtifactTagFilter(parsed.tag) : undefined,
+    status: parsed.status !== undefined ? parseArtifactStatus(parsed.status) : undefined,
+    live: parsed.live === true ? true : undefined,
+    sort: parsed.sort !== undefined ? parseArtifactListSort(parsed.sort) : undefined,
+    order: parsed.order !== undefined ? parseArtifactListOrder(parsed.order) : undefined,
+  };
 }
 
 async function fetchArtifactList(
@@ -247,42 +406,29 @@ async function fetchArtifactList(
     throw new ArtifactQueryError(503, "artifact.store_unavailable", "Artifact index is unavailable");
   }
   const roots = await catalogRootsForArtifacts(store);
-  if (!hasClientFilters(parsed)) {
-    return listArtifacts(
-      db,
-      {
-        projectRoot: parsed.projectRoot,
-        limit: parsed.limit,
-      },
-      roots,
-    );
+  const filters = serverListQuery(parsed);
+  const q = parsed.q?.trim() ?? "";
+  if (q.length === 0) {
+    return listArtifacts(db, { ...filters, limit: parsed.limit }, roots);
   }
-  const filters = {
-    q: parsed.q,
-    kind: parsed.kind,
-    owner: parsed.owner,
-    live: parsed.live,
-  };
   const collected: ArtifactRecord[] = [];
   let cursor: string | undefined;
-  while (collected.length < parsed.limit) {
+  for (let pageNumber = 0; pageNumber < CLIENT_QUERY_MAX_PAGES && collected.length < parsed.limit; pageNumber++) {
     const page = listArtifacts(
       db,
       {
-        projectRoot: parsed.projectRoot,
-        limit: 100,
+        ...filters,
+        limit: CLIENT_QUERY_PAGE_SIZE,
         cursor,
       },
       roots,
     );
-    const filtered = applyClientFilters(page.artifacts, filters);
+    const filtered = applyClientFilters(page.artifacts, { q });
     for (const record of filtered) {
       collected.push(record);
       if (collected.length >= parsed.limit) break;
     }
-    if (page.next_cursor === null || collected.length >= parsed.limit) {
-      break;
-    }
+    if (page.next_cursor === null) break;
     cursor = page.next_cursor;
   }
   return { artifacts: collected, next_cursor: null };
@@ -398,6 +544,127 @@ async function runReadSubcommand(
   }
 }
 
+function reportPublishError(err: ArtifactPublishError, json: boolean, out: ArtifactCommandIo): number {
+  const payload: Record<string, unknown> = { error: err.message, code: err.code };
+  if (err.issues !== undefined) payload.issues = err.issues;
+  if (err.projectRoots !== undefined) payload.project_roots = err.projectRoots;
+  if (json) out.log(JSON.stringify(payload));
+  else out.error(err.message);
+  return 1;
+}
+
+function reportCommandError(message: string, code: string, json: boolean, out: ArtifactCommandIo): number {
+  if (json) out.log(JSON.stringify({ error: message, code }));
+  else out.error(message);
+  return 1;
+}
+
+async function readStdinBytes(): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+function promptYes(question: string): Promise<boolean> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr, terminal: true });
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(/^y(es)?$/i.test(answer.trim()));
+    });
+  });
+}
+
+async function runPublishSubcommand(
+  parsed: ParsedPublishArgs,
+  store: RunStore,
+  cwd: string,
+  out: ArtifactCommandIo,
+  readStdin: () => Promise<Buffer>,
+): Promise<number> {
+  const db = sqliteConnectionFromStore(store);
+  if (db === undefined) {
+    return reportQueryError(
+      new ArtifactQueryError(503, "artifact.store_unavailable", "Artifact index is unavailable"),
+      parsed.json,
+      out,
+    );
+  }
+  try {
+    const bytes = parsed.file ? await readFile(path.resolve(cwd, parsed.file)) : await readStdin();
+    const result = await publishArtifact(db, {
+      owner: parsePublishOwner(parsed.owner ?? ""),
+      projectRoot: parsed.projectRoot,
+      id: parsed.id ?? "",
+      kind: parsed.kind ?? "",
+      title: parsed.title ?? "",
+      description: parsed.description,
+      tags: parsed.tags,
+      summary: parsed.summary,
+      bytes,
+      publishSource: "console",
+      roots: await catalogRootsForArtifacts(store),
+    });
+    if (parsed.json) out.log(JSON.stringify(result));
+    else out.log(`${result.unchanged ? "Unchanged" : "Published"} ${result.key} version ${result.version}`);
+    return 0;
+  } catch (error) {
+    if (error instanceof ArtifactPublishError) return reportPublishError(error, parsed.json, out);
+    if (error instanceof ArtifactQueryError) return reportQueryError(error, parsed.json, out);
+    const message = error instanceof Error ? error.message : String(error);
+    return reportCommandError(message, "artifact.invalid_shape", parsed.json, out);
+  }
+}
+
+async function runDeleteSubcommand(
+  parsed: ParsedDeleteArgs,
+  store: RunStore,
+  out: ArtifactCommandIo,
+  options: { stdinIsTTY?: boolean; confirm?: (prompt: string) => Promise<boolean> },
+): Promise<number> {
+  const parts = parseArtifactShowKey(parsed.key);
+  if (!parts) return reportCommandError("Artifact key is not valid", "artifact.invalid_id", parsed.json, out);
+  if (!parsed.yes) {
+    const prompt = `Delete published artifact ${parsed.key} and all of its versions? This cannot be undone. [y/N] `;
+    let confirmed = false;
+    if (options.confirm) confirmed = await options.confirm(prompt);
+    else if (options.stdinIsTTY === true) confirmed = await promptYes(prompt);
+    else {
+      return reportCommandError(
+        "Refusing to delete without --yes because stdin is not a terminal.",
+        "artifact.confirmation_required",
+        parsed.json,
+        out,
+      );
+    }
+    if (!confirmed) {
+      return reportCommandError("Delete cancelled.", "artifact.confirmation_required", parsed.json, out);
+    }
+  }
+  const db = sqliteConnectionFromStore(store);
+  if (db === undefined) {
+    return reportQueryError(
+      new ArtifactQueryError(503, "artifact.store_unavailable", "Artifact index is unavailable"),
+      parsed.json,
+      out,
+    );
+  }
+  try {
+    const roots = await catalogRootsForArtifacts(store);
+    const deleted = await deletePublishedArtifact(db, parts.ownerKey, parts.id, parsed.projectRoot, roots);
+    if (parsed.json) out.log(JSON.stringify(deleted));
+    else out.log(`Deleted ${deleted.key}`);
+    return 0;
+  } catch (error) {
+    if (error instanceof ArtifactPublishError) return reportPublishError(error, parsed.json, out);
+    if (error instanceof ArtifactQueryError) return reportQueryError(error, parsed.json, out);
+    const message = error instanceof Error ? error.message : String(error);
+    return reportCommandError(message, "artifact.invalid_shape", parsed.json, out);
+  }
+}
+
 export async function runArtifactCommand(
   args: string[],
   options: {
@@ -405,6 +672,9 @@ export async function runArtifactCommand(
     projectRoot?: string;
     io?: Partial<ArtifactCommandIo>;
     ensureService?: () => ReturnType<typeof ensureGlobalService>;
+    readStdin?: () => Promise<Buffer>;
+    stdinIsTTY?: boolean;
+    confirm?: (prompt: string) => Promise<boolean>;
   } = {},
 ): Promise<number> {
   const cwd = options.cwd ?? process.cwd();
@@ -458,6 +728,12 @@ export async function runArtifactCommand(
   }
   if (parsed.subcommand === "show") {
     return runShowSubcommand(parsed, store, out);
+  }
+  if (parsed.subcommand === "publish") {
+    return runPublishSubcommand(parsed, store, cwd, out, options.readStdin ?? readStdinBytes);
+  }
+  if (parsed.subcommand === "delete") {
+    return runDeleteSubcommand(parsed, store, out, options);
   }
   return runReadSubcommand(parsed, store, cwd, out);
 }

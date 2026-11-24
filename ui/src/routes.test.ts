@@ -285,6 +285,13 @@ describe("artifact routes", () => {
       ownerKey: "agent:helper",
       id: "weekly",
     });
+    expect(parseHash(`#${artifactDetailPath("stage:sales:summarize", "weekly", "proj/root", 2)}`)).toEqual({
+      name: "artifact",
+      ownerKey: "stage:sales:summarize",
+      id: "weekly",
+      projectRoot: "proj/root",
+      version: 2,
+    });
   });
 });
 

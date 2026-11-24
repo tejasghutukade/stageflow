@@ -701,26 +701,31 @@ HTTP: `GET /api/export` (**read** scope) with the same query filters.
 
 ## `sf artifact`
 
-List and show indexed artifacts (the artifact index in `state.db`), or read a run workspace file as UTF-8 text.
+List, show, publish, and delete artifacts in the artifact index, or read a run workspace file as UTF-8 text.
 
-Like other store read verbs, `list` and `show` open `$STAGEFLOW_HOME` SQLite directly. When the database is missing or its schema is behind this binary, they start the Host to apply migrations, then open again (same as `sf runs list` and `sf artifact read`).
+Like other store verbs, `list` and `show` open `$STAGEFLOW_HOME` SQLite directly. `publish` and `delete` do the same. When the database is missing or its schema is behind this binary, they start the Host to apply migrations, then open again (same as `sf runs list` and `sf artifact read`).
 
 ### `sf artifact list`
 
 ```bash
-sf artifact list [--q <text>] [--kind <kind>] [--owner <pipeline:stage|agent:id>] [--live]
+sf artifact list [--q <text>] [--kind <kind>] [--owner <pipeline:stage|agent:id>] [--tag <tag>]
+  [--status <available|expired>] [--live] [--sort <updated|title|size>] [--order <asc|desc>]
   [--project-root <wire id or path>] [--limit <n>] [--json]
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--q` | Client-side filter: matches `title`, `id`, or owner text (full-text search arrives later). |
-| `--kind` | Client-side filter on artifact `kind` (for example `static.markdown`). |
-| `--owner` | Client-side filter: `pipeline:stage` for stage artifacts, or `agent:<id>` (also accepts a full `stage:…` owner key). |
-| `--live` | Client-side filter: only artifacts whose kind starts with `live.`. |
+| `--q` | Client-side filter: matches `title`, `id`, or owner text (full-text search arrives later). The command reads further index pages, up to 20, until `--limit` matches are collected or the pages run out. |
+| `--kind` | Passed to the index (`kind`). A value without a dot matches that prefix (`static` matches `static.markdown`). |
+| `--owner` | Passed to the index. `pipeline:stage` or `stage:<pipeline>:<stage>` for a stage, or `agent:<id>`. |
+| `--tag` | Passed to the index (`tag`). |
+| `--status` | Passed to the index: `available` or `expired`. |
+| `--live` | Passed as `live=true`: only artifacts whose kind starts with `live.`. |
+| `--sort` | Passed to the index: `updated` (default), `title`, or `size`. |
+| `--order` | Passed to the index: `asc` or `desc`. Default is `desc`, except `title`, which defaults to `asc`. |
 | `--project-root` | Catalog wire id or absolute path; passed through to the index query. |
 | `--limit` | Max rows (`1`–`100`, default `50`). |
-| `--json` | Print `{ "artifacts": […], "next_cursor": string \| null }` (same field names as `GET /api/artifacts`). With client-side filters, `next_cursor` is always `null`. |
+| `--json` | Print `{ "artifacts": […], "next_cursor": string \| null }` (same field names as `GET /api/artifacts`). With `--q`, `next_cursor` is `null`. |
 
 Human output is a compact table: `KEY`, `KIND`, `TITLE`, `OWNER`, `RUN` (the same short run id the console uses, so a timestamp-prefixed id is not cut to `2026-11-`), `STATUS` (blank, or `expired`), `UPDATED` (UTC). Newest first. Empty index: `No artifacts.`
 
@@ -737,6 +742,32 @@ sf artifact show <ownerKey>/<id> [--project-root <wire id or path>] [--json]
 **Exit codes:** `0` success; `1` not found (`artifact.not_found`), ambiguous owner/id across projects (`artifact.ambiguous`, project roots listed on stderr), invalid key, or other error.
 
 Human output is one field per line: `key`, `title`, `kind`, `status`, `owner`, `source` (run, stage, attempt), `updated`, and `expires` or `expired` (reason and time). With `--json`, stdout is the artifact record object, or `{ "error", "code" }` (and `project_roots` when ambiguous) on failure. `--json` is unchanged by the human summary.
+
+### `sf artifact publish` {#sf-artifact-publish}
+
+Copy a static file into the keep-class artifact store. Same caps and version rules as [Publishing](artifacts.md#publishing).
+
+```bash
+sf artifact publish --owner <pipeline:stage|agent:id> --id <id> --kind <kind> --title <title>
+  [--description <text>] [--tag <tag>]... [--summary <text>]
+  [--project-root <wire id or path>] (--file <path> | --stdin) [--json]
+```
+
+`--owner` is `pipeline:stage` (or `stage:<pipeline>:<stage>`) or `agent:<id>`. Pass exactly one of `--file` or `--stdin`. `--tag` may be repeated. The recorded source is `console`.
+
+Human output is `Published <key> version <N>` or `Unchanged <key> version <N>`. `--json` prints `{ "key", "version", "project_root", "url", "unchanged" }`.
+
+**Exit codes:** `0` success; `1` validation error, ambiguous project, or store unavailable. With `--json`, stdout is `{ "error", "code" }` and `issues` when the body was rejected.
+
+### `sf artifact delete <key>` {#sf-artifact-delete}
+
+```bash
+sf artifact delete <ownerKey>/<id> [--project-root <wire id or path>] [--yes] [--json]
+```
+
+Deletes a published artifact and every version. Without `--yes`, a terminal asks for confirmation. With no terminal and no `--yes`, the command exits `1` and does not delete. `--json` errors are `{ "error", "code" }` (`artifact.confirmation_required`, `artifact.not_deletable`, `artifact.not_found`, `artifact.ambiguous`).
+
+**Exit codes:** `0` deleted; `1` refused, not found, indexed, ambiguous, or other error.
 
 ### `sf artifact read`
 

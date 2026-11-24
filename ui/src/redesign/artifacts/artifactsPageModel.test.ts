@@ -5,13 +5,21 @@ import {
   ALL_PROJECTS_SCOPE,
   ARTIFACTS_EMPTY_BODY,
   ARTIFACTS_EMPTY_TITLE,
+  DEFAULT_ARTIFACT_LIST_FILTERS,
   activeArtifactProjectWireId,
   applyArtifactPage,
   artifactExpiredShortReason,
+  artifactListFiltersActive,
+  artifactListFiltersToQuery,
   artifactListRows,
+  artifactLiveStatusPill,
   artifactProjectScopeOptions,
   artifactScopeQuery,
+  artifactStatusPillForRecord,
+  artifactExpiryNote,
   initialArtifactCursorState,
+  serializeArtifactListFiltersRoundTrip,
+  tabToListQuery,
   unregisteredProjectLabel,
 } from "./artifactsPageModel";
 
@@ -124,6 +132,85 @@ describe("artifacts page model", () => {
     ]);
     const [row] = artifactListRows([record()], Date.parse("2026-11-24T12:00:00.000Z"), { runs });
     expect(row?.runLabel).toBe(`${runShortId("run_abcdef123456")} · weekly-digest`);
+  });
+
+  it("maps filters to query params and tabs", () => {
+    expect(tabToListQuery("live")).toEqual({ live: true });
+    expect(tabToListQuery("static")).toEqual({ kind: "static" });
+    expect(
+      artifactListFiltersToQuery({
+        ...DEFAULT_ARTIFACT_LIST_FILTERS,
+        tab: "static",
+        owner: "sales",
+        tag: "weekly",
+        status: "available",
+        sort: "title",
+        order: "asc",
+      }),
+    ).toMatchObject({
+      kind: "static",
+      owner: "sales",
+      tag: "weekly",
+      status: "available",
+      sort: "title",
+      order: "asc",
+    });
+    expect(
+      artifactListFiltersActive({
+        ...DEFAULT_ARTIFACT_LIST_FILTERS,
+        kind: "markdown",
+      }),
+    ).toBe(true);
+    expect(artifactListFiltersActive(DEFAULT_ARTIFACT_LIST_FILTERS)).toBe(false);
+  });
+
+  it("round-trips list filters in the hash path", () => {
+    const filters = {
+      ...DEFAULT_ARTIFACT_LIST_FILTERS,
+      tab: "live" as const,
+      kind: "live.declarative",
+      owner: "stage:sales:summarize",
+      tag: "revenue",
+      status: "available" as const,
+      sort: "size" as const,
+      order: "desc" as const,
+    };
+    expect(serializeArtifactListFiltersRoundTrip(filters, "workspace")).toEqual(filters);
+  });
+
+  it("derives expiry notes from expires_at with a fixed now", () => {
+    const now = Date.parse("2026-06-15T15:00:00.000Z");
+    expect(artifactExpiryNote(null, now)).toBeNull();
+    expect(artifactExpiryNote("2026-06-15T18:00:00.000Z", now)).toBe("expires today");
+    expect(artifactExpiryNote("2026-06-16T00:00:00.000Z", now)).toBe("expires tomorrow");
+    expect(artifactExpiryNote("2026-06-27T00:00:00.000Z", now)).toBe("expires in 12 days");
+    expect(artifactExpiryNote("2026-06-01T00:00:00.000Z", now)).toBe("expired");
+  });
+
+  it("maps indexed and live status pills", () => {
+    expect(artifactStatusPillForRecord(record())).toEqual({ label: "Available", variant: "ok" });
+    expect(artifactStatusPillForRecord(record({ status: "expired" }))).toEqual({
+      label: "Expired",
+      variant: "fail",
+    });
+    expect(artifactLiveStatusPill("fresh")).toEqual({ label: "Fresh", variant: "ok" });
+    expect(artifactLiveStatusPill("stale")).toEqual({ label: "Stale", variant: "needs" });
+    expect(artifactLiveStatusPill("error")).toEqual({ label: "Error", variant: "fail" });
+    expect(artifactLiveStatusPill("refreshing")).toEqual({ label: "Refreshing", variant: "running" });
+    expect(
+      artifactStatusPillForRecord(record({ live: { status: "stale" } })),
+    ).toEqual({ label: "Stale", variant: "needs" });
+  });
+
+  it("builds view rows for 1,000 records under a generous bound", () => {
+    const now = Date.parse("2026-11-24T12:00:00.000Z");
+    const records = Array.from({ length: 1000 }, (_, i) =>
+      record({ id: `id-${i}`, key: `stage:sales:summarize/id-${i}`, title: `f-${i}.md` }),
+    );
+    const start = performance.now();
+    const rows = artifactListRows(records, now);
+    expect(rows).toHaveLength(1000);
+    expect(performance.now() - start).toBeLessThan(500);
   });
 
   it("marks an expired row and keeps a short reason", () => {

@@ -5,6 +5,8 @@ export type ArtifactOwner =
   | { kind: "stage"; pipeline: string; stage: string }
   | { kind: "agent"; agent: string };
 
+export type ArtifactLiveStatus = "fresh" | "stale" | "refreshing" | "error";
+
 export type ArtifactRecord = {
   key: string;
   id: string;
@@ -31,6 +33,23 @@ export type ArtifactRecord = {
   expired_at: string | null;
   expired_reason: string | null;
   content_hash?: string | null;
+  live?: { status: ArtifactLiveStatus };
+};
+
+export type ArtifactListSort = "updated" | "title" | "size";
+export type ArtifactListOrder = "asc" | "desc";
+
+export type ArtifactListQueryParams = {
+  project_root?: string;
+  limit?: number;
+  cursor?: string;
+  status?: "available" | "expired";
+  kind?: string;
+  owner?: string;
+  tag?: string;
+  live?: boolean;
+  sort?: ArtifactListSort;
+  order?: ArtifactListOrder;
 };
 
 export type ArtifactListPage = {
@@ -38,14 +57,30 @@ export type ArtifactListPage = {
   next_cursor: string | null;
 };
 
-export function fetchArtifacts(
-  projectRoot?: string,
-  options?: { limit?: number; cursor?: string },
-): Promise<ArtifactListPage> {
+export function artifactListSearchParams(
+  projectRoot: string | undefined,
+  options?: ArtifactListQueryParams,
+): URLSearchParams {
   const params = new URLSearchParams();
   if (projectRoot) params.set("project_root", projectRoot);
   params.set("limit", String(options?.limit ?? 50));
   if (options?.cursor) params.set("cursor", options.cursor);
+  if (options?.status) params.set("status", options.status);
+  if (options?.kind) params.set("kind", options.kind);
+  if (options?.owner) params.set("owner", options.owner);
+  if (options?.tag) params.set("tag", options.tag);
+  if (options?.live === true) params.set("live", "true");
+  if (options?.live === false) params.set("live", "false");
+  if (options?.sort) params.set("sort", options.sort);
+  if (options?.order) params.set("order", options.order);
+  return params;
+}
+
+export function fetchArtifacts(
+  projectRoot?: string,
+  options?: ArtifactListQueryParams,
+): Promise<ArtifactListPage> {
+  const params = artifactListSearchParams(projectRoot, options);
   const query = params.toString();
   return api(`/api/artifacts${query ? `?${query}` : ""}`);
 }
@@ -62,20 +97,25 @@ export class ArtifactRequestError extends Error {
   }
 }
 
-function artifactRecordPath(ownerKey: string, id: string, projectRoot?: string): string {
+function artifactQuery(projectRoot?: string, version?: number): string {
   const params = new URLSearchParams();
   if (projectRoot) params.set("project_root", projectRoot);
+  if (version !== undefined) params.set("version", String(version));
   const query = params.toString();
-  const path = `/api/artifacts/${encodeURIComponent(ownerKey)}/${encodeURIComponent(id)}`;
-  return query ? `${path}?${query}` : path;
+  return query ? `?${query}` : "";
 }
 
-export function artifactContentPath(ownerKey: string, id: string, projectRoot?: string): string {
-  const params = new URLSearchParams();
-  if (projectRoot) params.set("project_root", projectRoot);
-  const query = params.toString();
-  const path = `/api/artifacts/${encodeURIComponent(ownerKey)}/${encodeURIComponent(id)}/content`;
-  return query ? `${path}?${query}` : path;
+function artifactRecordPath(ownerKey: string, id: string, projectRoot?: string, version?: number): string {
+  return `/api/artifacts/${encodeURIComponent(ownerKey)}/${encodeURIComponent(id)}${artifactQuery(projectRoot, version)}`;
+}
+
+export function artifactContentPath(
+  ownerKey: string,
+  id: string,
+  projectRoot?: string,
+  version?: number,
+): string {
+  return `/api/artifacts/${encodeURIComponent(ownerKey)}/${encodeURIComponent(id)}/content${artifactQuery(projectRoot, version)}`;
 }
 
 async function readArtifactError(res: Response): Promise<ArtifactRequestError> {
@@ -84,8 +124,13 @@ async function readArtifactError(res: Response): Promise<ArtifactRequestError> {
   return new ArtifactRequestError(res.status, body.code, body.error ?? `Request failed (${res.status})`);
 }
 
-export function fetchArtifact(ownerKey: string, id: string, projectRoot?: string): Promise<ArtifactRecord> {
-  return api(artifactRecordPath(ownerKey, id, projectRoot));
+export function fetchArtifact(
+  ownerKey: string,
+  id: string,
+  projectRoot?: string,
+  version?: number,
+): Promise<ArtifactRecord> {
+  return api(artifactRecordPath(ownerKey, id, projectRoot, version));
 }
 
 export type ArtifactContentPayload =
@@ -97,8 +142,9 @@ export async function fetchArtifactContent(
   ownerKey: string,
   id: string,
   projectRoot?: string,
+  version?: number,
 ): Promise<ArtifactContentPayload> {
-  const res = await fetch(artifactContentPath(ownerKey, id, projectRoot), {
+  const res = await fetch(artifactContentPath(ownerKey, id, projectRoot, version), {
     headers: { ...authorizationHeaders() },
   });
   if (!res.ok) throw await readArtifactError(res);
@@ -126,4 +172,27 @@ export async function fetchArtifactContent(
     contentHash,
     size: new TextEncoder().encode(text).length,
   };
+}
+
+export type ArtifactVersionRecord = {
+  version: number;
+  size_bytes: number | null;
+  content_hash: string | null;
+  created_at: string;
+  pinned: boolean;
+  current: boolean;
+  kind: string | null;
+};
+
+export function fetchArtifactVersions(
+  ownerKey: string,
+  id: string,
+  projectRoot?: string,
+): Promise<{ versions: ArtifactVersionRecord[] }> {
+  const path = `/api/artifacts/${encodeURIComponent(ownerKey)}/${encodeURIComponent(id)}/versions${artifactQuery(projectRoot)}`;
+  return api(path);
+}
+
+export function deleteArtifact(ownerKey: string, id: string, projectRoot?: string): Promise<{ key: string }> {
+  return api(artifactRecordPath(ownerKey, id, projectRoot), { method: "DELETE" });
 }

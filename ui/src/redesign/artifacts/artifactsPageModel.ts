@@ -1,4 +1,10 @@
-import type { ArtifactRecord } from "../../api/artifacts";
+import type {
+  ArtifactListOrder,
+  ArtifactListQueryParams,
+  ArtifactListSort,
+  ArtifactLiveStatus,
+  ArtifactRecord,
+} from "../../api/artifacts";
 import { displayCatalogPath, runTaskLabel } from "../../catalog/displayCatalogPath";
 import { runShortId } from "../../catalogJoin";
 import { artifactDetailPath } from "../../routes";
@@ -7,6 +13,40 @@ export const ARTIFACTS_EMPTY_TITLE = "No artifacts yet";
 
 export const ARTIFACTS_EMPTY_BODY =
   "Artifacts show up here when a stage finishes successfully and lists files in its envelope. Only those declared deliverables are indexed. Tool-output spill files, agent-internal folders, and anything the artifact path guard denies stay on the run and do not appear in this list.";
+
+export const ARTIFACTS_FILTERED_EMPTY_TITLE = "No matches";
+
+export const ARTIFACTS_FILTERED_EMPTY_BODY =
+  "No artifacts match the current filters. Try changing or clearing them.";
+
+export type ArtifactListTab = "all" | "live" | "static";
+
+export type ArtifactListFilterState = {
+  tab: ArtifactListTab;
+  kind: string;
+  owner: string;
+  tag: string;
+  status: "" | "available" | "expired";
+  sort: ArtifactListSort;
+  order: ArtifactListOrder;
+};
+
+export const DEFAULT_ARTIFACT_LIST_FILTERS: ArtifactListFilterState = {
+  tab: "all",
+  kind: "",
+  owner: "",
+  tag: "",
+  status: "",
+  sort: "updated",
+  order: "desc",
+};
+
+export type ArtifactStatusPillVariant = "ok" | "fail" | "needs" | "running" | "muted";
+
+export type ArtifactStatusPill = {
+  label: string;
+  variant: ArtifactStatusPillVariant;
+};
 
 /** Select value for the unscoped list. The API is called without project_root. */
 export const ALL_PROJECTS_SCOPE = "";
@@ -42,6 +82,8 @@ export type ArtifactListRow = {
   updatedLabel: string;
   expired: boolean;
   expiredReason: string | null;
+  statusPill: ArtifactStatusPill;
+  expiryNote: string | null;
   unregistered: boolean;
   projectId: string;
   projectLabel: string;
@@ -118,6 +160,185 @@ export function artifactScopeQuery(scopeId: string): string | undefined {
   return scopeId === ALL_PROJECTS_SCOPE ? undefined : scopeId;
 }
 
+export function artifactListFiltersActive(filters: ArtifactListFilterState): boolean {
+  if (filters.tab !== "all") return true;
+  if (filters.kind.trim().length > 0) return true;
+  if (filters.owner.trim().length > 0) return true;
+  if (filters.tag.trim().length > 0) return true;
+  if (filters.status.length > 0) return true;
+  if (filters.sort !== DEFAULT_ARTIFACT_LIST_FILTERS.sort) return true;
+  if (filters.order !== DEFAULT_ARTIFACT_LIST_FILTERS.order) return true;
+  return false;
+}
+
+export function tabToListQuery(tab: ArtifactListTab): Pick<ArtifactListQueryParams, "live" | "kind"> {
+  if (tab === "live") return { live: true };
+  if (tab === "static") return { kind: "static" };
+  return {};
+}
+
+export function artifactListFiltersToQuery(
+  filters: ArtifactListFilterState,
+): Omit<ArtifactListQueryParams, "cursor" | "limit" | "project_root"> {
+  const tabQuery = tabToListQuery(filters.tab);
+  const query: Omit<ArtifactListQueryParams, "cursor" | "limit" | "project_root"> = {
+    sort: filters.sort,
+    order: filters.order,
+    ...tabQuery,
+  };
+  const kind = filters.kind.trim();
+  if (kind.length > 0) query.kind = kind;
+  if (filters.tab === "static" && !query.kind) query.kind = "static";
+  const owner = filters.owner.trim();
+  if (owner.length > 0) query.owner = owner;
+  const tag = filters.tag.trim().toLowerCase();
+  if (tag.length > 0) query.tag = tag;
+  if (filters.status) query.status = filters.status;
+  return query;
+}
+
+export function parseArtifactListFiltersFromHash(hash = window.location.hash): {
+  filters: ArtifactListFilterState;
+  projectRoot: string | null;
+} {
+  const stripped = hash.replace(/^#\/?/, "");
+  const q = stripped.indexOf("?");
+  if (q < 0 || stripped.slice(0, q) !== "artifacts") {
+    return { filters: { ...DEFAULT_ARTIFACT_LIST_FILTERS }, projectRoot: null };
+  }
+  const params = new URLSearchParams(stripped.slice(q + 1));
+  const tabRaw = params.get("tab");
+  const tab: ArtifactListTab =
+    tabRaw === "live" || tabRaw === "static" ? tabRaw : "all";
+  const sortRaw = params.get("sort");
+  const sort: ArtifactListSort =
+    sortRaw === "title" || sortRaw === "size" ? sortRaw : "updated";
+  const orderRaw = params.get("order");
+  const order: ArtifactListOrder = orderRaw === "asc" ? "asc" : orderRaw === "desc" ? "desc" : "desc";
+  const statusRaw = params.get("status");
+  const status: ArtifactListFilterState["status"] =
+    statusRaw === "available" || statusRaw === "expired" ? statusRaw : "";
+  return {
+    filters: {
+      tab,
+      kind: params.get("kind") ?? "",
+      owner: params.get("owner") ?? "",
+      tag: params.get("tag") ?? "",
+      status,
+      sort,
+      order: sort === "title" && orderRaw == null ? "asc" : order,
+    },
+    projectRoot: params.get("project_root"),
+  };
+}
+
+export function artifactsListHashPath(
+  filters: ArtifactListFilterState,
+  projectRoot?: string,
+): string {
+  const params = new URLSearchParams();
+  if (projectRoot && projectRoot.length > 0) params.set("project_root", projectRoot);
+  if (filters.tab !== "all") params.set("tab", filters.tab);
+  if (filters.kind.trim().length > 0) params.set("kind", filters.kind.trim());
+  if (filters.owner.trim().length > 0) params.set("owner", filters.owner.trim());
+  const tag = filters.tag.trim().toLowerCase();
+  if (tag.length > 0) params.set("tag", tag);
+  if (filters.status) params.set("status", filters.status);
+  if (filters.sort !== "updated" || filters.order !== "desc") {
+    params.set("sort", filters.sort);
+    params.set("order", filters.order);
+  }
+  const query = params.toString();
+  return query.length > 0 ? `/artifacts?${query}` : "/artifacts";
+}
+
+export function replaceArtifactsListInHash(filters: ArtifactListFilterState, projectRoot?: string): void {
+  const next = artifactsListHashPath(filters, projectRoot);
+  if (window.location.hash.replace(/^#/, "") !== next) {
+    window.location.hash = next;
+  }
+}
+
+export function serializeArtifactListFiltersRoundTrip(
+  filters: ArtifactListFilterState,
+  projectRoot?: string,
+): ArtifactListFilterState {
+  const path = artifactsListHashPath(filters, projectRoot);
+  const hash = `#${path}`;
+  return parseArtifactListFiltersFromHash(hash).filters;
+}
+
+export type ArtifactExpiryNoteKind = "expires_today" | "expires_in" | "expired" | null;
+
+export function artifactExpiryNote(expiresAt: string | null, now = Date.now()): string | null {
+  if (expiresAt == null || expiresAt.trim() === "") return null;
+  const end = Date.parse(expiresAt);
+  if (!Number.isFinite(end)) return null;
+  const dayMs = 86_400_000;
+  const utcDay = (ms: number) => Math.floor(ms / dayMs);
+  const today = utcDay(now);
+  const expiryDay = utcDay(end);
+  if (expiryDay < today) return "expired";
+  if (expiryDay === today) return "expires today";
+  const days = expiryDay - today;
+  if (days === 1) return "expires tomorrow";
+  return `expires in ${days} days`;
+}
+
+export function artifactIndexedStatusPill(record: Pick<ArtifactRecord, "status">): ArtifactStatusPill {
+  if (record.status === "expired") {
+    return { label: "Expired", variant: "fail" };
+  }
+  return { label: "Available", variant: "ok" };
+}
+
+export function artifactLiveStatusPill(status: ArtifactLiveStatus): ArtifactStatusPill {
+  switch (status) {
+    case "fresh":
+      return { label: "Fresh", variant: "ok" };
+    case "stale":
+      return { label: "Stale", variant: "needs" };
+    case "error":
+      return { label: "Error", variant: "fail" };
+    case "refreshing":
+      return { label: "Refreshing", variant: "running" };
+    default:
+      return { label: String(status), variant: "muted" };
+  }
+}
+
+export function artifactStatusPillForRecord(record: ArtifactRecord): ArtifactStatusPill {
+  if (record.live?.status) return artifactLiveStatusPill(record.live.status);
+  return artifactIndexedStatusPill(record);
+}
+
+export function artifactStatusPillClass(variant: ArtifactStatusPillVariant): string {
+  switch (variant) {
+    case "ok":
+      return "sf-pill sf-pill--ok";
+    case "fail":
+      return "sf-pill sf-pill--fail";
+    case "needs":
+      return "sf-pill sf-pill--needs";
+    case "running":
+      return "sf-pill sf-pill--running";
+    default:
+      return "sf-pill";
+  }
+}
+
+export function artifactTabCountsFromRecords(
+  records: readonly ArtifactRecord[],
+): { all: number; live: number; static: number } {
+  let live = 0;
+  let staticCount = 0;
+  for (const row of records) {
+    if (row.kind.startsWith("live.")) live += 1;
+    else if (row.kind.startsWith("static.")) staticCount += 1;
+  }
+  return { all: records.length, live, static: staticCount };
+}
+
 export function initialArtifactCursorState(): ArtifactCursorState {
   return { records: [], nextCursor: null };
 }
@@ -184,6 +405,8 @@ export function artifactListRows(
     updatedLabel: formatArtifactUpdated(record.updated_at, now),
     expired: record.status === "expired",
     expiredReason: record.status === "expired" ? artifactExpiredShortReason(record.expired_reason) : null,
+    statusPill: artifactStatusPillForRecord(record),
+    expiryNote: artifactExpiryNote(record.expires_at, now),
     unregistered: record.project.registered === false,
     projectId: record.project.id,
     projectLabel: artifactProjectLabel(record.project.id),

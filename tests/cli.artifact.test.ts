@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { artifactIdFromRelative, publicArtifactKey, stageOwnerKey } from "../src/artifacts/keys.js";
+import { artifactIdFromRelative, artifactStorageKey, publicArtifactKey, stageOwnerKey } from "../src/artifacts/keys.js";
 import {
   runArtifactCommand,
 } from "../src/cli/artifactCommand.js";
@@ -415,6 +415,96 @@ describe("runArtifactCommand", () => {
     ]);
   });
 
+  it("sends kind, owner, tag, status, sort, and order to the index", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-art-list-server-"));
+    await indexEnvelopeArtifacts(projectRoot, {
+      pipelineId: "sales",
+      stageId: "summarize",
+      files: { "report.md": "a", "data.csv": "b" },
+      artifacts: ["report.md", "data.csv"],
+    });
+    const store = createRunStore({ rootDir: globalStageflowHome() });
+    const db = sqliteConnectionFromStore(store)!;
+    db.prepare(`UPDATE artifacts SET tags_json = '["weekly"]' WHERE title = 'report.md'`).run();
+    db.prepare(`UPDATE artifacts SET status = 'expired', expired_reason = 'run_deleted' WHERE title = 'data.csv'`).run();
+    await store.close();
+
+    const { stdout: tagOut, io: tagIo } = captureIo();
+    expect(
+      await runArtifactCommand(["list", "--tag", "weekly", "--json"], { cwd: projectRoot, projectRoot, io: tagIo }),
+    ).toBe(0);
+    expect(JSON.parse(tagOut.join("\n")).artifacts.map((row: { title: string }) => row.title)).toEqual(["report.md"]);
+
+    const { stdout: statusOut, io: statusIo } = captureIo();
+    expect(
+      await runArtifactCommand(["list", "--status", "expired", "--json"], {
+        cwd: projectRoot,
+        projectRoot,
+        io: statusIo,
+      }),
+    ).toBe(0);
+    expect(JSON.parse(statusOut.join("\n")).artifacts.map((row: { title: string }) => row.title)).toEqual(["data.csv"]);
+
+    const { stdout: sortOut, io: sortIo } = captureIo();
+    expect(
+      await runArtifactCommand(["list", "--sort", "title", "--order", "asc", "--json"], {
+        cwd: projectRoot,
+        projectRoot,
+        io: sortIo,
+      }),
+    ).toBe(0);
+    expect(JSON.parse(sortOut.join("\n")).artifacts.map((row: { title: string }) => row.title)).toEqual([
+      "data.csv",
+      "report.md",
+    ]);
+
+    const { stdout: badOut, stderr: badErr, io: badIo } = captureIo();
+    expect(
+      await runArtifactCommand(["list", "--sort", "nope", "--json"], { cwd: projectRoot, projectRoot, io: badIo }),
+    ).toBe(1);
+    expect(JSON.parse(badOut.join("\n")).code).toBe("artifact.invalid_filter");
+    expect(badErr).toEqual([]);
+  });
+
+  it("keeps paging a client-side --q until the match is found", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-art-list-q-"));
+    await indexEnvelopeArtifacts(projectRoot, {
+      files: { "report.md": "a" },
+      artifacts: ["report.md"],
+    });
+    const store = createRunStore({ rootDir: globalStageflowHome() });
+    const db = sqliteConnectionFromStore(store)!;
+    const sample = db.prepare(`SELECT * FROM artifacts LIMIT 1`).get() as Record<string, unknown>;
+    db.prepare(`UPDATE artifacts SET title = 'needle-report', updated_at = '2020-01-01T00:00:00.000Z'`).run();
+    const insertColumns = Object.keys(sample);
+    const insert = db.prepare(
+      `INSERT INTO artifacts (${insertColumns.join(", ")}) VALUES (${insertColumns.map((column) => `@${column}`).join(", ")})`,
+    );
+    for (let index = 0; index < 100; index++) {
+      const id = `filler${index}`;
+      insert.run({
+        ...sample,
+        key: artifactStorageKey(String(sample.project_root_id), stageOwnerKey("sales", "summarize"), id),
+        id,
+        title: `filler ${index}`,
+        updated_at: `2027-01-01T00:00:00.${String(index).padStart(3, "0")}Z`,
+        created_at: `2027-01-01T00:00:00.${String(index).padStart(3, "0")}Z`,
+      });
+    }
+    await store.close();
+    const { stdout, io } = captureIo();
+    expect(
+      await runArtifactCommand(["list", "--q", "needle", "--limit", "1", "--json"], {
+        cwd: projectRoot,
+        projectRoot,
+        io,
+      }),
+    ).toBe(0);
+    const body = JSON.parse(stdout.join("\n"));
+    expect(body.artifacts.map((row: { title: string }) => row.title)).toEqual(["needle-report"]);
+    expect(body.next_cursor).toBeNull();
+  });
+
   it("list --limit caps rows and reports an empty index", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-art-list-limit-"));
     await indexEnvelopeArtifacts(projectRoot, {
@@ -540,11 +630,100 @@ describe("runArtifactCommand", () => {
   it("reports usage for unknown subcommands and missing show key", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-art-usage-"));
     const { stderr: badSub, io: badIo } = captureIo();
-    expect(await runArtifactCommand(["publish"], { cwd: projectRoot, projectRoot, io: badIo })).toBe(1);
+    expect(await runArtifactCommand(["nope"], { cwd: projectRoot, projectRoot, io: badIo })).toBe(1);
     expect(badSub.join("\n")).toMatch(/Unknown artifact subcommand/);
 
     const { stderr: missingKey, io: keyIo } = captureIo();
     expect(await runArtifactCommand(["show"], { cwd: projectRoot, projectRoot, io: keyIo })).toBe(1);
     expect(missingKey.join("\n")).toMatch(/Missing artifact key/);
+  });
+
+  it("publishes from --file and --stdin and deletes with and without --yes", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-art-pub-"));
+    const home = globalStageflowHome();
+    const store = createRunStore({ rootDir: home });
+    await store.ensureProject(projectRoot);
+    await store.close();
+    const file = path.join(projectRoot, "note.md");
+    await writeFile(file, "# from file\n");
+    const { stdout, io } = captureIo();
+    const published = await runArtifactCommand(
+      [
+        "publish",
+        "--owner",
+        "sales:summarize",
+        "--id",
+        "weekly",
+        "--kind",
+        "static.markdown",
+        "--title",
+        "Weekly",
+        "--file",
+        file,
+        "--project-root",
+        projectRoot,
+        "--json",
+      ],
+      { cwd: projectRoot, projectRoot, io },
+    );
+    expect(published).toBe(0);
+    const body = JSON.parse(stdout.join("\n")) as { key: string; version: number; unchanged: boolean };
+    expect(body).toMatchObject({ key: "stage:sales:summarize/weekly", version: 1, unchanged: false });
+
+    const again = captureIo();
+    const republish = await runArtifactCommand(
+      [
+        "publish",
+        "--owner",
+        "sales:summarize",
+        "--id",
+        "notes",
+        "--kind",
+        "static.text",
+        "--title",
+        "Notes",
+        "--stdin",
+        "--project-root",
+        projectRoot,
+        "--json",
+      ],
+      {
+        cwd: projectRoot,
+        projectRoot,
+        io: again.io,
+        readStdin: async () => Buffer.from("from stdin"),
+      },
+    );
+    expect(republish).toBe(0);
+    expect(JSON.parse(again.stdout.join("\n")).version).toBe(1);
+
+    const refused = captureIo();
+    const no = await runArtifactCommand(
+      ["delete", body.key, "--project-root", projectRoot, "--json"],
+      { cwd: projectRoot, projectRoot, io: refused.io, stdinIsTTY: false },
+    );
+    expect(no).toBe(1);
+    expect(JSON.parse(refused.stdout.join("\n")).code).toBe("artifact.confirmation_required");
+
+    const removed = captureIo();
+    const yes = await runArtifactCommand(
+      ["delete", body.key, "--project-root", projectRoot, "--yes", "--json"],
+      { cwd: projectRoot, projectRoot, io: removed.io },
+    );
+    expect(yes).toBe(0);
+    expect(JSON.parse(removed.stdout.join("\n")).key).toBe(body.key);
+
+    const cancelled = captureIo();
+    const declined = await runArtifactCommand(
+      ["delete", "stage:sales:summarize/notes", "--project-root", projectRoot, "--json"],
+      { cwd: projectRoot, projectRoot, io: cancelled.io, confirm: async () => false },
+    );
+    expect(declined).toBe(1);
+    const accepted = captureIo();
+    const confirmed = await runArtifactCommand(
+      ["delete", "stage:sales:summarize/notes", "--project-root", projectRoot, "--json"],
+      { cwd: projectRoot, projectRoot, io: accepted.io, confirm: async () => true },
+    );
+    expect(confirmed).toBe(0);
   });
 });
