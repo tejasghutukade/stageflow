@@ -325,10 +325,30 @@ function loadRow(db: Database.Database, key: string): ArtifactLiveRow | undefine
     .get(key) as ArtifactLiveRow | undefined;
 }
 
-function snapshotRows(db: Database.Database, key: string): SnapshotRow[] {
+const SNAPSHOT_COLUMNS = `binding_id, args_hash, value_json, fetched_at, duration_ms, status, error_code`;
+
+/** Rows for the given bindings' default-args pairs only; variant rows are never read. */
+function snapshotRows(db: Database.Database, key: string, bindings: readonly LiveBinding[]): SnapshotRow[] {
+  const pairs = [...new Set(bindings.map((binding) => pairKey(binding.id, argsHash(binding.args))))].map(
+    (pair) => pair.split("\0") as [string, string],
+  );
+  if (pairs.length === 0) return [];
+  const where = pairs.map(() => `(binding_id = ? AND args_hash = ?)`).join(" OR ");
   return db
     .prepare(
-      `SELECT binding_id, args_hash, value_json, fetched_at, duration_ms, status, error_code
+      `SELECT ${SNAPSHOT_COLUMNS}
+         FROM artifact_snapshots
+        WHERE artifact_key = ? AND (${where})
+        ORDER BY binding_id, args_hash`,
+    )
+    .all(key, ...pairs.flat()) as SnapshotRow[];
+}
+
+/** Every row for the key, including variants, without the stored value. */
+function snapshotMetaRows(db: Database.Database, key: string): SnapshotRow[] {
+  return db
+    .prepare(
+      `SELECT binding_id, args_hash, '' AS value_json, fetched_at, duration_ms, status, error_code
          FROM artifact_snapshots
         WHERE artifact_key = ?
         ORDER BY binding_id, args_hash`,
@@ -404,7 +424,7 @@ export function readArtifactSnapshots(
   const bindings = manifest?.bindings ?? [];
   return {
     status: row.live_status,
-    snapshots: currentSnapshots(snapshotRows(db, key), bindings),
+    snapshots: currentSnapshots(snapshotRows(db, key, bindings), bindings),
     last_refreshed_at: row.last_refreshed_at,
     last_error_code: row.last_error_code,
     errors: [],
@@ -454,7 +474,7 @@ function capacityRefreshResult(
     if (index >= 0) selected.splice(index, 1);
   }
   const bindingIds = selected.length > 0 ? selected : ["artifact"];
-  const snapshots = currentSnapshots(snapshotRows(db, key), bindings).map((snapshot) => ({
+  const snapshots = currentSnapshots(snapshotRows(db, key, bindings), bindings).map((snapshot) => ({
     ...snapshot,
     source: "cache" as const,
   }));
@@ -487,7 +507,7 @@ function freshIfStaleResult(
     return undefined;
   }
   for (const id of options.skipBindingIds ?? []) selected.delete(id);
-  const existingRows = snapshotRows(db, key);
+  const existingRows = snapshotRows(db, key, manifest.bindings);
   const nowIso = (deps.now ?? (() => new Date().toISOString()))();
   const ttl = effectiveTtlSeconds(manifest.refresh);
   const sources = new Map<string, ArtifactSnapshotSource>();
@@ -529,7 +549,7 @@ function forceTerminal(db: Database.Database, key: string): void {
   if (!row || row.deleted_at || row.live_status !== "refreshing") return;
   const manifest = loadStoredLiveBindings(row.manifest_json);
   const bindings = manifest?.bindings ?? [];
-  const state = liveRefreshState(snapshotRows(db, key), bindings);
+  const state = liveRefreshState(snapshotMetaRows(db, key), bindings);
   const status = state.status === "fresh" ? "stale" : state.status;
   db.prepare(
     `UPDATE artifacts
@@ -619,7 +639,7 @@ async function refreshLocked(
     const runnable = new Set<string>();
     const nowIso = now();
     const ttl = effectiveTtlSeconds(manifest.refresh);
-    const existingRows = snapshotRows(db, key);
+    const existingRows = snapshotRows(db, key, manifest.bindings);
     for (const binding of manifest.bindings) {
       if (!selected.has(binding.id)) continue;
       if (options.ifStale === true && !snapshotNeedsRefresh(snapshotFor(existingRows, binding), nowIso, ttl)) {
@@ -690,7 +710,7 @@ async function refreshLocked(
         });
       }
 
-      const snapshots = snapshotRows(db, key);
+      const snapshots = snapshotMetaRows(db, key);
       const state = liveRefreshState(snapshots, manifest.bindings, errors.length > 0);
       const lastError = errors[0]?.code ?? null;
       db.prepare(
@@ -710,7 +730,7 @@ async function refreshLocked(
         kind: "stored" as const,
         result: {
           status: state.status,
-          snapshots: annotateSnapshots(currentSnapshots(snapshotRows(db, key), manifest.bindings), sources),
+          snapshots: annotateSnapshots(currentSnapshots(snapshotRows(db, key, manifest.bindings), manifest.bindings), sources),
           last_refreshed_at: state.last_refreshed_at,
           last_error_code: lastError,
           errors,
@@ -843,14 +863,14 @@ export function reconcileLiveSnapshots(
     const before = previousFunctions.get(binding.id);
     if (before !== undefined && before !== binding.function) keep.delete(pairKey(binding.id, argsHash(binding.args)));
   }
-  const rows = snapshotRows(db, key);
+  const rows = snapshotMetaRows(db, key);
   for (const row of rows) {
     if (keep.has(pairKey(row.binding_id, row.args_hash))) continue;
     db.prepare(
       `DELETE FROM artifact_snapshots WHERE artifact_key = ? AND binding_id = ? AND args_hash = ?`,
     ).run(key, row.binding_id, row.args_hash);
   }
-  const remaining = successfulSnapshots(snapshotRows(db, key), manifest.bindings);
+  const remaining = successfulSnapshots(snapshotMetaRows(db, key), manifest.bindings);
   if (remaining.length === 0) {
     db.prepare(
       `UPDATE artifacts
@@ -859,7 +879,7 @@ export function reconcileLiveSnapshots(
     ).run(key);
     return;
   }
-  const state = liveRefreshState(snapshotRows(db, key), manifest.bindings);
+  const state = liveRefreshState(snapshotMetaRows(db, key), manifest.bindings);
   db.prepare(
     `UPDATE artifacts
         SET live_status = @status,
