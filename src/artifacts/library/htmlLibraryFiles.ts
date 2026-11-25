@@ -53,7 +53,12 @@ export function readHtmlLibraryFile(name: string, version: string, filePath: str
   const resolved = resolveHtmlLibraryFile(library, file);
   if (!resolved) return null;
   libraryDiskReads += 1;
-  const body = readFileSync(resolved);
+  let body: Buffer;
+  try {
+    body = readFileSync(resolved);
+  } catch {
+    return null;
+  }
   const result = { body, contentType: htmlLibraryContentType(file.path) };
   if (libraryCacheBytes + body.length <= LIBRARY_CACHE_CAP_BYTES) {
     libraryCache.set(key, result);

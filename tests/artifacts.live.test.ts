@@ -411,6 +411,18 @@ source: |
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
+  it("drops a snapshot when a republish points the binding at another function", async () => {
+    const { store, project } = await setup("{ network: [] }", ["revenue_by_week", "costs_by_week"]);
+    await writeFunction(project, "costs_by_week", toolSource("{ network: [] }"));
+    await publishLive(store, project);
+    const db = sqliteConnectionFromStore(store)!;
+    const key = storageKey(project);
+    await refreshArtifact(db, { projectRoot: project, invoke: async () => okView({ weeks: 1 }) }, key);
+    expect(db.prepare(`SELECT COUNT(*) AS c FROM artifact_snapshots WHERE artifact_key = ?`).get(key)).toEqual({ c: 1 });
+    await publishLive(store, project, { manifest: manifest("costs_by_week") });
+    expect(db.prepare(`SELECT COUNT(*) AS c FROM artifact_snapshots WHERE artifact_key = ?`).get(key)).toEqual({ c: 0 });
+  });
+
   it("keeps the previous snapshot on failure and uses error when none succeeded", async () => {
     const { store, project } = await setup();
     await publishLive(store, project);

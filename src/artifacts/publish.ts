@@ -859,7 +859,7 @@ export async function publishArtifact(
           });
           recordAttemptPublish(db, input, storageKey, next, false, now);
           syncPublishedSearch(db, storageKey, fields, input, project.id, extractSearchBody(fields.kind, input.bytes));
-          reconcileLiveSnapshots(db, storageKey, fields.live ?? fields.html ?? null);
+          reconcileLiveSnapshots(db, storageKey, fields.live ?? fields.html ?? null, next);
           if (failAfterVersionInsert) {
             failAfterVersionInsert = false;
             throw new Error("injected publish version insert failure");

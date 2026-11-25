@@ -817,6 +817,7 @@ export function reconcileLiveSnapshots(
   db: Database.Database,
   key: string,
   manifest: LiveBindingSet | null,
+  version?: number,
 ): void {
   if (!manifest) {
     db.prepare(`DELETE FROM artifact_snapshots WHERE artifact_key = ?`).run(key);
@@ -828,6 +829,20 @@ export function reconcileLiveSnapshots(
     return;
   }
   const keep = new Set(manifest.bindings.map((binding) => pairKey(binding.id, argsHash(binding.args))));
+  const previous =
+    version !== undefined && version > 1
+      ? (db
+          .prepare(`SELECT manifest_json FROM artifact_versions WHERE key = ? AND version = ?`)
+          .get(key, version - 1) as { manifest_json: string | null } | undefined)
+      : undefined;
+  const previousFunctions = new Map<string, string>();
+  for (const binding of loadStoredLiveBindings(previous?.manifest_json ?? null)?.bindings ?? []) {
+    previousFunctions.set(binding.id, binding.function);
+  }
+  for (const binding of manifest.bindings) {
+    const before = previousFunctions.get(binding.id);
+    if (before !== undefined && before !== binding.function) keep.delete(pairKey(binding.id, argsHash(binding.args)));
+  }
   const rows = snapshotRows(db, key);
   for (const row of rows) {
     if (keep.has(pairKey(row.binding_id, row.args_hash))) continue;
