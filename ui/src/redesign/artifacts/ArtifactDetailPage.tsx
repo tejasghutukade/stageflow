@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArtifactRequestError,
   deleteArtifact,
@@ -523,6 +523,7 @@ export function ArtifactDetailPage({
   projectRoot?: string;
   version?: number;
 }) {
+  const originsEpoch = useRef(0);
   const [record, setRecord] = useState<ArtifactRecord | null>(null);
   const [versions, setVersions] = useState<ArtifactVersionRecord[]>([]);
   const [payload, setPayload] = useState<ArtifactContentPayload | null>(null);
@@ -543,6 +544,7 @@ export function ArtifactDetailPage({
     version,
     latestVersion,
     hidden: false,
+    recordEpoch: () => originsEpoch.current,
     onRecord: (next) => {
       setRecord((current) => {
         if (!current?.live || current.version !== next.version) return current;
@@ -720,6 +722,7 @@ export function ArtifactDetailPage({
               projectRoot,
               reviewToken: originReview,
               onOrigins: (origins: ArtifactOriginView) => {
+                originsEpoch.current += 1;
                 setRecord((current) =>
                   current?.live ? { ...current, live: { ...current.live, origins } } : current,
                 );

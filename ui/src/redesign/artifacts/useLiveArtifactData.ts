@@ -24,6 +24,8 @@ export type UseLiveArtifactDataOptions = {
   latestVersion?: number;
   hidden?: boolean;
   onRecord?: (record: ArtifactRecord) => void;
+  /** Bumped whenever the page changes the record itself (origin approve or revoke); a sync issued before the bump is dropped. */
+  recordEpoch?: () => number;
 };
 
 export type LiveArtifactData = {
@@ -278,6 +280,7 @@ export function useLiveArtifactData(record: ArtifactRecord | null, options: UseL
 
   useEffect(() => {
     const current = optionsRef.current;
+    let stopped = false;
     setSettled(false);
     setData(emptyData(recordRef.current));
     const model = createLiveArtifactDataModel({
@@ -309,9 +312,17 @@ export function useLiveArtifactData(record: ArtifactRecord | null, options: UseL
         }),
       syncRecord: async () => {
         const optionsNow = optionsRef.current;
-        if (!recordRef.current || (recordRef.current.kind !== "live.html" && recordRef.current.kind !== "live.declarative")) return;
+        const issuedFor = recordRef.current;
+        if (!issuedFor || (issuedFor.kind !== "live.html" && issuedFor.kind !== "live.declarative")) return;
+        const issuedEpoch = optionsNow.recordEpoch?.() ?? 0;
+        const issuedIdentity = `${optionsNow.ownerKey}\0${optionsNow.id}\0${optionsNow.projectRoot ?? ""}\0${optionsNow.version ?? ""}`;
         try {
           const next = await fetchArtifact(optionsNow.ownerKey, optionsNow.id, optionsNow.projectRoot, optionsNow.version);
+          const latest = optionsRef.current;
+          const latestIdentity = `${latest.ownerKey}\0${latest.id}\0${latest.projectRoot ?? ""}\0${latest.version ?? ""}`;
+          if (stopped || latestIdentity !== issuedIdentity) return;
+          if (next.key !== issuedFor.key || recordRef.current?.key !== issuedFor.key) return;
+          if ((latest.recordEpoch?.() ?? 0) !== issuedEpoch) return;
           optionsNow.onRecord?.(next);
         } catch {
           return;
@@ -327,6 +338,7 @@ export function useLiveArtifactData(record: ArtifactRecord | null, options: UseL
     document.addEventListener("visibilitychange", onVisibility);
     void model.start();
     return () => {
+      stopped = true;
       document.removeEventListener("visibilitychange", onVisibility);
       model.unmount();
       refreshRef.current = () => undefined;
