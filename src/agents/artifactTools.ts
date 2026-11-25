@@ -13,11 +13,15 @@ import {
   ARTIFACT_SUMMARY_MAX_CHARS,
   ARTIFACT_TAG_MAX,
   ARTIFACT_TITLE_MAX_CHARS,
+  LIVE_PROGRAM_MAX_BYTES,
   STATIC_CONTENT_MAX_BYTES,
   ArtifactPublishError,
   type ArtifactIssue,
 } from "../artifacts/limits.js";
 import { SessionPublishError, type SessionPublishBody, type SessionPublishSuccess } from "../artifacts/sessionPublish.js";
+import { bindableFunctionsFromAttachments } from "../artifacts/bindable.js";
+import { liveArtifactsPromptSection } from "../artifacts/livePrompt.js";
+import { LIVE_DECLARATIVE_KIND } from "../artifacts/kinds.js";
 import { PUBLISH_ARTIFACT_TOOL_NAME } from "../tools/stageToolNames.js";
 import {
   STATIC_KINDS,
@@ -52,7 +56,10 @@ function agentHoldsArtifactRefresh(definition: Pick<AgentDefinition, "tools">): 
   return grantedStageflowTools(definition.tools.stageflow).includes("refresh_artifact");
 }
 
-export function agentArtifactPromptSection(definition: Pick<AgentDefinition, "tools">): string | undefined {
+export function agentArtifactPromptSection(
+  definition: Pick<AgentDefinition, "tools">,
+  projectRoot?: string,
+): string | undefined {
   if (agentHoldsArtifactWrite(definition)) {
     const mib = Math.floor(STATIC_CONTENT_MAX_BYTES / (1024 * 1024));
     const lines = [
@@ -62,13 +69,15 @@ export function agentArtifactPromptSection(definition: Pick<AgentDefinition, "to
       "",
       "The id is a lowercase slug: it starts with a letter, then has up to 63 letters, digits, underscores, or hyphens (`^[a-z][a-z0-9_-]{0,63}$`). Publishing the same id again creates a new version. If the bytes and kind are unchanged, the current version is kept and the tool returns unchanged.",
       "",
-      `Kinds: ${STATIC_KINDS.join(", ")}. Content is at most ${mib} MiB. The title is at most ${ARTIFACT_TITLE_MAX_CHARS} characters. You may set at most ${ARTIFACT_TAG_MAX} tags, each matching [a-z0-9_-] and at most 32 characters. Description and summary are at most ${ARTIFACT_DESCRIPTION_MAX_CHARS} and ${ARTIFACT_SUMMARY_MAX_CHARS} characters.`,
+      `Kinds: ${STATIC_KINDS.join(", ")}, ${LIVE_DECLARATIVE_KIND}. Static content is at most ${mib} MiB. A live.declarative program is the content string, at most ${Math.round(LIVE_PROGRAM_MAX_BYTES / 1024)} KiB. The title is at most ${ARTIFACT_TITLE_MAX_CHARS} characters. You may set at most ${ARTIFACT_TAG_MAX} tags, each matching [a-z0-9_-] and at most 32 characters. Description and summary are at most ${ARTIFACT_DESCRIPTION_MAX_CHARS} and ${ARTIFACT_SUMMARY_MAX_CHARS} characters.`,
       "",
       "Give path, content, or content_base64, and only one of them. path is relative to the project root. It must stay inside the project, must not be absolute, must not contain .., must not name an agent definition, must not point under the Stageflow home, and must not be a symlink. content is inline text. content_base64 is an image (png, jpeg, gif, or webp).",
     ];
     if (agentHoldsArtifactRead(definition)) {
       lines.push("", AGENT_ARTIFACT_READ_SENTENCE);
     }
+    const functions = projectRoot ? bindableFunctionsFromAttachments(projectRoot, definition.tools.functions ?? []) : [];
+    lines.push("", liveArtifactsPromptSection(functions));
     return withArtifactSentences(definition, lines.join("\n"));
   }
   if (agentHoldsArtifactRead(definition)) return withArtifactSentences(definition, AGENT_ARTIFACT_READ_SENTENCE);
@@ -89,8 +98,12 @@ function withArtifactSentences(
 }
 
 /** Leaves the prompt unchanged when the agent has no artifact read, write, cleanup, or refresh grant. */
-export function appendAgentArtifactPrompt(systemPrompt: string, definition: Pick<AgentDefinition, "tools">): string {
-  const section = agentArtifactPromptSection(definition);
+export function appendAgentArtifactPrompt(
+  systemPrompt: string,
+  definition: Pick<AgentDefinition, "tools">,
+  projectRoot?: string,
+): string {
+  const section = agentArtifactPromptSection(definition, projectRoot);
   if (section === undefined) return systemPrompt;
   return `${systemPrompt}\n\n${section}`;
 }
@@ -100,7 +113,13 @@ function toolError(code: string, message: string, issues?: ArtifactIssue[]) {
     code,
     message: scrubSecrets(message),
     ...(issues !== undefined
-      ? { issues: issues.map((issue) => ({ path: issue.path, message: scrubSecrets(issue.message) })) }
+      ? {
+          issues: issues.map((issue) => ({
+            path: issue.path,
+            message: scrubSecrets(issue.message),
+            ...(issue.code ? { code: issue.code } : {}),
+          })),
+        }
       : {}),
   };
   return {
@@ -111,12 +130,13 @@ function toolError(code: string, message: string, issues?: ArtifactIssue[]) {
 }
 
 function toolOk(result: SessionPublishSuccess) {
-  const payload: { key: string; version: number; unchanged?: true; url?: string } = {
+  const payload: { key: string; version: number; unchanged?: true; url?: string; warnings?: SessionPublishSuccess["warnings"] } = {
     key: result.key,
     version: result.version,
   };
   if (result.unchanged) payload.unchanged = true;
   if (result.url) payload.url = result.url;
+  if (result.warnings && result.warnings.length > 0) payload.warnings = result.warnings;
   return {
     content: [{ type: "text" as const, text: JSON.stringify(payload) }],
     details: payload,

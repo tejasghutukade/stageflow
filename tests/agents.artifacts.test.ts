@@ -465,7 +465,7 @@ ${source
       id: "weekly",
       kind: "live.declarative",
       title: "Weekly",
-      bytes: Buffer.from("card\n"),
+      bytes: Buffer.from('root = TextContent("card")\n'),
       manifest: {
         format: "openui-lang",
         library: { name: "stageflow", version: "1.0.0" },

@@ -4,9 +4,7 @@ import {
   deleteArtifact,
   fetchArtifact,
   fetchArtifactContent,
-  fetchArtifactData,
   fetchArtifactVersions,
-  refreshArtifact,
   type ArtifactContentPayload,
   type ArtifactDataResponse,
   type ArtifactLiveView,
@@ -22,7 +20,9 @@ import {
   artifactVersionRows,
   compactJson,
   deleteArtifactConfirm,
+  formatLiveRefreshed,
   formatLiveSnapshotJson,
+  liveExpiryPreview,
   LIVE_RENDERER_NOTE,
   LIVE_VERSION_SNAPSHOT_NOTE,
   recordForViewedVersion,
@@ -31,6 +31,8 @@ import {
   type ArtifactVersionRowModel,
 } from "./artifactDetailModel";
 import { artifactLiveStatusPill, artifactStatusPillClass } from "./artifactsPageModel";
+import { autoRefreshNote, formatUpdatedAgo } from "./liveRefreshSchedule";
+import { useLiveArtifactData } from "./useLiveArtifactData";
 import { previewFromContent, type StaticPreview } from "./renderers/previewModel";
 import { StaticArtifactBody } from "./renderers/StaticPreview";
 
@@ -90,6 +92,9 @@ function LiveSection({
   historical,
   refreshing,
   refreshError,
+  updatedAgo,
+  autoNote,
+  nowMs,
   onRefresh,
 }: {
   live: ArtifactLiveView;
@@ -97,6 +102,9 @@ function LiveSection({
   historical: boolean;
   refreshing: boolean;
   refreshError: string | null;
+  updatedAgo?: string | null;
+  autoNote?: string | null;
+  nowMs?: number;
   onRefresh?: () => void;
 }) {
   const status = data?.status ?? live.status;
@@ -104,7 +112,7 @@ function LiveSection({
     status === "fresh" || status === "stale" || status === "error" || status === "refreshing"
       ? artifactLiveStatusPill(status)
       : { label: "Live", variant: "muted" as const };
-  const refreshed = data?.last_refreshed_at ?? live.last_refreshed_at ?? null;
+  const refreshed = formatLiveRefreshed(data?.last_refreshed_at ?? live.last_refreshed_at ?? null, nowMs ?? Date.now());
   const errorCode = data?.last_error_code ?? live.last_error_code ?? null;
   const bindings = live.bindings ?? [];
   return (
@@ -114,7 +122,11 @@ function LiveSection({
         <span className={artifactStatusPillClass(pill.variant)}>
           <span className="sf-pill__label">{pill.label}</span>
         </span>
-        <div className="text-[13px] text-[var(--sf-text-1)]">Last refreshed {refreshed ?? "—"}</div>
+        <div className="text-[13px] text-[var(--sf-text-1)]" title={refreshed.title ?? undefined}>
+          Last refreshed {refreshed.label}
+        </div>
+        {updatedAgo ? <div className="text-[13px] text-[var(--sf-text-2)]">{updatedAgo}</div> : null}
+        {autoNote ? <div className="text-[13px] text-[var(--sf-text-2)]">{autoNote}</div> : null}
         <div className="text-[13px] text-[var(--sf-text-1)]">Last error {errorCode ?? "—"}</div>
         {bindings.map((binding) => (
           <div key={binding.id} className="text-[13px] text-[var(--sf-text-1)]">
@@ -222,6 +234,9 @@ export function ArtifactDetailView({
   historicalSnapshots,
   refreshing,
   refreshError,
+  updatedAgo,
+  autoNote,
+  nowMs,
   onRefresh,
 }: {
   meta: ArtifactDetailMeta;
@@ -247,8 +262,13 @@ export function ArtifactDetailView({
   historicalSnapshots?: boolean;
   refreshing?: boolean;
   refreshError?: string | null;
+  updatedAgo?: string | null;
+  autoNote?: string | null;
+  nowMs?: number;
   onRefresh?: () => void;
 }) {
+  const showLiveProgram = meta.kind === "live.declarative" && preview?.mode !== "unavailable";
+  const refresh = preview?.mode === "unavailable" ? undefined : onRefresh;
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-[var(--sf-ground)]">
       <PageHeader
@@ -265,7 +285,9 @@ export function ArtifactDetailView({
               </button>
             </div>
           ) : null}
-          {meta.kind === "live.declarative" ? (
+          {preview?.mode === "unavailable" ? (
+            <StaticArtifactBody preview={preview} imageUrl={imageUrl} imageAlt={meta.title} />
+          ) : showLiveProgram ? (
             <div>
               <p className="mb-3 text-[13px] text-[var(--sf-text-2)]">{LIVE_RENDERER_NOTE}</p>
               <pre className="sf-mono whitespace-pre-wrap text-[13px] text-[var(--sf-text-1)]">{program ?? ""}</pre>
@@ -317,7 +339,10 @@ export function ArtifactDetailView({
                 historical={historicalSnapshots === true}
                 refreshing={refreshing === true}
                 refreshError={refreshError ?? null}
-                onRefresh={onRefresh}
+                updatedAgo={updatedAgo}
+                autoNote={autoNote}
+                nowMs={nowMs}
+                onRefresh={refresh}
               />
             ) : null}
             {versions ? <VersionsSection versions={versions} onOpenVersion={onOpenVersion} /> : null}
@@ -424,9 +449,10 @@ export function ArtifactDetailPage({
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [liveData, setLiveData] = useState<ArtifactDataResponse | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
-  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const latestVersion = versions.length === 0
+    ? undefined
+    : versions.find((item) => item.current)?.version ?? versions.reduce((max, item) => Math.max(max, item.version), 0);
+  const live = useLiveArtifactData(record, { ownerKey, id, projectRoot, version, latestVersion, hidden: false });
 
   useEffect(() => {
     let cancelled = false;
@@ -438,9 +464,6 @@ export function ArtifactDetailPage({
     setContentError(null);
     setConfirming(false);
     setDeleteError(null);
-    setLiveData(null);
-    setRefreshError(null);
-    setRefreshing(false);
     void (async () => {
       try {
         const [next, versionPage] = await Promise.all([
@@ -450,14 +473,6 @@ export function ArtifactDetailPage({
         if (cancelled) return;
         setRecord(next);
         setVersions(versionPage.versions);
-        if (next.kind === "live.declarative" || next.live) {
-          try {
-            const data = await fetchArtifactData(ownerKey, id, projectRoot);
-            if (!cancelled) setLiveData(data);
-          } catch (err) {
-            if (!cancelled) setRefreshError(err instanceof Error ? err.message : String(err));
-          }
-        }
         if (next.status === "expired") {
           setLoading(false);
           return;
@@ -506,15 +521,29 @@ export function ArtifactDetailPage({
   }
   const displayRecord = recordForViewedVersion(record, versions, version);
   const view = payloadPreview(displayRecord, payload, contentError);
+  const expiry = liveExpiryPreview(displayRecord, live.unavailable, live.unavailableMessage);
+  const preview = expiry ?? view.preview;
   const meta = artifactDetailMeta(displayRecord, view.hash);
   const versionRows = artifactVersionRows(versions);
-  const latest = versions.find((item) => item.current)?.version ?? record.version;
-  const viewing = version !== undefined && version !== latest ? { version, latest } : null;
+  const viewing = version !== undefined && latestVersion !== undefined && version !== latestVersion
+    ? { version, latest: latestVersion }
+    : null;
   const confirm = confirming ? deleteArtifactConfirm(record.title, Math.max(versions.length, 1)) : null;
+  const liveData: ArtifactDataResponse | null =
+    displayRecord.kind === "live.declarative" || displayRecord.live
+      ? {
+          status: live.status,
+          snapshots: live.snapshots,
+          last_refreshed_at: live.lastRefreshedAt,
+          last_error_code: live.lastErrorCode,
+          errors: live.errors,
+        }
+      : null;
+  const autoSeconds = viewing ? null : displayRecord.live?.refresh?.auto_seconds;
   return (
     <ArtifactDetailView
       meta={meta}
-      preview={loading ? null : view.preview}
+      preview={preview}
       imageUrl={view.imageUrl}
       onBack={() => navigate(artifactsPath())}
       onOpenRun={meta.runPath ? () => navigate(meta.runPath!) : undefined}
@@ -533,37 +562,19 @@ export function ArtifactDetailPage({
       live={displayRecord.live ?? null}
       liveData={liveData}
       historicalSnapshots={viewing !== null}
-      refreshing={refreshing}
-      refreshError={refreshError}
+      refreshing={live.refreshing}
+      refreshError={live.unavailable ? null : live.lastError}
+      updatedAgo={expiry ? null : formatUpdatedAgo(live.lastRefreshedAt, Date.now())}
+      autoNote={
+        expiry
+          ? null
+          : autoRefreshNote(
+              typeof autoSeconds === "number" ? autoSeconds : null,
+              displayRecord.live?.refresh?.ttl_seconds,
+            )
+      }
       onRefresh={
-        displayRecord.kind === "live.declarative" && viewing === null
-          ? () => {
-              if (refreshing) return;
-              setRefreshing(true);
-              setRefreshError(null);
-              void refreshArtifact(ownerKey, id, projectRoot)
-                .then((data) => {
-                  setLiveData(data);
-                  setRecord((current) =>
-                    current?.live
-                      ? {
-                          ...current,
-                          live: {
-                            ...current.live,
-                            status: data.status === "fresh" || data.status === "stale" || data.status === "error" || data.status === "refreshing" ? data.status : current.live.status,
-                            last_refreshed_at: data.last_refreshed_at,
-                            last_error_code: data.last_error_code,
-                          },
-                        }
-                      : current,
-                  );
-                })
-                .catch((err: unknown) => {
-                  setRefreshError(err instanceof Error ? err.message : String(err));
-                })
-                .finally(() => setRefreshing(false));
-            }
-          : undefined
+        expiry || displayRecord.kind !== "live.declarative" || viewing !== null ? undefined : () => live.refresh()
       }
       onConfirmDelete={() => {
         if (deleting) return;

@@ -22,7 +22,8 @@ import {
   readArtifact,
 } from "../artifacts/query.js";
 import { catalogRootsForArtifacts } from "../artifacts/projectScope.js";
-import { readArtifactSnapshots, refreshArtifact } from "../artifacts/refresh.js";
+import { refreshHttpStatus } from "../artifacts/refreshPolicy.js";
+import { readArtifactSnapshots, refreshArtifact, type ArtifactRefreshDeps } from "../artifacts/refresh.js";
 import type { ArtifactOwner } from "../artifacts/record.js";
 import { artifactVersionKind, listArtifactVersions, readArtifactVersionRow } from "../artifacts/versions.js";
 
@@ -273,14 +274,48 @@ function publishRequestFromBody(
   };
 }
 
-function bindingIdsFromBody(body: unknown): string[] | undefined {
-  if (body === undefined || (isRecord(body) && Object.keys(body).length === 0)) return undefined;
-  if (!isRecord(body) || !Array.isArray(body.bindingIds) || body.bindingIds.some((id) => typeof id !== "string")) {
-    throw new ArtifactPublishError(400, "artifact.invalid_shape", "bindingIds must be an array of binding ids", [
-      { path: "bindingIds", message: "must be an array of binding ids" },
+let refreshInvokeForTests: ArtifactRefreshDeps["invoke"] | undefined;
+
+export function setArtifactRouteRefreshInvokeForTests(invoke: ArtifactRefreshDeps["invoke"] | undefined): void {
+  refreshInvokeForTests = invoke;
+}
+
+function refreshRequestFromBody(body: unknown): { bindingIds?: string[]; ifStale?: boolean } {
+  if (body === undefined || (isRecord(body) && Object.keys(body).length === 0)) return {};
+  if (!isRecord(body)) {
+    throw new ArtifactPublishError(400, "artifact.invalid_shape", "Refresh body must be an object", [
+      { path: "body", message: "must be an object" },
     ]);
   }
-  return body.bindingIds as string[];
+  for (const key of Object.keys(body)) {
+    if (key !== "bindingIds" && key !== "ifStale") {
+      throw new ArtifactPublishError(400, "artifact.invalid_shape", "Refresh body has an unknown field", [
+        { path: key, message: "is not a refresh field" },
+      ]);
+    }
+  }
+  let bindingIds: string[] | undefined;
+  if (Object.prototype.hasOwnProperty.call(body, "bindingIds")) {
+    if (!Array.isArray(body.bindingIds) || body.bindingIds.some((id) => typeof id !== "string")) {
+      throw new ArtifactPublishError(400, "artifact.invalid_shape", "bindingIds must be an array of binding ids", [
+        { path: "bindingIds", message: "must be an array of binding ids" },
+      ]);
+    }
+    bindingIds = body.bindingIds as string[];
+  }
+  let ifStale: boolean | undefined;
+  if (Object.prototype.hasOwnProperty.call(body, "ifStale")) {
+    if (typeof body.ifStale !== "boolean") {
+      throw new ArtifactPublishError(400, "artifact.invalid_shape", "ifStale must be a boolean", [
+        { path: "ifStale", message: "must be a boolean" },
+      ]);
+    }
+    ifStale = body.ifStale;
+  }
+  return {
+    ...(bindingIds !== undefined ? { bindingIds } : {}),
+    ...(ifStale !== undefined ? { ifStale } : {}),
+  };
 }
 
 function storageKeyFor(record: {
@@ -385,14 +420,36 @@ export async function handleArtifactRoutes(
         return true;
       }
       const body = await readLimitedJson(req);
-      const bindingIds = bindingIdsFromBody(body);
-      const result = await refreshArtifact(
-        db,
-        { projectRoot: root?.path ?? artifact.project.id },
-        storageKey,
-        bindingIds ? { bindingIds } : {},
-      );
-      json(res, 200, result);
+      const request = refreshRequestFromBody(body);
+      const controller = new AbortController();
+      const onClose = () => {
+        if (res.writableFinished !== true) controller.abort();
+      };
+      if (typeof res.once === "function") res.once("close", onClose);
+      const clientGone = () =>
+        controller.signal.aborted || res.writableFinished === true || res.destroyed === true;
+      try {
+        const result = await refreshArtifact(
+          db,
+          {
+            projectRoot: root?.path ?? artifact.project.id,
+            ...(refreshInvokeForTests ? { invoke: refreshInvokeForTests } : {}),
+          },
+          storageKey,
+          {
+            ...(request.bindingIds !== undefined ? { bindingIds: request.bindingIds } : {}),
+            ...(request.ifStale !== undefined ? { ifStale: request.ifStale } : {}),
+            signal: controller.signal,
+          },
+        );
+        if (clientGone()) return true;
+        json(res, refreshHttpStatus(result), result);
+      } catch (error) {
+        if (clientGone() || (error instanceof Error && error.name === "AbortError")) return true;
+        throw error;
+      } finally {
+        if (typeof res.removeListener === "function") res.removeListener("close", onClose);
+      }
       return true;
     }
     if (content) {

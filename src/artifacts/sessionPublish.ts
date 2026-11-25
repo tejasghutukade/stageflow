@@ -45,6 +45,7 @@ export type SessionPublishSuccess = {
   unchanged?: boolean;
   url?: string;
   project_root: string;
+  warnings?: ArtifactIssue[];
 };
 
 export class SessionPublishError extends Error {
@@ -130,6 +131,7 @@ export function publishSessionArtifact(
     ...(result.unchanged ? { unchanged: true } : {}),
     url: result.url,
     project_root: result.project_root,
+    ...(result.warnings && result.warnings.length > 0 ? { warnings: result.warnings } : {}),
   }));
 }
 

@@ -383,7 +383,7 @@ stages:
       "save_artifact",
       stage(project, {
         kind: "live.declarative",
-        content: "card\n",
+        content: 'root = TextContent("card")\n',
         manifest: {
           format: "openui-lang",
           library: { name: "stageflow", version: "1.0.0" },

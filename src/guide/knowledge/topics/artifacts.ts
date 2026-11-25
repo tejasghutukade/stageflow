@@ -13,7 +13,7 @@ Stageflow uses the word **artifact** in three places. Keep them separate:
 2. **\`publish_artifact\`** — an opted-in stage or an agent with \`artifacts.write\` copies content into the **keep-class store** with a stable author id. Versions stay when the run is deleted.
 3. **Function \`access.artifacts\`** — which run files a **function** may read. That is not the artifact index.
 
-This topic covers (1) indexing and (2) publishing. A live artifact (\`live.declarative\`) stores an opaque program and read-only function bindings. Refresh runs those bindings from the CLI (\`sf artifact refresh\`), MCP (\`refresh_artifact\`), or the console **Refresh now** button. The visual renderer comes later.
+This topic covers (1) indexing and (2) publishing. A live artifact (\`live.declarative\`) stores an OpenUI Lang program (format openui-lang, library stageflow 1.0.0) and read-only function bindings. Publish rejects an invalid program with artifact.program_invalid. Refresh runs those bindings from the CLI (\`sf artifact refresh\`), MCP (\`refresh_artifact\`), or the console **Refresh now** button. The visual renderer comes later.
 
 ## Opt in
 

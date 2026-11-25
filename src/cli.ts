@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import "./artifacts/library/telemetryEnv.js";
 import { spawn } from "node:child_process";
 import { A2A_USAGE, runA2aCommand } from "./cli/a2aCommand.js";
 import { realpathSync } from "node:fs";

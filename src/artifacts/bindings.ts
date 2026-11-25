@@ -18,6 +18,64 @@ import type { ArtifactOwner } from "./record.js";
 
 const READ_METHODS = new Set(["GET", "HEAD"]);
 
+const TRANSIENT_FS_CODES = new Set([
+  "ENOENT",
+  "EBUSY",
+  "EAGAIN",
+  "EPERM",
+  "EACCES",
+  "EMFILE",
+  "ENFILE",
+  "EIO",
+  "ETIMEDOUT",
+  "EWOULDBLOCK",
+  "UNKNOWN",
+  "EBADF",
+]);
+
+function fsCode(error: unknown): string | undefined {
+  if (error !== null && typeof error === "object" && "code" in error && typeof error.code === "string") return error.code;
+  return undefined;
+}
+
+type ReadText = { ok: true; text: string } | { ok: false; missing: boolean; message: string };
+
+let catalogReadForTests: ((file: string) => Promise<string>) | undefined;
+
+export function setBindingCatalogReadForTests(read: ((file: string) => Promise<string>) | undefined): void {
+  catalogReadForTests = read;
+}
+
+async function readUtf8(file: string): Promise<string> {
+  if (catalogReadForTests) return catalogReadForTests(file);
+  return readFile(file, "utf8");
+}
+
+async function readTextRetry(file: string): Promise<ReadText> {
+  let last: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return { ok: true, text: await readUtf8(file) };
+    } catch (error) {
+      last = error;
+      const code = fsCode(error);
+      if (code && TRANSIENT_FS_CODES.has(code) && attempt === 0) continue;
+      const missing = code === "ENOENT" || code === "ENOTDIR";
+      return { ok: false, missing, message: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  return { ok: false, missing: false, message: last instanceof Error ? last.message : String(last) };
+}
+
+function catalogUnavailable(detail: string): OwnerFunctionAccess {
+  return {
+    ok: false,
+    code: "artifact.catalog_unavailable",
+    status: 503,
+    message: `Could not read the catalog (retry): ${detail}`,
+  };
+}
+
 export type BindingFailure = {
   status: number;
   code: string;
@@ -108,13 +166,15 @@ export function argsFailure(definition: FunctionDefinition, args: Record<string,
  * `scanCatalogPaths`, including `uses:`). This does not call `loadPipeline`.
  * When several files in the same project declare one pipeline id, only the first
  * non-excluded path in catalog order is that pipeline. A later file does not grant access.
- * A `uses:` file that cannot be read or parsed is skipped with a warning and does not grant.
+ * A `uses:` file that cannot be parsed is skipped with a warning and does not grant.
+ * A catalog file that cannot be read is retried once. If the read still fails, the result is
+ * `artifact.catalog_unavailable` (503), not a missing pipeline.
  * Grants are the attachment's `grants` list (`[]` when the list is omitted). Refresh passes
  * those grants and no others.
  */
 export type OwnerFunctionAccess =
   | { ok: true; grants: FunctionGrant[] }
-  | { ok: false; message: string };
+  | { ok: false; message: string; code?: "artifact.catalog_unavailable"; status?: number };
 
 export async function ownerFunctionAccess(
   projectRoot: string,
@@ -126,12 +186,12 @@ export async function ownerFunctionAccess(
 }
 
 async function agentFunctionAccess(projectRoot: string, agentId: string, functionId: string): Promise<OwnerFunctionAccess> {
-  let text: string;
-  try {
-    text = await readFile(path.join(projectRoot, "agents", `${agentId}.agent.yaml`), "utf8");
-  } catch {
+  const read = await readTextRetry(path.join(projectRoot, "agents", `${agentId}.agent.yaml`));
+  if (!read.ok) {
+    if (!read.missing) return catalogUnavailable(read.message);
     return { ok: false, message: `Agent ${agentId} was not found` };
   }
+  const text = read.text;
   const parsed = parseAgentYaml(text);
   if (!parsed.ok || parsed.value.id !== agentId) {
     return { ok: false, message: `Agent ${agentId} was not found` };
@@ -171,17 +231,16 @@ function attachmentRead(tools: unknown, functionId: string): AttachmentRead {
 async function stageBody(
   file: string,
   entry: Record<string, unknown>,
-): Promise<{ skip: boolean; body: Record<string, unknown> }> {
+): Promise<{ skip: boolean; unavailable?: string; body: Record<string, unknown> }> {
   if (typeof entry.uses !== "string") return { skip: false, body: entry };
   const usedPath = path.resolve(path.dirname(file), entry.uses);
-  let text: string;
-  try {
-    text = await readFile(usedPath, "utf8");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`artifact binding: skipped unreadable stage file ${usedPath}: ${message}`);
+  const read = await readTextRetry(usedPath);
+  if (!read.ok) {
+    if (!read.missing) return { skip: true, unavailable: read.message, body: entry };
+    console.warn(`artifact binding: skipped unreadable stage file ${usedPath}: ${read.message}`);
     return { skip: true, body: entry };
   }
+  const text = read.text;
   let parsed: unknown;
   try {
     parsed = parseYaml(text) as unknown;
@@ -205,11 +264,17 @@ function pipelineNameMatches(name: string, pattern: string): boolean {
 async function walkFiles(absDir: string): Promise<string[]> {
   const files: string[] = [];
   let entries;
-  try {
-    entries = await readdir(absDir, { withFileTypes: true, recursive: true });
-  } catch {
-    return files;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      entries = await readdir(absDir, { withFileTypes: true, recursive: true });
+      break;
+    } catch (error) {
+      const code = fsCode(error);
+      if (code && TRANSIENT_FS_CODES.has(code) && attempt === 0) continue;
+      return files;
+    }
   }
+  if (!entries) return files;
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     const parentDir = entry.parentPath ?? absDir;
@@ -218,22 +283,36 @@ async function walkFiles(absDir: string): Promise<string[]> {
   return files;
 }
 
-async function catalogPipelineFiles(loaded: LoadedManifest): Promise<{ included: string[]; excluded: string[] }> {
+async function statRetry(absPath: string): Promise<{ found: boolean; unreadable?: string; isDirectory?: boolean; isFile?: boolean }> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const entryStat = await stat(absPath);
+      return { found: true, isDirectory: entryStat.isDirectory(), isFile: entryStat.isFile() };
+    } catch (error) {
+      const code = fsCode(error);
+      if (code && TRANSIENT_FS_CODES.has(code) && attempt === 0) continue;
+      const missing = code === "ENOENT" || code === "ENOTDIR";
+      if (missing) return { found: false };
+      return { found: false, unreadable: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  return { found: false, unreadable: "Could not stat catalog path" };
+}
+
+async function catalogPipelineFiles(loaded: LoadedManifest): Promise<{ included: string[]; excluded: string[]; unreadable?: string }> {
   const included = await scanCatalogPaths(loaded, "pipeline");
   const includedSet = new Set(included.map((file) => path.resolve(file)));
   const exclude = loaded.manifest.catalog.exclude;
   const excluded: string[] = [];
+  let unreadable: string | undefined;
   if (!exclude || exclude.length === 0) return { included, excluded };
   const pattern = loaded.patterns.pipeline;
   for (const entry of loaded.manifest.catalog.pipelines) {
     const absPath = path.join(loaded.projectRoot, entry);
-    let entryStat;
-    try {
-      entryStat = await stat(absPath);
-    } catch {
-      continue;
-    }
-    const candidates = entryStat.isDirectory() ? await walkFiles(absPath) : entryStat.isFile() ? [absPath] : [];
+    const entryStat = await statRetry(absPath);
+    if (entryStat.unreadable) unreadable = entryStat.unreadable;
+    if (!entryStat.found) continue;
+    const candidates = entryStat.isDirectory ? await walkFiles(absPath) : entryStat.isFile ? [absPath] : [];
     for (const file of candidates) {
       if (!pipelineNameMatches(path.basename(file), pattern)) continue;
       const normalized = path.resolve(file);
@@ -244,7 +323,7 @@ async function catalogPipelineFiles(loaded: LoadedManifest): Promise<{ included:
     }
   }
   excluded.sort((a, b) => a.localeCompare(b));
-  return { included, excluded };
+  return { included, excluded, unreadable };
 }
 
 function manifestAccessFailure(projectRoot: string, issues: { message: string }[]): OwnerFunctionAccess {
@@ -256,35 +335,117 @@ function manifestAccessFailure(projectRoot: string, issues: { message: string }[
   return { ok: false, message: `Project manifest could not be read: ${text || "invalid manifest"}` };
 }
 
+type PipelineFile = { file: string; id?: string; text: string };
+
+type CatalogSnapshot = {
+  failure?: OwnerFunctionAccess;
+  included: PipelineFile[];
+  excludedIds: Set<string>;
+  unreadable?: string;
+};
+
+type CatalogMemo = { depth: number; snapshot?: Promise<CatalogSnapshot> };
+
+const catalogMemos = new Map<string, CatalogMemo>();
+const catalogInflight = new Map<string, Promise<CatalogSnapshot>>();
+
+function retainCatalog(projectRoot: string): () => void {
+  const slot = catalogMemos.get(projectRoot) ?? { depth: 0 };
+  slot.depth += 1;
+  catalogMemos.set(projectRoot, slot);
+  return () => {
+    slot.depth -= 1;
+    if (slot.depth <= 0) catalogMemos.delete(projectRoot);
+  };
+}
+
+async function readPipelineFile(file: string): Promise<{ file: PipelineFile } | { unavailable: string } | { skip: true }> {
+  const read = await readTextRetry(file);
+  if (!read.ok) {
+    if (read.missing) return { skip: true };
+    return { unavailable: read.message };
+  }
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(read.text) as unknown;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`artifact binding: skipped unreadable pipeline file ${file}: ${message}`);
+    return { skip: true };
+  }
+  if (!isRecord(parsed) || typeof parsed.id !== "string") return { file: { file, text: read.text } };
+  return { file: { file, id: parsed.id, text: read.text } };
+}
+
+async function buildCatalogSnapshot(projectRoot: string): Promise<CatalogSnapshot> {
+  const manifest = await loadStageflowManifestOutcome(projectRoot);
+  if (!manifest.ok) return { failure: manifestAccessFailure(projectRoot, manifest.issues), included: [], excludedIds: new Set() };
+  if (manifest.value.manifest.catalog.pipelines.length === 0) {
+    return {
+      failure: { ok: false, message: "Manifest has no catalog.pipelines" },
+      included: [],
+      excludedIds: new Set(),
+    };
+  }
+  const { included, excluded, unreadable } = await catalogPipelineFiles(manifest.value);
+  const files: PipelineFile[] = [];
+  const excludedIds = new Set<string>();
+  let readError = unreadable;
+  for (const file of excluded) {
+    const read = await readPipelineFile(file);
+    if ("unavailable" in read) readError = read.unavailable;
+    else if ("file" in read && read.file.id) excludedIds.add(read.file.id);
+  }
+  for (const file of included) {
+    const read = await readPipelineFile(file);
+    if ("unavailable" in read) readError = read.unavailable;
+    else if ("file" in read) files.push(read.file);
+  }
+  return { included: files, excludedIds, unreadable: readError };
+}
+
+async function catalogSnapshot(projectRoot: string): Promise<CatalogSnapshot> {
+  const slot = catalogMemos.get(projectRoot);
+  if (slot?.snapshot) return slot.snapshot;
+  const existing = catalogInflight.get(projectRoot);
+  if (existing) {
+    if (slot) slot.snapshot = existing;
+    return existing;
+  }
+  let resolvePending: (value: CatalogSnapshot) => void = () => undefined;
+  let rejectPending: (error: unknown) => void = () => undefined;
+  const pending = new Promise<CatalogSnapshot>((resolve, reject) => {
+    resolvePending = resolve;
+    rejectPending = reject;
+  });
+  catalogInflight.set(projectRoot, pending);
+  if (slot) slot.snapshot = pending;
+  void buildCatalogSnapshot(projectRoot).then(resolvePending, rejectPending).finally(() => {
+    if (catalogInflight.get(projectRoot) === pending) catalogInflight.delete(projectRoot);
+  });
+  return pending;
+}
+
 async function stageFunctionAccess(
   projectRoot: string,
   pipelineId: string,
   stageId: string,
   functionId: string,
 ): Promise<OwnerFunctionAccess> {
-  const manifest = await loadStageflowManifestOutcome(projectRoot);
-  if (!manifest.ok) return manifestAccessFailure(projectRoot, manifest.issues);
-  if (manifest.value.manifest.catalog.pipelines.length === 0) {
-    return { ok: false, message: "Manifest has no catalog.pipelines" };
-  }
-  const { included, excluded } = await catalogPipelineFiles(manifest.value);
-  const matches: string[] = [];
-  let excludedHit = false;
-  for (const file of excluded) {
-    const id = await pipelineIdOf(file);
-    if (id === pipelineId) excludedHit = true;
-  }
-  for (const file of included) {
-    const id = await pipelineIdOf(file);
-    if (id === pipelineId) matches.push(file);
-  }
+  const snapshot = await catalogSnapshot(projectRoot);
+  if (snapshot.failure) return snapshot.failure;
+  const matches = snapshot.included.filter((file) => file.id === pipelineId);
   if (matches.length === 0) {
-    if (excludedHit) return { ok: false, message: `Pipeline ${pipelineId} is excluded from the catalog` };
+    if (snapshot.excludedIds.has(pipelineId)) {
+      return { ok: false, message: `Pipeline ${pipelineId} is excluded from the catalog` };
+    }
+    if (snapshot.unreadable) return catalogUnavailable(snapshot.unreadable);
     return { ok: false, message: `Pipeline ${pipelineId} was not found in the catalog` };
   }
   const matching = matches[0]!;
-  const relative = path.relative(projectRoot, matching).replace(/\\/g, "/");
-  const found = await stageGrantInFile(matching, stageId, functionId);
+  const relative = path.relative(projectRoot, matching.file).replace(/\\/g, "/");
+  const found = await stageGrantInFile(matching.file, stageId, functionId, matching.text);
+  if (found.state === "unavailable") return catalogUnavailable(found.message);
   if (found.state === "invalid") {
     return { ok: false, message: `Stage ${stageId} on pipeline ${pipelineId} could not be read: ${found.message}` };
   }
@@ -304,27 +465,24 @@ async function stageFunctionAccess(
   };
 }
 
-async function pipelineIdOf(file: string): Promise<string | undefined> {
-  let parsed: unknown;
-  try {
-    parsed = parseYaml(await readFile(file, "utf8")) as unknown;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`artifact binding: skipped unreadable pipeline file ${file}: ${message}`);
-    return undefined;
-  }
-  if (!isRecord(parsed) || typeof parsed.id !== "string") return undefined;
-  return parsed.id;
-}
-
 async function stageGrantInFile(
   file: string,
   stageId: string,
   functionId: string,
-): Promise<AttachmentRead | { state: "no-stage" }> {
+  text?: string,
+): Promise<AttachmentRead | { state: "no-stage" } | { state: "unavailable"; message: string }> {
+  let source = text;
+  if (source === undefined) {
+    const read = await readTextRetry(file);
+    if (!read.ok) {
+      if (read.missing) return { state: "no-stage" };
+      return { state: "unavailable", message: read.message };
+    }
+    source = read.text;
+  }
   let parsed: unknown;
   try {
-    parsed = parseYaml(await readFile(file, "utf8")) as unknown;
+    parsed = parseYaml(source) as unknown;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`artifact binding: skipped unreadable pipeline file ${file}: ${message}`);
@@ -336,6 +494,12 @@ async function stageGrantInFile(
   for (const raw of parsed.stages) {
     if (!isRecord(raw)) continue;
     const loaded = await stageBody(file, raw);
+    if (loaded.unavailable) {
+      const skippedId = typeof raw.id === "string" ? raw.id : "";
+      if (skippedId === stageId) return { state: "unavailable", message: loaded.unavailable };
+      console.warn(`artifact binding: skipped unreadable stage file for ${skippedId || "a stage"}: ${loaded.unavailable}`);
+      continue;
+    }
     if (loaded.skip) {
       const skippedId = typeof raw.id === "string" ? raw.id : "";
       if (skippedId === stageId) {
@@ -378,9 +542,10 @@ export async function checkBinding(
   if (!access.ok) {
     return {
       failure: bindingFailure(
-        "artifact.binding_not_granted",
+        access.code ?? "artifact.binding_not_granted",
         `manifest.bindings[${index}].function`,
         access.message,
+        access.status ?? 400,
       ),
       grants: [],
     };
@@ -403,15 +568,20 @@ export async function assertBindingsAtPublish(
   owner: ArtifactOwner,
   bindings: readonly LiveBinding[],
 ): Promise<void> {
-  const issues: ArtifactIssue[] = [];
-  let failure: BindingFailure | undefined;
-  for (let index = 0; index < bindings.length; index += 1) {
-    const result = await checkBinding(projectRoot, owner, bindings[index]!, index);
-    if (!result.failure) continue;
-    failure = failure ?? result.failure;
-    issues.push(...result.failure.issues);
-  }
-  if (failure) {
-    throw new ArtifactPublishError(failure.status, failure.code, failure.message, issues);
+  const release = retainCatalog(projectRoot);
+  try {
+    const issues: ArtifactIssue[] = [];
+    let failure: BindingFailure | undefined;
+    for (let index = 0; index < bindings.length; index += 1) {
+      const result = await checkBinding(projectRoot, owner, bindings[index]!, index);
+      if (!result.failure) continue;
+      failure = failure ?? result.failure;
+      issues.push(...result.failure.issues);
+    }
+    if (failure) {
+      throw new ArtifactPublishError(failure.status, failure.code, failure.message, issues);
+    }
+  } finally {
+    release();
   }
 }

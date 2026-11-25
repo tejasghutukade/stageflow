@@ -90,6 +90,7 @@
     "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
+    "@openuidev/lang-core": "1.2.0",
     "agentmail": "0.5.46",
     "better-sqlite3": "^13.0.3",
     "croner": "^10.0.1",

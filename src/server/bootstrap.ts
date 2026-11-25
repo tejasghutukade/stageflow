@@ -1,3 +1,4 @@
+import "../artifacts/library/telemetryEnv.js";
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { createA2aHost, type A2aHost } from "../a2a/server.js";

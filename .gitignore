@@ -101,6 +101,8 @@ artifacts/
 !/ui/src/redesign/artifacts/**
 !/examples/artifacts/
 !/examples/artifacts/**
+!/scripts/artifacts/
+!/scripts/artifacts/**
 naming-candidate-conflicts.json
 sf-differentiation-research.json
 software-factory-naming-research.json

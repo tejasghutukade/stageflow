@@ -776,7 +776,7 @@ stages:
     );
     const program = path.join(projectRoot, "program.txt");
     const manifest = path.join(projectRoot, "manifest.json");
-    await writeFile(program, "card\n");
+    await writeFile(program, 'root = TextContent("card")\n');
     await writeFile(
       manifest,
       JSON.stringify({
@@ -899,10 +899,30 @@ stages:
         io: refreshed.io,
       }),
     ).toBe(0);
-    const body = JSON.parse(refreshed.stdout.join("\n")) as { status: string; snapshots: Array<{ binding_id: string; value: { weeks: number } }>; errors: unknown[] };
+    const body = JSON.parse(refreshed.stdout.join("\n")) as {
+      status: string;
+      last_refreshed_at: string | null;
+      snapshots: Array<{ binding_id: string; source?: string; value: { weeks: number } }>;
+      errors: unknown[];
+    };
     expect(body.status).toBe("fresh");
     expect(body.errors).toEqual([]);
     expect(body.snapshots[0]?.value).toEqual({ weeks: 12 });
+    expect(body.snapshots[0]?.source).toBe("executed");
+    const cached = captureIo();
+    expect(
+      await runArtifactCommand(["refresh", key, "--if-stale", "--project-root", projectRoot, "--json"], {
+        cwd: projectRoot,
+        projectRoot,
+        io: cached.io,
+      }),
+    ).toBe(0);
+    const cachedBody = JSON.parse(cached.stdout.join("\n")) as {
+      last_refreshed_at: string | null;
+      snapshots: Array<{ source?: string }>;
+    };
+    expect(cachedBody.snapshots[0]?.source).toBe("cache");
+    expect(cachedBody.last_refreshed_at).toBe(body.last_refreshed_at);
     const badBinding = captureIo();
     expect(
       await runArtifactCommand(["refresh", key, "--binding", "nope", "--project-root", projectRoot, "--json"], {

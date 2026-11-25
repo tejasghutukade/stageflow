@@ -405,6 +405,8 @@ services:
     networks: [internal]
     environment:
       STAGEFLOW_HOME: /data
+      OPENUI_TELEMETRY_DISABLED: "1"
+      DO_NOT_TRACK: "1"
       STAGEFLOW_BIND: 0.0.0.0
       STAGEFLOW_CONTROL_TOKEN_FILE: /run/secrets/control_token
       STAGEFLOW_BUILD_SHA: "<git sha>"

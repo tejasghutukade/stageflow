@@ -7,6 +7,7 @@ import { STAGE_ID_PATTERN } from "../config/createStage.js";
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
 import { ArtifactKeyError, artifactStorageKey, assertArtifactId, publicArtifactKey, stageOwnerKey } from "./keys.js";
 import { assertBindingsAtPublish } from "./bindings.js";
+import { assertLiveProgramAtPublish } from "./program.js";
 import { contentTypeForKind, isLiveDeclarativeKind, LIVE_DECLARATIVE_KIND, type StaticArtifactKind } from "./kinds.js";
 import {
   ARTIFACT_DESCRIPTION_MAX_CHARS,
@@ -134,6 +135,7 @@ export type PublishResult = {
   url: string;
   unchanged: boolean;
   agent_unverified?: true;
+  warnings?: ArtifactIssue[];
 };
 
 type ResolvedProject = { id: string; path: string };
@@ -550,7 +552,11 @@ export async function publishArtifact(
   const storageKey = artifactStorageKey(project.id, ownerKey, fields.id);
   const publicKey = publicArtifactKey(ownerKey, fields.id);
   const now = input.now ?? new Date().toISOString();
-  if (fields.live) await assertBindingsAtPublish(project.path, input.owner, fields.live.bindings);
+  let programWarnings: ArtifactIssue[] = [];
+  if (fields.live) {
+    await assertBindingsAtPublish(project.path, input.owner, fields.live.bindings);
+    programWarnings = await assertLiveProgramAtPublish(project.path, fields.live);
+  }
   const contentHash = fields.live
     ? liveIdentityHash(input.bytes, fields.live)
     : createHash("sha256").update(input.bytes).digest("hex");
@@ -620,6 +626,7 @@ export async function publishArtifact(
         url: artifactUrl(ownerKey, fields.id, project.id),
         unchanged: true,
         ...flags,
+        ...(programWarnings.length > 0 ? { warnings: programWarnings } : {}),
       };
     }
 
@@ -638,6 +645,7 @@ export async function publishArtifact(
       url: artifactUrl(ownerKey, fields.id, project.id),
       unchanged: false,
       ...flags,
+      ...(programWarnings.length > 0 ? { warnings: programWarnings } : {}),
     };
     } finally {
       keyOperationTrace?.("publish");

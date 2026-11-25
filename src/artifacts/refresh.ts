@@ -16,6 +16,13 @@ import { argsHash, parseStoredLiveManifest, type LiveBinding, type LiveManifest 
 import { ArtifactQueryError } from "./query.js";
 import type { ArtifactOwner } from "./record.js";
 import { isLiveDeclarativeKind } from "./kinds.js";
+import {
+  effectiveTtlSeconds,
+  REFRESH_RETRY_AFTER_SECONDS,
+  snapshotNeedsRefresh,
+  type ArtifactSnapshotSource,
+} from "./refreshPolicy.js";
+import { coordinateRefresh, refreshInFlightCount, type RefreshShareOptions } from "./refreshShare.js";
 
 export type ArtifactRefreshDeps = {
   projectRoot: string;
@@ -32,6 +39,7 @@ export type ArtifactSnapshotView = {
   duration_ms: number;
   status: string;
   error_code: string | null;
+  source?: ArtifactSnapshotSource;
 };
 
 export type ArtifactRefreshResult = {
@@ -40,6 +48,7 @@ export type ArtifactRefreshResult = {
   last_refreshed_at: string | null;
   last_error_code: string | null;
   errors: Array<{ binding_id: string; code: string }>;
+  retry_after_seconds?: number;
 };
 
 type SnapshotRow = {
@@ -77,13 +86,18 @@ type ArtifactLiveRow = {
  * reentrant for the same key, so a delete started from inside that refresh runs at
  * once and the snapshot write sees the artifact is gone.
  *
- * At most 32 refresh callers wait behind the one that is running; the next refresh
- * caller fails immediately with artifact.resource_limit. Mutate callers (delete) queue
- * ahead of waiting refresh callers and are not subject to that cap.
+ * At most 32 refresh executions wait behind the one that is running. The next
+ * caller that needs its own execution is refused with artifact.resource_limit
+ * and the last stored snapshots. Callers that only join an in-flight execution,
+ * and ifStale callers that reuse a fresh snapshot, do not take one of those slots.
+ * Mutate callers (delete) queue ahead of refresh callers that are waiting on this
+ * lock. They are not subject to the cap. Aborting a joined caller does not cancel
+ * the shared execution.
  */
 const refreshHeld = new AsyncLocalStorage<Set<string>>();
 const refreshQueues = new Map<string, Array<{ kind: RefreshLockKind; run: () => Promise<void> }>>();
 const refreshRunning = new Map<string, RefreshLockKind>();
+const refreshLeadersPending = new Map<string, number>();
 
 export const REFRESH_QUEUE_WAITING = 32;
 export const SNAPSHOT_MAX_DEPTH = 64;
@@ -92,10 +106,36 @@ export const REFRESH_RECOVERY_STALE_MS = 10 * 60 * 1000;
 
 export type RefreshLockKind = "refresh" | "mutate";
 
-function refreshWaiterCount(key: string): number {
+function bumpCount(map: Map<string, number>, key: string, delta: number): void {
+  const next = (map.get(key) ?? 0) + delta;
+  if (next <= 0) map.delete(key);
+  else map.set(key, next);
+}
+
+function refreshExecutionCount(key: string): number {
   let count = refreshRunning.get(key) === "refresh" ? 1 : 0;
   count += (refreshQueues.get(key) ?? []).filter((job) => job.kind === "refresh").length;
+  count += refreshLeadersPending.get(key) ?? 0;
   return count;
+}
+
+export function tryBeginRefreshLeader(key: string): boolean {
+  if (refreshExecutionCount(key) > REFRESH_QUEUE_WAITING) return false;
+  bumpCount(refreshLeadersPending, key, 1);
+  return true;
+}
+
+export function refreshLeaderEntered(key: string): void {
+  bumpCount(refreshLeadersPending, key, -1);
+}
+
+export function refreshShareIdle(): boolean {
+  return (
+    refreshInFlightCount() === 0 &&
+    refreshLeadersPending.size === 0 &&
+    refreshRunning.size === 0 &&
+    refreshQueues.size === 0
+  );
 }
 
 function pumpRefreshLock(key: string): void {
@@ -129,11 +169,6 @@ export function withRefreshLock<T>(
 ): Promise<T> {
   const held = refreshHeld.getStore();
   if (held?.has(key)) return fn();
-  if (kind === "refresh" && refreshWaiterCount(key) > REFRESH_QUEUE_WAITING) {
-    throw new ArtifactPublishError(429, "artifact.resource_limit", "Too many refreshes are waiting for this artifact", [
-      { path: "key", message: "Too many refreshes are waiting for this artifact" },
-    ]);
-  }
   return new Promise<T>((resolve, reject) => {
     const job = {
       kind,
@@ -392,13 +427,91 @@ async function loadPinnedFunction(
   }
 }
 
+export type ArtifactRefreshOptions = RefreshShareOptions;
+
+function capacityRefreshResult(
+  db: Database.Database,
+  deps: ArtifactRefreshDeps,
+  key: string,
+  options: ArtifactRefreshOptions,
+): ArtifactRefreshResult {
+  const row = assertLiveRow(loadRow(db, key), deps.projectRoot);
+  const manifest = parseStoredLiveManifest(row.manifest_json);
+  const bindings = manifest?.bindings ?? [];
+  const selected = manifest ? [...selectBindings(manifest, options.bindingIds, options.bindingIdsIssuePath ?? "bindingIds")] : [];
+  for (const id of options.skipBindingIds ?? []) {
+    const index = selected.indexOf(id);
+    if (index >= 0) selected.splice(index, 1);
+  }
+  const bindingIds = selected.length > 0 ? selected : ["artifact"];
+  const snapshots = currentSnapshots(snapshotRows(db, key), bindings).map((snapshot) => ({
+    ...snapshot,
+    source: "cache" as const,
+  }));
+  const ok = snapshots.some((snapshot) => snapshot.status === "ok");
+  return finishRefreshResult({
+    status: ok ? "stale" : "error",
+    snapshots,
+    last_refreshed_at: ok ? row.last_refreshed_at : null,
+    last_error_code: "artifact.resource_limit",
+    errors: bindingIds.map((bindingId) => ({ binding_id: bindingId, code: "artifact.resource_limit" })),
+  });
+}
+
+function freshIfStaleResult(
+  db: Database.Database,
+  deps: ArtifactRefreshDeps,
+  key: string,
+  options: ArtifactRefreshOptions,
+): ArtifactRefreshResult | undefined {
+  if (options.ifStale !== true) return undefined;
+  const row = loadRow(db, key);
+  if (!row || row.deleted_at || !projectMatches(row.project_root_id, deps.projectRoot)) return undefined;
+  if (!isLiveDeclarativeKind(row.kind) || row.status === "expired") return undefined;
+  const manifest = parseStoredLiveManifest(row.manifest_json);
+  if (!manifest) return undefined;
+  let selected: Set<string>;
+  try {
+    selected = selectBindings(manifest, options.bindingIds, options.bindingIdsIssuePath ?? "bindingIds");
+  } catch {
+    return undefined;
+  }
+  for (const id of options.skipBindingIds ?? []) selected.delete(id);
+  const existingRows = snapshotRows(db, key);
+  const nowIso = (deps.now ?? (() => new Date().toISOString()))();
+  const ttl = effectiveTtlSeconds(manifest.refresh);
+  const sources = new Map<string, ArtifactSnapshotSource>();
+  for (const binding of manifest.bindings) {
+    if (!selected.has(binding.id)) continue;
+    if (snapshotNeedsRefresh(snapshotFor(existingRows, binding), nowIso, ttl)) return undefined;
+    sources.set(binding.id, "cache");
+  }
+  if (selected.size > 0 && sources.size !== selected.size) return undefined;
+  return {
+    status: row.live_status,
+    snapshots: annotateSnapshots(currentSnapshots(existingRows, manifest.bindings), sources),
+    last_refreshed_at: row.last_refreshed_at,
+    last_error_code: row.last_error_code,
+    errors: [],
+  };
+}
+
 export async function refreshArtifact(
   db: Database.Database,
   deps: ArtifactRefreshDeps,
   key: string,
-  options: { bindingIds?: readonly string[]; bindingIdsIssuePath?: string } = {},
+  options: ArtifactRefreshOptions = {},
 ): Promise<ArtifactRefreshResult> {
-  return withRefreshLock(key, () => refreshLocked(db, deps, key, options));
+  return coordinateRefresh(
+    key,
+    options,
+    () => withRefreshLock(key, () => refreshLocked(db, deps, key, options)),
+    (next) => refreshArtifact(db, deps, key, next),
+    {
+      onCapacity: () => capacityRefreshResult(db, deps, key, options),
+      freshCache: () => freshIfStaleResult(db, deps, key, options),
+    },
+  );
 }
 
 function forceTerminal(db: Database.Database, key: string): void {
@@ -448,11 +561,33 @@ export function recoverRefreshingArtifacts(
   return db.prepare(sweepSql).run(staleBefore, ...heldKeys).changes;
 }
 
+function snapshotFor(rows: readonly SnapshotRow[], binding: LiveBinding): SnapshotRow | undefined {
+  const hash = argsHash(binding.args);
+  return rows.find((row) => row.binding_id === binding.id && row.args_hash === hash);
+}
+
+function annotateSnapshots(
+  snapshots: ArtifactSnapshotView[],
+  sources: ReadonlyMap<string, ArtifactSnapshotSource>,
+): ArtifactSnapshotView[] {
+  return snapshots.map((snapshot) => {
+    const source = sources.get(snapshot.binding_id);
+    return source === undefined ? snapshot : { ...snapshot, source };
+  });
+}
+
+function finishRefreshResult(result: ArtifactRefreshResult): ArtifactRefreshResult {
+  if (result.errors.some((error) => error.code === "artifact.resource_limit")) {
+    result.retry_after_seconds = REFRESH_RETRY_AFTER_SECONDS;
+  }
+  return result;
+}
+
 async function refreshLocked(
   db: Database.Database,
   deps: ArtifactRefreshDeps,
   key: string,
-  options: { bindingIds?: readonly string[]; bindingIdsIssuePath?: string },
+  options: ArtifactRefreshOptions,
 ): Promise<ArtifactRefreshResult> {
   let markedRefreshing = false;
   try {
@@ -465,26 +600,53 @@ async function refreshLocked(
     }
     const bindingIdsPath = options.bindingIdsIssuePath ?? "bindingIds";
     const selected = selectBindings(manifest, options.bindingIds, bindingIdsPath);
+    for (const id of options.skipBindingIds ?? []) selected.delete(id);
     const invoke = deps.invoke ?? defaultInvoke(db);
     const now = deps.now ?? (() => new Date().toISOString());
     const owner = ownerOf(row);
     const startedVersion = row.current_version;
-    const refreshedAt = now();
+    const sources = new Map<string, ArtifactSnapshotSource>();
+    const runnable = new Set<string>();
+    const nowIso = now();
+    const ttl = effectiveTtlSeconds(manifest.refresh);
+    const existingRows = snapshotRows(db, key);
+    for (const binding of manifest.bindings) {
+      if (!selected.has(binding.id)) continue;
+      if (options.ifStale === true && !snapshotNeedsRefresh(snapshotFor(existingRows, binding), nowIso, ttl)) {
+        sources.set(binding.id, "cache");
+        continue;
+      }
+      sources.set(binding.id, "executed");
+      runnable.add(binding.id);
+    }
+    if (runnable.size === 0) {
+      return finishRefreshResult({
+        status: row.live_status,
+        snapshots: annotateSnapshots(currentSnapshots(existingRows, manifest.bindings), sources),
+        last_refreshed_at: row.last_refreshed_at,
+        last_error_code: row.last_error_code,
+        errors: [],
+      });
+    }
     db.prepare(
       `UPDATE artifacts SET live_status = 'refreshing', last_error_code = NULL, updated_at = ? WHERE key = ?`,
-    ).run(refreshedAt, key);
+    ).run(nowIso, key);
     markedRefreshing = true;
 
     const errors: Array<{ binding_id: string; code: string }> = [];
     const ready: Array<{ binding: LiveBinding; valueJson: string; duration: number }> = [];
     for (let index = 0; index < manifest.bindings.length; index += 1) {
       const binding = manifest.bindings[index]!;
-      if (!selected.has(binding.id)) continue;
+      if (!runnable.has(binding.id)) continue;
       const outcome = await refreshBinding(db, deps.projectRoot, owner, binding, index, invoke);
       if (outcome.code) errors.push({ binding_id: binding.id, code: outcome.code });
       else if (outcome.valueJson !== undefined) {
         ready.push({ binding, valueJson: outcome.valueJson, duration: outcome.duration ?? 0 });
       }
+    }
+    const produced = new Set(ready.map((item) => item.binding.id));
+    for (const bindingId of runnable) {
+      if (!produced.has(bindingId)) sources.set(bindingId, "cache");
     }
 
     const stored = db.transaction(() => {
@@ -541,7 +703,7 @@ async function refreshLocked(
         kind: "stored" as const,
         result: {
           status: state.status,
-          snapshots: currentSnapshots(snapshotRows(db, key), manifest.bindings),
+          snapshots: annotateSnapshots(currentSnapshots(snapshotRows(db, key), manifest.bindings), sources),
           last_refreshed_at: state.last_refreshed_at,
           last_error_code: lastError,
           errors,
@@ -553,7 +715,7 @@ async function refreshLocked(
       throw new ArtifactQueryError(404, "artifact.not_found", "Artifact not found");
     }
     if (stored.kind === "superseded") return readArtifactSnapshots(db, key, deps.projectRoot);
-    return stored.result;
+    return finishRefreshResult(stored.result);
   } finally {
     if (markedRefreshing) {
       try {

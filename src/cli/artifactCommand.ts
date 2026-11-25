@@ -38,7 +38,7 @@ import { resolveSafeOutPath } from "./resolveSafeOutPath.js";
 export const ARTIFACT_USAGE = `Usage:
   sf artifact list [--q <text>] [--kind <kind>] [--owner <pipeline:stage|agent:id>] [--tag <tag>] [--status <available|expired>] [--live] [--sort <updated|title|size>] [--order <asc|desc>] [--project-root <wire id or path>] [--limit <n>] [--json]
   sf artifact show <key> [--project-root <wire id or path>] [--json]
-  sf artifact refresh <key> [--binding <id>]... [--project-root <wire id or path>] [--json]
+  sf artifact refresh <key> [--binding <id>]... [--if-stale] [--project-root <wire id or path>] [--json]
   sf artifact publish --owner <pipeline:stage|agent:id> --id <id> --kind <kind> --title <title> [--description <text>] [--tag <tag>]... [--summary <text>] [--manifest <file>] [--project-root <wire id or path>] (--file <path> | --stdin) [--json]
   sf artifact delete <key> [--project-root <wire id or path>] [--yes] [--json]
   sf artifact read --run <runId> --path <relPath> [--out <file>]`;
@@ -107,6 +107,7 @@ type ParsedRefreshArgs = {
   subcommand: "refresh";
   key: string;
   bindings: string[];
+  ifStale: boolean;
   projectRoot?: string;
   json: boolean;
 };
@@ -345,16 +346,18 @@ function parseRefreshArgs(args: string[]): ParsedRefreshArgs {
   let projectRoot: string | undefined;
   let json = false;
   let help = false;
+  let ifStale = false;
   for (let i = 2; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--help" || arg === "-h") help = true;
     else if (arg === "--json") json = true;
+    else if (arg === "--if-stale") ifStale = true;
     else if (arg === "--binding") bindings.push(requireFlag(args[++i], "--binding"));
     else if (arg === "--project-root") projectRoot = requireFlag(args[++i], "--project-root");
     else if (arg?.startsWith("-")) throw new Error(`Unknown flag: ${arg}`);
     else throw new Error(`Unexpected argument: ${arg}`);
   }
-  return { help, subcommand: "refresh", key, bindings, projectRoot, json };
+  return { help, subcommand: "refresh", key, bindings, ifStale, projectRoot, json };
 }
 
 function parseDeleteArgs(args: string[]): ParsedDeleteArgs {
@@ -672,7 +675,10 @@ async function runRefreshSubcommand(
       db,
       { projectRoot: root?.path ?? record.project.id },
       storageKeyFor(record),
-      parsed.bindings.length > 0 ? { bindingIds: parsed.bindings } : {},
+      {
+        ...(parsed.bindings.length > 0 ? { bindingIds: parsed.bindings } : {}),
+        ...(parsed.ifStale ? { ifStale: true } : {}),
+      },
     );
     if (parsed.json) out.log(JSON.stringify(result));
     else out.log(formatArtifactRefresh(result));

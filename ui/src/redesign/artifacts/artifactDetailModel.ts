@@ -1,5 +1,6 @@
 import type { ArtifactRecord } from "../../api/artifacts";
 import { artifactKindLabel, artifactOwnerLabel, artifactOwnerPath } from "./artifactsPageModel";
+import { previewFromContent, type StaticPreview } from "./renderers/previewModel";
 import { runStagePath, runStreamPath } from "../../routes";
 
 export type ArtifactDetailMeta = {
@@ -30,6 +31,40 @@ export function formatArtifactSize(bytes: number | null | undefined): string {
 export function formatArtifactTimestamp(iso: string): string {
   if (!Number.isFinite(Date.parse(iso))) return iso;
   return iso.replace("T", " ").replace(/\.\d+Z$/, " UTC").replace(/Z$/, " UTC");
+}
+
+export function formatLiveRefreshed(
+  iso: string | null | undefined,
+  nowMs: number,
+): { label: string; title: string | null } {
+  if (!iso) return { label: "—", title: null };
+  const title = formatArtifactTimestamp(iso);
+  const then = Date.parse(iso);
+  if (!Number.isFinite(then)) return { label: title, title: null };
+  const seconds = Math.max(0, Math.floor((nowMs - then) / 1000));
+  if (seconds < 45) return { label: "just now", title };
+  if (seconds < 3600) return { label: `${Math.max(1, Math.round(seconds / 60))}m ago`, title };
+  if (seconds < 86_400) return { label: `${Math.round(seconds / 3600)}h ago`, title };
+  return { label: `${Math.round(seconds / 86_400)}d ago`, title };
+}
+
+export function liveExpiryPreview(
+  record: Pick<ArtifactRecord, "kind" | "title" | "content_type" | "status" | "expired_reason">,
+  unavailable: boolean,
+  unavailableMessage?: string | null,
+): StaticPreview | null {
+  if (record.kind !== "live.declarative") return null;
+  if (record.status === "expired") return previewFromContent({ record, text: null, binary: false });
+  if (!unavailable) return null;
+  return previewFromContent({
+    record,
+    text: null,
+    binary: false,
+    contentError: {
+      code: "artifact.content_unavailable",
+      message: unavailableMessage?.trim() || "This artifact has expired",
+    },
+  });
 }
 
 export function shortContentHash(hash: string | null | undefined): string {

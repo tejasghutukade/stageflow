@@ -30,7 +30,19 @@ export type ArtifactSnapshot = {
   duration_ms: number;
   status: string;
   error_code: string | null;
+  source?: "cache" | "executed";
 };
+
+/** Matches the Host default when a live manifest omits `refresh.ttl_seconds`. */
+export const DEFAULT_LIVE_TTL_SECONDS = 300;
+
+/** Matches the Host floor for `refresh.ttl_seconds` and `refresh.auto_seconds`. */
+export const LIVE_REFRESH_MIN_SECONDS = 30;
+
+export function effectiveLiveTtlSeconds(ttl: number | undefined): number {
+  if (typeof ttl !== "number" || !Number.isInteger(ttl)) return DEFAULT_LIVE_TTL_SECONDS;
+  return Math.max(LIVE_REFRESH_MIN_SECONDS, ttl);
+}
 
 export type ArtifactDataResponse = {
   status: ArtifactLiveStatus | string | null;
@@ -38,6 +50,7 @@ export type ArtifactDataResponse = {
   last_refreshed_at: string | null;
   last_error_code: string | null;
   errors: Array<{ binding_id: string; code: string }>;
+  retry_after_seconds?: number;
 };
 
 export type ArtifactRecord = {
@@ -125,12 +138,14 @@ export function fetchArtifacts(
 export class ArtifactRequestError extends Error {
   readonly status: number;
   readonly code: string | undefined;
+  readonly retryAfterSeconds: number | undefined;
 
-  constructor(status: number, code: string | undefined, message: string) {
+  constructor(status: number, code: string | undefined, message: string, retryAfterSeconds?: number) {
     super(message);
     this.name = "ArtifactRequestError";
     this.status = status;
     this.code = code;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -156,9 +171,19 @@ export function artifactContentPath(
 }
 
 async function readArtifactError(res: Response): Promise<ArtifactRequestError> {
-  const body = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
+  const body = (await res.json().catch(() => ({}))) as {
+    error?: string;
+    code?: string;
+    last_error_code?: string | null;
+    retry_after_seconds?: number;
+  };
   if (res.status === 401) notifyControlTokenRequired();
-  return new ArtifactRequestError(res.status, body.code, body.error ?? `Request failed (${res.status})`);
+  return new ArtifactRequestError(
+    res.status,
+    body.code ?? body.last_error_code ?? undefined,
+    body.error ?? body.last_error_code ?? `Request failed (${res.status})`,
+    body.retry_after_seconds,
+  );
 }
 
 export function fetchArtifact(
@@ -246,12 +271,18 @@ export async function fetchArtifactData(ownerKey: string, id: string, projectRoo
   return (await res.json()) as ArtifactDataResponse;
 }
 
-export async function refreshArtifact(ownerKey: string, id: string, projectRoot?: string): Promise<ArtifactDataResponse> {
+export async function requestArtifactRefresh(
+  ownerKey: string,
+  id: string,
+  projectRoot?: string,
+  options?: { ifStale?: boolean; signal?: AbortSignal },
+): Promise<{ status: number; body: unknown }> {
   const res = await fetch(artifactActionPath(ownerKey, id, "refresh", projectRoot), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authorizationHeaders() },
-    body: "{}",
+    body: JSON.stringify(options?.ifStale ? { ifStale: true } : {}),
+    signal: options?.signal,
   });
-  if (!res.ok) throw await readArtifactError(res);
-  return (await res.json()) as ArtifactDataResponse;
+  const body = (await res.json().catch(() => ({}))) as unknown;
+  return { status: res.status, body };
 }

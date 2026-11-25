@@ -1,5 +1,5 @@
 export const STATIC_CONTENT_MAX_BYTES = 5 * 1024 * 1024;
-export const LIVE_PROGRAM_MAX_BYTES = 512 * 1024;
+export const LIVE_PROGRAM_MAX_BYTES = 128 * 1024;
 export const LIVE_BINDING_MAX = 8;
 export const LIVE_BINDING_ARGS_MAX_BYTES = 8 * 1024;
 export const LIVE_SNAPSHOT_MAX_BYTES = 1024 * 1024;
@@ -13,7 +13,7 @@ export const ARTIFACT_TAG_PATTERN = /^[a-z0-9_-]{1,32}$/;
 export const DEFAULT_ARTIFACT_VERSIONS_KEEP = 10;
 export const ARTIFACT_VERSIONS_KEEP_ENV = "STAGEFLOW_ARTIFACT_VERSIONS_KEEP";
 
-export type ArtifactIssue = { path: string; message: string };
+export type ArtifactIssue = { path: string; message: string; code?: string };
 
 export class ArtifactPublishError extends Error {
   constructor(

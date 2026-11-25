@@ -1,5 +1,9 @@
 name: CI
 
+env:
+  OPENUI_TELEMETRY_DISABLED: "1"
+  DO_NOT_TRACK: "1"
+
 on:
   push:
     branches:

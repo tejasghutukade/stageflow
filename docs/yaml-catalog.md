@@ -1002,7 +1002,7 @@ The word **artifacts** means three different things:
 
 | Key | Required | Meaning |
 |---|---|---|
-| `publish` | yes when the block is present | Boolean. `true` registers `publish_artifact` and appends a short section to the stage system prompt. `false` changes nothing. |
+| `publish` | yes when the block is present | Boolean. `true` registers `publish_artifact` and appends a short section to the stage system prompt, including a Live artifacts subsection (vocabulary, Query rules, and this stage's bindable functions). `false` changes nothing. |
 | `expect` | no | Artifact ids this attempt must publish before a success envelope. At most 20. Each id matches `^[a-z][a-z0-9_-]{0,63}$`. Ids are unique. |
 
 `expect` without `publish: true` is `stage.invalid_artifacts`. So is a non-boolean `publish`, a non-array `expect`, a bad or duplicate id, more than 20 ids, or an unknown key. `sf validate` reports that code through the same findings list as other stage load errors.
@@ -1013,7 +1013,7 @@ artifacts:
   expect: [weekly-note]
 ```
 
-`publish_artifact` does not end the turn. Parameters: `id`, `kind` (`static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`), `title`, optional `description`, `tags`, and `summary`, and one of `path` (a run-relative path inside this attempt's artifacts directory), `content` (inline text), or `content_base64` (an image). For every kind except `static.image`, those bytes are checked as UTF-8 and scrubbed. Invalid UTF-8 is `artifact.invalid_shape`. Image bytes are stored unchanged. A validation error is a tool error with `code` and `issues`, so the model can correct the call and try again. Publishing the same id again writes the next version. A missing `expect` id rejects the success envelope with `artifact.expected_missing`. The check is per attempt: an unchanged republish in this attempt counts, and a later attempt that does not publish is still missing. See [Artifacts — Authoring from a stage](artifacts.md#authoring-from-a-stage).
+`publish_artifact` does not end the turn. Parameters: `id`, `kind` (`static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`, `live.declarative`), `title`, optional `description`, `tags`, and `summary`, and one of `path` (a run-relative path inside this attempt's artifacts directory), `content` (inline text), or `content_base64` (an image). A `live.declarative` publish also sends `format`, `library`, `bindings`, and optional `refresh`. The program is checked at publish. See [Live artifacts: programs](artifacts.md#live-artifacts-programs). For every kind except `static.image`, those bytes are checked as UTF-8 and scrubbed. Invalid UTF-8 is `artifact.invalid_shape`. Image bytes are stored unchanged. A validation error is a tool error with `code` and `issues`, so the model can correct the call and try again. Publishing the same id again writes the next version. A missing `expect` id rejects the success envelope with `artifact.expected_missing`. The check is per attempt: an unchanged republish in this attempt counts, and a later attempt that does not publish is still missing. See [Artifacts — Authoring from a stage](artifacts.md#authoring-from-a-stage).
 
 ```yaml
 stages:

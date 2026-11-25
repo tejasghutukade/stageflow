@@ -102,6 +102,10 @@ Every variable the Host and CLI read, in one place. Details live in the page eac
 
 Stages receive `STAGEFLOW_CHECKOUT`, `STAGEFLOW_RUN_WORKSPACE`, `STAGEFLOW_REPOSITORY`, `STAGEFLOW_REF`, `STAGEFLOW_BASE_SHA`, `STAGEFLOW_RUN_BRANCH` and `STAGEFLOW_STAGE_ARTIFACTS_DIR`. Do not set these on the Host.
 
+## OpenUI telemetry
+
+Stageflow forces `OPENUI_TELEMETRY_DISABLED=1` and `DO_NOT_TRACK=1` in the CLI and the Host before it loads `@openuidev/lang-core`. It deletes `OPENUI_RUNTIME_TELEMETRY_ENABLED` if that variable is set. There is no Stageflow setting that turns this telemetry on. The package's install script is not on the `allowScripts` allowlist, so `npm install` does not run it.
+
 ## Docker
 
 The shipped `docker-compose.yml` passes a fixed set of variables. Add others under `environment:` in your own override. See [Docker](docker.md).

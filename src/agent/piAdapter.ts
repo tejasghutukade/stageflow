@@ -165,6 +165,7 @@ export { STAGEFLOW_PATH_DENIED };
 import { createPiSettingsManager } from "./piSettings.js";
 import { createSessionContextWiring } from "../compaction/sessionWiring.js";
 import { ASK_OPERATOR_TOOL_NAME, PUBLISH_ARTIFACT_TOOL_NAME } from "../tools/stageToolNames.js";
+import { bindableFunctionsFromAttachments } from "../artifacts/bindable.js";
 import { artifactPublishPromptSection, createPublishArtifactTool } from "../tools/publishArtifact.js";
 import { WORKING_STATE_GUIDANCE } from "../compaction/workingState.js";
 import { inProcessBrowserEnv, sandboxBrowserEnv } from "../runtime/sandboxContainer.js";
@@ -882,7 +883,13 @@ export function composeStagePiSystemPrompt(
     buildUserPrompt(input, emitToolName, emitHintOverride, artifactToolName),
   ];
   if (input.stage.artifacts?.publish === true) {
-    parts.push("", artifactPublishPromptSection(input.stage.artifacts.expect));
+    parts.push(
+      "",
+      artifactPublishPromptSection(
+        input.stage.artifacts.expect,
+        bindableFunctionsFromAttachments(functionCatalogRoot(input), input.stage.tools?.functions ?? []),
+      ),
+    );
   }
   return parts.join("\n");
 }

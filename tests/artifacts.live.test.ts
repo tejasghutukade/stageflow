@@ -1,11 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { connect as netConnect } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentPublishArtifactTool } from "../src/agents/artifactTools.js";
 import { agentProjectKey } from "../src/agents/store.js";
+import { setBindingCatalogReadForTests } from "../src/artifacts/bindings.js";
 import { indexDeclaredDeliverables } from "../src/artifacts/indexDeclared.js";
 import { artifactStorageKey, stageOwnerKey } from "../src/artifacts/keys.js";
 import { LIVE_PROGRAM_MAX_BYTES, LIVE_SNAPSHOT_MAX_BYTES } from "../src/artifacts/limits.js";
@@ -42,6 +43,7 @@ const cleanups: Array<() => Promise<void>> = [];
 const previousHome = process.env.STAGEFLOW_HOME;
 
 afterEach(async () => {
+  setBindingCatalogReadForTests(undefined);
   resetGlobalStageflowHomeForTests();
   if (previousHome === undefined) delete process.env.STAGEFLOW_HOME;
   else process.env.STAGEFLOW_HOME = previousHome;
@@ -176,7 +178,7 @@ async function publishLive(
     id: "weekly",
     kind: "live.declarative",
     title: "Weekly",
-    bytes: Buffer.from("card rows\n"),
+    bytes: Buffer.from('root = TextContent("card")\n'),
     manifest: manifest(),
     publishSource: "api",
     roots,
@@ -269,7 +271,7 @@ describe("live artifact publish and refresh", () => {
         id: "weekly",
         kind: "live.declarative",
         title: "Weekly",
-        bytes: Buffer.from("card\n"),
+        bytes: Buffer.from('root = TextContent("card")\n'),
         manifest: manifestBody,
         publishSource: "api",
         roots,
@@ -328,7 +330,7 @@ source: |
         id: "board",
         kind: "live.declarative",
         title: "Board",
-        bytes: Buffer.from("card\n"),
+        bytes: Buffer.from('root = TextContent("card")\n'),
         manifest: manifest(),
         publishSource: "api",
         roots,
@@ -341,7 +343,7 @@ source: |
       id: "board",
       kind: "live.declarative",
       title: "Board",
-      bytes: Buffer.from("card\n"),
+      bytes: Buffer.from('root = TextContent("card")\n'),
       manifest: manifest(),
       publishSource: "api",
       roots,
@@ -559,7 +561,7 @@ source: |
         projectRoot: project,
         source: { runId: "run-eval", stageId: "summarize", attempt: 1 },
       },
-      { id: "weekly", kind: "live.declarative", title: "Weekly", bytes: Buffer.from("card\n"), manifest: manifest() },
+      { id: "weekly", kind: "live.declarative", title: "Weekly", bytes: Buffer.from('root = TextContent("card")\n'), manifest: manifest() },
     );
     expect(stage.key.startsWith("eval:")).toBe(true);
     const hidden = db.prepare(`SELECT hidden FROM artifacts WHERE id = 'weekly'`).get() as { hidden: number };
@@ -568,7 +570,7 @@ source: |
     const agent = await publishSessionArtifact(
       { db, roots },
       { owner: { kind: "agent", agent: "helper" }, projectRoot: project, source: { sessionId: "sess-eval" } },
-      { id: "board", kind: "live.declarative", title: "Board", bytes: Buffer.from("card\n"), manifest: manifest() },
+      { id: "board", kind: "live.declarative", title: "Board", bytes: Buffer.from('root = TextContent("card")\n'), manifest: manifest() },
     );
     expect(agent.key.startsWith("eval:")).toBe(true);
   });
@@ -616,7 +618,7 @@ describe("live artifact routes and tools", () => {
       id: "weekly",
       kind: "live.declarative",
       title: "Weekly",
-      content: "card rows\n",
+      content: 'root = TextContent("card")\n',
       manifest: manifest(),
     };
     expect((await call(store, "POST", "/api/artifacts", { ...body, project_root: project })).status).toBe(200);
@@ -717,7 +719,7 @@ describe("live artifact routes and tools", () => {
         id: "weekly",
         kind: "live.declarative",
         title: "Weekly",
-        content: "card rows\n",
+        content: 'root = TextContent("card")\n',
         format: "openui-lang",
         library: { name: "stageflow", version: "1.0.0" },
         bindings: [{ id: "rows", function: "revenue_by_week", args: { weeks: 12 } }],
@@ -746,7 +748,7 @@ describe("live artifact routes and tools", () => {
       id: "board",
       kind: "live.declarative",
       title: "Board",
-      content: "card rows\n",
+      content: 'root = TextContent("card")\n',
       format: "openui-lang",
       library: { name: "stageflow", version: "1.0.0" },
       bindings: [{ id: "rows", function: "revenue_by_week", args: { weeks: 12 } }],
@@ -851,7 +853,7 @@ describe("live artifact fix pass", () => {
     expect(same.unchanged).toBe(true);
     expect(db.prepare(`SELECT live_status FROM artifacts WHERE key = ?`).get(key)).toEqual({ live_status: "fresh" });
     const next = await publishLive(store, project, {
-      bytes: Buffer.from("other card\n"),
+      bytes: Buffer.from('root = TextContent("other")\n'),
       manifest: manifest("revenue_by_week", { weeks: 4 }),
     });
     expect(next.version).toBe(2);
@@ -893,7 +895,7 @@ describe("live artifact fix pass", () => {
       {
         projectRoot: project,
         invoke: async () => {
-          await publishLive(store, project, { bytes: Buffer.from("card rows next\n") });
+          await publishLive(store, project, { bytes: Buffer.from('root = TextContent("next")\n') });
           return okView({ stale: true });
         },
       },
@@ -1049,7 +1051,7 @@ stages:
         id: "weekly",
         kind: "live.declarative",
         title: "Weekly",
-        bytes: Buffer.from("card\n"),
+        bytes: Buffer.from('root = TextContent("card")\n'),
         manifest: manifest(),
         publishSource: "api",
         roots,
@@ -1125,7 +1127,7 @@ stages:
         id: "second",
         kind: "live.declarative",
         title: "Second",
-        bytes: Buffer.from("card\n"),
+        bytes: Buffer.from('root = TextContent("card")\n'),
         manifest: manifest(),
         publishSource: "api",
         roots,
@@ -1147,7 +1149,7 @@ stages:
       id: "third",
       kind: "live.declarative",
       title: "Third",
-      bytes: Buffer.from("card\n"),
+      bytes: Buffer.from('root = TextContent("card")\n'),
       manifest: manifest(),
       publishSource: "api",
       roots,
@@ -1164,12 +1166,62 @@ stages:
         id: "board",
         kind: "live.declarative",
         title: "Board",
-        bytes: Buffer.from("card\n"),
+        bytes: Buffer.from('root = TextContent("card")\n'),
         manifest: manifest(),
         publishSource: "api",
         roots,
       }),
     ).rejects.toThrow(/Agent missing was not found/);
+  });
+
+  it("retries a transient catalog read and does not report the pipeline as missing", async () => {
+    const { store, project } = await setup();
+    await writeFunction(project, "revenue_by_week", toolSource("{ network: [] }"));
+    await writeStage(project, ["revenue_by_week"]);
+    const db = sqliteConnectionFromStore(store)!;
+    const roots = await catalogRootsForArtifacts(store);
+    const pipelineFile = path.join(project, "sales.pipeline.yaml");
+    let failures = 1;
+    setBindingCatalogReadForTests(async (file) => {
+      if (file === pipelineFile && failures > 0) {
+        failures -= 1;
+        const error = Object.assign(new Error("resource busy"), { code: "EBUSY" });
+        throw error;
+      }
+      return readFile(file, "utf8");
+    });
+    const published = await publishArtifact(db, {
+      owner: { kind: "stage", pipeline: "sales", stage: "summarize" },
+      projectRoot: project,
+      id: "weekly",
+      kind: "live.declarative",
+      title: "Weekly",
+      bytes: Buffer.from('root = TextContent("card")\n'),
+      manifest: manifest(),
+      publishSource: "api",
+      roots,
+    });
+    expect(published.version).toBe(1);
+    expect(failures).toBe(0);
+
+    failures = 8;
+    await expect(
+      publishArtifact(db, {
+        owner: { kind: "stage", pipeline: "sales", stage: "summarize" },
+        projectRoot: project,
+        id: "again",
+        kind: "live.declarative",
+        title: "Again",
+        bytes: Buffer.from('root = TextContent("card")\n'),
+        manifest: manifest(),
+        publishSource: "api",
+        roots,
+      }),
+    ).rejects.toMatchObject({
+      status: 503,
+      code: "artifact.catalog_unavailable",
+      message: expect.stringMatching(/Could not read the catalog \(retry\)/),
+    });
   });
 
   it("refuses another waiter past 32 and removes snapshots when an indexed row is deleted", async () => {
@@ -1193,9 +1245,14 @@ stages:
     const first = refreshArtifact(db, { projectRoot: project, invoke }, key);
     await entered;
     const waiting = Array.from({ length: 32 }, () => refreshArtifact(db, { projectRoot: project, invoke: async () => okView() }, key));
-    await expect(refreshArtifact(db, { projectRoot: project, invoke: async () => okView() }, key)).rejects.toMatchObject({
-      code: "artifact.resource_limit",
+    const refused = await refreshArtifact(db, { projectRoot: project, invoke: async () => okView() }, key);
+    expect(refused).toMatchObject({
+      status: "error",
+      last_error_code: "artifact.resource_limit",
+      retry_after_seconds: 30,
+      errors: [{ binding_id: "rows", code: "artifact.resource_limit" }],
     });
+    expect(refused.snapshots).toEqual([]);
     release();
     await Promise.all([first, ...waiting]);
     const now = "2026-11-24T00:00:00.000Z";
@@ -1271,9 +1328,9 @@ stages:
     const waiting = Array.from({ length: 32 }, () =>
       refreshArtifact(db, { projectRoot: project, invoke: async () => okView() }, key).catch((error) => error),
     );
-    await expect(refreshArtifact(db, { projectRoot: project, invoke: async () => okView() }, key)).rejects.toMatchObject({
-      code: "artifact.resource_limit",
-    });
+    const refused = await refreshArtifact(db, { projectRoot: project, invoke: async () => okView() }, key);
+    expect(refused.last_error_code).toBe("artifact.resource_limit");
+    expect(refused.retry_after_seconds).toBe(30);
     const publishUnderLoad = publishLive(store, project, { title: "Under load" });
     const deletePromise = deletePublishedArtifact(db, "stage:sales:summarize", "weekly", project, roots);
     release();

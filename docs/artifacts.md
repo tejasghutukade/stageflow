@@ -214,7 +214,7 @@ The Artifacts page shows an agent owner as `agent · <id>` and links to that age
 - `sf artifact list` — table or `--json` page of indexed artifacts. Server-side filters match the list query above (`--project-root`, `--limit`, `--kind`, `--owner`, `--tag`, `--status`, `--live`, `--sort`, `--order`, `--q`). `--q` is the same search as `GET /api/artifacts?q=`. The human table includes a `STATUS` column (`expired` or blank) and a short run id. See [CLI reference](cli-reference.md#sf-artifact).
 - `sf artifact show <ownerKey>/<id>` — a readable summary (key, title, kind, status, owner, source, updated, and expires or the expired reason). `--json` prints the record. Use `--project-root` when the key is ambiguous across projects.
 - `sf artifact publish` — copy a file into the keep store. See [Publishing](#publishing) and [CLI reference](cli-reference.md#sf-artifact-publish).
-- `sf artifact refresh <ownerKey>/<id>` — run the live bindings. Repeat `--binding <id>` to refresh some of them. See [CLI reference](cli-reference.md#sf-artifact).
+- `sf artifact refresh <ownerKey>/<id>` — run the live bindings. Repeat `--binding <id>` to refresh some of them. `--if-stale` reuses a snapshot that is still inside the TTL. See [CLI reference](cli-reference.md#sf-artifact).
 - `sf artifact delete <ownerKey>/<id>` — remove a published artifact and every version. See [CLI reference](cli-reference.md#sf-artifact-delete).
 - `sf artifact read --run --path` — read a run workspace file by path (not the index). Unchanged from before the index shipped.
 
@@ -291,7 +291,7 @@ Never publish secrets. Text kinds are UTF-8-checked and scrubbed before store. *
 
 ## Live artifacts {#live-artifacts}
 
-`live.declarative` is a published artifact whose content is an opaque program and whose manifest names read-only tool functions. A refresh runs those functions and stores snapshots. It does not create a version, start a run, or call a model. Rendering the program is a later step. Until then, the record, the data route, and the refresh route expose the bindings and the latest snapshots.
+`live.declarative` is a published artifact whose content is an OpenUI Lang program and whose manifest names read-only tool functions. A refresh runs those functions and stores snapshots. It does not create a version, start a run, or call a model. The visual renderer is a later step. Until then, the record, the data route, and the refresh route expose the program, the bindings, and the latest snapshots.
 
 ### Manifest
 
@@ -306,21 +306,130 @@ Never publish secrets. Text kinds are UTF-8-checked and scrubbed before store. *
 }
 ```
 
-`program` inside the manifest is optional. When it is present it must equal `content`. The Host stores the program text twice: as the content file (`program.txt`) and again inside the manifest (`artifact_versions.manifest_json` and `manifest.json` on disk). The 512 KiB cap counts that program text once, as the content bytes, not a second time for the manifest copy. The program is not parsed here.
+`program` inside the manifest is optional. When it is present it must equal `content`. The Host stores the program text twice: as the content file (`program.txt`) and again inside the manifest (`artifact_versions.manifest_json` and `manifest.json` on disk). The 128 KiB cap counts that program text once, as the content bytes, not a second time for the manifest copy. Publish parses the program. See [Live artifacts: programs](#live-artifacts-programs).
 
 | Field | Rule |
 |---|---|
-| `format` | Non-empty string, at most 64 characters |
-| `library.name` | Non-empty string, at most 64 characters |
-| `library.version` | Non-empty string, at most 32 characters |
-| `program` | Opaque UTF-8, at most 512 KiB. Over that is `413` `artifact.too_large` |
+| `format` | `openui-lang`. Any other value is `artifact.invalid_shape` (`unsupported format`) |
+| `library.name` | `stageflow`. Another name is `artifact.invalid_shape` |
+| `library.version` | `1.0.0`, the current library. Publish accepts only that version. An older stored version is reported as needing migration when it is rendered |
+| `program` | OpenUI Lang text, at most 128 KiB, at most 2,000 statements, at most 64 `Query` calls, and at most 20 levels of nesting. Over the byte cap is `413` `artifact.too_large` |
 | `bindings` | At most 8. `id` matches `^[a-z][a-z0-9_]{0,31}$` and is unique. `function` is a function id. `args` is a JSON object of at most 8 KiB |
-| `refresh.on_view` | Optional boolean |
-| `refresh.ttl_seconds`, `refresh.auto_seconds` | Optional integers of at least 30 |
+| `refresh.on_view` | Optional boolean. Omitted means the console refreshes when the artifact is opened. `false` skips that open refresh. Automatic refresh while the tab is open still follows `auto_seconds` |
+| `refresh.ttl_seconds` | Optional integer of at least 30. Omitted means 300 seconds. A snapshot is fresh while its age is less than or equal to this TTL |
+| `refresh.auto_seconds` | Optional integer of at least 30. When set, a visible console tab repeats the stale check on that interval |
 
 A bad manifest is `400` `artifact.invalid_shape` with `issues[].path`. `args` are data. The Host does not run them as code.
 
 The stage and agent `publish_artifact` tools take the same program as `content` and pass `format`, `library`, `bindings`, and optional `refresh` instead of one `manifest` object. MCP `save_artifact` takes `manifest`, the same object as this route. The same bytes-and-manifest hash keeps the current version (`unchanged: true`). The hash is the program plus the canonical manifest JSON. Title, description, tags, and summary still update.
+
+### Live artifacts: programs
+
+The language is a subset of OpenUI Lang. One statement per line: `name = Expression`. The entry statement is `root`. Forward references are allowed. `$variables` hold local filter state. `Query(tool, args, default, refreshSeconds)` reads a bound function. `tool` is that function's id, not the binding id. `args` may use `$variables`. `refreshSeconds` is optional. A program with no `Query` is static content and is allowed.
+
+A `Query` is accepted only when its first argument is exactly one double-quoted string literal: no single quotes, concatenation, operators, ternary, references, variables, or backslash escapes. That literal must equal the `function` of a declared binding. `@Query(...)` is a `Query`. Any other tool-name shape is `artifact.program_invalid` with the message `the tool name must be a single string literal that matches a bound function`.
+
+`Query` and `Mutation` are read from the same parse tree the renderer uses, including calls nested in props, arrays, ternaries, and function arguments. Either name is `inline-reserved` unless it is the whole right-hand side of a statement. An `@` call that is not `@Set`, `@Reset`, `@Run`, or `Action` is `unknown-function`. A component outside the vocabulary is `unknown-component`.
+
+Characters outside string literals and comments are rejected with `invalid-character` when they are Unicode format or space characters other than a normal space, tab, carriage return, or line feed. That includes U+200B–U+200F, U+2060–U+2064, U+FEFF, NBSP and the other `Zs` spaces, U+000B, U+000C, U+0085, U+2028, and U+2029. A string literal may contain them.
+
+Accepted:
+
+```text
+data = Query("get_usage", {range: $range}, {rows: []})
+rows = data.rows
+root = TextContent("x")
+```
+
+Rejected:
+
+```text
+Query("get_usage" + "_evil", {})
+Query("get_usage" || "evil", {})
+Query("get_usage" ?? "evil", {})
+Query("get_usage" == "x" ? "evil" : "get_usage", {})
+@Query("evil", {})
+Query("get_usag\e", {})
+root = TextContent(Query("get_usage", {}).nope)
+root = TextContent("aaa
+```
+
+`Query` and `Mutation` used inside a component (`inline-reserved`) are rejected. An unterminated string, which the parser would otherwise close, is rejected (`unterminated-string`). Every string is rendered as plain text and never becomes a link or an image. A URL-like string in `TextContent` or `Tag`, including `javascript:` and `data:`, publishes with the warning `URL-like text: rendered as plain text`.
+
+Scanning is linear in the program size. One field-access chain is recorded once, not once per prefix. Limits, past which publish returns `artifact.program_invalid`:
+
+| Limit | Rejection |
+|---|---|
+| 128 KiB | `program-too-large` (content bytes; the route uses `413` `artifact.too_large`) |
+| 2,000 statements | `statement-limit` |
+| 64 `Query` calls | `too-many-queries` |
+| 32 KiB of string literals | `string-literal-budget` |
+| 5,000 array or object literal elements | `literal-budget` |
+| 20 nested brackets | `nesting-limit` |
+| line longer than 16 KiB | `line-too-long` |
+| identifier longer than 128 characters | `identifier-too-long` |
+| statement larger than 64 KiB | `statement-too-large` |
+| field chain longer than 64 segments | `chain-too-long` |
+| more than 20,000 field accesses | `too-many-field-accesses` |
+| a disallowed Unicode space or format character outside a string or comment | `invalid-character` |
+| more than 250 ms while scanning or reconciling | `program too complex` |
+
+Publish resolves each distinct bound function once, before reconcile, and passes that in-memory map into reconcile. Reconcile does not read function files. At most two program validations run in one process. Further publishes wait, and the wait yields between validations. A 33rd waiter is `429` `artifact.resource_limit` with `{ "error", "code" }`. Nothing is written.
+
+Every opted-in stage or agent gets this Live artifacts block, including an owner with no bindable functions. With no functions the block is the vocabulary, one syntax line, and `no bindable functions: write data into the program`. With functions, each description is capped at 200 characters and each function's input/output rendering at 600 characters. If those caps would put the section over 4,500 estimated tokens, the input/output rendering is shortened further until it fits. Token estimates are `characters / 4`: vocabulary 1,763; the block with no functions 1,808; 20 functions with short descriptions 2,430; 20 functions with long descriptions and long schemas 4,390.
+
+`scripts/artifacts/live-program-regression.ts` writes its JSON to `--out-dir`. The default is the operating-system temp directory `stageflow-live-regression`, not a directory in this repo.
+
+Publish accepts only library `stageflow` version `1.0.0` (`LIBRARY_NAME` / `LIBRARY_VERSION`). A stored artifact stays tied to the version that wrote it. `libraryVersionStatus` returns `current`, `older`, `newer`, or `unknown` so a later renderer can show a needs-migration state. An older or newer version is `artifact.invalid_shape` at publish.
+
+| Component | Props, in order |
+|---|---|
+| `Stack` | children, direction, gap, align, justify, wrap |
+| `Card` | children, variant, direction, gap, align, justify, wrap |
+| `CardHeader` | title, subtitle |
+| `TextContent` | text, size |
+| `Callout` | variant, title, description, visible |
+| `Table` | columns |
+| `Col` | label, data, type |
+| `Tag` | text, icon, size, variant |
+| `Stat` | label, value, tone |
+| `StatusPill` | tone, label |
+| `SectionCard` | title, body |
+| `LineChart` | labels, series, variant, xLabel, yLabel, height |
+| `BarChart` | labels, series, variant, xLabel, yLabel, height |
+| `Series` | category, values |
+| `Select` | name, items, placeholder, rules, value, size |
+| `SelectItem` | value, label |
+| `Input` | name, placeholder, type, rules, value |
+| `Button` | label, action, variant, type, size |
+
+`Stack` and `Card` take an array of children. Optional props may be omitted from the end or passed as `null`. `Select` and `Input` bind a `$variable` for local filter state. `Button` actions are `@Set`, `@Reset`, or `@Run` of a Query.
+
+These are rejected because they load remote content, run a write, or start an agent turn (levels 3 and 4 stay off):
+
+- `Image`, `Carousel`, `ImageGallery`, `Link`, `Embed`, `Markdown`, `Form`, and any other component not in the table (`unknown-component`)
+- `Mutation`, `@ToAssistant`, `@OpenUrl`, and `@Run` of a Mutation (`excluded-feature`)
+- A `Query` whose tool is not a binding function (`unknown-tool`). The message lists the declared function ids
+- A field read that is not in the function's `output_schema` when the function declares one (`unknown-field`). The message names the valid fields at that level. Array pluck (`usage.rows.day`) walks `items`. A read through an alias (`rows = data.rows`, then `rows.day`) and a `Query` inside a conditional are checked the same way
+- More than 2,000 statements, more than 64 `Query` calls, more than 20 levels of nesting, a line over 16 KiB, an identifier over 128 characters, a statement over 64 KiB, string literals over 32 KiB, more than 5,000 array or object literal elements, a field chain over 64 segments, more than 20,000 field accesses, a disallowed character outside a string or comment, or a scan or reconcile that exceeds 250 ms (`program too complex`)
+- A cyclic reference graph (`reference-cycle`)
+
+A `Query` whose literal args differ from the binding args is a warning (`binding-args`), not an error. `$variable` args are not a mismatch. A binding that the program never queries is a warning (`binding-unused`). A function with no `output_schema` skips the field check and adds a warning (`output-schema-missing`). A program that has no `root` but does call `Stack` still publishes, with a `no-root` warning. The publish response includes `warnings` when any of these apply. Errors reject the publish with `400` `artifact.program_invalid` and `issues[]` (`path` is the statement id, `code` is the parser or reconcile code, at most 20 issues, sorted by line). Nothing is written when publish is rejected.
+
+Example that fails, then the fix:
+
+```text
+root = NotAThing("x")
+```
+
+`artifact.program_invalid`, issue code `unknown-component`. The corrected program is `root = TextContent("x")`.
+
+```text
+usage = Query("other", {range: "7"}, {rows: []})
+root = TextContent("x")
+```
+
+`unknown-tool` when the only binding function is `get_usage`. `usage = Query("get_usage", {range: $range}, {rows: []})` matches a binding whose function id is `get_usage`.
 
 ### Bindings
 
@@ -341,8 +450,9 @@ The owner check reads the catalog, not a resolved pipeline (so an under-granted 
 - No `stageflow.yaml` fails with "Project has no stageflow.yaml".
 - A manifest with no `catalog.pipelines` fails with "Manifest has no catalog.pipelines".
 - A pipeline id that is not in the catalog fails with "was not found in the catalog". A file listed under `catalog.exclude` fails with "excluded from the catalog".
+- A catalog file that cannot be read (a busy or interrupted read, after one retry) fails with `503` `artifact.catalog_unavailable`. The message says the catalog could not be read and to retry. That is not `artifact.binding_not_granted`.
 - A missing stage fails with "Stage … was not found". A stage that does not list the function says it does not attach that function.
-- A `uses:` file that cannot be read or parsed is skipped with a warning. The scan continues. That stage does not grant the function.
+- A `uses:` file that cannot be parsed is skipped with a warning. The scan continues. That stage does not grant the function. A `uses:` file for the stage that owns the binding that still cannot be read after one retry is `artifact.catalog_unavailable`, not a missing pipeline.
 - When more than one catalog file in the project declares the same pipeline id, only the first non-excluded path in catalog order is that pipeline. A later file does not grant the function.
 - A missing agent file fails with "Agent … was not found".
 
@@ -350,21 +460,25 @@ Refresh passes the attachment's `grants` and no other capability. `grants: []`, 
 
 ### Refresh and snapshots
 
-`POST /api/artifacts/<ownerKey>/<id>/refresh` runs every manifest binding, or only the ids in `{ "bindingIds": ["rows"] }`. An empty `bindingIds` array is `400` `artifact.invalid_shape`. Omitting the field runs every binding. An unknown id is `artifact.invalid_shape`. `GET /api/artifacts/<ownerKey>/<id>/data` returns the current snapshots and does not run anything. Both take `project_root` the same way as the record route. A missing artifact, or a key from another project, is `404` `artifact.not_found`. More than one project and no `project_root` is `409` `artifact.ambiguous` with `project_roots`. A static artifact is `404` `artifact.not_live`. An expired artifact is `404` `artifact.content_unavailable` and is not refreshed.
+`POST /api/artifacts/<ownerKey>/<id>/refresh` runs every manifest binding, or only the ids in `{ "bindingIds": ["rows"] }`. The body may also set `ifStale` (boolean). An empty `bindingIds` array is `400` `artifact.invalid_shape`. Omitting `bindingIds` runs every binding. An unknown id is `artifact.invalid_shape`. `ifStale` that is not a boolean is `400` `artifact.invalid_shape` at `ifStale`. `GET /api/artifacts/<ownerKey>/<id>/data` returns the current snapshots and does not run anything. Both take `project_root` the same way as the record route. A missing artifact, or a key from another project, is `404` `artifact.not_found`. More than one project and no `project_root` is `409` `artifact.ambiguous` with `project_roots`. A static artifact is `404` `artifact.not_live`. An expired artifact is `404` `artifact.content_unavailable` and is not refreshed.
 
-The refresh response is `{ "status", "snapshots", "last_refreshed_at", "last_error_code", "errors" }`. `errors` is `{ "binding_id", "code" }`. Each snapshot is `{ "binding_id", "args_hash", "value", "fetched_at", "duration_ms", "status", "error_code" }`. The data route uses the same shape with `errors: []`.
+With `ifStale: true`, a binding runs only when its current snapshot is missing, its status is not `ok`, or its `fetched_at` is older than the effective TTL. The effective TTL is `refresh.ttl_seconds` when the manifest sets it (already at least 30; a smaller stored value is treated as 30) and **300 seconds** when `ttl_seconds` is omitted. A fresh snapshot is reused. That reuse does not call the function, does not write an invocation row, and does not change the snapshot row or `last_refreshed_at`. `ifStale: false` or an omitted `ifStale` runs the requested bindings.
+
+The refresh response is `{ "status", "snapshots", "last_refreshed_at", "last_error_code", "errors" }`. `errors` is `{ "binding_id", "code" }`. Each snapshot is `{ "binding_id", "args_hash", "value", "fetched_at", "duration_ms", "status", "error_code" }` and, on a refresh, `source`. `source` is `executed` only when this call stored that snapshot. It is `cache` when the returned snapshot was already stored, including an `ifStale` reuse and a binding that failed and kept its previous snapshot. The data route uses the same shape without `source`, and with `errors: []`. When any binding failed with `artifact.resource_limit`, or the caller was refused because the execution queue or the joiner bound was full, the body also includes `retry_after_seconds` (30). If at least one stored snapshot can be shown, that response is `200` with `status: "stale"`. If nothing can be shown, the same body is `503`. It is never a bare `{ "error", "code" }` envelope. Other refresh results stay `200`.
+
+Concurrent `ifStale` requests join an in-flight execution when they ask for the same bindings or for a subset of the bindings already running. A caller that also asks for a binding that is not in flight waits for the shared part and then runs only the missing bindings. Callers that join receive the same result object, including the same error when the shared execution fails. Joining waits on that shared promise and does not take an execution slot. At most 1,000 callers may join one flight; the next one is refused with the `artifact.resource_limit` body above. An `ifStale` caller that finds every requested snapshot still inside the TTL returns the cache and does not take a slot either. A manual refresh (`ifStale` omitted or false) does not join that flight. It queues its own execution. At most 32 of those executions wait behind the one that is running; the next one is refused with the same body. Aborting or disconnecting one caller does not cancel the shared execution. That caller's wait is released immediately, and the response is not written after the connection closes. A refresh does not start a run or call a model.
 
 A snapshot is one row per binding for that binding's current args hash. Older hashes and bindings removed from the manifest are deleted. A new result replaces the current row. It is not a version. The stored value is at most 1 MiB and at most 64 levels deep and 200,000 nodes. Over the byte or node cap is `artifact.snapshot_too_large`. Over the depth cap is `artifact.refresh_failed`. The previous snapshot stays. Before scrubbing, the Host checks an upper bound on the serialized JSON size and rejects over-limit values without walking string secrets. Values within the cap are scrubbed by walking the JSON: string leaves go through pattern redaction; property names that match `secret`, `token`, `passw`, `pwd`, `api_key` / `api-key`, `auth`, `credential`, `bearer`, `cookie`, `private`, `session`, `sid`, `csrf`, `xsrf`, `jwt`, or `signature` (case-insensitive substrings) have the whole value replaced by `[redacted]`, including arrays and objects. Other keys keep their shape.
 
-The Host runs the function through the function executor with the attachment's grants, and with that function's timeout and body limits. Credentials are resolved by the Host for granted capabilities only. Secret values, request URLs, and response bodies are not stored. Invocation history records `kind: artifact` and a code only. A full executor queue is `artifact.resource_limit`. Any other function failure keeps the previous snapshot and sets `last_error_code` to the function code, or `artifact.refresh_failed` when the function has no code.
+The Host runs the function through the function executor with the attachment's grants, and with that function's timeout and body limits (4 running, 16 waiting). Credentials are resolved by the Host for granted capabilities only. Secret values, request URLs, and response bodies are not stored. Invocation history records `kind: artifact` and a code only. A cache hit writes no invocation row. A full executor queue is `artifact.resource_limit`: the previous snapshot stays, the status is `stale` when that snapshot exists and `error` when it does not, and the response includes `retry_after_seconds`. The view is not failed as a 429 or a generic 500. Any other function failure keeps the previous snapshot and sets `last_error_code` to the function code, or `artifact.refresh_failed` when the function has no code.
 
 `status` is computed from every binding in the current manifest, not only the ones this call ran. It is `fresh` only when every binding has a successful snapshot for its current args hash and this call had no binding error. It is `stale` when at least one successful snapshot exists and some binding failed or has no snapshot. It is `error` when no binding has a successful snapshot. It is null before the first successful snapshot (including after a new version drops every snapshot). `refreshing` is set only while a refresh is in progress. A thrown failure, including a crash while storing the value, leaves `stale` or `error` with `artifact.refresh_failed`. On Host start, every row still marked `refreshing` is reset the same way. On the indexed-artifact repair pass, only rows that have been `refreshing` for more than ten minutes and are not in flight in this process are reset. `last_refreshed_at` is the newest successful `fetched_at` among current snapshots, including when only some bindings succeeded.
 
 A new version (not an unchanged republish) deletes snapshot rows whose binding id and args hash are not in the new manifest, then recomputes status from what remains. An unchanged republish leaves snapshots and status alone. Publishing a non-live version deletes the snapshots.
 
-Lock order for one artifact is the publish lock, then the refresh lock. Publish holds only the publish lock, so a new version can commit while a refresh is running the function. The snapshot write checks that the artifact and the version it started with are still there. If the artifact was deleted, the result is discarded with `artifact.not_found`. If a new version was published, the result is discarded and the refresh returns the stored state. Delete takes both locks in that order, and it deletes snapshot rows in the same transaction as the artifact row. A delete started from inside the refresh runs immediately, and the snapshot write then sees that the artifact is gone. Indexed-artifact deletes remove snapshot rows for those keys too. At most 32 refresh callers wait behind the refresh that is running; the next refresh caller gets `artifact.resource_limit` immediately. Delete and other mutating callers still queue on the refresh lock without that cap.
+Lock order for one artifact is the publish lock, then the refresh lock. Publish holds only the publish lock, so a new version can commit while a refresh is running the function. The snapshot write checks that the artifact and the version it started with are still there. If the artifact was deleted, the result is discarded with `artifact.not_found`. If a new version was published, the result is discarded and the refresh returns the stored state. Delete takes both locks in that order, and it deletes snapshot rows in the same transaction as the artifact row. A delete started from inside the refresh runs immediately, and the snapshot write then sees that the artifact is gone. Indexed-artifact deletes remove snapshot rows for those keys too. At most 32 refresh executions wait behind the one that is running. Callers joined to an in-flight execution, and `ifStale` callers served from a fresh snapshot, do not take those slots. A joiner past 1,000 on one flight, or an execution past the 32 waiting slots, gets `artifact.resource_limit` in the refresh result body (`200` with the last `ok` snapshot, or `503` when there is none), including `retry_after_seconds`. Delete and other mutating callers still queue on the refresh lock, ahead of refresh callers that are waiting to run, and without that cap. Disconnecting one caller releases only that caller's wait. The shared execution still finishes.
 
-Refreshes of one artifact run one at a time in arrival order. The list and record include `live` for this kind:
+One artifact runs one refresh execution at a time. Overlapping callers share that execution instead of lining up another copy. The read-only check and the revision pin happen once for that execution. In-flight entries are removed when the execution finishes, including when it fails. The list and record include `live` for this kind:
 
 ```json
 "live": {
@@ -383,7 +497,7 @@ An eval-origin publish uses the same hidden `eval:` namespace as a static publis
 
 ### CLI
 
-`sf artifact publish --kind live.declarative` takes the program from `--file` or `--stdin` and the manifest JSON from `--manifest`. `sf artifact list` marks a live row `LIVE` or `LIVE/<status>` (`fresh`, `stale`, `error`, `refreshing`). `sf artifact show` prints each binding (`id`, function, `read-only`), the refresh policy, and the last refreshed time. `--json` includes the `live` object. `sf artifact refresh <ownerKey>/<id>` runs the bindings, or only the ids given with repeated `--binding`. It runs in the CLI process, so the function executor's limits apply to that process. `--json` prints `{ status, snapshots, last_refreshed_at, last_error_code, errors }`. A binding failure exits 1 and still prints that object. `artifact.not_found`, `artifact.ambiguous`, `artifact.not_live`, and `artifact.content_unavailable` exit 1 with `{ error, code }`.
+`sf artifact publish --kind live.declarative` takes the program from `--file` or `--stdin` and the manifest JSON from `--manifest`. `sf artifact list` marks a live row `LIVE` or `LIVE/<status>` (`fresh`, `stale`, `error`, `refreshing`). `sf artifact show` prints each binding (`id`, function, `read-only`), the refresh policy, and the last refreshed time. `--json` includes the `live` object. `sf artifact refresh <ownerKey>/<id>` runs the bindings, or only the ids given with repeated `--binding`. `--if-stale` applies the TTL rule above. It runs in the CLI process, so the function executor's limits apply to that process. `--json` prints `{ status, snapshots, last_refreshed_at, last_error_code, errors }`, plus `source` on snapshots and `retry_after_seconds` when the executor queue is full. A binding failure exits 1 and still prints that object. `artifact.not_found`, `artifact.ambiguous`, `artifact.not_live`, and `artifact.content_unavailable` exit 1 with `{ error, code }`.
 
 ### MCP
 
@@ -391,4 +505,4 @@ An eval-origin publish uses the same hidden `eval:` namespace as a static publis
 
 ### Console
 
-The Artifacts list shows the live kind label and the status pill. The detail page shows the program as monospace text and says the visual renderer comes in a later update. The Inspector **Live** section lists bindings with a Read-only badge, status, last refreshed time, last error code, and collapsed snapshot JSON. **Refresh now** calls the refresh route. An older version (`?v=`) shows that version's program and manifest bindings, and says snapshots are for the current version.
+The Artifacts list shows the live kind label and the status pill. The detail page shows the program as monospace text and says the visual renderer comes in a later update. The Inspector **Live** section lists bindings with a Read-only badge, status, last refreshed time (a relative age, with the absolute time on hover), an **Updated Ns ago** line, last error code, and collapsed snapshot JSON. When `auto_seconds` is set it also says **Checking every Ns · data refreshed at most every Ms**, where M is the effective TTL (`refresh.ttl_seconds`, or 300 seconds when that field is omitted). Opening the current version loads the stored snapshots from the data route first, then refreshes with `ifStale: true` unless `on_view` is false. The page waits until the versions list identifies the latest version before that load, so an older version is not refreshed while the list is still loading. The interval pauses while the browser tab is hidden and, on becoming visible, refreshes immediately when the snapshot is older than `auto_seconds`. **Refresh now** calls the refresh route without `ifStale`. An older version (`?v=` when it is not the latest), an expired artifact, or a hidden artifact does not start that refresh. An older version does not read stored snapshots. It shows that version's program and manifest bindings, and says snapshots are for the current version. An expired live artifact shows the same expiry explanation as a static artifact and hides the live program note and **Refresh now**. `artifact.content_unavailable` from the data route shows that explanation as well.

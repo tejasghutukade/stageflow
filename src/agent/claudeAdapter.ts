@@ -74,6 +74,7 @@ import {
 import { readActivityVerbose } from "./activity.js";
 import { readCheckoutAgentsContext } from "./checkoutContext.js";
 import { composeStageUserPrompt } from "./piAdapter.js";
+import { bindableFunctionsFromAttachments } from "../artifacts/bindable.js";
 import { appendArtifactPublishPrompt } from "../tools/publishArtifact.js";
 import {
   claudeSessionMarkerPath,
@@ -432,6 +433,9 @@ async function runTurn(
             input.stage.system_prompt,
             input.stage.artifacts?.expect,
             input.stage.artifacts?.publish === true,
+            input.stage.artifacts?.publish === true
+              ? bindableFunctionsFromAttachments(functionCatalogRoot(input), input.stage.tools?.functions ?? [])
+              : undefined,
           ),
         },
         settingSources: [],

@@ -17,6 +17,8 @@ import {
 } from "../artifacts/limits.js";
 import { LIVE_DECLARATIVE_KIND, type StaticArtifactKind } from "../artifacts/kinds.js";
 import { SessionPublishError, type SessionPublishBody, type SessionPublishSuccess } from "../artifacts/sessionPublish.js";
+import { liveArtifactsPromptSection } from "../artifacts/livePrompt.js";
+import type { BindableFunctionInfo } from "../artifacts/bindable.js";
 import { PUBLISH_ARTIFACT_TOOL_NAME } from "./stageToolNames.js";
 
 export const STATIC_KINDS = [
@@ -43,7 +45,13 @@ function toolError(code: string, message: string, issues?: ArtifactIssue[]) {
     code,
     message: scrubSecrets(message),
     ...(issues !== undefined
-      ? { issues: issues.map((issue) => ({ path: issue.path, message: scrubSecrets(issue.message) })) }
+      ? {
+          issues: issues.map((issue) => ({
+            path: issue.path,
+            message: scrubSecrets(issue.message),
+            ...(issue.code ? { code: issue.code } : {}),
+          })),
+        }
       : {}),
   };
   return {
@@ -54,19 +62,23 @@ function toolError(code: string, message: string, issues?: ArtifactIssue[]) {
 }
 
 function toolOk(result: SessionPublishSuccess) {
-  const payload: { key: string; version: number; unchanged?: true; url?: string } = {
+  const payload: { key: string; version: number; unchanged?: true; url?: string; warnings?: SessionPublishSuccess["warnings"] } = {
     key: result.key,
     version: result.version,
   };
   if (result.unchanged) payload.unchanged = true;
   if (result.url) payload.url = result.url;
+  if (result.warnings && result.warnings.length > 0) payload.warnings = result.warnings;
   return {
     content: [{ type: "text" as const, text: JSON.stringify(payload) }],
     details: payload,
   };
 }
 
-export function artifactPublishPromptSection(expect?: readonly string[]): string {
+export function artifactPublishPromptSection(
+  expect?: readonly string[],
+  functions?: readonly BindableFunctionInfo[],
+): string {
   const mib = Math.floor(STATIC_CONTENT_MAX_BYTES / (1024 * 1024));
   const lines = [
     "# Published artifacts",
@@ -75,7 +87,7 @@ export function artifactPublishPromptSection(expect?: readonly string[]): string
     "",
     "The id is a lowercase slug: it starts with a letter, then has up to 63 letters, digits, underscores, or hyphens (`^[a-z][a-z0-9_-]{0,63}$`). Publishing the same id again creates a new version. If the bytes and kind are unchanged, the current version is kept and the tool returns unchanged. That unchanged publish still counts for this attempt.",
     "",
-    `Kinds: ${PUBLISH_KINDS.join(", ")}. Static content is at most ${mib} MiB. A live.declarative program is the content string, at most 512 KiB, with format, library, bindings, and optional refresh. The title is at most ${ARTIFACT_TITLE_MAX_CHARS} characters. You may set at most ${ARTIFACT_TAG_MAX} tags, each matching [a-z0-9_-] and at most 32 characters. Description and summary are at most ${ARTIFACT_DESCRIPTION_MAX_CHARS} and ${ARTIFACT_SUMMARY_MAX_CHARS} characters.`,
+    `Kinds: ${PUBLISH_KINDS.join(", ")}. Static content is at most ${mib} MiB. A live.declarative program is the content string, at most ${Math.round(LIVE_PROGRAM_MAX_BYTES / 1024)} KiB, with format, library, bindings, and optional refresh. The title is at most ${ARTIFACT_TITLE_MAX_CHARS} characters. You may set at most ${ARTIFACT_TAG_MAX} tags, each matching [a-z0-9_-] and at most 32 characters. Description and summary are at most ${ARTIFACT_DESCRIPTION_MAX_CHARS} and ${ARTIFACT_SUMMARY_MAX_CHARS} characters.`,
     "",
     "Give path, content, or content_base64, and only one of them. path is a run-relative path inside this attempt's artifacts directory, or a path relative to that directory. content is inline text. content_base64 is an image (png, jpeg, gif, or webp).",
     "",
@@ -84,6 +96,7 @@ export function artifactPublishPromptSection(expect?: readonly string[]): string
   if (expect !== undefined && expect.length > 0) {
     lines.push("", `Before a success envelope, publish every id in this list: ${expect.join(", ")}.`);
   }
+  lines.push("", liveArtifactsPromptSection(functions ?? []));
   return lines.join("\n");
 }
 
@@ -91,9 +104,10 @@ export function appendArtifactPublishPrompt(
   systemPrompt: string,
   expect?: readonly string[],
   enabled = false,
+  functions?: readonly BindableFunctionInfo[],
 ): string {
   if (!enabled) return systemPrompt;
-  return `${systemPrompt}\n\n${artifactPublishPromptSection(expect)}`;
+  return `${systemPrompt}\n\n${artifactPublishPromptSection(expect, functions)}`;
 }
 
 let publishPathBytesRead = 0;

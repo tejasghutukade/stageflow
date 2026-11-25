@@ -767,10 +767,10 @@ Human output is `Published <key> version <N>` or `Unchanged <key> version <N>`. 
 ### `sf artifact refresh <key>`
 
 ```bash
-sf artifact refresh <ownerKey>/<id> [--binding <id>]... [--project-root <wire id or path>] [--json]
+sf artifact refresh <ownerKey>/<id> [--binding <id>]... [--if-stale] [--project-root <wire id or path>] [--json]
 ```
 
-Runs the live bindings now, or only the ids passed with `--binding` (repeat the flag). Same path as the refresh route. The command runs in its own process, so function-executor limits apply to that process. Human output is `status`, `last refreshed`, `last error`, one line per snapshot (`<id>: ok` or a status), and one line per binding error. `--json` prints `{ "status", "snapshots", "last_refreshed_at", "last_error_code", "errors" }`.
+Runs the live bindings now, or only the ids passed with `--binding` (repeat the flag). `--if-stale` runs a binding only when its snapshot is missing, failed, or older than the effective TTL (the manifest `ttl_seconds`, or 300 seconds when that field is omitted). A fresh snapshot is reused: the function is not called, no invocation row is written, and `last_refreshed_at` stays as it was. Same path as the refresh route. The command runs in its own process, so function-executor limits apply to that process. Human output is `status`, `last refreshed`, `last error`, one line per snapshot (`<id>: ok` or a status), and one line per binding error. `--json` prints `{ "status", "snapshots", "last_refreshed_at", "last_error_code", "errors" }`. Each snapshot may include `source`: `executed` when this refresh stored it, `cache` when the snapshot was already stored. A full executor queue or a full refresh queue adds `retry_after_seconds`.
 
 **Exit codes:** `0` when every requested binding succeeded; `1` when a binding failed (stdout is still that JSON object with `--json`), or for `artifact.not_found`, `artifact.ambiguous`, `artifact.not_live`, `artifact.content_unavailable`, an unknown binding id, or another error (`{ "error", "code" }` with `--json`).
 

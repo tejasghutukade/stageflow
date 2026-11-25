@@ -36,6 +36,8 @@ services:
       - "127.0.0.1:3847:3847"
     environment:
       STAGEFLOW_HOME: /data
+      OPENUI_TELEMETRY_DISABLED: "1"
+      DO_NOT_TRACK: "1"
       STAGEFLOW_CREDENTIAL_HOME: /data
       TMPDIR: /tmp/stageflow
       SQLITE_TMPDIR: /data/tmp

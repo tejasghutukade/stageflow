@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ArtifactRecord } from "../../api/artifacts";
 import { ArtifactDetailView } from "./ArtifactDetailPage";
-import { artifactDetailMeta, artifactVersionRows, deleteArtifactConfirm, formatLiveSnapshotJson, LIVE_RENDERER_NOTE, LIVE_SNAPSHOT_DISPLAY_MAX_BYTES, LIVE_VERSION_SNAPSHOT_NOTE, recordForViewedVersion, viewingVersionBanner } from "./artifactDetailModel";
+import { artifactDetailMeta, artifactVersionRows, deleteArtifactConfirm, formatLiveRefreshed, formatLiveSnapshotJson, liveExpiryPreview, LIVE_RENDERER_NOTE, LIVE_SNAPSHOT_DISPLAY_MAX_BYTES, LIVE_VERSION_SNAPSHOT_NOTE, recordForViewedVersion, viewingVersionBanner } from "./artifactDetailModel";
 import { expiredReasonText, previewFromContent } from "./renderers/previewModel";
 
 function record(patch: Partial<ArtifactRecord> = {}): ArtifactRecord {
@@ -253,6 +253,9 @@ describe("artifact detail", () => {
       },
       refreshing: true,
       refreshError: "queue full",
+      nowMs: Date.parse("2026-11-24T15:00:00.000Z"),
+      updatedAgo: "Updated 4s ago",
+      autoNote: "Checking every 60s · data refreshed at most every 300s",
       onRefresh: () => undefined,
       onBack: () => undefined,
     }));
@@ -266,6 +269,15 @@ describe("artifact detail", () => {
     expect(html).toContain("disabled");
     expect(html).toContain('role="alert"');
     expect(html).toContain("queue full");
+    expect(formatLiveRefreshed("2026-11-24T13:00:00.000Z", Date.parse("2026-11-24T15:00:00.000Z"))).toEqual({
+      label: "2h ago",
+      title: "2026-11-24 13:00:00 UTC",
+    });
+    expect(formatLiveRefreshed(null, 0)).toEqual({ label: "—", title: null });
+    expect(html).toContain("Last refreshed 2h ago");
+    expect(html).toContain('title="2026-11-24 13:00:00 UTC"');
+    expect(html).toContain("Updated 4s ago");
+    expect(html).toContain("Checking every 60s · data refreshed at most every 300s");
     expect(html).toContain("weeks");
     const historical = renderToStaticMarkup(createElement(ArtifactDetailView, {
       meta: artifactDetailMeta(live),
@@ -278,5 +290,40 @@ describe("artifact detail", () => {
     expect(historical).toContain(LIVE_VERSION_SNAPSHOT_NOTE);
     expect(historical).toContain("old card");
     expect(historical).not.toContain("Refresh now");
+
+    const expiredRecord = record({
+      status: "expired",
+      expired_reason: "run_deleted",
+      kind: "live.declarative",
+      title: "Weekly",
+    });
+    const expiredPreview = liveExpiryPreview(expiredRecord, false, null);
+    expect(expiredPreview).toMatchObject({ mode: "unavailable", title: "This artifact has expired", body: expiredReasonText("run_deleted") });
+    const expiredHtml = renderToStaticMarkup(createElement(ArtifactDetailView, {
+      meta: artifactDetailMeta(expiredRecord),
+      preview: expiredPreview,
+      program: "root = TextContent(\"card\")",
+      live: expiredRecord.live,
+      onRefresh: () => undefined,
+      onBack: () => undefined,
+    }));
+    expect(expiredHtml).toContain("artifact-unavailable");
+    expect(expiredHtml).toContain(expiredReasonText("run_deleted"));
+    expect(expiredHtml).not.toContain(LIVE_RENDERER_NOTE);
+    expect(expiredHtml).not.toContain("Refresh now");
+
+    const unavailable = liveExpiryPreview(record({ kind: "live.declarative", title: "Weekly" }), true, "This artifact has expired");
+    expect(unavailable).toMatchObject({ mode: "unavailable", title: "This file is no longer available" });
+    const unavailableHtml = renderToStaticMarkup(createElement(ArtifactDetailView, {
+      meta: artifactDetailMeta(record({ kind: "live.declarative", title: "Weekly" })),
+      preview: unavailable,
+      program: "card",
+      live: record().live,
+      onRefresh: () => undefined,
+      onBack: () => undefined,
+    }));
+    expect(unavailableHtml).toContain("This artifact has expired");
+    expect(unavailableHtml).not.toContain(LIVE_RENDERER_NOTE);
+    expect(unavailableHtml).not.toContain("Refresh now");
   });
 });
