@@ -8,6 +8,7 @@ import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
 import { ArtifactKeyError, artifactStorageKey, assertArtifactId, publicArtifactKey, stageOwnerKey } from "./keys.js";
 import { assertBindingsAtPublish } from "./bindings.js";
 import { assertHtmlDocumentAtPublish } from "./htmlScan.js";
+import { declaredOriginCount, deleteOriginApprovals, ORIGIN_APPROVAL_WARNING } from "./originApproval.js";
 import { htmlDbManifest, htmlIdentityHash, validateHtmlManifest, type HtmlManifest } from "./htmlManifest.js";
 import { assertLiveProgramAtPublish } from "./program.js";
 import { contentTypeForKind, isLiveDeclarativeKind, isLiveHtmlKind, LIVE_DECLARATIVE_KIND, type StaticArtifactKind } from "./kinds.js";
@@ -588,6 +589,12 @@ export async function publishArtifact(
   } else if (fields.html) {
     await assertBindingsAtPublish(project.path, input.owner, fields.html.bindings);
     programWarnings = await assertHtmlDocumentAtPublish(input.bytes.toString("utf8"), fields.html.csp);
+    if (declaredOriginCount(fields.html.csp) > 0) {
+      programWarnings = [
+        ...programWarnings,
+        { path: "manifest.csp", message: ORIGIN_APPROVAL_WARNING },
+      ];
+    }
   }
   const contentHash = fields.html
     ? htmlIdentityHash(input.bytes, fields.html)
@@ -943,6 +950,7 @@ export async function deletePublishedArtifact(
       const storageKey = artifactStorageKey(record.project.id, owner, record.id);
       db.transaction(() => {
         unindexArtifactSearch(db, storageKey);
+        deleteOriginApprovals(db, [storageKey]);
         db.prepare(`DELETE FROM artifact_snapshots WHERE artifact_key = ?`).run(storageKey);
         db.prepare(`DELETE FROM artifact_versions WHERE key = ?`).run(storageKey);
         db.prepare(`DELETE FROM artifacts WHERE key = ?`).run(storageKey);

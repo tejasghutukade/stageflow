@@ -55,6 +55,8 @@ const KEPT_ATTRS = new Set([
   "poster",
   "background",
   "imagesrcset",
+  "integrity",
+  "crossorigin",
   "type",
 ]);
 const RAW_TAGS = new Set(["script", "style", "textarea", "title"]);
@@ -425,7 +427,10 @@ function inspectTag(state: State, name: string, index: number, attrs: Array<{ na
   }
   if (name === "script") {
     const src = attr("src");
-    if (src !== undefined) considerUrl(state, src, "resourceDomains", "script", pathFor("src"), "script");
+    if (src !== undefined) {
+      considerUrl(state, src, "resourceDomains", "script", pathFor("src"), "script");
+      requireExternalSri(state, src, attrs, pathFor("src"));
+    }
     return;
   }
   if (name === "link") {
@@ -437,6 +442,7 @@ function inspectTag(state: State, name: string, index: number, attrs: Array<{ na
       const list: HtmlCspListName = connect ? "connectDomains" : "resourceDomains";
       const bucket: Bucket = connect ? "connect" : linkBucket(rel, as);
       considerUrl(state, href, list, bucket, pathFor("href"), connect ? "connect" : "resource");
+      if (rel.includes("stylesheet")) requireExternalSri(state, href, attrs, pathFor("href"));
     }
     const imagesrcset = attr("imagesrcset");
     if (imagesrcset !== undefined) {
@@ -724,6 +730,25 @@ function readCssQuote(css: string, from: number): { url: string; end: number } |
 }
 
 type UrlKind = "script" | "embed" | "img" | "media" | "style" | "base" | "frame" | "connect" | "resource";
+
+const SRI_VALUE = /^(?:sha256|sha384|sha512)-[A-Za-z0-9+/]+={0,2}(?: (?:sha256|sha384|sha512)-[A-Za-z0-9+/]+={0,2})*$/;
+const EXTERNAL_SRI_MESSAGE = "external scripts and stylesheets need an integrity hash and crossorigin=anonymous";
+
+function requireExternalSri(
+  state: State,
+  raw: string,
+  attrs: Array<{ name: string; value: string | null }>,
+  path: string,
+): void {
+  const classified = classifyUrl(raw);
+  if (classified.kind !== "origin" || !classified.origin.startsWith("https://")) return;
+  const integrity = attrs.find((item) => item.name === "integrity")?.value;
+  const cross = attrs.find((item) => item.name === "crossorigin");
+  const crossValue = cross ? (cross.value ?? "").trim().toLowerCase() : null;
+  const crossOk = crossValue === "" || crossValue === "anonymous";
+  const integrityOk = typeof integrity === "string" && SRI_VALUE.test(integrity.trim());
+  if (!crossOk || !integrityOk) pushIssue(state, cspIssue(path, EXTERNAL_SRI_MESSAGE));
+}
 
 function considerUrl(
   state: State,

@@ -590,6 +590,38 @@ function exactKeys(value: Record<string, unknown>, keys: string[]): boolean {
   return keys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
 }
 
+export function parseSandboxLoadParams(value: unknown):
+  | { ok: true; load: { html: string; csp: string; nonce: string; libraries: { name: string; version: string }[]; allowEval: boolean } }
+  | { ok: false } {
+  if (!isPlain(value)) return { ok: false };
+  const keys = Object.keys(value);
+  for (const key of keys) {
+    if (key !== "html" && key !== "csp" && key !== "nonce" && key !== "libraries" && key !== "allowEval") return { ok: false };
+  }
+  if (typeof value.html !== "string" || typeof value.csp !== "string" || typeof value.nonce !== "string") return { ok: false };
+  if (!/^[0-9a-fA-F]{32}$/.test(value.nonce)) return { ok: false };
+  let allowEval = false;
+  if (Object.prototype.hasOwnProperty.call(value, "allowEval")) {
+    if (typeof value.allowEval !== "boolean") return { ok: false };
+    allowEval = value.allowEval;
+  }
+  const libraries: { name: string; version: string }[] = [];
+  if (Object.prototype.hasOwnProperty.call(value, "libraries")) {
+    const listed = value.libraries;
+    if (!Array.isArray(listed) || listed.length > 6) return { ok: false };
+    const seen = new Set<string>();
+    for (const entry of listed) {
+      if (!isPlain(entry) || !exactKeys(entry, ["name", "version"])) return { ok: false };
+      if (typeof entry.name !== "string" || typeof entry.version !== "string") return { ok: false };
+      if (!/^[a-z][a-z0-9-]{0,31}$/.test(entry.name) || !/^\d+\.\d+\.\d+$/.test(entry.version)) return { ok: false };
+      if (seen.has(entry.name)) return { ok: false };
+      seen.add(entry.name);
+      libraries.push({ name: entry.name, version: entry.version });
+    }
+  }
+  return { ok: true, load: { html: value.html, csp: value.csp, nonce: value.nonce, libraries, allowEval } };
+}
+
 export function bridgeRuntimeSource(): string {
   return [
     `var BRIDGE_PROTOCOL_VERSION = ${JSON.stringify(BRIDGE_PROTOCOL_VERSION)};`,
@@ -627,5 +659,6 @@ export function bridgeRuntimeSource(): string {
     fail.toString(),
     isPlain.toString(),
     exactKeys.toString(),
+    parseSandboxLoadParams.toString(),
   ].join("\n");
 }

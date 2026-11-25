@@ -336,4 +336,32 @@ describe("artifact detail", () => {
     expect(unavailableHtml).not.toContain("Program source");
     expect(unavailableHtml).not.toContain("Refresh now");
   });
+
+  it("offers Review origins when declared origins are not approved", () => {
+    const live = record({
+      kind: "live.html",
+      title: "Weekly",
+      live: {
+        status: "fresh",
+        csp: { connectDomains: ["https://api.example.com"] },
+        origins: {
+          connect: ["https://api.example.com"],
+          resource: [],
+          base: [],
+          hash: "ab".repeat(32),
+          approved: false,
+          approved_at: null,
+        },
+      },
+    });
+    const html = renderToStaticMarkup(createElement(ArtifactDetailView, {
+      meta: artifactDetailMeta(live),
+      preview: null,
+      live: live.live,
+      onReviewOrigins: () => undefined,
+      onBack: () => undefined,
+    }));
+    expect(html).toContain("Origins: not approved");
+    expect(html).toContain("Review origins");
+  });
 });

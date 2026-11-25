@@ -318,6 +318,9 @@ describe("stored snapshots on open", () => {
         calls.push("refresh");
         return options.refreshBody ?? { status: 200, body: stored };
       },
+      syncRecord: async () => {
+        calls.push("sync");
+      },
       onChange: (next) => {
         state = next;
       },
@@ -358,7 +361,7 @@ describe("stored snapshots on open", () => {
 
     const follow = open({});
     await follow.settle();
-    expect(follow.calls).toEqual(["load", "refresh"]);
+    expect(follow.calls).toEqual(["load", "sync", "refresh"]);
   });
 
   it("marks expired data unavailable and does not refresh a hidden artifact", async () => {
@@ -391,11 +394,11 @@ describe("stored snapshots on open", () => {
     expect(pending.calls).toEqual([]);
     const proceeded = open({ view: { latestVersion: 2 } });
     await proceeded.settle();
-    expect(proceeded.calls).toEqual(["load", "refresh"]);
+    expect(proceeded.calls).toEqual(["load", "sync", "refresh"]);
 
     const switched = open({ view: { version: 2, latestVersion: 2 } });
     await switched.settle();
-    expect(switched.calls).toEqual(["load", "refresh"]);
+    expect(switched.calls).toEqual(["load", "sync", "refresh"]);
   });
 
   it("keeps snapshots for a 200 resource limit and applies a 503 refresh body", async () => {
@@ -422,5 +425,38 @@ describe("stored snapshots on open", () => {
     expect(stale.read()?.status).toBe("stale");
     expect(stale.read()?.snapshots[0]?.value).toEqual({ weeks: 12 });
     expect(stale.read()?.lastError).toBeNull();
+  });
+
+  it("re-reads the record on each refresh tick and when the tab becomes visible", async () => {
+    const clock = new FakeClock();
+    const calls: string[] = [];
+    const subject = record({ kind: "live.html" });
+    const model = createLiveArtifactDataModel({
+      record: subject,
+      options: { ownerKey: "stage:sales:summarize", id: "weekly", latestVersion: subject.version },
+      clock,
+      loadStored: async () => ({ status: 200, body: stored }),
+      refresh: async () => {
+        calls.push("refresh");
+        return { status: 200, body: stored };
+      },
+      syncRecord: async () => {
+        calls.push("sync");
+      },
+      onChange: () => undefined,
+    });
+    await model.start();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls).toEqual(["sync", "refresh"]);
+    calls.length = 0;
+    await clock.advance(60_000);
+    expect(calls).toEqual(["sync", "refresh"]);
+    calls.length = 0;
+    model.setVisible(false);
+    expect(calls).toEqual([]);
+    model.setVisible(true);
+    await Promise.resolve();
+    expect(calls).toEqual(["sync"]);
+    model.unmount();
   });
 });

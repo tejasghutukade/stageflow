@@ -14,8 +14,8 @@ const MARKERS = [
 const LIVE_MARKER = "stageflow-live-renderer";
 /** Measured lazy renderer gzip 144226 (JS + CSS) plus 10%. */
 export const LIVE_CHUNK_GZIP_BUDGET = 158_649;
-/** Measured live HTML gzip 8177 across the lazy chunk and its shared query cache, plus 10%. */
-export const LIVE_HTML_CHUNK_GZIP_BUDGET = 8_995;
+/** Measured live HTML gzip 9717 across the lazy chunk and its shared query cache, plus 10%. The origin-approval banner raised the previous 8797 measurement. */
+export const LIVE_HTML_CHUNK_GZIP_BUDGET = 10_689;
 
 function files() {
   return readdirSync(root).filter((name) => name.endsWith(".js") || name.endsWith(".css"));

@@ -29,6 +29,7 @@ export type ArtifactLiveView = {
   bindings?: ArtifactLiveBinding[];
   refresh?: { on_view?: boolean; ttl_seconds?: number; auto_seconds?: number };
   library?: { name: string; version: string };
+  libraries?: Array<{ name: string; version: string; allowEval?: boolean }>;
   format?: string;
   csp?: {
     connectDomains?: string[];
@@ -36,6 +37,16 @@ export type ArtifactLiveView = {
     frameDomains?: string[];
     baseUriDomains?: string[];
   };
+  origins?: ArtifactOriginView;
+};
+
+export type ArtifactOriginView = {
+  connect: string[];
+  resource: string[];
+  base: string[];
+  hash: string;
+  approved: boolean;
+  approved_at: string | null;
 };
 
 export type ArtifactSnapshot = {
@@ -328,6 +339,42 @@ export async function queryArtifactBinding(
   } catch (error) {
     return { status: 0, body: null, networkError: error instanceof Error ? error.message : String(error) };
   }
+}
+
+export async function approveArtifactOrigins(
+  ownerKey: string,
+  id: string,
+  body: { origins_hash: string; version?: number },
+  projectRoot?: string,
+): Promise<{ origins: ArtifactOriginView; approved: true; approved_at: string }> {
+  const res = await fetch(
+    `/api/artifacts/${encodeURIComponent(ownerKey)}/${encodeURIComponent(id)}/origins/approve${artifactQuery(projectRoot)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
+      body: JSON.stringify(body),
+    },
+  );
+  if (!res.ok) throw await readArtifactError(res);
+  return (await res.json()) as { origins: ArtifactOriginView; approved: true; approved_at: string };
+}
+
+export async function revokeArtifactOrigins(
+  ownerKey: string,
+  id: string,
+  projectRoot?: string,
+  originsHash?: string,
+): Promise<{ revoked: number; origins: ArtifactOriginView | null }> {
+  const params = new URLSearchParams();
+  if (projectRoot) params.set("project_root", projectRoot);
+  if (originsHash) params.set("origins_hash", originsHash);
+  const query = params.toString();
+  const res = await fetch(
+    `/api/artifacts/${encodeURIComponent(ownerKey)}/${encodeURIComponent(id)}/origins/approval${query ? `?${query}` : ""}`,
+    { method: "DELETE", headers: { ...authorizationHeaders() } },
+  );
+  if (!res.ok) throw await readArtifactError(res);
+  return (await res.json()) as { revoked: number; origins: ArtifactOriginView | null };
 }
 
 export async function requestArtifactRefresh(

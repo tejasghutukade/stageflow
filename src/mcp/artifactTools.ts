@@ -348,6 +348,7 @@ export function registerArtifactTools(server: McpServer, deps: McpToolDeps): voi
           unchanged: published.unchanged,
           project_root: published.project_root,
           ...(published.agent_unverified ? { agent_unverified: true } : {}),
+          ...(published.warnings && published.warnings.length > 0 ? { warnings: published.warnings } : {}),
         });
       } catch (error) {
         if (

@@ -136,7 +136,7 @@ function put(
 describe("artifact search", () => {
   it("applies migration 027 on a fresh store and backfills an existing store", async () => {
     const fresh = await openStore();
-    expect(fresh.db.pragma("user_version", { simple: true })).toBe(29);
+    expect(fresh.db.pragma("user_version", { simple: true })).toBe(30);
     expect(fresh.db.prepare(`SELECT name FROM sqlite_master WHERE name = 'artifact_fts'`).get()).toBeTruthy();
     expect(
       (fresh.db.prepare(`SELECT value FROM artifact_search_meta WHERE key = 'fts'`).get() as { value: string }).value,
@@ -164,7 +164,7 @@ describe("artifact search", () => {
     const migrated = createRunStore({ rootDir: home });
     cleanups.push(() => migrated.close());
     const migratedDb = sqliteConnectionFromStore(migrated)!;
-    expect(migratedDb.pragma("user_version", { simple: true })).toBe(29);
+    expect(migratedDb.pragma("user_version", { simple: true })).toBe(30);
     expect(titles(migratedDb, "backfill")).toEqual(["backfilltitle"]);
   });
 
@@ -176,7 +176,7 @@ describe("artifact search", () => {
     const store = createRunStore({ rootDir: home });
     cleanups.push(() => store.close());
     const db = sqliteConnectionFromStore(store)!;
-    expect(db.pragma("user_version", { simple: true })).toBe(29);
+    expect(db.pragma("user_version", { simple: true })).toBe(30);
     expect(db.prepare(`SELECT name FROM sqlite_master WHERE name = 'artifact_fts'`).get()).toBeUndefined();
     expect(
       (db.prepare(`SELECT value FROM artifact_search_meta WHERE key = 'fts'`).get() as { value: string }).value,

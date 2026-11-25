@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { HTML_CSP_LIST_MAX } from "../artifacts/limits.js";
-import { buildHtmlCsp, normalizeCspOrigin, type HtmlCsp } from "../artifacts/htmlManifest.js";
+import { buildHtmlCsp, isLoopbackLibraryOrigin, parseLibraryDirectorySource, normalizeCspOrigin, type HtmlCsp, type HtmlCspBuildOptions, type LibraryDirectorySource } from "../artifacts/htmlManifest.js";
+import { findHtmlLibrary, shellLibraryTable, type HtmlLibraryRef } from "../artifacts/library/htmlLibraries.js";
 import {
   HOST_CONTEXT_VARIABLES,
   MAX_FRAME_HEIGHT_PX,
@@ -18,8 +19,8 @@ export const MAX_CSP_CHARS = 8192;
 export const SHELL_MESSAGE_RATE = 200;
 export const SHELL_PROTOCOL_VERSION = 1;
 
-export function artifactDocumentCsp(csp: HtmlCsp): string {
-  return buildHtmlCsp(csp);
+export function artifactDocumentCsp(csp: HtmlCsp, options?: HtmlCspBuildOptions): string {
+  return buildHtmlCsp(csp, options);
 }
 
 export type LoadGuardDecision = "keep" | "teardown";
@@ -48,7 +49,7 @@ const ARTIFACT_CSP_DIRECTIVES = [
   "object-src",
 ] as const;
 
-export function acceptArtifactCsp(csp: string): boolean {
+export function acceptArtifactCsp(csp: string, ownOrigin?: string, allowEval = false): boolean {
   if (typeof csp !== "string" || csp.length === 0 || csp.length > MAX_CSP_CHARS) return false;
   for (let index = 0; index < csp.length; index += 1) {
     const code = csp.charCodeAt(index);
@@ -75,16 +76,63 @@ export function acceptArtifactCsp(csp: string): boolean {
   if (!sameTokens(sources[0], ["'none'"])) return false;
   if (!sameTokens(sources[9], ["'none'"])) return false;
   if (!sameTokens(sources[10], ["'none'"])) return false;
-  const resources = headThenOrigins(script, "'unsafe-inline'", true);
-  if (!resources) return false;
-  if (!sameTokens(style, ["'unsafe-inline'", ...resources])) return false;
-  if (!sameTokens(img, ["data:", ...resources])) return false;
-  if (!sameTokens(font, ["data:", ...resources])) return false;
-  if (!sameTokens(media, ["data:", ...resources])) return false;
+  const scriptPolicy = splitLibrarySources(script, "'unsafe-inline'", ownOrigin, allowEval, true);
+  const stylePolicy = splitLibrarySources(style, "'unsafe-inline'", ownOrigin, false, false);
+  const imgPolicy = splitLibrarySources(img, "data:", ownOrigin, false, false);
+  const fontPolicy = splitLibrarySources(font, "data:", ownOrigin, false, false);
+  const mediaPolicy = splitLibrarySources(media, "data:", ownOrigin, false, false);
+  if (!scriptPolicy || !stylePolicy || !imgPolicy || !fontPolicy || !mediaPolicy) return false;
+  if (!sameTokens(scriptPolicy.https, stylePolicy.https)) return false;
+  if (!sameTokens(scriptPolicy.https, imgPolicy.https)) return false;
+  if (!sameTokens(scriptPolicy.https, fontPolicy.https)) return false;
+  if (!sameTokens(scriptPolicy.https, mediaPolicy.https)) return false;
+  if (!sameLibraries(scriptPolicy.dirs, stylePolicy.dirs)) return false;
+  if (!sameLibraries(imgPolicy.dirs, fontPolicy.dirs)) return false;
+  if (!sameLibraries(imgPolicy.dirs, scriptPolicy.dirs.filter((dir) => dir.assets))) return false;
+  if (mediaPolicy.dirs.length > 0 || mediaPolicy.eval) return false;
+  if (stylePolicy.eval || imgPolicy.eval || fontPolicy.eval) return false;
   if (!noneOrOrigins(connect)) return false;
   if (!sameTokens(frame, ["'none'"])) return false;
   if (!noneOrOrigins(base)) return false;
   return true;
+}
+
+function splitLibrarySources(
+  tokens: readonly string[],
+  head: string,
+  ownOrigin: string | undefined,
+  allowEval: boolean,
+  permitEval: boolean,
+): { https: string[]; dirs: LibraryDirectorySource[]; eval: boolean } | null {
+  if (tokens[0] !== head) return null;
+  let index = 1;
+  let sawEval = false;
+  if (tokens[index] === "'unsafe-eval'") {
+    if (!permitEval || !allowEval) return null;
+    sawEval = true;
+    index += 1;
+  }
+  const dirs: LibraryDirectorySource[] = [];
+  let previous = "";
+  while (index < tokens.length) {
+    const candidate = tokens[index];
+    if (candidate === undefined || !candidate.startsWith("http://")) break;
+    const parsed = parseLibraryDirectorySource(candidate);
+    if (!parsed || ownOrigin === undefined || !candidate.startsWith(`${ownOrigin}/libs/`)) return null;
+    if (candidate <= previous) return null;
+    previous = candidate;
+    dirs.push(parsed);
+    index += 1;
+  }
+  if (sawEval && dirs.length === 0) return null;
+  const https = tokens.slice(index);
+  if (!sortedOrigins(https, true)) return null;
+  return { https, dirs, eval: sawEval };
+}
+
+function sameLibraries(left: readonly LibraryDirectorySource[], right: readonly LibraryDirectorySource[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((item, index) => item.name === right[index]?.name && item.version === right[index]?.version);
 }
 
 function sameTokens(tokens: readonly string[] | undefined, expected: readonly string[]): boolean {
@@ -95,13 +143,6 @@ function sameTokens(tokens: readonly string[] | undefined, expected: readonly st
 function canonicalHttpsOrigin(token: string): boolean {
   const normalized = normalizeCspOrigin(token);
   return !("message" in normalized) && normalized.origin === token;
-}
-
-function headThenOrigins(tokens: readonly string[], head: string, allowEmpty: boolean): string[] | null {
-  if (tokens[0] !== head) return null;
-  const origins = tokens.slice(1);
-  if (!sortedOrigins(origins, allowEmpty)) return null;
-  return origins;
 }
 
 function noneOrOrigins(tokens: readonly string[]): boolean {
@@ -479,19 +520,49 @@ export function noteInflight(active: Set<string>, id: string, max: number): bool
   return true;
 }
 
-export function buildLiveDocument(html: string, csp: string, bridgeScript = BRIDGE_CLIENT_SOURCE): string {
+export function liveLibraryTags(libraries: readonly Pick<HtmlLibraryRef, "name" | "version">[], origin: string): string | null {
+  if (!isLoopbackLibraryOrigin(origin)) return null;
+  let html = "";
+  for (const ref of libraries) {
+    const library = findHtmlLibrary(ref.name, ref.version);
+    if (!library) return null;
+    for (const file of library.files) {
+      if (file.kind === "asset") continue;
+      const url = escapeAttr(`${origin}/libs/${library.name}@${library.version}/${file.path}`);
+      const integrity = escapeAttr(file.integrity);
+      if (file.kind === "style") {
+        html += `<link rel="stylesheet" href="${url}" integrity="${integrity}" crossorigin="anonymous">`;
+      } else {
+        html += `<script src="${url}" integrity="${integrity}" crossorigin="anonymous"></script>`;
+      }
+    }
+  }
+  return html;
+}
+
+export function buildLiveDocument(
+  html: string,
+  csp: string,
+  bridgeScript = BRIDGE_CLIENT_SOURCE,
+  libraries?: readonly Pick<HtmlLibraryRef, "name" | "version">[],
+  origin?: string,
+): string {
   const bom = html.charCodeAt(0) === 0xfeff ? "\uFEFF" : "";
   const source = bom ? html.slice(1) : html;
   const body = neutralizeLiveHtml(source).replace(/^\s*<!doctype\s+html\s*>/i, "");
   const script = bridgeScript.replace(/<\/script/gi, "<\\/script");
-  return `${bom}<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${escapeAttr(csp)}"><script>${script}</script></head><body>${body}</body></html>`;
+  const tags = libraries && libraries.length > 0 && origin ? liveLibraryTags(libraries, origin) ?? "" : "";
+  return `${bom}<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${escapeAttr(csp)}">${tags}<script>${script}</script></head><body>${body}</body></html>`;
 }
 
-export function shellScript(consoleOrigins: readonly string[]): string {
+export function shellScript(consoleOrigins: readonly string[], options?: { allowEval?: boolean }): string {
   const parents = frameAncestorOrigins(consoleOrigins);
+  const allowEval = options?.allowEval === true;
   return `'use strict';
 var CONSOLES = ${JSON.stringify(parents)};
 var VARS = ${JSON.stringify(HOST_CONTEXT_VARIABLES)};
+var LIBS = ${JSON.stringify(shellLibraryTable())};
+var ALLOW_EVAL = ${allowEval ? "true" : "false"};
 var MAX_RELAY = ${MAX_MESSAGE_BYTES};
 var MAX_HTML = ${MAX_LIVE_HTML_BYTES};
 var MAX_CSP = ${MAX_CSP_CHARS};
@@ -505,6 +576,7 @@ if (typeof globalThis !== "undefined") {
   globalThis.__sfBuildLiveDocument = buildLiveDocument;
   globalThis.__sfAcceptRelay = acceptRelay;
   globalThis.__sfAcceptCsp = acceptArtifactCsp;
+  globalThis.__sfParseLoad = parseSandboxLoadParams;
   globalThis.__sfCreateLoadGuard = createLoadGuard;
 }
 if (typeof window !== "undefined") startShell();
@@ -742,13 +814,41 @@ function idOk(value) {
 function plain(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
-function buildLiveDocument(html, csp) {
+function buildLiveDocument(html, csp, libraries) {
   var bom = html.charCodeAt(0) === 0xfeff ? "\uFEFF" : "";
   var source = bom ? html.slice(1) : html;
   var body = neutralize(source).replace(/^\s*<!doctype\s+html\s*>/i, "");
   var script = String(BRIDGE).split("</" + "script").join("<\\" + "/script");
   var escaped = String(csp).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return bom + "<!doctype html><html><head><meta http-equiv=\"Content-Security-Policy\" content=\"" + escaped + "\"><script>" + script + "</script></head><body>" + body + "</body></html>";
+  var tags = libraryTags(libraries);
+  return bom + "<!doctype html><html><head><meta http-equiv=\"Content-Security-Policy\" content=\"" + escaped + "\">" + tags + "<script>" + script + "</script></head><body>" + body + "</body></html>";
+}
+function libraryTags(libraries) {
+  if (!libraries || !libraries.length) return "";
+  var origin = location.origin;
+  var html = "";
+  for (var i = 0; i < libraries.length; i++) {
+    var ref = libraries[i];
+    var lib = null;
+    for (var j = 0; j < LIBS.length; j++) {
+      if (LIBS[j].name === ref.name && LIBS[j].version === ref.version) lib = LIBS[j];
+    }
+    if (!lib) return "";
+    for (var f = 0; f < lib.files.length; f++) {
+      var file = lib.files[f];
+      if (file.kind === "asset") continue;
+      var url = origin + "/libs/" + lib.name + "@" + lib.version + "/" + file.path;
+      if (file.kind === "style") html += '<link rel="stylesheet" href="' + url + '" integrity="' + file.integrity + '" crossorigin="anonymous">';
+      else html += '<script src="' + url + '" integrity="' + file.integrity + '" crossorigin="anonymous"></script>';
+    }
+  }
+  return html;
+}
+function lookupLibrary(ref) {
+  for (var j = 0; j < LIBS.length; j++) {
+    if (LIBS[j].name === ref.name && LIBS[j].version === ref.version) return LIBS[j];
+  }
+  return null;
 }
 function neutralize(input) {
   var parts = [];
@@ -854,7 +954,7 @@ function relayErrorMessage(code) {
   if (code === -32000) return "Request rejected";
   return "Invalid request";
 }
-function acceptArtifactCsp(csp) {
+function acceptArtifactCsp(csp, ownOrigin, allowEval) {
   if (typeof csp !== "string" || csp.length < 1 || csp.length > MAX_CSP) return false;
   for (var i = 0; i < csp.length; i++) {
     var code = csp.charCodeAt(i);
@@ -874,14 +974,70 @@ function acceptArtifactCsp(csp) {
   if (parsed[7].length !== 1 || parsed[7][0] !== "'none'") return false;
   if (parsed[9].length !== 1 || parsed[9][0] !== "'none'") return false;
   if (parsed[10].length !== 1 || parsed[10][0] !== "'none'") return false;
-  var resources = headOrigins(parsed[1], "'unsafe-inline'", true);
-  if (!resources) return false;
-  if (!sameTokens(parsed[2], ["'unsafe-inline'"].concat(resources))) return false;
-  if (!sameTokens(parsed[3], ["data:"].concat(resources))) return false;
-  if (!sameTokens(parsed[4], ["data:"].concat(resources))) return false;
-  if (!sameTokens(parsed[5], ["data:"].concat(resources))) return false;
+  var script = splitLib(parsed[1], "'unsafe-inline'", ownOrigin, allowEval === true, true);
+  var style = splitLib(parsed[2], "'unsafe-inline'", ownOrigin, false, false);
+  var img = splitLib(parsed[3], "data:", ownOrigin, false, false);
+  var font = splitLib(parsed[4], "data:", ownOrigin, false, false);
+  var media = splitLib(parsed[5], "data:", ownOrigin, false, false);
+  if (!script || !style || !img || !font || !media) return false;
+  if (!sameTokens(script.https, style.https) || !sameTokens(script.https, img.https) || !sameTokens(script.https, font.https) || !sameTokens(script.https, media.https)) return false;
+  if (!sameLibs(script.dirs, style.dirs) || !sameLibs(img.dirs, font.dirs) || !sameLibs(img.dirs, assetLibs(script.dirs))) return false;
+  if (media.dirs.length || media.eval || style.eval || img.eval || font.eval) return false;
   if (!noneOrOrigins(parsed[6]) || !noneOrOrigins(parsed[8])) return false;
   return true;
+}
+function splitLib(tokens, head, ownOrigin, allowEval, permitEval) {
+  if (tokens[0] !== head) return null;
+  var index = 1;
+  var sawEval = false;
+  if (tokens[index] === "'unsafe-eval'") {
+    if (!permitEval || !allowEval) return null;
+    sawEval = true;
+    index += 1;
+  }
+  var dirs = [];
+  var prev = "";
+  while (index < tokens.length) {
+    var candidate = tokens[index];
+    if (candidate.indexOf("http://") !== 0) break;
+    var lib = libraryDir(candidate, ownOrigin);
+    if (!lib || candidate <= prev) return null;
+    prev = candidate;
+    dirs.push(lib);
+    index += 1;
+  }
+  if (sawEval && !dirs.length) return null;
+  var https = tokens.slice(index);
+  if (!sortedOrigins(https, true)) return null;
+  return { https: https, dirs: dirs, eval: sawEval };
+}
+function libraryDir(token, ownOrigin) {
+  if (!ownOrigin || token.indexOf(ownOrigin + "/libs/") !== 0 || token.charAt(token.length - 1) !== "/") return null;
+  if (token.indexOf("?") >= 0 || token.indexOf("#") >= 0 || token.indexOf("\\") >= 0) return null;
+  var id = token.slice((ownOrigin + "/libs/").length, -1);
+  if (!id || id.indexOf("/") >= 0) return null;
+  var at = id.lastIndexOf("@");
+  if (at <= 0) return null;
+  var name = id.slice(0, at);
+  var version = id.slice(at + 1);
+  var expected = ownOrigin + "/libs/" + name + "@" + version + "/";
+  if (token !== expected) return null;
+  for (var i = 0; i < LIBS.length; i++) {
+    if (LIBS[i].name === name && LIBS[i].version === version) return LIBS[i];
+  }
+  return null;
+}
+function sameLibs(left, right) {
+  if (left.length !== right.length) return false;
+  for (var i = 0; i < left.length; i++) {
+    if (left[i].name !== right[i].name || left[i].version !== right[i].version) return false;
+  }
+  return true;
+}
+function assetLibs(dirs) {
+  var out = [];
+  for (var i = 0; i < dirs.length; i++) if (dirs[i].assets) out.push(dirs[i]);
+  return out;
 }
 function sameTokens(tokens, expected) {
   if (tokens.length !== expected.length) return false;
@@ -1034,12 +1190,22 @@ function startShell() {
     if (data.method === "sf/sandbox-load") {
       if (size > MAX_HTML + MAX_CSP + 1024) return;
       if (loaded) return;
-      var load = data.params;
-      if (!plain(load) || typeof load.html !== "string" || typeof load.csp !== "string" || typeof load.nonce !== "string") return;
-      if (!/^[0-9a-fA-F]{32}$/.test(load.nonce)) return;
-      if (!acceptArtifactCsp(load.csp)) {
+      var parsedLoad = parseSandboxLoadParams(data.params);
+      if (!parsedLoad.ok) return;
+      var load = parsedLoad.load;
+      var evalAllowed = ALLOW_EVAL && load.allowEval === true;
+      if (!acceptArtifactCsp(load.csp, location.origin, evalAllowed)) {
         window.parent.postMessage({ jsonrpc: "2.0", method: "sf/sandbox-error", params: { reason: "csp" } }, parentOrigin);
         return;
+      }
+      var selected = [];
+      for (var n = 0; n < load.libraries.length; n++) {
+        var found = lookupLibrary(load.libraries[n]);
+        if (!found || (found.needsEval && !evalAllowed)) {
+          window.parent.postMessage({ jsonrpc: "2.0", method: "sf/sandbox-error", params: { reason: "library" } }, parentOrigin);
+          return;
+        }
+        selected.push(load.libraries[n]);
       }
       if (new TextEncoder().encode(load.html).length > MAX_HTML) return;
       loaded = true;
@@ -1048,7 +1214,7 @@ function startShell() {
       frame.setAttribute("referrerpolicy", "no-referrer");
       frame.setAttribute("allow", "");
       frame.addEventListener("load", onNestedLoad);
-      frame.setAttribute("srcdoc", buildLiveDocument(load.html, load.csp));
+      frame.setAttribute("srcdoc", buildLiveDocument(load.html, load.csp, selected));
       return;
     }
     if (data.method !== "sf/sandbox-relay" || !loaded) return;

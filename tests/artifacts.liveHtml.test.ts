@@ -6,8 +6,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAgentPublishArtifactTool } from "../src/agents/artifactTools.js";
 import { agentProjectKey } from "../src/agents/store.js";
-import { buildHtmlCsp, validateHtmlManifest } from "../src/artifacts/htmlManifest.js";
-import { liveHtmlDocumentCsp } from "../ui/src/redesign/artifacts/liveHtml/cspPolicy.ts";
+import { buildHtmlCsp, libraryCspSources, validateHtmlManifest } from "../src/artifacts/htmlManifest.js";
+import { htmlLibraryCatalogIds } from "../src/artifacts/library/htmlLibraries.js";
+import { libraryCspSources as liveLibraryCspSources, liveHtmlDocumentCsp } from "../ui/src/redesign/artifacts/liveHtml/cspPolicy.ts";
 import { scanHtml } from "../src/artifacts/htmlScan.js";
 import { artifactStorageKey, stageOwnerKey } from "../src/artifacts/keys.js";
 import { ArtifactPublishError, HTML_CSP_LIST_MAX, HTML_SCAN_MAX_LINE_BYTES, LIVE_HTML_MAX_BYTES } from "../src/artifacts/limits.js";
@@ -126,11 +127,60 @@ describe("live.html manifest", () => {
     const longHost = issuesOf(() => validateHtmlManifest({ format: "html", csp: { baseUriDomains: [`https://${host}`] } }));
     expect(longHost[0]?.message).toContain("253");
     const libraries = issuesOf(() => validateHtmlManifest({ format: "html", libraries: ["chart"] }));
-    expect(libraries[0]).toMatchObject({ path: "manifest.libraries", message: "libraries are not available yet" });
+    expect(libraries[0]).toMatchObject({ path: "manifest.libraries[0]", message: "must be an object with name and version" });
     const library = issuesOf(() => validateHtmlManifest({ format: "html", library: { name: "stageflow", version: "1.0.0" } }));
     expect(library.some((issue) => issue.path === "manifest.library")).toBe(true);
     const unknown = issuesOf(() => validateHtmlManifest({ format: "html", program: "<p></p>" }));
     expect(unknown[0]?.path).toBe("manifest.program");
+  });
+});
+
+describe("vendored libraries", () => {
+  const available = htmlLibraryCatalogIds();
+
+  it("accepts a pinned library and rejects unknown, duplicate, and oversized lists", () => {
+    const manifest = validateHtmlManifest({
+      format: "html",
+      libraries: [{ name: "chartjs", version: "4.6.2" }, { name: "d3", version: "7.9.2" }],
+    });
+    expect(manifest.libraries).toEqual([
+      { name: "chartjs", version: "4.6.2" },
+      { name: "d3", version: "7.9.2" },
+    ]);
+    expect(validateHtmlManifest({ format: "html", libraries: [] }).libraries).toBeUndefined();
+    const unknown = issuesOf(() => validateHtmlManifest({ format: "html", libraries: [{ name: "chartjs", version: "9.9.9" }] }));
+    expect(unknown[0]?.message).toBe(`unknown library chartjs@9.9.9; available: ${available}`);
+    expect(issuesOf(() => validateHtmlManifest({ format: "html", libraries: [{ name: "nope", version: "1.0.0" }] }))[0]?.message).toContain("unknown library nope@1.0.0");
+    expect(issuesOf(() => validateHtmlManifest({
+      format: "html",
+      libraries: [{ name: "chartjs", version: "4.6.2" }, { name: "chartjs", version: "4.6.2" }],
+    }))[0]?.message).toBe("duplicate library chartjs");
+    expect(issuesOf(() => validateHtmlManifest({
+      format: "html",
+      libraries: Array.from({ length: 7 }, () => ({ name: "chartjs", version: "4.6.2" })),
+    }))[0]?.message).toBe("at most 6 libraries");
+  });
+
+  it("refuses a library that needs eval unless the entry and the host both allow it", () => {
+    const blocked = issuesOf(() => validateHtmlManifest({
+      format: "html",
+      libraries: [{ name: "mermaid", version: "12.3.0" }],
+    }, { env: {} }));
+    expect(blocked[0]?.message).toContain("needs allowEval: true");
+    const flagOnly = issuesOf(() => validateHtmlManifest({
+      format: "html",
+      libraries: [{ name: "mermaid", version: "12.3.0", allowEval: true }],
+    }, { env: {} }));
+    expect(flagOnly[0]?.message).toContain("STAGEFLOW_ARTIFACT_ALLOW_EVAL_LIBS=1");
+    const allowed = validateHtmlManifest({
+      format: "html",
+      libraries: [{ name: "mermaid", version: "12.3.0", allowEval: true }],
+    }, { env: { STAGEFLOW_ARTIFACT_ALLOW_EVAL_LIBS: "1" } });
+    expect(allowed.libraries).toEqual([{ name: "mermaid", version: "12.3.0", allowEval: true }]);
+    expect(issuesOf(() => validateHtmlManifest({
+      format: "html",
+      libraries: [{ name: "chartjs", version: "4.6.2", allowEval: true }],
+    }))[0]?.message).toBe("allowEval is only valid for a library that needs runtime code evaluation");
   });
 });
 
@@ -161,6 +211,41 @@ describe("buildHtmlCsp", () => {
     expect(filled).not.toContain("unsafe-eval");
     expect(filled).not.toContain("'self'");
   });
+
+  it("adds path sources for selected libraries and eval only when asked", () => {
+    const origin = "http://127.0.0.1:4311";
+    const chart = `${origin}/libs/chartjs@4.6.2/`;
+    const leafletDir = `${origin}/libs/leaflet@1.9.4/`;
+    const withLib = buildHtmlCsp(
+      { resourceDomains: ["https://b.example.com", "https://a.example.com"] },
+      libraryCspSources(origin, [{ name: "chartjs", version: "4.6.2" }]),
+    );
+    expect(withLib).toContain(`script-src 'unsafe-inline' ${chart} https://a.example.com https://b.example.com`);
+    expect(withLib).toContain(`style-src 'unsafe-inline' ${chart} https://a.example.com https://b.example.com`);
+    expect(withLib).toContain("img-src data: https://a.example.com https://b.example.com");
+    expect(withLib.split(" ")).not.toContain(origin);
+    expect(withLib).not.toContain("unsafe-eval");
+    expect(withLib).not.toContain(`media-src data: ${chart}`);
+    const leaflet = buildHtmlCsp({}, libraryCspSources(origin, [{ name: "leaflet", version: "1.9.4" }]));
+    expect(leaflet).toContain(`script-src 'unsafe-inline' ${leafletDir}`);
+    expect(leaflet).toContain(`img-src data: ${leafletDir}`);
+    expect(leaflet).toContain(`font-src data: ${leafletDir}`);
+    expect(leaflet).toContain("media-src data:");
+    expect(leaflet).not.toContain(`media-src data: ${leafletDir}`);
+    const both = buildHtmlCsp({}, libraryCspSources(origin, [
+      { name: "leaflet", version: "1.9.4" },
+      { name: "chartjs", version: "4.6.2" },
+    ]));
+    expect(both).toContain(`script-src 'unsafe-inline' ${chart} ${leafletDir}`);
+    expect(both).toContain(`img-src data: ${leafletDir}`);
+    expect(both).not.toContain(`img-src data: ${chart}`);
+    const evalLib = buildHtmlCsp({}, { ...libraryCspSources(origin, [{ name: "mermaid", version: "12.3.0" }]), needsEval: true });
+    expect(evalLib).toContain(`script-src 'unsafe-inline' 'unsafe-eval' ${origin}/libs/mermaid@12.3.0/`);
+    expect(evalLib).not.toContain("style-src 'unsafe-inline' 'unsafe-eval'");
+    expect(buildHtmlCsp({}, { libraryDirs: ["https://cdn.example.com/libs/chartjs@4.6.2/"], needsEval: true })).not.toContain("unsafe-eval");
+    expect(buildHtmlCsp({}, { libraryDirs: ["http://evil.example.com/libs/chartjs@4.6.2/"], needsEval: true })).not.toContain("http://evil.example.com");
+    expect(buildHtmlCsp({}, { needsEval: true })).not.toContain("unsafe-eval");
+  });
 });
 
 function scan(html: string, csp: Parameters<typeof scanHtml>[1] = {}) {
@@ -168,11 +253,44 @@ function scan(html: string, csp: Parameters<typeof scanHtml>[1] = {}) {
 }
 
 describe("live.html scan", () => {
+  const hash = `sha384-${"A".repeat(64)}`;
+
+  it("requires integrity and crossorigin=anonymous on external scripts and stylesheets", () => {
+    const declared = { resourceDomains: ["https://cdn.example.com"] };
+    const ok = scan(
+      `<script src="https://cdn.example.com/app.js" integrity="${hash} sha512-${"B".repeat(86)}==" crossorigin="anonymous"></script><link rel="stylesheet" href="https://cdn.example.com/app.css" integrity="${hash}" crossorigin="">`,
+      { csp: declared },
+    );
+    expect(ok.ok, JSON.stringify(ok.issues)).toBe(true);
+    const message = "external scripts and stylesheets need an integrity hash and crossorigin=anonymous";
+    for (const html of [
+      `<script src="https://cdn.example.com/app.js"></script>`,
+      `<script src="https://cdn.example.com/app.js" integrity="${hash}"></script>`,
+      `<script src="https://cdn.example.com/app.js" crossorigin="anonymous"></script>`,
+      `<script src="https://cdn.example.com/app.js" integrity="${hash}" crossorigin="use-credentials"></script>`,
+      `<script src="https://cdn.example.com/app.js" integrity="sha1-${"A".repeat(28)}" crossorigin="anonymous"></script>`,
+      `<link rel="stylesheet" href="https://cdn.example.com/app.css" integrity="${hash}" crossorigin="anonymous">`,
+    ]) {
+      const found = scan(html, { csp: declared });
+      const expectedOk = html.includes("rel=\"stylesheet\"") && html.includes("integrity") && html.includes("anonymous");
+      if (expectedOk) {
+        expect(found.ok, html).toBe(true);
+      } else {
+        expect(found.issues.some((issue) => issue.message === message), html).toBe(true);
+        expect(found.issues[0]?.code).toBe("html_csp_violation");
+      }
+    }
+    const sandboxScript = scan(`<script src="http://127.0.0.1:9/libs/chartjs@4.6.2/chart.umd.min.js"></script>`);
+    expect(sandboxScript.issues[0]?.message).toContain("not declared in resourceDomains");
+    const relativeLib = scan(`<script src="/libs/chartjs@4.6.2/chart.umd.min.js"></script>`);
+    expect(relativeLib.issues[0]?.message).toContain("relative URLs");
+  });
+
   const csp = { resourceDomains: ["https://cdn.example.com", "https://*.assets.example"] };
 
   it("checks each external reference against the declared list", () => {
     const ok = scan(
-      `<img src="https://cdn.example.com/a.png"><img src="HTTPS://CDN.EXAMPLE.COM/b.png"><img src="//cdn.example.com/c.png"><img src="&#104;ttps://cdn.example.com/d.png"><script src="https://lib.assets.example/app.js"></script>`,
+      `<img src="https://cdn.example.com/a.png"><img src="HTTPS://CDN.EXAMPLE.COM/b.png"><img src="//cdn.example.com/c.png"><img src="&#104;ttps://cdn.example.com/d.png"><script src="https://lib.assets.example/app.js" integrity="sha384-${"A".repeat(64)}" crossorigin="anonymous"></script>`,
       { csp },
     );
     expect(ok.ok, JSON.stringify(ok.issues)).toBe(true);
@@ -670,5 +788,15 @@ describe("live.html publish", () => {
     for (const sample of samples) {
       expect(liveHtmlDocumentCsp(sample)).toBe(buildHtmlCsp(sample));
     }
+    const origin = "http://localhost:4311";
+    const selected = [{ name: "mermaid", version: "12.3.0" }, { name: "leaflet", version: "1.9.4" }];
+    const options = { ...libraryCspSources(origin, selected), needsEval: true };
+    expect(liveLibraryCspSources(origin, selected)).toEqual(libraryCspSources(origin, selected));
+    expect(liveHtmlDocumentCsp({ resourceDomains: ["https://cdn.example.com"] }, options)).toBe(
+      buildHtmlCsp({ resourceDomains: ["https://cdn.example.com"] }, options),
+    );
+    expect(liveHtmlDocumentCsp({}, libraryCspSources(origin, [{ name: "chartjs", version: "4.6.2" }]))).toBe(
+      buildHtmlCsp({}, libraryCspSources(origin, [{ name: "chartjs", version: "4.6.2" }])),
+    );
   });
 });

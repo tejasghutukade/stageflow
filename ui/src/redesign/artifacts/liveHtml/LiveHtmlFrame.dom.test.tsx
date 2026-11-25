@@ -9,7 +9,9 @@ import { createRunCatalog } from "../../../catalog/runCatalog";
 import type { CapacityHealth } from "../../../api";
 import { ArtifactDetailView } from "../ArtifactDetailPage";
 import { artifactDetailMeta } from "../artifactDetailModel";
+import { libraryCspSources, liveHtmlDocumentCsp } from "./cspPolicy";
 import { LiveHtmlFrame, type LiveHtmlFrameProps } from "./LiveHtmlFrame";
+import type { ArtifactOriginView } from "../../../api/artifacts";
 import { setSandboxOriginForTests, useSandboxOrigin } from "./sandboxOrigin";
 import { resetLiveQueryCacheForTests } from "../liveData/queryCache";
 
@@ -43,6 +45,14 @@ function record(patch: Partial<ArtifactRecord> = {}): ArtifactRecord {
       format: "html",
       bindings: [{ id: "rows", function: "revenue_by_week", args: { weeks: 12 } }],
       csp: { connectDomains: ["https://api.example.com"] },
+      origins: {
+        connect: ["https://api.example.com"],
+        resource: [],
+        base: [],
+        hash: "c".repeat(64),
+        approved: true,
+        approved_at: "2026-11-25T00:00:00.000Z",
+      },
     },
     ...patch,
   };
@@ -219,7 +229,7 @@ describe("LiveHtmlFrame", () => {
     expect(container?.textContent).toContain("The sandbox did not start");
     expect(container?.textContent).toContain(ORIGIN);
     await act(async () => {
-      container?.querySelector("button")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      [...(container?.querySelectorAll("button") ?? [])].find((button) => button.textContent === "Retry")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     const second = shell();
     expect(second.iframe).not.toBe(first.iframe);
@@ -297,7 +307,7 @@ describe("LiveHtmlFrame", () => {
       });
       expect(current.post).not.toHaveBeenCalled();
       await act(async () => {
-        view.querySelector("button")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        [...view.querySelectorAll("button")].find((button) => button.textContent === "Retry")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       });
       const next = shell();
       expect(next.iframe).not.toBe(current.iframe);
@@ -537,5 +547,269 @@ describe("sandbox origin hook", () => {
     });
     expect(container?.querySelector("[data-origin]")?.getAttribute("data-origin")).toBe("");
     catalog.stop();
+  });
+
+  it("sends declared libraries on sf/sandbox-load and puts the shell origin in the CSP", async () => {
+    setSandboxOriginForTests(ORIGIN);
+    const page = record({
+      live: {
+        status: "fresh",
+        format: "html",
+        bindings: [],
+        libraries: [{ name: "chartjs", version: "4.6.2" }, { name: "leaflet", version: "1.9.4" }],
+      },
+    });
+    await render(createElement(LiveHtmlFrame, props({ record: page, html: "<canvas id=\"c\"></canvas>" })));
+    const { win, post } = shell();
+    emit(win, ready());
+    const load = post.mock.calls.find((call) => (call[0] as { method?: string }).method === "sf/sandbox-load");
+    const params = (load?.[0] as { params: { libraries?: unknown; csp: string; allowEval?: boolean } }).params;
+    expect(params.libraries).toEqual([
+      { name: "chartjs", version: "4.6.2" },
+      { name: "leaflet", version: "1.9.4" },
+    ]);
+    expect(params.allowEval).toBeUndefined();
+    expect(params.csp).toContain(`script-src 'unsafe-inline' ${ORIGIN}/libs/chartjs@4.6.2/ ${ORIGIN}/libs/leaflet@1.9.4/`);
+    expect(params.csp).toContain(`img-src data: ${ORIGIN}/libs/leaflet@1.9.4/`);
+    expect(params.csp.split(" ")).not.toContain(ORIGIN);
+    expect(params.csp).not.toContain("unsafe-eval");
+    expect(post.mock.calls.every((call) => call[1] === ORIGIN)).toBe(true);
+  });
+
+  it("blocks unapproved origins, approves them into a new frame, and revokes back to the empty policy", async () => {
+    setSandboxOriginForTests(ORIGIN);
+    const hash = "a".repeat(64);
+    const nextHash = "b".repeat(64);
+    const origins: ArtifactOriginView = {
+      connect: ["https://api.example.com"],
+      resource: ["https://cdn.example.com"],
+      base: ["https://base.example.com"],
+      hash,
+      approved: false,
+      approved_at: null,
+    };
+    const sources = libraryCspSources(ORIGIN, [{ name: "chartjs", version: "4.6.2" }]);
+    const empty = liveHtmlDocumentCsp({}, sources);
+    const full = liveHtmlDocumentCsp(
+      { connectDomains: ["https://api.example.com"], resourceDomains: ["https://cdn.example.com"], baseUriDomains: ["https://base.example.com"] },
+      sources,
+    );
+    const page = record({
+      live: {
+        status: "fresh",
+        format: "html",
+        bindings: [],
+        libraries: [{ name: "chartjs", version: "4.6.2" }],
+        csp: {
+          connectDomains: ["https://api.example.com"],
+          resourceDomains: ["https://cdn.example.com"],
+          baseUriDomains: ["https://base.example.com"],
+        },
+        origins,
+      },
+    });
+    await render(createElement(LiveHtmlFrame, props({ record: page, html: "<canvas id=\"c\"></canvas>" })));
+    const banner = container?.querySelector("[data-testid=live-html-origin-banner]");
+    expect(banner?.textContent).toContain("This artifact asks to contact external servers. Nothing is allowed until you approve.");
+    expect(banner?.textContent).toContain("Approved origins can receive any data this artifact can read");
+    expect(banner?.textContent).toContain("Send and receive data (connect)");
+    expect(banner?.textContent).toContain("Load scripts, styles, images and fonts (resources)");
+    expect(banner?.textContent).toContain("Base URL");
+    expect(banner?.textContent).toContain(hash.slice(0, 8));
+    expect(banner?.querySelectorAll("a")).toHaveLength(0);
+    expect(banner?.getAttribute("role")).toBe("region");
+    let shellBox = shell();
+    emit(shellBox.win, ready());
+    const first = shellBox.post.mock.calls.find((call) => (call[0] as { method?: string }).method === "sf/sandbox-load");
+    const firstParams = (first?.[0] as { params: { csp: string; nonce: string } }).params;
+    expect(firstParams.csp).toBe(empty);
+    expect(firstParams.csp).not.toContain("https://cdn.example.com");
+
+    const blocked = [...(banner?.querySelectorAll("button") ?? [])].find((button) => button.textContent === "Keep blocked");
+    await act(async () => {
+      blocked?.click();
+    });
+    expect(container?.querySelector("[data-testid=live-html-origin-banner]")).toBeNull();
+    const review = [...(container?.querySelectorAll("button") ?? [])].find((button) => button.textContent === "Review origins");
+    await act(async () => {
+      review?.click();
+    });
+    expect(container?.querySelector("[data-testid=live-html-origin-banner]")?.textContent).toContain("https://api.example.com");
+    const blockedAgain = [...(container?.querySelectorAll("button") ?? [])].find((button) => button.textContent === "Keep blocked");
+    await act(async () => {
+      blockedAgain?.click();
+    });
+    expect(container?.querySelector("[data-testid=live-html-origin-banner]")).toBeNull();
+    expect(container?.textContent).not.toContain("Origins approved");
+    shellBox = shell();
+    emit(shellBox.win, ready());
+    const kept = shellBox.post.mock.calls.find((call) => (call[0] as { method?: string }).method === "sf/sandbox-load");
+    expect((kept?.[0] as { params: { csp: string } } | undefined)?.params.csp ?? firstParams.csp).toBe(empty);
+
+    act(() => {
+      root?.unmount();
+    });
+    container?.remove();
+    await render(createElement(LiveHtmlFrame, props({ record: page, html: "<canvas id=\"c\"></canvas>" })));
+    let pending: (value: Response) => void = () => undefined;
+    const fetchMock = vi.fn((_url: string, _init?: RequestInit) =>
+      new Promise<Response>((resolve) => {
+        pending = resolve;
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const approve = [...(container?.querySelectorAll("button") ?? [])].find((button) => button.textContent === "Approve these origins");
+    await act(async () => {
+      approve?.click();
+    });
+    expect(approve?.hasAttribute("disabled")).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/origins/approve");
+    expect(JSON.parse(String(init.body))).toEqual({ origins_hash: hash, version: 2 });
+    await act(async () => {
+      pending(
+        new Response(
+          JSON.stringify({
+            approved: true,
+            approved_at: "2026-11-25T00:00:00.000Z",
+            origins: { ...origins, approved: true, approved_at: "2026-11-25T00:00:00.000Z" },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+      await Promise.resolve();
+    });
+    expect(container?.textContent).toContain("Origins approved (revoke)");
+    shellBox = shell();
+    emit(shellBox.win, ready());
+    const second = shellBox.post.mock.calls.find((call) => (call[0] as { method?: string }).method === "sf/sandbox-load");
+    const secondParams = (second?.[0] as { params: { csp: string; nonce: string } }).params;
+    expect(secondParams.csp).toBe(full);
+    expect(secondParams.nonce).not.toBe(firstParams.nonce);
+
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          revoked: 1,
+          origins: { ...origins, approved: false, approved_at: null },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    const revoke = [...(container?.querySelectorAll("button") ?? [])].find((button) => button.textContent === "Revoke");
+    await act(async () => {
+      revoke?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(container?.querySelector("[data-testid=live-html-origin-banner]")).toBeTruthy();
+    shellBox = shell();
+    emit(shellBox.win, ready());
+    const third = shellBox.post.mock.calls.find((call) => (call[0] as { method?: string }).method === "sf/sandbox-load");
+    expect((third?.[0] as { params: { csp: string; nonce: string } }).params.csp).toBe(empty);
+    expect((third?.[0] as { params: { nonce: string } }).params.nonce).not.toBe(secondParams.nonce);
+
+    const changed = record({
+      live: {
+        ...page.live!,
+        csp: { connectDomains: ["https://other.example.com"] },
+        origins: { ...origins, connect: ["https://other.example.com"], hash: nextHash, approved: false, approved_at: null },
+      },
+    });
+    await act(async () => {
+      root?.render(createElement(LiveHtmlFrame, props({ record: changed, html: "<canvas id=\"d\"></canvas>" })));
+    });
+    expect(container?.querySelector("[data-testid=live-html-origin-banner]")?.textContent).toContain("https://other.example.com");
+    shellBox = shell();
+    emit(shellBox.win, ready());
+    const fourth = shellBox.post.mock.calls.find((call) => (call[0] as { method?: string }).method === "sf/sandbox-load");
+    expect((fourth?.[0] as { params: { csp: string } }).params.csp).toBe(empty);
+    expect((fourth?.[0] as { params: { csp: string } }).params.csp).not.toContain("https://other.example.com");
+  });
+
+  it("shows an inline error, skips the banner when there are no origins, and skips it without a sandbox origin", async () => {
+    setSandboxOriginForTests(ORIGIN);
+    const hash = "c".repeat(64);
+    const origins: ArtifactOriginView = {
+      connect: ["https://api.example.com"],
+      resource: [],
+      base: [],
+      hash,
+      approved: false,
+      approved_at: null,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ error: "origins hash does not match the current manifest", code: "artifact.origins_mismatch" }), { status: 409 })),
+    );
+    await render(createElement(LiveHtmlFrame, props({ record: record({ live: { status: "fresh", format: "html", bindings: [], csp: { connectDomains: ["https://api.example.com"] }, origins } }) })));
+    const approve = [...(container?.querySelectorAll("button") ?? [])].find((button) => button.textContent === "Approve these origins");
+    await act(async () => {
+      approve?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(container?.querySelector("[role=alert]")?.textContent).toContain("origins hash does not match the current manifest");
+
+    const none = record({
+      live: {
+        status: "fresh",
+        format: "html",
+        bindings: [],
+        csp: { connectDomains: ["https://api.example.com"] },
+        origins: { connect: [], resource: [], base: [], hash: "d".repeat(64), approved: true, approved_at: null },
+      },
+    });
+    await act(async () => {
+      root?.render(createElement(LiveHtmlFrame, props({ record: none })));
+    });
+    expect(container?.querySelector("[data-testid=live-html-origin-banner]")).toBeNull();
+    const box = shell();
+    emit(box.win, ready());
+    const load = box.post.mock.calls.find((call) => (call[0] as { method?: string }).method === "sf/sandbox-load");
+    expect((load?.[0] as { params: { csp: string } }).params.csp).toBe(
+      liveHtmlDocumentCsp({ connectDomains: ["https://api.example.com"] }),
+    );
+
+    await act(async () => {
+      setSandboxOriginForTests(null);
+    });
+    expect(container?.querySelector("[data-testid=live-html-origin-banner]")).toBeNull();
+    expect(container?.textContent).toContain("Showing a static preview");
+  });
+
+  it("fails closed when origins are missing and reopens the banner from a review token", async () => {
+    setSandboxOriginForTests(ORIGIN);
+    const page = record({
+      live: {
+        status: "fresh",
+        format: "html",
+        bindings: [],
+        csp: { connectDomains: ["https://api.example.com"], resourceDomains: ["https://cdn.example.com"] },
+      },
+    });
+    await render(createElement(LiveHtmlFrame, props({ record: page, reviewToken: 0 })));
+    const banner = container?.querySelector("[data-testid=live-html-origin-banner]");
+    expect(banner?.textContent).toContain("https://api.example.com");
+    expect(banner?.textContent).toContain("https://cdn.example.com");
+    const reload = [...(banner?.querySelectorAll("button") ?? [])].find((button) => button.textContent === "Reload to approve");
+    expect(reload?.hasAttribute("disabled")).toBe(true);
+    expect(banner?.textContent).toContain("unrestricted shell access");
+    const box = shell();
+    emit(box.win, ready());
+    const load = box.post.mock.calls.find((call) => (call[0] as { method?: string }).method === "sf/sandbox-load");
+    const sent = (load?.[0] as { params: { csp: string } }).params.csp;
+    expect(sent).toBe(liveHtmlDocumentCsp({}));
+    expect(sent).not.toContain("https://api.example.com");
+    const keep = [...(banner?.querySelectorAll("button") ?? [])].find((button) => button.textContent === "Keep blocked");
+    await act(async () => {
+      keep?.click();
+    });
+    expect(container?.querySelector("[data-testid=live-html-origin-banner]")).toBeNull();
+    await act(async () => {
+      root?.render(createElement(LiveHtmlFrame, props({ record: page, reviewToken: 1 })));
+    });
+    expect(container?.querySelector("[data-testid=live-html-origin-banner]")?.textContent).toContain("Reload to approve");
   });
 });

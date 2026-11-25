@@ -1,6 +1,7 @@
 import { parseStoredHtmlManifest, type HtmlCsp } from "./htmlManifest.js";
 import { isLiveHtmlKind, isLiveKind } from "./kinds.js";
 import { parseStoredLiveManifest } from "./manifest.js";
+import type { ArtifactOriginView } from "./originApproval.js";
 
 export type ArtifactOwner =
   | { kind: "stage"; pipeline: string; stage: string }
@@ -54,8 +55,10 @@ export type ArtifactLiveView = {
   bindings: Array<{ id: string; function: string; args: Record<string, unknown> }>;
   refresh?: { on_view?: boolean; ttl_seconds?: number; auto_seconds?: number };
   library?: { name: string; version: string };
+  libraries?: Array<{ name: string; version: string; allowEval?: boolean }>;
   format?: string;
   csp?: HtmlCsp;
+  origins?: ArtifactOriginView;
 };
 
 export type ArtifactRow = {
@@ -141,13 +144,14 @@ export function artifactRecord(row: ArtifactRow, registered: boolean): ArtifactR
 export function artifactLiveManifestFields(
   kind: string,
   manifestJson: string | null | undefined,
-): Pick<ArtifactLiveView, "bindings" | "refresh" | "library" | "format" | "csp"> {
+): Pick<ArtifactLiveView, "bindings" | "refresh" | "library" | "libraries" | "format" | "csp"> {
   if (isLiveHtmlKind(kind)) {
     const manifest = parseStoredHtmlManifest(manifestJson);
     return {
       bindings: manifest?.bindings ?? [],
       format: manifest?.format ?? "html",
       ...(manifest?.csp ? { csp: manifest.csp } : {}),
+      ...(manifest?.libraries && manifest.libraries.length > 0 ? { libraries: manifest.libraries } : {}),
       ...(manifest?.refresh ? { refresh: manifest.refresh } : {}),
     };
   }

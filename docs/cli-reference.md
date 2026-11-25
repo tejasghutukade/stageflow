@@ -708,7 +708,7 @@ HTTP: `GET /api/export` (**read** scope) with the same query filters.
 
 List, show, publish, refresh, query, and delete artifacts in the artifact index, or read a run workspace file as UTF-8 text.
 
-Like other store verbs, `list` and `show` open `$STAGEFLOW_HOME` SQLite directly. `publish` and `delete` do the same. When the database is missing or its schema is behind this binary, they start the Host to apply migrations, then open again (same as `sf runs list` and `sf artifact read`).
+Like other store verbs, `list` and `show` open `$STAGEFLOW_HOME` SQLite directly. `publish`, `delete`, `origins`, `approve-origins`, and `revoke-origins` do the same. When the database is missing or its schema is behind this binary, they start the Host to apply migrations, then open again (same as `sf runs list` and `sf artifact read`).
 
 ### `sf artifact list`
 
@@ -787,6 +787,36 @@ Runs one live binding with viewer arguments. The manifest `args` are the default
 **Exit codes:** `0` when the query has no binding error; `1` when it does (stdout is still that JSON object with `--json`), or for `artifact.not_found`, `artifact.ambiguous`, `artifact.not_live`, `artifact.content_unavailable`, an unknown binding, invalid arguments, or another error (`{ "error", "code" }` with `--json`).
 
 List human output puts `LIVE`, `LIVE/fresh`, `LIVE/stale`, `LIVE/error`, or `LIVE/refreshing` in the `STATUS` column. An expired indexed row still shows `expired`.
+
+### `sf artifact origins <key>`
+
+```bash
+sf artifact origins <ownerKey>/<id> [--project-root <wire id or path>] [--json]
+```
+
+Prints the origins a live HTML artifact has requested, the sha256 of that set, and whether an operator has approved it. Human output groups connect, resource, and base origins. `--json` prints `{ "key", "origins" }`. `origins` is `{ "connect", "resource", "base", "hash", "approved", "approved_at" }`. A static or declarative artifact is `artifact.invalid_shape`.
+
+**Exit codes:** `0` when the record was read; `1` for `artifact.not_found`, `artifact.ambiguous`, `artifact.invalid_shape`, or another error (`{ "error", "code" }` with `--json`).
+
+### `sf artifact approve-origins <key>`
+
+```bash
+sf artifact approve-origins <ownerKey>/<id> [--hash <sha256>] [--yes] [--project-root <wire id or path>] [--json]
+```
+
+Approves the current origin set. The command prints the origins and asks for confirmation. `--yes` skips the question. With no terminal and no `--yes`, it exits `1` and does not approve (`artifact.confirmation_required`). Inside a stage or agent session (the process environment has a stage-session marker such as `SF_STAGE_WORKER=1` or `STAGEFLOW_RUN_WORKSPACE`), it exits `1` and does not approve, and `--yes` does not override that. The message is `approval is an operator action: refused inside a stage or agent session` (`artifact.operator_only`). `--hash` must be the current set. A different hash is `artifact.origins_mismatch` and the JSON error includes `current_hash`. An empty set is `artifact.invalid_shape` (`no origins to approve`). `--json` on success prints `{ "origins", "approved": true, "approved_at" }`.
+
+**Exit codes:** `0` approved; `1` refused, mismatched, not found, ambiguous, or other error.
+
+### `sf artifact revoke-origins <key>`
+
+```bash
+sf artifact revoke-origins <ownerKey>/<id> [--hash <sha256>] [--project-root <wire id or path>] [--json]
+```
+
+Deletes one approval when `--hash` is set, or every approval for the artifact when it is omitted. The same session-environment refusal as `approve-origins` applies, including when the command would otherwise succeed. `--json` prints `{ "revoked", "origins" }`.
+
+**Exit codes:** `0` when the artifact was found; `1` for a session refusal, `artifact.not_found`, `artifact.ambiguous`, or another error.
 
 ### `sf artifact delete <key>` {#sf-artifact-delete}
 

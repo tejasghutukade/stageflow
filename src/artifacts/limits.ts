@@ -29,6 +29,7 @@ export class ArtifactPublishError extends Error {
     message: string,
     readonly issues?: ArtifactIssue[],
     readonly projectRoots?: string[],
+    readonly details?: Record<string, string>,
   ) {
     super(message);
     this.name = "ArtifactPublishError";

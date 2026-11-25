@@ -8,6 +8,7 @@ import {
   type ArtifactContentPayload,
   type ArtifactDataResponse,
   type ArtifactLiveView,
+  type ArtifactOriginView,
   type ArtifactRecord,
   type ArtifactVersionRecord,
 } from "../../api/artifacts";
@@ -106,6 +107,7 @@ function LiveSection({
   autoNote,
   nowMs,
   onRefresh,
+  onReviewOrigins,
 }: {
   live: ArtifactLiveView;
   data: ArtifactDataResponse | null;
@@ -116,6 +118,7 @@ function LiveSection({
   autoNote?: string | null;
   nowMs?: number;
   onRefresh?: () => void;
+  onReviewOrigins?: () => void;
 }) {
   const status = data?.status ?? live.status;
   const pill =
@@ -148,6 +151,20 @@ function LiveSection({
             </span>
           </div>
         ))}
+        {live.csp || live.origins ? (
+          <div className="text-[13px] text-[var(--sf-text-1)]">
+            Origins: {originApprovalLabel(live)}
+            {onReviewOrigins && originApprovalLabel(live) === "not approved" ? (
+              <button
+                type="button"
+                className="ml-2 h-7 rounded-lg border border-[var(--sf-hairline-strong)] px-2 text-[12px] text-[var(--sf-text-1)]"
+                onClick={onReviewOrigins}
+              >
+                Review origins
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {live.csp ? (
           <div className="text-[13px] text-[var(--sf-text-1)]">
             <div className="text-[11px] uppercase tracking-wide text-[var(--sf-text-3)]">Declared origins</div>
@@ -190,6 +207,19 @@ function LiveSection({
       </div>
     </div>
   );
+}
+
+function originApprovalLabel(live: ArtifactLiveView): string {
+  const connect = live.csp?.connectDomains?.length ?? 0;
+  const resource = live.csp?.resourceDomains?.length ?? 0;
+  const base = live.csp?.baseUriDomains?.length ?? 0;
+  const declared = connect + resource + base;
+  const origins = live.origins;
+  const listed = origins ? origins.connect.length + origins.resource.length + origins.base.length : 0;
+  if (declared === 0 && listed === 0) return "none";
+  if (origins?.approved && (declared > 0 || listed > 0)) return "approved";
+  if (declared > 0 || listed > 0) return "not approved";
+  return "none";
 }
 
 function DeleteArtifactDialog({
@@ -257,6 +287,7 @@ export function ArtifactDetailView({
   autoNote,
   nowMs,
   onRefresh,
+  onReviewOrigins,
   livePreview,
   liveHtml,
 }: {
@@ -287,6 +318,7 @@ export function ArtifactDetailView({
   autoNote?: string | null;
   nowMs?: number;
   onRefresh?: () => void;
+  onReviewOrigins?: () => void;
   livePreview?: LivePreviewInput | null;
   liveHtml?: LiveHtmlFrameProps | null;
 }) {
@@ -393,6 +425,7 @@ export function ArtifactDetailView({
                 autoNote={autoNote}
                 nowMs={nowMs}
                 onRefresh={refresh}
+                onReviewOrigins={onReviewOrigins}
               />
             ) : null}
             {versions ? <VersionsSection versions={versions} onOpenVersion={onOpenVersion} /> : null}
@@ -499,10 +532,29 @@ export function ArtifactDetailPage({
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [originReview, setOriginReview] = useState(0);
   const latestVersion = versions.length === 0
     ? undefined
     : versions.find((item) => item.current)?.version ?? versions.reduce((max, item) => Math.max(max, item.version), 0);
-  const live = useLiveArtifactData(record, { ownerKey, id, projectRoot, version, latestVersion, hidden: false });
+  const live = useLiveArtifactData(record, {
+    ownerKey,
+    id,
+    projectRoot,
+    version,
+    latestVersion,
+    hidden: false,
+    onRecord: (next) => {
+      setRecord((current) => {
+        if (!current?.live || current.version !== next.version) return current;
+        const previous = current.live.origins;
+        const incoming = next.live?.origins;
+        const previousKey = previous ? `${previous.hash}:${previous.approved}:${previous.approved_at ?? ""}` : "";
+        const incomingKey = incoming ? `${incoming.hash}:${incoming.approved}:${incoming.approved_at ?? ""}` : "";
+        if (previousKey === incomingKey) return current;
+        return { ...current, live: { ...current.live, origins: incoming } };
+      });
+    },
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -626,6 +678,7 @@ export function ArtifactDetailPage({
       onRefresh={
         showLiveRefresh(displayRecord.kind, viewing !== null, Boolean(expiry)) ? () => live.refresh() : undefined
       }
+      onReviewOrigins={() => setOriginReview((value) => value + 1)}
       livePreview={
         expiry || displayRecord.kind !== "live.declarative"
           ? null
@@ -665,6 +718,12 @@ export function ArtifactDetailPage({
               ownerKey,
               artifactId: id,
               projectRoot,
+              reviewToken: originReview,
+              onOrigins: (origins: ArtifactOriginView) => {
+                setRecord((current) =>
+                  current?.live ? { ...current, live: { ...current.live, origins } } : current,
+                );
+              },
             }
       }
       onConfirmDelete={() => {

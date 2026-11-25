@@ -343,6 +343,8 @@ Toolset `artifacts`. A bare `/mcp` session does not load it. Groups: `artifacts.
 | `refresh_artifact` | `artifacts.refresh` | External. `key`, optional `project_root`, optional `binding_ids` (REST refresh uses `bindingIds`). Runs the live bindings and returns `{ status, snapshots, last_refreshed_at, last_error_code, errors, truncated }`. Snapshots may include `source` (`executed` or `cache`). A full executor queue adds `retry_after_seconds` (30). `ifStale` is a REST and CLI option, not an MCP argument. Snapshot values share the 200 KiB cap; a dropped value is `null` with per-snapshot `truncated: true` and `size_bytes`. A static artifact is `artifact.not_live`. An expired artifact is `artifact.content_unavailable`. |
 | `delete_artifact` | `artifacts.cleanup` | `key`, optional `project_root`. Removes every version. Irreversible. An indexed artifact is `artifact.not_deletable`. |
 
+There is no tool to approve or revoke declared live HTML origins. That is deliberate: only an operator can approve, from the console or `sf artifact approve-origins`. `save_artifact` can publish a manifest that declares origins. Those origins stay blocked until a person approves them. A publish with declared origins returns a warning that they need approval in the console before they take effect.
+
 Read calls do not write. `project_root` is the catalog wire id, and omitting it when the owner and id exist in more than one project returns `artifact.ambiguous` with `project_roots`.
 
 | Code | When |

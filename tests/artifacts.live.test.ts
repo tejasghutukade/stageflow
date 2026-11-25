@@ -1423,7 +1423,7 @@ describe("migration 029", () => {
   it("adds snapshots on a fresh store and on a store at version 28", async () => {
     const fresh = await openStore();
     const freshDb = sqliteConnectionFromStore(fresh.store)!;
-    expect(freshDb.pragma("user_version", { simple: true })).toBe(29);
+    expect(freshDb.pragma("user_version", { simple: true })).toBe(30);
     expect(freshDb.prepare(`SELECT name FROM sqlite_master WHERE name = 'artifact_snapshots'`).get()).toBeTruthy();
     const cols = freshDb.prepare(`PRAGMA table_info(artifacts)`).all() as Array<{ name: string }>;
     expect(cols.map((col) => col.name)).toEqual(expect.arrayContaining(["live_status", "last_refreshed_at", "last_error_code"]));
@@ -1445,7 +1445,7 @@ describe("migration 029", () => {
     const migrated = createRunStore({ rootDir: home });
     cleanups.push(() => migrated.close());
     const migratedDb = sqliteConnectionFromStore(migrated)!;
-    expect(migratedDb.pragma("user_version", { simple: true })).toBe(29);
+    expect(migratedDb.pragma("user_version", { simple: true })).toBe(30);
     expect(migratedDb.prepare(`SELECT kind FROM function_invocations WHERE id = 'old'`).get()).toEqual({ kind: "tool" });
     migratedDb.prepare(
       `INSERT INTO function_invocations (

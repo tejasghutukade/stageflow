@@ -5,6 +5,8 @@ import * as readline from "node:readline";
 import { artifactStorageKey, parseOwnerKey, stageOwnerKey } from "../artifacts/keys.js";
 import { ArtifactPublishError } from "../artifacts/limits.js";
 import { isLiveKind } from "../artifacts/kinds.js";
+import { approveOrigins, revokeOrigins } from "../artifacts/originApproval.js";
+import { isInsideStageflowSession } from "../artifacts/sessionEnv.js";
 import { deletePublishedArtifact, publishArtifact } from "../artifacts/publish.js";
 import { queryBinding } from "../artifacts/bindingQuery.js";
 import { refreshArtifact } from "../artifacts/refresh.js";
@@ -44,6 +46,9 @@ export const ARTIFACT_USAGE = `Usage:
   sf artifact query <key> --binding <id> [--args <json>] [--if-stale|--no-if-stale] [--project-root <wire id or path>] [--json]
   sf artifact publish --owner <pipeline:stage|agent:id> --id <id> --kind <kind> --title <title> [--description <text>] [--tag <tag>]... [--summary <text>] [--manifest <file>] [--project-root <wire id or path>] (--file <path> | --stdin) [--json]
   sf artifact delete <key> [--project-root <wire id or path>] [--yes] [--json]
+  sf artifact origins <key> [--project-root <wire id or path>] [--json]
+  sf artifact approve-origins <key> [--hash <h>] [--yes] [--project-root <wire id or path>] [--json]
+  sf artifact revoke-origins <key> [--hash <h>] [--project-root <wire id or path>] [--json]
   sf artifact read --run <runId> --path <relPath> [--out <file>]`;
 
 export type ArtifactCommandIo = {
@@ -126,6 +131,16 @@ type ParsedQueryArgs = {
   json: boolean;
 };
 
+type ParsedOriginsArgs = {
+  help: boolean;
+  subcommand: "origins" | "approve-origins" | "revoke-origins";
+  key: string;
+  projectRoot?: string;
+  hash?: string;
+  yes: boolean;
+  json: boolean;
+};
+
 type ParsedDeleteArgs = {
   help: boolean;
   subcommand: "delete";
@@ -144,6 +159,7 @@ type ParsedArtifactArgs =
   | ParsedRefreshArgs
   | ParsedQueryArgs
   | ParsedDeleteArgs
+  | ParsedOriginsArgs
   | { help: false };
 
 function parseLimitFlag(value: string): number {
@@ -423,6 +439,27 @@ function parseDeleteArgs(args: string[]): ParsedDeleteArgs {
   return { help, subcommand: "delete", key, projectRoot, yes, json };
 }
 
+function parseOriginsArgs(args: string[], subcommand: ParsedOriginsArgs["subcommand"]): ParsedOriginsArgs {
+  if (args.length < 2) throw new Error("Missing artifact key");
+  const key = args[1]!;
+  let projectRoot: string | undefined;
+  let hash: string | undefined;
+  let yes = false;
+  let json = false;
+  let help = false;
+  for (let i = 2; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--help" || arg === "-h") help = true;
+    else if (arg === "--json") json = true;
+    else if (arg === "--yes") yes = true;
+    else if (arg === "--hash") hash = requireFlag(args[++i], "--hash");
+    else if (arg === "--project-root") projectRoot = requireFlag(args[++i], "--project-root");
+    else if (arg?.startsWith("-")) throw new Error(`Unknown flag: ${arg}`);
+    else throw new Error(`Unexpected argument: ${arg}`);
+  }
+  return { help, subcommand, key, projectRoot, hash, yes, json };
+}
+
 export function parseArtifactArgs(args: string[]): ParsedArtifactArgs {
   if (args.length === 0) {
     return { help: false };
@@ -439,6 +476,9 @@ export function parseArtifactArgs(args: string[]): ParsedArtifactArgs {
   if (subcommand === "refresh") return parseRefreshArgs(args);
   if (subcommand === "query") return parseQueryArgs(args);
   if (subcommand === "delete") return parseDeleteArgs(args);
+  if (subcommand === "origins" || subcommand === "approve-origins" || subcommand === "revoke-origins") {
+    return parseOriginsArgs(args, subcommand);
+  }
   throw new Error(`Unknown artifact subcommand: ${subcommand}`);
 }
 
@@ -606,6 +646,7 @@ function reportPublishError(err: ArtifactPublishError, json: boolean, out: Artif
   const payload: Record<string, unknown> = { error: err.message, code: err.code };
   if (err.issues !== undefined) payload.issues = err.issues;
   if (err.projectRoots !== undefined) payload.project_roots = err.projectRoots;
+  if (err.details !== undefined) Object.assign(payload, err.details);
   if (json) out.log(JSON.stringify(payload));
   else out.error(err.message);
   return 1;
@@ -842,6 +883,114 @@ async function runDeleteSubcommand(
   }
 }
 
+function originLines(record: ArtifactRecord): string[] {
+  const origins = record.live?.origins;
+  if (!origins) return ["No declared origins."];
+  const lines = (label: string, values: string[]): string[] => [label, ...(values.length > 0 ? values.map((value) => `  ${value}`) : ["  (none)"])];
+  return [
+    ...lines("Send and receive data (connect)", origins.connect),
+    ...lines("Load scripts, styles, images and fonts (resources)", origins.resource),
+    ...lines("Base URL", origins.base),
+    `hash: ${origins.hash}`,
+    `approved: ${origins.approved ? "yes" : "no"}`,
+    ...(origins.approved_at ? [`approved_at: ${origins.approved_at}`] : []),
+  ];
+}
+
+async function runOriginsSubcommand(
+  parsed: ParsedOriginsArgs,
+  store: RunStore,
+  out: ArtifactCommandIo,
+  options: { stdinIsTTY?: boolean; confirm?: (prompt: string) => Promise<boolean> },
+): Promise<number> {
+  if (
+    (parsed.subcommand === "approve-origins" || parsed.subcommand === "revoke-origins") &&
+    isInsideStageflowSession(process.env)
+  ) {
+    return reportCommandError(
+      "approval is an operator action: refused inside a stage or agent session",
+      "artifact.operator_only",
+      parsed.json,
+      out,
+    );
+  }
+  const parts = parseArtifactShowKey(parsed.key);
+  if (!parts) return reportCommandError("Artifact key is not valid", "artifact.invalid_id", parsed.json, out);
+  const db = sqliteConnectionFromStore(store);
+  if (db === undefined) {
+    return reportQueryError(
+      new ArtifactQueryError(503, "artifact.store_unavailable", "Artifact index is unavailable"),
+      parsed.json,
+      out,
+    );
+  }
+  try {
+    const roots = await catalogRootsForArtifacts(store);
+    const record = readArtifact(db, parts.ownerKey, parts.id, parsed.projectRoot, roots);
+    const origins = record.live?.origins;
+    if (!origins || record.kind !== "live.html") {
+      return reportCommandError("no origins to approve", "artifact.invalid_shape", parsed.json, out);
+    }
+    const owner =
+      record.owner.kind === "agent"
+        ? `agent:${record.owner.agent}`
+        : stageOwnerKey(record.owner.pipeline, record.owner.stage);
+    const storageKey = artifactStorageKey(record.project.id, owner, record.id);
+    if (parsed.subcommand === "origins") {
+      if (parsed.json) out.log(JSON.stringify({ key: record.key, origins }));
+      else out.log(originLines(record).join("\n"));
+      return 0;
+    }
+    if (parsed.subcommand === "approve-origins" && parsed.hash !== undefined && parsed.hash !== origins.hash) {
+      return reportPublishError(
+        new ArtifactPublishError(
+          409,
+          "artifact.origins_mismatch",
+          "origins hash does not match the current manifest",
+          [{ path: "origins_hash", message: "origins hash does not match the current manifest" }],
+          undefined,
+          { current_hash: origins.hash },
+        ),
+        parsed.json,
+        out,
+      );
+    }
+    if (parsed.subcommand === "approve-origins") {
+      if (!parsed.yes) {
+        out.error(originLines(record).join("\n"));
+        const prompt = `Approve these origins for ${record.key}? An approved connect origin can receive any data the artifact can read. [y/N] `;
+        let confirmed = false;
+        if (options.confirm) confirmed = await options.confirm(prompt);
+        else if (options.stdinIsTTY === true) confirmed = await promptYes(prompt);
+        else {
+          return reportCommandError(
+            "Refusing to approve origins without --yes because stdin is not a terminal.",
+            "artifact.confirmation_required",
+            parsed.json,
+            out,
+          );
+        }
+        if (!confirmed) {
+          return reportCommandError("Approval cancelled.", "artifact.confirmation_required", parsed.json, out);
+        }
+      }
+      const approved = approveOrigins(db, storageKey, { originsHash: parsed.hash ?? origins.hash, by: "cli" });
+      if (parsed.json) out.log(JSON.stringify(approved));
+      else out.log(`Approved ${approved.origins.hash}`);
+      return 0;
+    }
+    const revoked = revokeOrigins(db, storageKey, parsed.hash);
+    if (parsed.json) out.log(JSON.stringify(revoked));
+    else out.log(`Revoked ${revoked.revoked} origin approval${revoked.revoked === 1 ? "" : "s"}`);
+    return 0;
+  } catch (error) {
+    if (error instanceof ArtifactPublishError) return reportPublishError(error, parsed.json, out);
+    if (error instanceof ArtifactQueryError) return reportQueryError(error, parsed.json, out);
+    const message = error instanceof Error ? error.message : String(error);
+    return reportCommandError(message, "artifact.invalid_shape", parsed.json, out);
+  }
+}
+
 export async function runArtifactCommand(
   args: string[],
   options: {
@@ -918,5 +1067,11 @@ export async function runArtifactCommand(
   if (parsed.subcommand === "delete") {
     return runDeleteSubcommand(parsed, store, out, options);
   }
-  return runReadSubcommand(parsed, store, cwd, out);
+  if (parsed.subcommand === "origins" || parsed.subcommand === "approve-origins" || parsed.subcommand === "revoke-origins") {
+    return runOriginsSubcommand(parsed, store, out, options);
+  }
+  if (parsed.subcommand === "read") {
+    return runReadSubcommand(parsed, store, cwd, out);
+  }
+  return 1;
 }

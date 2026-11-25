@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { appendAgentArtifactPrompt, createAgentPublishArtifactTool } from "../src/agents/artifactTools.js";
 import { agentProjectKey } from "../src/agents/store.js";
 import { bindableFunctionsFromAttachments } from "../src/artifacts/bindable.js";
-import { liveArtifactsPromptSection, promptTokenEstimate } from "../src/artifacts/livePrompt.js";
+import { htmlPromptSection, liveArtifactsPromptSection, promptTokenEstimate } from "../src/artifacts/livePrompt.js";
 import {
   EXCLUDED_COMPONENT_NAMES,
   LIBRARY_NAME,
@@ -117,7 +117,10 @@ describe("live program vocabulary", () => {
       output: "rows[].day, rows[].events",
     }));
     const section = liveArtifactsPromptSection(functions);
-    expect(promptTokenEstimate(section)).toBeLessThan(4500);
+    expect(promptTokenEstimate(htmlPromptSection())).toBeLessThan(900);
+    expect(promptTokenEstimate(section)).toBeLessThan(6000);
+    expect(section).toContain("### Live HTML artifacts");
+    expect(section).toContain("chartjs@");
     expect(liveArtifactsPromptSection(functions)).toBe(section);
     const long = liveArtifactsPromptSection(
       functions.map((fn) => ({
@@ -127,7 +130,7 @@ describe("live program vocabulary", () => {
         output: `rows[].day, rows[].events, ${"rows[].bucket, ".repeat(40)}`,
       })),
     );
-    expect(promptTokenEstimate(long)).toBeLessThan(4500);
+    expect(promptTokenEstimate(long)).toBeLessThan(6000);
     expect(long).toContain("...");
     const row = long.split("\n").find((line) => line.startsWith("- fn_00:"));
     expect(row).toBeTruthy();

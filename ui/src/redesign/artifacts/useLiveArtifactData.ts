@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArtifactRequestError,
+  fetchArtifact,
   fetchArtifactData,
   requestArtifactRefresh,
   type ArtifactDataResponse,
@@ -22,6 +23,7 @@ export type UseLiveArtifactDataOptions = {
   version?: number;
   latestVersion?: number;
   hidden?: boolean;
+  onRecord?: (record: ArtifactRecord) => void;
 };
 
 export type LiveArtifactData = {
@@ -176,6 +178,7 @@ export function createLiveArtifactDataModel(input: {
   clock: LiveRefreshClock;
   loadStored: () => Promise<LiveHttpBody>;
   refresh: (request: LiveScheduleRequest) => Promise<LiveHttpBody>;
+  syncRecord?: () => Promise<void>;
   onChange: (state: Omit<LiveArtifactData, "refresh" | "settled">) => void;
 }): {
   start: () => Promise<void>;
@@ -195,7 +198,9 @@ export function createLiveArtifactDataModel(input: {
     clock: input.clock,
     onChange: (view) => emit({ refreshing: view.refreshing, lastError: view.lastError }),
     refresh: async (request) => {
+      const sync = input.syncRecord?.();
       const response = await input.refresh(request);
+      await sync;
       if (request.signal.aborted || stopped) {
         return { ok: false, resourceLimit: false, refreshedAt: null };
       }
@@ -238,6 +243,7 @@ export function createLiveArtifactDataModel(input: {
     },
     setVisible(visible: boolean) {
       scheduler.setVisible(visible);
+      if (visible) void input.syncRecord?.();
     },
     unmount() {
       stopped = true;
@@ -301,6 +307,16 @@ export function useLiveArtifactData(record: ArtifactRecord | null, options: UseL
           ifStale: request.ifStale,
           signal: request.signal,
         }),
+      syncRecord: async () => {
+        const optionsNow = optionsRef.current;
+        if (!recordRef.current || (recordRef.current.kind !== "live.html" && recordRef.current.kind !== "live.declarative")) return;
+        try {
+          const next = await fetchArtifact(optionsNow.ownerKey, optionsNow.id, optionsNow.projectRoot, optionsNow.version);
+          optionsNow.onRecord?.(next);
+        } catch {
+          return;
+        }
+      },
       onChange: (state) => {
         setData(state);
         setSettled(true);

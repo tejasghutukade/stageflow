@@ -18,6 +18,8 @@ import {
   shellDocumentHeaders,
   type SandboxDisableReason,
 } from "./sandboxPolicy.js";
+import { readHtmlLibraryFile } from "../artifacts/library/htmlLibraryFiles.js";
+import { artifactEvalLibsAllowed } from "../artifacts/library/htmlLibraries.js";
 import { SHELL_HTML, shellScript } from "./sandboxShell.js";
 
 const log = rootLogger.child({ component: "sandbox" });
@@ -67,7 +69,7 @@ export async function startSandboxListener(options: StartSandboxListenerOptions)
     return idle("remote-bind");
   }
   const choice = sandboxHostname(options.listenHost);
-  const script = shellScript(options.consoleOrigins);
+  const script = shellScript(options.consoleOrigins, { allowEval: artifactEvalLibsAllowed(env) });
   const headers = shellDocumentHeaders(options.consoleOrigins);
   const handler = (req: IncomingMessage, res: ServerResponse) => handle(req, res, script, headers);
   const bindSocket = options.bind ?? bind;
@@ -259,6 +261,23 @@ function handle(
     send(req, res, 404, "text/plain; charset=utf-8", "not found\n", commonHeaders());
     return;
   }
+  const library = matchSandboxLibraryPath(pathname);
+  if (library) {
+    if (method !== "GET" && method !== "HEAD") {
+      send(req, res, 405, "text/plain; charset=utf-8", "method not allowed\n", {
+        ...commonHeaders(),
+        Allow: "GET, HEAD",
+      });
+      return;
+    }
+    const file = readHtmlLibraryFile(library.name, library.version, library.file);
+    if (!file) {
+      send(req, res, 404, "text/plain; charset=utf-8", "not found\n", commonHeaders());
+      return;
+    }
+    send(req, res, 200, file.contentType, file.body, libraryHeaders());
+    return;
+  }
   if (!ROUTES.has(pathname)) {
     send(req, res, 404, "text/plain; charset=utf-8", "not found\n", commonHeaders());
     return;
@@ -284,6 +303,36 @@ function handle(
   send(req, res, 200, "text/html; charset=utf-8", SHELL_HTML, documentHeaders);
 }
 
+export function matchSandboxLibraryPath(pathname: string): { name: string; version: string; file: string } | null {
+  if (!pathname.startsWith("/libs/") || pathname.includes("//") || pathname.includes("\\") || pathname.includes("..") || pathname.includes("%")) {
+    return null;
+  }
+  const rest = pathname.slice("/libs/".length);
+  const slash = rest.indexOf("/");
+  if (slash <= 0) return null;
+  const id = rest.slice(0, slash);
+  const file = rest.slice(slash + 1);
+  if (!file || file.endsWith("/")) return null;
+  const at = id.lastIndexOf("@");
+  if (at <= 0) return null;
+  const name = id.slice(0, at);
+  const version = id.slice(at + 1);
+  if (!/^[a-z][a-z0-9-]{0,31}$/.test(name) || !/^\d+\.\d+\.\d+$/.test(version)) return null;
+  if (!/^[A-Za-z0-9./_-]+$/.test(file)) return null;
+  const parts = file.split("/");
+  if (parts.some((part) => part.length === 0 || part === "." || part === "..")) return null;
+  return { name, version, file };
+}
+
+function libraryHeaders(): Record<string, string> {
+  return {
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "public, max-age=31536000, immutable",
+    "Cross-Origin-Resource-Policy": "cross-origin",
+    "Access-Control-Allow-Origin": "*",
+  };
+}
+
 function commonHeaders(): Record<string, string> {
   return {
     "X-Content-Type-Options": "nosniff",
@@ -298,10 +347,10 @@ function send(
   res: ServerResponse,
   status: number,
   contentType: string,
-  body: string,
+  body: string | Buffer,
   headers: Record<string, string>,
 ): void {
-  const payload = Buffer.from(body);
+  const payload = Buffer.isBuffer(body) ? body : Buffer.from(body);
   res.writeHead(status, {
     ...headers,
     "Content-Type": contentType,

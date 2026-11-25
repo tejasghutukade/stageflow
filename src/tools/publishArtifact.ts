@@ -88,7 +88,7 @@ export function artifactPublishPromptSection(
     "",
     "The id is a lowercase slug: it starts with a letter, then has up to 63 letters, digits, underscores, or hyphens (`^[a-z][a-z0-9_-]{0,63}$`). Publishing the same id again creates a new version. If the bytes and kind are unchanged, the current version is kept and the tool returns unchanged. That unchanged publish still counts for this attempt.",
     "",
-    `Kinds: ${PUBLISH_KINDS.join(", ")}. Static content is at most ${mib} MiB. A live.declarative program is the content string, at most ${Math.round(LIVE_PROGRAM_MAX_BYTES / 1024)} KiB, with format, library, bindings, and optional refresh. live.html is one HTML document, at most ${Math.round(LIVE_HTML_MAX_BYTES / 1024)} KiB, with format, csp, bindings, and optional refresh. The title is at most ${ARTIFACT_TITLE_MAX_CHARS} characters. You may set at most ${ARTIFACT_TAG_MAX} tags, each matching [a-z0-9_-] and at most 32 characters. Description and summary are at most ${ARTIFACT_DESCRIPTION_MAX_CHARS} and ${ARTIFACT_SUMMARY_MAX_CHARS} characters.`,
+    `Kinds: ${PUBLISH_KINDS.join(", ")}. Static content is at most ${mib} MiB. A live.declarative program is the content string, at most ${Math.round(LIVE_PROGRAM_MAX_BYTES / 1024)} KiB, with format, library, bindings, and optional refresh. live.html is one HTML document, at most ${Math.round(LIVE_HTML_MAX_BYTES / 1024)} KiB, with format, csp, libraries, bindings, and optional refresh. The title is at most ${ARTIFACT_TITLE_MAX_CHARS} characters. You may set at most ${ARTIFACT_TAG_MAX} tags, each matching [a-z0-9_-] and at most 32 characters. Description and summary are at most ${ARTIFACT_DESCRIPTION_MAX_CHARS} and ${ARTIFACT_SUMMARY_MAX_CHARS} characters.`,
     "",
     "Give path, content, or content_base64, and only one of them. path is a run-relative path inside this attempt's artifacts directory, or a path relative to that directory. content is inline text. content_base64 is an image (png, jpeg, gif, or webp).",
     "",
@@ -266,6 +266,15 @@ export function publishArtifactParameterSchema() {
           baseUriDomains: Type.Optional(Type.Array(Type.String())),
         }),
       ),
+      libraries: Type.Optional(
+        Type.Array(
+          Type.Object({
+            name: Type.String(),
+            version: Type.String(),
+            allowEval: Type.Optional(Type.Boolean()),
+          }),
+        ),
+      ),
     },
     { additionalProperties: false },
   );
@@ -275,7 +284,7 @@ export function createPublishArtifactTool(options: PublishArtifactToolOptions) {
   return {
     name: PUBLISH_ARTIFACT_TOOL_NAME,
     label: "Publish artifact",
-    description: `Publish a titled, versioned artifact a person can open later. Kinds: ${PUBLISH_KINDS.join(", ")}. Static content at most ${Math.floor(STATIC_CONTENT_MAX_BYTES / (1024 * 1024))} MiB. live.declarative takes content as the program plus format, library, bindings, and optional refresh. live.html takes the HTML document plus format, csp, bindings, and optional refresh. Pass path, content, or content_base64. Publishing the same id again creates a new version. This call does not end the turn. A validation error returns a code and issues; fix the arguments and call again.`,
+    description: `Publish a titled, versioned artifact a person can open later. Kinds: ${PUBLISH_KINDS.join(", ")}. Static content at most ${Math.floor(STATIC_CONTENT_MAX_BYTES / (1024 * 1024))} MiB. live.declarative takes content as the program plus format, library, bindings, and optional refresh. live.html takes the HTML document plus format, csp, libraries ({name, version} from the Host list), bindings, and optional refresh. Pass path, content, or content_base64. Publishing the same id again creates a new version. This call does not end the turn. A validation error returns a code and issues; fix the arguments and call again.`,
     parameters: publishArtifactParameterSchema(),
     execute: async (_toolCallId: string, params: unknown): Promise<{
       content: Array<{ type: "text"; text: string }>;
@@ -396,8 +405,13 @@ export async function publishBodyFromToolParams(
 }
 
 function liveManifestFields(record: Record<string, unknown>): { manifest?: unknown } {
-  const liveFields = ["format", "library", "bindings", "refresh", "csp"] as const;
+  const liveFields = ["format", "library", "bindings", "refresh", "csp", "libraries"] as const;
   const present = liveFields.some((key) => record[key] !== undefined);
+  if (record.kind !== LIVE_HTML_KIND && record.libraries !== undefined) {
+    throw new ArtifactPublishError(400, "artifact.invalid_shape", "libraries is only valid for live.html", [
+      { path: "libraries", message: "libraries is only valid for live.html" },
+    ]);
+  }
   if (record.kind === LIVE_HTML_KIND) {
     if (record.library !== undefined) {
       throw new ArtifactPublishError(400, "artifact.invalid_shape", "library is not valid for live.html", [
@@ -408,6 +422,7 @@ function liveManifestFields(record: Record<string, unknown>): { manifest?: unkno
       manifest: {
         format: record.format ?? "html",
         ...(record.csp !== undefined ? { csp: record.csp } : {}),
+        ...(record.libraries !== undefined ? { libraries: record.libraries } : {}),
         bindings: record.bindings ?? [],
         ...(record.refresh !== undefined ? { refresh: record.refresh } : {}),
       },

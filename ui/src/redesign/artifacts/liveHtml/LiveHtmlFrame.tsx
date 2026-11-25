@@ -1,9 +1,19 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { queryArtifactBinding, type ArtifactRecord, type ArtifactSnapshot } from "../../../api/artifacts";
+import { LuShieldAlert } from "react-icons/lu";
+import {
+  approveArtifactOrigins,
+  queryArtifactBinding,
+  revokeArtifactOrigins,
+  type ArtifactLiveView,
+  type ArtifactOriginView,
+  type ArtifactRecord,
+  type ArtifactSnapshot,
+} from "../../../api/artifacts";
 import { canonicalJson, clearLiveQueryCache } from "../liveData/queryCache";
 import { SandboxedHtml } from "../renderers/SandboxedHtml";
 import { bindingCacheScope, createBindingCaller, type BindingQuery } from "./bindingCalls";
-import { liveHtmlDocumentCsp } from "./cspPolicy";
+import { HTML_LIBRARY_FLAGS } from "../../../../../src/artifacts/library/htmlLibraryFlags.ts";
+import { libraryCspSources, liveHtmlDocumentCsp } from "./cspPolicy";
 import { COLLAPSED_SHELL_HEIGHT_PX, createHostBridge, createNonce, type HostBridge } from "./hostBridge";
 import { readLiveHtmlHostContext } from "./hostContext";
 import { useSandboxOrigin } from "./sandboxOrigin";
@@ -37,6 +47,8 @@ export type LiveHtmlFrameProps = {
   artifactId: string;
   projectRoot?: string;
   query?: BindingQuery;
+  onOrigins?: (origins: ArtifactOriginView) => void;
+  reviewToken?: number;
 };
 
 function LoadingSkeleton() {
@@ -100,44 +112,276 @@ export function LiveHtmlFrame(props: LiveHtmlFrameProps) {
   return <LiveHtmlMount {...props} html={props.html} origin={sandbox.origin} />;
 }
 
+function originKey(origins: ArtifactOriginView | undefined): string {
+  if (!origins) return "";
+  return `${origins.hash}:${origins.approved}:${origins.approved_at ?? ""}`;
+}
+
+function declaredOriginLists(csp: ArtifactLiveView["csp"]): { connect: string[]; resource: string[]; base: string[] } {
+  return {
+    connect: csp?.connectDomains ?? [],
+    resource: csp?.resourceDomains ?? [],
+    base: csp?.baseUriDomains ?? [],
+  };
+}
+
+function hasDeclaredOrigins(lists: { connect: string[]; resource: string[]; base: string[] }): boolean {
+  return lists.connect.length + lists.resource.length + lists.base.length > 0;
+}
+
+function approvalView(record: ArtifactRecord): { view: ArtifactOriginView | null; blocked: boolean; hashKnown: boolean } {
+  const lists = declaredOriginLists(record.live?.csp);
+  const origins = record.live?.origins;
+  if (!hasDeclaredOrigins(lists) && (!origins || origins.connect.length + origins.resource.length + origins.base.length === 0)) {
+    return { view: origins ?? null, blocked: false, hashKnown: true };
+  }
+  if (!hasDeclaredOrigins(lists)) {
+    return { view: origins ?? null, blocked: Boolean(origins && !origins.approved && origins.connect.length + origins.resource.length + origins.base.length > 0), hashKnown: Boolean(origins?.hash) };
+  }
+  if (!origins || !origins.approved) {
+    const view = origins ?? { ...lists, hash: "", approved: false, approved_at: null };
+    return { view, blocked: true, hashKnown: Boolean(origins?.hash) };
+  }
+  return { view: origins, blocked: false, hashKnown: true };
+}
+
 function LiveHtmlMount(props: LiveHtmlFrameProps & { html: string; origin: string }) {
   const [attempt, setAttempt] = useState(0);
+  const [frameEpoch, setFrameEpoch] = useState(0);
   const [failed, setFailed] = useState(false);
+  const incomingKey = `${originKey(props.record.live?.origins)}:${declaredOriginLists(props.record.live?.csp).connect.join(",")}:${declaredOriginLists(props.record.live?.csp).resource.join(",")}:${declaredOriginLists(props.record.live?.csp).base.join(",")}`;
+  const [seenKey, setSeenKey] = useState(incomingKey);
+  const [origins, setOrigins] = useState<ArtifactOriginView | null>(approvalView(props.record).view);
+  const [dismissed, setDismissed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const review = props.reviewToken ?? 0;
+  const [seenReview, setSeenReview] = useState(review);
+  if (seenKey !== incomingKey) {
+    setSeenKey(incomingKey);
+    setOrigins(approvalView(props.record).view);
+    setDismissed(false);
+    setActionError(null);
+  }
+  if (seenReview !== review) {
+    setSeenReview(review);
+    setDismissed(false);
+  }
   useEffect(() => {
     setFailed(false);
-  }, [props.html, props.record.live?.csp, props.version, props.origin]);
-  if (failed) {
-    return (
-      <StateCard title="The sandbox did not start">
+  }, [props.html, props.record.live?.csp, props.version, props.origin, frameEpoch]);
+  const declared = props.record.live?.libraries ?? [];
+  const selected = declared.flatMap((ref) => {
+    const library = HTML_LIBRARY_FLAGS.find((item) => item.name === ref.name && item.version === ref.version);
+    return library ? [library] : [];
+  });
+  const lists = declaredOriginLists(props.record.live?.csp);
+  const listed = origins ? origins.connect.length + origins.resource.length + origins.base.length : 0;
+  const declaredOrigins = hasDeclaredOrigins(lists);
+  const blocked = declaredOrigins ? origins?.approved !== true : listed > 0 && origins?.approved !== true;
+  const requested = blocked
+    ? listed > 0
+      ? origins
+      : declaredOrigins
+        ? { connect: lists.connect, resource: lists.resource, base: lists.base, hash: origins?.hash ?? "", approved: false as const, approved_at: null }
+        : null
+    : origins && origins.approved && listed > 0
+      ? origins
+      : null;
+  const hashKnown = Boolean(requested?.hash);
+  const sources = libraryCspSources(props.origin, declared);
+  const csp = liveHtmlDocumentCsp(blocked ? {} : (props.record.live?.csp ?? {}), {
+    ...sources,
+    needsEval: selected.some((library) => library.needsEval),
+  });
+  async function approve() {
+    if (!requested || busy || !requested.hash) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      const result = await approveArtifactOrigins(
+        props.ownerKey,
+        props.artifactId,
+        { origins_hash: requested.hash, version: props.version },
+        props.projectRoot,
+      );
+      setOrigins(result.origins);
+      setDismissed(false);
+      setFrameEpoch((value) => value + 1);
+      props.onOrigins?.(result.origins);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function revoke() {
+    if (!requested || busy) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      const result = await revokeArtifactOrigins(props.ownerKey, props.artifactId, props.projectRoot, requested.hash);
+      if (result.origins) {
+        setOrigins(result.origins);
+        setDismissed(false);
+        setFrameEpoch((value) => value + 1);
+        props.onOrigins?.(result.origins);
+      }
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const showBanner = requested !== null && !requested.approved && !dismissed;
+  const showApproved = requested !== null && requested.approved;
+  return (
+    <div className="flex flex-col gap-3">
+      {showBanner && requested ? (
+        <OriginBanner
+          origins={requested}
+          hashKnown={hashKnown}
+          busy={busy}
+          error={actionError}
+          onApprove={() => void approve()}
+          onKeepBlocked={() => {
+            setDismissed(true);
+            setActionError(null);
+          }}
+        />
+      ) : null}
+      {requested && !requested.approved && dismissed ? (
         <button
           type="button"
-          className="mt-3 h-8 rounded-lg border border-[var(--sf-hairline-strong)] px-3 text-[13px] text-[var(--sf-text-1)]"
-          onClick={() => {
+          className="h-8 w-fit rounded-lg border border-[var(--sf-hairline-strong)] px-3 text-[13px] text-[var(--sf-text-1)]"
+          onClick={() => setDismissed(false)}
+        >
+          Review origins
+        </button>
+      ) : null}
+      {showApproved && requested ? (
+        <div data-testid="live-html-origin-approved" className="flex flex-wrap items-center gap-3 text-[13px] text-[var(--sf-text-2)]">
+          <span>Origins approved (revoke)</span>
+          <button
+            type="button"
+            className="h-8 rounded-lg border border-[var(--sf-hairline-strong)] px-3 text-[13px] text-[var(--sf-text-1)] disabled:opacity-50"
+            disabled={busy}
+            onClick={() => void revoke()}
+          >
+            Revoke
+          </button>
+          {actionError ? (
+            <p role="alert" className="text-[13px] text-[var(--sf-fail)]">
+              {actionError}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      {failed ? (
+        <StateCard title="The sandbox did not start">
+          <button
+            type="button"
+            className="mt-3 h-8 rounded-lg border border-[var(--sf-hairline-strong)] px-3 text-[13px] text-[var(--sf-text-1)]"
+            onClick={() => {
+              setFailed(false);
+              setAttempt((value) => value + 1);
+            }}
+          >
+            Retry
+          </button>
+          <details className="mt-3">
+            <summary className="cursor-pointer text-[13px] text-[var(--sf-text-2)]">Details</summary>
+            <p className="sf-mono mt-1 text-[12px] text-[var(--sf-text-1)]">{props.origin}</p>
+          </details>
+        </StateCard>
+      ) : (
+        <LiveHtmlSession
+          key={`${attempt}:${frameEpoch}:${props.version}:${csp}:${props.html}`}
+          {...props}
+          csp={csp}
+          onTimeout={() => setFailed(true)}
+          onRestart={() => {
             setFailed(false);
             setAttempt((value) => value + 1);
           }}
-        >
-          Retry
-        </button>
-        <details className="mt-3">
-          <summary className="cursor-pointer text-[13px] text-[var(--sf-text-2)]">Details</summary>
-          <p className="sf-mono mt-1 text-[12px] text-[var(--sf-text-1)]">{props.origin}</p>
-        </details>
-      </StateCard>
-    );
-  }
-  const csp = liveHtmlDocumentCsp(props.record.live?.csp ?? {});
+        />
+      )}
+    </div>
+  );
+}
+
+function OriginGroup({ label, values }: { label: string; values: readonly string[] }) {
+  if (values.length === 0) return null;
   return (
-    <LiveHtmlSession
-      key={`${attempt}:${props.version}:${csp}:${props.html}`}
-      {...props}
-      csp={csp}
-      onTimeout={() => setFailed(true)}
-      onRestart={() => {
-        setFailed(false);
-        setAttempt((value) => value + 1);
-      }}
-    />
+    <div>
+      <div className="text-[11px] uppercase tracking-wide text-[var(--sf-text-3)]">{label}</div>
+      {values.map((origin) => (
+        <div key={origin} className="sf-mono text-[13px] text-[var(--sf-text-1)]">
+          {origin}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function OriginBanner(props: {
+  origins: ArtifactOriginView;
+  hashKnown: boolean;
+  busy: boolean;
+  error: string | null;
+  onApprove: () => void;
+  onKeepBlocked: () => void;
+}) {
+  return (
+    <section
+      role="region"
+      aria-label="Origin approval"
+      data-testid="live-html-origin-banner"
+      className="rounded-lg border border-[var(--sf-hairline)] bg-[var(--sf-needs-bg)] px-4 py-3"
+    >
+      <p className="flex items-start gap-2 text-[13px] font-medium text-[var(--sf-text-1)]">
+        <LuShieldAlert aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--sf-needs)]" />
+        This artifact asks to contact external servers. Nothing is allowed until you approve.
+      </p>
+      <p className="mt-2 text-[13px] text-[var(--sf-text-2)]">
+        Approved origins can receive any data this artifact can read, including its bound data.
+      </p>
+      <div className="mt-3 flex flex-col gap-2">
+        <OriginGroup label="Send and receive data (connect)" values={props.origins.connect} />
+        <OriginGroup label="Load scripts, styles, images and fonts (resources)" values={props.origins.resource} />
+        <OriginGroup label="Base URL" values={props.origins.base} />
+      </div>
+      <details className="mt-3">
+        <summary className="cursor-pointer text-[13px] text-[var(--sf-text-2)]">Details</summary>
+        {props.hashKnown ? <p className="sf-mono mt-1 text-[12px] text-[var(--sf-text-1)]">{props.origins.hash.slice(0, 8)}</p> : null}
+        <p className="mt-1 text-[12px] text-[var(--sf-text-2)]">
+          Tools cannot approve. The approve API needs the control token, and the CLI refuses inside a stage or agent session. A model with unrestricted shell access and the operator&apos;s home directory can still read the control token or the database and bypass that. Stages run with a curated environment, and a shell command can still reach those files.
+        </p>
+      </details>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="h-8 rounded-lg border border-[var(--sf-hairline-strong)] px-3 text-[13px] text-[var(--sf-text-1)] disabled:opacity-50"
+          disabled={props.busy || !props.hashKnown}
+          onClick={props.onApprove}
+        >
+          {props.hashKnown ? "Approve these origins" : "Reload to approve"}
+        </button>
+        <button
+          type="button"
+          className="h-8 rounded-lg border border-[var(--sf-hairline-strong)] px-3 text-[13px] text-[var(--sf-text-1)] disabled:opacity-50"
+          disabled={props.busy}
+          onClick={props.onKeepBlocked}
+        >
+          Keep blocked
+        </button>
+      </div>
+      {props.error ? (
+        <p role="alert" className="mt-2 text-[13px] text-[var(--sf-fail)]">
+          {props.error}
+        </p>
+      ) : null}
+    </section>
   );
 }
 
@@ -195,11 +439,14 @@ function LiveHtmlSession(props: LiveHtmlFrameProps & {
       },
       cacheScope: bindingCacheScope(props.projectRoot, props.ownerKey, props.artifactId, props.version),
     });
+    const libraryRefs = (props.record.live?.libraries ?? []).map((library) => ({ name: library.name, version: library.version }));
     bridgeRef.current = createHostBridge({
       sandboxOrigin: props.origin,
       html: props.html,
       csp: props.csp,
       nonce,
+      libraries: libraryRefs,
+      allowEval: (props.record.live?.libraries ?? []).some((library) => library.allowEval === true),
       readContext: () => readLiveHtmlHostContext(containerRef.current),
       callBinding: caller,
       onHeight: (px) => setHeight(px),

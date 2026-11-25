@@ -1,5 +1,7 @@
 import type Database from "better-sqlite3";
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
+import { originApprovalView } from "./originApproval.js";
+import { isLiveHtmlKind } from "./kinds.js";
 import {
   artifactRecord,
   type ArtifactRecord,
@@ -277,8 +279,12 @@ function registeredIds(roots: readonly CatalogRoot[]): Set<string> {
   return new Set(roots.map((root) => root.project_root));
 }
 
-function toRecord(row: ArtifactRow, registered: Set<string>): ArtifactRecord {
-  return artifactRecord(row, registered.has(row.project_root_id));
+function toRecord(db: Database.Database, row: ArtifactRow, registered: Set<string>): ArtifactRecord {
+  const record = artifactRecord(row, registered.has(row.project_root_id));
+  if (record.live && isLiveHtmlKind(row.kind)) {
+    record.live = { ...record.live, origins: originApprovalView(db, row.key, record.live.csp) };
+  }
+  return record;
 }
 
 function sortPrimaryExpr(sort: ArtifactListSort): string {
@@ -429,7 +435,7 @@ function listArtifactsBySearch(
          LIMIT @limit OFFSET @offset`,
       )
       .all({ ...params, limit: query.limit + 1, offset }) as ArtifactRow[];
-    return pageFromRows(rows, roots, query.limit, offset, fingerprint, total.n);
+    return pageFromRows(db, rows, roots, query.limit, offset, fingerprint, total.n);
   };
 
   if (artifactFtsReady(db)) {
@@ -464,7 +470,7 @@ function listArtifactsBySearch(
            LIMIT @limit OFFSET @offset`,
         )
         .all(ftsParams) as ArtifactRow[];
-      return pageFromRows(rows, roots, query.limit, offset, fingerprint, total.n);
+      return pageFromRows(db, rows, roots, query.limit, offset, fingerprint, total.n);
     } catch (error) {
       noteArtifactFtsQueryFailed(error);
     }
@@ -473,6 +479,7 @@ function listArtifactsBySearch(
 }
 
 function pageFromRows(
+  db: Database.Database,
   rows: ArtifactRow[],
   roots: readonly CatalogRoot[],
   limit: number,
@@ -484,7 +491,7 @@ function pageFromRows(
   const registered = registeredIds(roots);
   const nextOffset = offset + page.length;
   return {
-    artifacts: page.map((row) => toRecord(row, registered)),
+    artifacts: page.map((row) => toRecord(db, row, registered)),
     next_cursor:
       rows.length > limit
         ? encodeSearchCursor({ mode: "search", ...fingerprint, offset: nextOffset })
@@ -577,7 +584,7 @@ export function listArtifacts(
   const registered = registeredIds(roots);
   const extra = rows.length > query.limit ? page[page.length - 1] : undefined;
   return {
-    artifacts: page.map((row) => toRecord(row, registered)),
+    artifacts: page.map((row) => toRecord(db, row, registered)),
     next_cursor: extra
       ? encodeArtifactCursor(sort, order, sortPrimaryValue(extra, sort), extra.key)
       : null,
@@ -652,5 +659,5 @@ export function readArtifact(
     );
   }
   const registered = registeredIds(roots);
-  return toRecord(rows[0]!, registered);
+  return toRecord(db, rows[0]!, registered);
 }

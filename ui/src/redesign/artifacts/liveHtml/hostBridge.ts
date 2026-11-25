@@ -87,6 +87,8 @@ export function createHostBridge(input: {
   html: string;
   csp: string;
   nonce: string;
+  libraries?: Array<{ name: string; version: string }>;
+  allowEval?: boolean;
   readContext: () => HostContext;
   callBinding: (name: string, args: Record<string, unknown> | undefined) => Promise<ToolCallBody>;
   onHeight: (px: number) => void;
@@ -129,10 +131,17 @@ export function createHostBridge(input: {
       timers.clear(timer);
       timer = null;
     }
+    const libraries = input.libraries ?? [];
     postToFrame(post, {
       jsonrpc: "2.0",
       method: SHELL_LOAD_METHOD,
-      params: { html: input.html, csp: input.csp, nonce: input.nonce },
+      params: {
+        html: input.html,
+        csp: input.csp,
+        nonce: input.nonce,
+        ...(libraries.length > 0 ? { libraries } : {}),
+        ...(input.allowEval === true ? { allowEval: true } : {}),
+      },
     });
     input.onReady();
     flushUpdates(post);

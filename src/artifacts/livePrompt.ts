@@ -1,5 +1,7 @@
 import type { BindableFunctionInfo } from "./bindable.js";
 import { LIBRARY_NAME, LIBRARY_VERSION, OPENUI_LANG_FORMAT, promptTokenEstimate, vocabularyPrompt } from "./library/index.js";
+import { HTML_LIBRARIES } from "./library/htmlLibraries.js";
+import { LIVE_HTML_MAX_BYTES } from "./limits.js";
 
 export { promptTokenEstimate };
 
@@ -32,9 +34,34 @@ function renderIo(input: string, output: string, cap: number): string {
   return rendered.length <= cap ? rendered : clip(rendered, cap);
 }
 
+export function htmlPromptSection(): string {
+  const rows = HTML_LIBRARIES.map((library) => `- ${library.name}@${library.version} global ${library.globalName}: ${library.hint}`);
+  return [
+    "### Live HTML artifacts",
+    "",
+    `kind live.html. format html. One HTML document, at most ${LIVE_HTML_MAX_BYTES} bytes. libraries is an optional list of {name, version} from the Host list below (at most 6, no URLs). csp lists https origins. bindings and refresh match live.declarative.`,
+    "",
+    "Vendored libraries:",
+    ...rows,
+    "mermaid needs allowEval: true on that entry and STAGEFLOW_ARTIFACT_ALLOW_EVAL_LIBS=1. It stays off otherwise.",
+    "",
+    "window.stageflow.initialize runs first. callBinding(name, args) returns the binding result. onBindingUpdated(id, fn) runs when that binding refreshes. Host theme variables are the --sf-* custom properties.",
+    "No iframes, links, forms, popups, or navigation. Declare every https origin in csp. Declared external origins need operator approval before they work. An external script or stylesheet needs integrity (sha256, sha384, or sha512) and crossorigin=anonymous. Text is plain text.",
+    "",
+    'Example: manifest libraries [{name:"chartjs", version:"' + HTML_LIBRARIES[0]!.version + '"}].',
+    '<canvas id="c"></canvas><script>',
+    'window.stageflow.callBinding("rows").then(function (res) {',
+    "  var rows = res.rows || [];",
+    '  new Chart(document.getElementById("c"), { type: "line", data: { labels: rows.map(function (r) { return r.day; }), datasets: [{ data: rows.map(function (r) { return r.n; }) }] } });',
+    "});",
+    "</script>",
+  ].join("\n");
+}
+
 export function liveArtifactsPromptSection(functions: readonly BindableFunctionInfo[]): string {
+  const html = htmlPromptSection();
   if (functions.length === 0) {
-    return ["## Live artifacts", "", vocabularyPrompt(), "", SYNTAX, "no bindable functions: write data into the program"].join("\n");
+    return ["## Live artifacts", "", vocabularyPrompt(), "", SYNTAX, "no bindable functions: write data into the program", "", html].join("\n");
   }
   const lines = [
     "## Live artifacts",
@@ -63,9 +90,10 @@ export function liveArtifactsPromptSection(functions: readonly BindableFunctionI
     ].join("\n");
   let ioCap = IO_CAP;
   let text = render(ioCap);
-  while (promptTokenEstimate(text) >= 4500 && ioCap > 48) {
+  const htmlTokens = promptTokenEstimate(html);
+  while (promptTokenEstimate(text) + htmlTokens >= 6000 && ioCap > 48) {
     ioCap -= 24;
     text = render(ioCap);
   }
-  return text;
+  return `${text}\n\n${html}`;
 }

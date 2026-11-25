@@ -827,7 +827,9 @@ async function shutdown(code: number): Promise<void> {
   setTimeout(() => process.exit(code), 50);
 }
 
-host.listen(0, "127.0.0.1", async () => {
+if (process.argv.includes("--libraries")) {
+  void import("./sandbox-library-check.ts").then((mod) => mod.runLibraryChecks());
+} else host.listen(0, "127.0.0.1", async () => {
   const address = host.address();
   const port = address && typeof address !== "string" ? address.port : 0;
   hostOrigin = `http://127.0.0.1:${port}`;

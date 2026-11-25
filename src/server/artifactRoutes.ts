@@ -2,7 +2,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RunStore } from "../runstore/port.js";
 import { sqliteConnectionFromStore } from "../runstore/createStore.js";
 import { ArtifactContentError, readArtifactContent, STATIC_HTML_CONTENT_SECURITY_POLICY } from "../artifacts/content.js";
-import { isLiveKind } from "../artifacts/kinds.js";
+import { isLiveHtmlKind, isLiveKind } from "../artifacts/kinds.js";
+import { approveOrigins, originApprovalView, revokeOrigins } from "../artifacts/originApproval.js";
 import { artifactStorageKey, stageOwnerKey } from "../artifacts/keys.js";
 import { artifactLiveManifestFields } from "../artifacts/record.js";
 import { ArtifactPublishError, STATIC_CONTENT_MAX_BYTES } from "../artifacts/limits.js";
@@ -41,11 +42,13 @@ function sendError(
   const projectRoots =
     error instanceof ArtifactQueryError || error instanceof ArtifactPublishError ? error.projectRoots : undefined;
   const issues = error instanceof ArtifactPublishError ? error.issues : undefined;
+  const details = error instanceof ArtifactPublishError ? error.details : undefined;
   json(res, error.status, {
     error: error.message,
     code: error.code,
     ...(issues !== undefined && issues.length > 0 ? { issues } : {}),
     ...(projectRoots !== undefined ? { project_roots: projectRoots } : {}),
+    ...(details ?? {}),
   });
 }
 
@@ -98,6 +101,37 @@ async function readLimitedJson(req: IncomingMessage, maxBytes = MAX_PUBLISH_BODY
       { path: "body", message: "must be JSON" },
     ]);
   }
+}
+
+function approveBody(raw: unknown): { originsHash: string; version?: number } {
+  if (!isRecord(raw)) {
+    throw new ArtifactPublishError(400, "artifact.invalid_shape", "Request body must be an object", [
+      { path: "body", message: "must be an object" },
+    ]);
+  }
+  const allowed = new Set(["origins_hash", "version"]);
+  for (const key of Object.keys(raw)) {
+    if (!allowed.has(key)) {
+      throw new ArtifactPublishError(400, "artifact.invalid_shape", `${key} is not a field`, [
+        { path: key, message: "unknown field" },
+      ]);
+    }
+  }
+  if (typeof raw.origins_hash !== "string" || !/^[a-f0-9]{64}$/.test(raw.origins_hash)) {
+    throw new ArtifactPublishError(400, "artifact.invalid_shape", "origins_hash is not valid", [
+      { path: "origins_hash", message: "must be a sha256 hex digest" },
+    ]);
+  }
+  let version: number | undefined;
+  if (Object.prototype.hasOwnProperty.call(raw, "version")) {
+    if (typeof raw.version !== "number" || !Number.isInteger(raw.version) || raw.version < 1) {
+      throw new ArtifactPublishError(400, "artifact.invalid_shape", "version must be a positive integer", [
+        { path: "version", message: "must be a positive integer" },
+      ]);
+    }
+    version = raw.version;
+  }
+  return { originsHash: raw.origins_hash, ...(version !== undefined ? { version } : {}) };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -392,8 +426,22 @@ export async function handleArtifactRoutes(
   const refresh = /^\/api\/artifacts\/([^/]+)\/([^/]+)\/refresh$/.exec(pathname);
   const query = /^\/api\/artifacts\/([^/]+)\/([^/]+)\/query$/.exec(pathname);
   const data = /^\/api\/artifacts\/([^/]+)\/([^/]+)\/data$/.exec(pathname);
+  const approve = /^\/api\/artifacts\/([^/]+)\/([^/]+)\/origins\/approve$/.exec(pathname);
+  const approval = /^\/api\/artifacts\/([^/]+)\/([^/]+)\/origins\/approval$/.exec(pathname);
   const record = /^\/api\/artifacts\/([^/]+)\/([^/]+)$/.exec(pathname);
-  if (!list && versions === null && content === null && refresh === null && query === null && data === null && record === null) return false;
+  if (
+    !list &&
+    versions === null &&
+    content === null &&
+    refresh === null &&
+    query === null &&
+    data === null &&
+    approve === null &&
+    approval === null &&
+    record === null
+  ) {
+    return false;
+  }
   if (list && method !== "GET" && method !== "POST") {
     json(res, 405, { error: "Method not allowed", code: "artifact.invalid_shape" });
     return true;
@@ -406,7 +454,11 @@ export async function handleArtifactRoutes(
     json(res, 405, { error: "Method not allowed", code: "artifact.invalid_shape" });
     return true;
   }
-  if ((refresh || query) && method !== "POST") {
+  if ((refresh || query || approve) && method !== "POST") {
+    json(res, 405, { error: "Method not allowed", code: "artifact.invalid_shape" });
+    return true;
+  }
+  if (approval && method !== "DELETE") {
     json(res, 405, { error: "Method not allowed", code: "artifact.invalid_shape" });
     return true;
   }
@@ -444,10 +496,29 @@ export async function handleArtifactRoutes(
       json(res, 200, page);
       return true;
     }
-    const match = versions ?? content ?? refresh ?? query ?? data ?? record;
+    const match = versions ?? content ?? refresh ?? query ?? data ?? approve ?? approval ?? record;
     const ownerKey = decodeURIComponent(match![1]!);
     const id = decodeURIComponent(match![2]!);
     const projectRoot = url.searchParams.get("project_root") ?? undefined;
+    if (approve || approval) {
+      const artifact = readArtifact(db, ownerKey, id, projectRoot, roots);
+      const storageKey = storageKeyFor(artifact);
+      if (approve) {
+        const body = approveBody(await readLimitedJson(req, MAX_LIVE_POST_BODY_BYTES));
+        const approved = approveOrigins(db, storageKey, { ...body, by: "api" });
+        json(res, 200, approved);
+        return true;
+      }
+      const hash = url.searchParams.get("origins_hash");
+      if (hash !== null && hash !== "" && !/^[a-f0-9]{64}$/.test(hash)) {
+        throw new ArtifactPublishError(400, "artifact.invalid_shape", "origins_hash is not valid", [
+          { path: "origins_hash", message: "must be a sha256 hex digest" },
+        ]);
+      }
+      const revoked = revokeOrigins(db, storageKey, hash !== null && hash !== "" ? hash : undefined);
+      json(res, 200, revoked);
+      return true;
+    }
     if (record && method === "DELETE") {
       const deleted = await deletePublishedArtifact(db, ownerKey, id, projectRoot, roots);
       json(res, 200, deleted);
@@ -559,11 +630,15 @@ export async function handleArtifactRoutes(
       ...(versionKind !== null ? { kind: versionKind } : {}),
     };
     if (versionKind !== null && isLiveKind(versionKind)) {
+      const fields = artifactLiveManifestFields(versionKind, row.manifest_json);
       viewed.live = {
         status: artifact.live?.status ?? null,
         last_refreshed_at: artifact.live?.last_refreshed_at ?? null,
         last_error_code: artifact.live?.last_error_code ?? null,
-        ...artifactLiveManifestFields(versionKind, row.manifest_json),
+        ...fields,
+        ...(isLiveHtmlKind(versionKind)
+          ? { origins: originApprovalView(db, storageKeyFor(artifact), fields.csp) }
+          : {}),
       };
     } else if (versionKind !== null) {
       delete viewed.live;

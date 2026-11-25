@@ -6,8 +6,9 @@ import { rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BRIDGE_ERROR, MAX_FRAME_WIDTH_PX, parseBridgeMessage } from "../src/artifacts/bridge/protocol.js";
-import { buildHtmlCsp } from "../src/artifacts/htmlManifest.js";
+import { BRIDGE_ERROR, MAX_FRAME_WIDTH_PX, parseBridgeMessage, parseSandboxLoadParams } from "../src/artifacts/bridge/protocol.js";
+import { buildHtmlCsp, libraryCspSources } from "../src/artifacts/htmlManifest.js";
+import { HTML_LIBRARIES } from "../src/artifacts/library/htmlLibraries.js";
 import { ShutdownController } from "../src/server/shutdown.js";
 import {
   consoleHostIsIpv6,
@@ -42,6 +43,49 @@ import {
 import { createHash } from "node:crypto";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+function cspSources(policy: string, directive: string): string[] {
+  const part = policy.split("; ").find((entry) => entry.startsWith(`${directive} `));
+  if (!part) return [];
+  return part.slice(directive.length + 1).split(" ").filter((token) => token.length > 0);
+}
+
+function cspSourceMatches(source: string, url: string, selfOrigin: string): boolean {
+  if (source === "'none'" || source === "'unsafe-inline'" || source === "'unsafe-eval'") return false;
+  if (source === "'self'") {
+    try {
+      return new URL(url).origin === selfOrigin;
+    } catch {
+      return false;
+    }
+  }
+  if (source.endsWith(":") && !source.includes("//")) return url.startsWith(source);
+  let base: URL;
+  try {
+    base = new URL(source);
+  } catch {
+    return false;
+  }
+  let target: URL;
+  try {
+    target = new URL(url);
+  } catch {
+    return false;
+  }
+  if (base.protocol !== target.protocol || base.host !== target.host) return false;
+  const pathPart = source.slice(`${base.protocol}//${base.host}`.length);
+  if (!pathPart.startsWith("/")) return true;
+  if (pathPart.endsWith("/")) return target.pathname.startsWith(pathPart);
+  return target.pathname === pathPart;
+}
+
+function cspIntersectionAllows(header: string, meta: string, directive: string, url: string, selfOrigin: string): boolean {
+  const headerSources = cspSources(header, directive);
+  const metaSources = cspSources(meta, directive);
+  const headerHit = headerSources.some((source) => cspSourceMatches(source, url, selfOrigin));
+  const metaHit = metaSources.some((source) => cspSourceMatches(source, url, selfOrigin));
+  return headerHit && metaHit;
+}
 const tsxCli = path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs");
 const listeners: SandboxListener[] = [];
 const servers: Server[] = [];
@@ -135,6 +179,67 @@ describe("sandbox listener", () => {
     const blocked = await fetch(`${origin}/livez`, { method: "POST" });
     expect(blocked.status).toBe(405);
     expect(blocked.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("serves only listed library files and only those responses send Access-Control-Allow-Origin", async () => {
+    const listener = await start({}, "127.0.0.1", 22100);
+    const origin = listener.origin!;
+    const chart = HTML_LIBRARIES.find((library) => library.name === "chartjs")!;
+    const file = chart.files[0]!;
+    const url = `${origin}/libs/${chart.name}@${chart.version}/${file.path}`;
+    const body = await fetch(url);
+    expect(body.status).toBe(200);
+    expect(body.headers.get("content-type")).toBe("application/javascript");
+    expect(body.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+    expect(body.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(body.headers.get("cross-origin-resource-policy")).toBe("cross-origin");
+    expect(body.headers.get("access-control-allow-origin")).toBe("*");
+    expect(body.headers.get("set-cookie")).toBeNull();
+    expect(body.headers.get("content-security-policy")).toBeNull();
+    expect(body.headers.get("referrer-policy")).toBeNull();
+    const bytes = Buffer.from(await body.arrayBuffer());
+    expect(bytes.length).toBe(chart.bytes);
+    const again = await fetch(url);
+    expect(again.status).toBe(200);
+    expect(again.headers.get("content-type")).toBe(body.headers.get("content-type"));
+    expect(again.headers.get("cache-control")).toBe(body.headers.get("cache-control"));
+    expect(again.headers.get("cross-origin-resource-policy")).toBe(body.headers.get("cross-origin-resource-policy"));
+    expect(again.headers.get("access-control-allow-origin")).toBe(body.headers.get("access-control-allow-origin"));
+    expect(Buffer.from(await again.arrayBuffer())).toEqual(bytes);
+    const head = await fetch(url, { method: "HEAD" });
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
+    expect(head.headers.get("content-length")).toBe(String(chart.bytes));
+    expect(head.headers.get("access-control-allow-origin")).toBe("*");
+    const leaflet = HTML_LIBRARIES.find((library) => library.name === "leaflet")!;
+    const png = leaflet.files.find((entry) => entry.path.endsWith(".png"))!;
+    const image = await fetch(`${origin}/libs/${leaflet.name}@${leaflet.version}/${png.path}`);
+    expect(image.status).toBe(200);
+    expect(image.headers.get("content-type")).toBe("image/png");
+    const css = await fetch(`${origin}/libs/${leaflet.name}@${leaflet.version}/leaflet.css`);
+    expect(css.status).toBe(200);
+    expect(css.headers.get("content-type")).toBe("text/css; charset=utf-8");
+    const missing = [
+      `${origin}/libs/${chart.name}@${chart.version}/nope.js`,
+      `${origin}/libs/${chart.name}@9.9.9/${file.path}`,
+      `${origin}/libs/notalib@1.0.0/a.js`,
+      `${origin}/libs/${chart.name}@${chart.version}/../package.json`,
+      `${origin}/libs/${chart.name}@${chart.version}/%2e%2e/%2e%2e/package.json`,
+      `${origin}/libs/${chart.name}@${chart.version}/..%2f..%2fpackage.json`,
+      `${origin}/libs/${chart.name}@${chart.version}//${file.path}`,
+      `${origin}/libs/${chart.name}@${chart.version}/%2e%2e%2fpackage.json`,
+    ];
+    for (const target of missing) {
+      const response = await fetch(target);
+      expect(response.status, target).toBe(404);
+      expect(response.headers.get("access-control-allow-origin"), target).toBeNull();
+    }
+    expect((await fetch(url, { method: "POST" })).status).toBe(405);
+    expect((await fetch(url, { method: "POST" })).headers.get("access-control-allow-origin")).toBeNull();
+    const shell = await fetch(`${origin}/shell.js`);
+    expect(shell.headers.get("access-control-allow-origin")).toBeNull();
+    const live = await fetch(`${origin}/livez`);
+    expect(live.headers.get("access-control-allow-origin")).toBeNull();
   });
 
   it("rejects an oversized header", async () => {
@@ -293,12 +398,39 @@ describe("sandbox shell", () => {
 
   it("uses the shell header as the https ceiling", () => {
     expect(shellContentSecurityPolicy(["http://127.0.0.1:3847", "http://localhost:3847"])).toBe(
-      "default-src 'none'; script-src 'self' 'unsafe-inline' https:; style-src 'unsafe-inline' https:; img-src data: https:; font-src data: https:; media-src data: https:; connect-src https:; frame-src about:; base-uri https:; form-action 'none'; object-src 'none'; frame-ancestors http://127.0.0.1:3847 http://localhost:3847",
+      "default-src 'none'; script-src 'self' 'unsafe-inline' https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https:; font-src 'self' data: https:; media-src 'self' data: https:; connect-src https:; frame-src about:; base-uri https:; form-action 'none'; object-src 'none'; frame-ancestors http://127.0.0.1:3847 http://localhost:3847",
     );
     expect(shellContentSecurityPolicy([])).toBe(
-      "default-src 'none'; script-src 'self' 'unsafe-inline' https:; style-src 'unsafe-inline' https:; img-src data: https:; font-src data: https:; media-src data: https:; connect-src https:; frame-src about:; base-uri https:; form-action 'none'; object-src 'none'; frame-ancestors 'none'",
+      "default-src 'none'; script-src 'self' 'unsafe-inline' https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https:; font-src 'self' data: https:; media-src 'self' data: https:; connect-src https:; frame-src about:; base-uri https:; form-action 'none'; object-src 'none'; frame-ancestors 'none'",
     );
     expect(shellScript(["http://127.0.0.1:3847"])).toContain("function createLoadGuard");
+    expect(shellContentSecurityPolicy(["http://127.0.0.1:3847"])).toContain("connect-src https:");
+    expect(shellContentSecurityPolicy(["http://127.0.0.1:3847"])).not.toContain("connect-src 'self'");
+    expect(shellContentSecurityPolicy(["http://127.0.0.1:3847"])).not.toContain("connect-src https: 'self'");
+  });
+
+  it("intersects the shell header with library path sources", () => {
+    const origin = "http://127.0.0.1:4311";
+    const header = shellContentSecurityPolicy(["http://127.0.0.1:3847"]);
+    const all = libraryCspSources(origin, HTML_LIBRARIES.map((library) => ({ name: library.name, version: library.version })));
+    const meta = buildHtmlCsp({}, all);
+    for (const library of HTML_LIBRARIES) {
+      for (const file of library.files) {
+        const url = `${origin}/libs/${library.name}@${library.version}/${file.path}`;
+        const directive = file.kind === "script" ? "script-src" : file.kind === "style" ? "style-src" : "img-src";
+        expect(cspIntersectionAllows(header, meta, directive, url, origin), url).toBe(true);
+      }
+    }
+    const chartOnly = buildHtmlCsp({}, libraryCspSources(origin, [{ name: "chartjs", version: "4.6.2" }]));
+    const chartJs = `${origin}/libs/chartjs@4.6.2/chart.umd.min.js`;
+    const leafletCss = `${origin}/libs/leaflet@1.9.4/leaflet.css`;
+    const d3Js = `${origin}/libs/d3@7.9.2/d3.min.js`;
+    expect(cspIntersectionAllows(header, chartOnly, "script-src", chartJs, origin)).toBe(true);
+    expect(cspIntersectionAllows(header, chartOnly, "style-src", leafletCss, origin)).toBe(false);
+    expect(cspIntersectionAllows(header, chartOnly, "script-src", d3Js, origin)).toBe(false);
+    expect(cspIntersectionAllows(header, chartOnly, "script-src", `${origin}/shell.js`, origin)).toBe(false);
+    expect(cspIntersectionAllows(header, chartOnly, "script-src", "https://cdn.example.com/app.js", origin)).toBe(false);
+    expect(cspIntersectionAllows(header, meta, "connect-src", `${origin}/libs/chartjs@4.6.2/chart.umd.min.js`, origin)).toBe(false);
   });
 
   it("wraps live HTML with the meta policy first and drops base and refresh", () => {
@@ -431,6 +563,34 @@ describe("sandbox shell", () => {
       expect(acceptArtifactCsp(policy), name).toBe(false);
       expect(context.__sfAcceptCsp(policy), name).toBe(false);
     }
+    const origin = "http://127.0.0.1:4311";
+    const chart = libraryCspSources(origin, [{ name: "chartjs", version: "4.6.2" }]);
+    const leaflet = libraryCspSources(origin, [{ name: "leaflet", version: "1.9.4" }]);
+    const mermaid = libraryCspSources(origin, [{ name: "mermaid", version: "12.3.0" }]);
+    const withLib = buildHtmlCsp({ resourceDomains: ["https://cdn.example.com"] }, chart);
+    const withAssets = buildHtmlCsp({}, leaflet);
+    const withEval = buildHtmlCsp({}, { ...mermaid, needsEval: true });
+    expect(acceptArtifactCsp(withLib)).toBe(false);
+    expect(acceptArtifactCsp(withLib, origin)).toBe(true);
+    expect(context.__sfAcceptCsp(withLib, origin)).toBe(true);
+    expect(acceptArtifactCsp(withLib, "http://localhost:4311")).toBe(false);
+    expect(acceptArtifactCsp(withLib, "http://127.0.0.1:9")).toBe(false);
+    expect(acceptArtifactCsp(withAssets, origin)).toBe(true);
+    expect(acceptArtifactCsp(withEval, origin, false)).toBe(false);
+    expect(acceptArtifactCsp(withEval, origin, true)).toBe(true);
+    expect(context.__sfAcceptCsp(withEval, origin, false)).toBe(false);
+    expect(context.__sfAcceptCsp(withEval, origin, true)).toBe(true);
+    const bare = withLib.replace(chart.libraryDirs[0]!, origin);
+    expect(acceptArtifactCsp(bare, origin)).toBe(false);
+    expect(context.__sfAcceptCsp(bare, origin)).toBe(false);
+    const fileSource = withLib.replace(chart.libraryDirs[0]!, `${chart.libraryDirs[0]}chart.umd.min.js`);
+    expect(acceptArtifactCsp(fileSource, origin)).toBe(false);
+    const queried = withLib.replace(chart.libraryDirs[0]!, `${chart.libraryDirs[0]}?x=1`);
+    expect(acceptArtifactCsp(queried, origin)).toBe(false);
+    const otherLib = withLib.replace(chart.libraryDirs[0]!, leaflet.libraryDirs[0]!);
+    expect(acceptArtifactCsp(otherLib, origin)).toBe(false);
+    const swapped = withLib.replace(`script-src 'unsafe-inline' ${chart.libraryDirs[0]}`, `script-src 'unsafe-inline'`);
+    expect(acceptArtifactCsp(swapped, origin)).toBe(false);
   });
 
   it("replies sf/sandbox-error and skips srcdoc when the CSP is not the manifest shape", () => {
@@ -957,6 +1117,34 @@ describe("sandbox host fixes", () => {
       message: "stageflow: too many pending requests",
     });
     vi.useRealTimers();
+  });
+
+  it("injects the same library tags as the shell and agrees on load params", () => {
+    const origin = "http://127.0.0.1:4311";
+    const libraries = [{ name: "chartjs", version: "4.6.2" }, { name: "leaflet", version: "1.9.4" }];
+    const csp = buildHtmlCsp({}, libraryCspSources(origin, libraries));
+    const fromHost = buildLiveDocument("<p>ok</p>", csp, "bridge", libraries, origin);
+    const context = vm.createContext({
+      TextEncoder,
+      URLSearchParams,
+      location: { origin },
+    }) as { __sfBuildLiveDocument: (html: string, csp: string, libraries?: unknown) => string; __sfParseLoad: (value: unknown) => { ok: boolean } };
+    vm.runInContext(shellScript(["http://127.0.0.1:1"]), context);
+    const fromShell = context.__sfBuildLiveDocument("<p>ok</p>", csp, libraries).replace(/<script>[\s\S]*<\/script>/, "<script>bridge</script>");
+    expect(fromShell).toBe(fromHost);
+    expect(fromShell.indexOf("chart.umd.min.js")).toBeLessThan(fromShell.indexOf("leaflet.js"));
+    expect(fromShell.indexOf("leaflet.js")).toBeLessThan(fromShell.indexOf("leaflet.css"));
+    const samples = [
+      { html: "<p>ok</p>", csp, nonce: "ab".repeat(16) },
+      { html: "<p>ok</p>", csp, nonce: "ab".repeat(16), libraries, allowEval: false },
+      { html: "<p>ok</p>", csp, nonce: "ab".repeat(16), libraries: [{ name: "chartjs", version: "4.6.2", path: "x" }] },
+      { html: "<p>ok</p>", csp, nonce: "nope", libraries: [] },
+      { html: "<p>ok</p>", csp, nonce: "ab".repeat(16), libraries: [{ name: "Chartjs", version: "4.6.2" }] },
+      { html: 1, csp, nonce: "ab".repeat(16) },
+    ];
+    for (const sample of samples) {
+      expect(context.__sfParseLoad(sample).ok).toBe(parseSandboxLoadParams(sample).ok);
+    }
   });
 
   it("matches parseBridgeMessage on a shared fuzz corpus", () => {

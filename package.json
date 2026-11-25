@@ -49,7 +49,7 @@
     "ui"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/vendor-artifact-libs.mjs",
     "test": "vitest run",
     "test:pack": "vitest run --config vitest.pack.config.ts",
     "test:watch": "vitest",
@@ -78,6 +78,11 @@
     "@types/node": "^26.2.0",
     "@types/nodemailer": "^8.0.2",
     "@types/semver": "^7.8.0",
+    "chart.js": "4.6.2",
+    "d3": "7.9.2",
+    "echarts": "6.1.0",
+    "leaflet": "1.9.4",
+    "mermaid": "12.3.0",
     "tsx": "^4.23.11",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"

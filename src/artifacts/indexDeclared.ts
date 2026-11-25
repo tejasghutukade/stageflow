@@ -18,6 +18,7 @@ import {
 import type { StageEnvelope } from "../types/envelope.js";
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
 import { contentTypeForKind, inferStaticKind } from "./kinds.js";
+import { deleteOriginApprovals } from "./originApproval.js";
 import {
   artifactSearchBodyKind,
   artifactSearchOwnerText,
@@ -144,6 +145,7 @@ function deleteIndexed(
       snapParams[`snap${index}`] = row.key;
     });
     db.prepare(`DELETE FROM artifact_snapshots WHERE artifact_key IN (${names})`).run(snapParams);
+    deleteOriginApprovals(db, keys.map((row) => row.key));
   }
   db.prepare(`DELETE FROM artifacts WHERE origin = 'indexed' AND ${clause}${keep}`).run(bound);
 }
