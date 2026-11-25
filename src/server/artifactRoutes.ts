@@ -2,9 +2,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RunStore } from "../runstore/port.js";
 import { sqliteConnectionFromStore } from "../runstore/createStore.js";
 import { ArtifactContentError, readArtifactContent, STATIC_HTML_CONTENT_SECURITY_POLICY } from "../artifacts/content.js";
-import { isLiveDeclarativeKind } from "../artifacts/kinds.js";
+import { isLiveKind } from "../artifacts/kinds.js";
 import { artifactStorageKey, stageOwnerKey } from "../artifacts/keys.js";
-import { parseStoredLiveManifest } from "../artifacts/manifest.js";
+import { artifactLiveManifestFields } from "../artifacts/record.js";
 import { ArtifactPublishError, STATIC_CONTENT_MAX_BYTES } from "../artifacts/limits.js";
 import { deletePublishedArtifact, publishArtifact, type PublishRequest } from "../artifacts/publish.js";
 import {
@@ -61,7 +61,9 @@ function sendContent(
     "Content-Length": bytes.length,
     "X-Content-Type-Options": "nosniff",
   };
-  if (kind === "static.html") headers["Content-Security-Policy"] = STATIC_HTML_CONTENT_SECURITY_POLICY;
+  if (kind === "static.html" || kind === "live.html") {
+    headers["Content-Security-Policy"] = STATIC_HTML_CONTENT_SECURITY_POLICY;
+  }
   if (contentHash) headers["X-Artifact-Content-Hash"] = contentHash;
   res.writeHead(200, headers);
   res.end(bytes);
@@ -556,15 +558,12 @@ export async function handleArtifactRoutes(
       content_hash: row.content_hash,
       ...(versionKind !== null ? { kind: versionKind } : {}),
     };
-    if (versionKind !== null && isLiveDeclarativeKind(versionKind)) {
-      const manifest = parseStoredLiveManifest(row.manifest_json);
+    if (versionKind !== null && isLiveKind(versionKind)) {
       viewed.live = {
         status: artifact.live?.status ?? null,
         last_refreshed_at: artifact.live?.last_refreshed_at ?? null,
         last_error_code: artifact.live?.last_error_code ?? null,
-        bindings: manifest?.bindings ?? [],
-        ...(manifest?.library ? { library: manifest.library } : {}),
-        ...(manifest?.refresh ? { refresh: manifest.refresh } : {}),
+        ...artifactLiveManifestFields(versionKind, row.manifest_json),
       };
     } else if (versionKind !== null) {
       delete viewed.live;

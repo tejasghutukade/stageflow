@@ -108,3 +108,5 @@ The hosted API always runs stages inline (`executionMode: "inline"`). It ignores
 ## What the host still owns
 
 Queueing, leases, the sandbox, model credentials, durable storage, artifact upload, and shutdown stay in the host. This package only runs the pipeline and reports what happened.
+
+`createHostedRuntime` does not serve the operator console and does not start the live-HTML shell listener. A console reached on a non-loopback bind, including a container that binds `0.0.0.0`, leaves that listener off unless `STAGEFLOW_SANDBOX_PORT` is set. A console whose hostname is an IPv6 literal stays off even then, because Chrome rejects that form in `frame-ancestors`. Live HTML preview needs the sandbox origin; it is not available by default in containers. See [Docker](docker.md) and [Live HTML artifacts: the sandbox origin](artifacts.md#live-html-sandbox).

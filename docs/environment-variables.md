@@ -14,6 +14,8 @@ Every variable the Host and CLI read, in one place. Details live in the page eac
 | `STAGEFLOW_CREDENTIAL_HOME` | Where provider auth and `channel-secrets.json` live (default `~/.stageflow`) |
 | `STAGEFLOW_CONNECTIONS_FILE` | Overrides the `connections.yaml` location. See [Channels](channels.md#connectionsyaml) |
 | `STAGEFLOW_BIND` | Listen address for `sf ui` / `sf mcp` |
+| `STAGEFLOW_SANDBOX_PORT` | Pinned loopback port for the live-HTML shell. An integer from 1024 to 65535. If that port is taken, the shell stays off. Unset: the Host tries the next 20 ports after the console port. See [Live HTML artifacts: the sandbox origin](artifacts.md#live-html-sandbox) |
+| `STAGEFLOW_SANDBOX_DISABLED` | `1` does not start the live-HTML shell. The console then uses the scriptless preview |
 | `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND` | `1` is an explicit opt-in to start a non-loopback bind with no control token. Leave unset otherwise; the Host then generates one |
 | `STAGEFLOW_ALLOWED_HOSTS` | Extra Host/Origin names accepted (loopback always allowed; `*` rejected). Needed for any public hostname, including webhook and web chat URLs. A Host bound (`STAGEFLOW_BIND`) to one non-loopback IP also accepts that IP on its own port, so its own calls, such as the eval engine's callback, are not refused |
 | `STAGEFLOW_CONTROL_TOKEN`, `_FILE` | Drive-scoped bearer token (32+ chars). Unset at Host start reuses `$STAGEFLOW_HOME/control-token` (mode 0600, owned by this user, not a symlink) or mints one and writes it after listen. `Control token:` is printed on first start, including Docker logs. Later starts print the file path only. The CLI reads that file when the variable is unset; a stage worker does not |

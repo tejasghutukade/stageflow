@@ -14,6 +14,8 @@ const MARKERS = [
 const LIVE_MARKER = "stageflow-live-renderer";
 /** Measured lazy renderer gzip 144226 (JS + CSS) plus 10%. */
 export const LIVE_CHUNK_GZIP_BUDGET = 158_649;
+/** Measured live HTML gzip 8177 across the lazy chunk and its shared query cache, plus 10%. */
+export const LIVE_HTML_CHUNK_GZIP_BUDGET = 8_995;
 
 function files() {
   return readdirSync(root).filter((name) => name.endsWith(".js") || name.endsWith(".css"));
@@ -102,5 +104,31 @@ for (const name of liveGraph) {
 console.log(`live renderer gzip ${gzip} across ${counted.length} files (budget ${LIVE_CHUNK_GZIP_BUDGET})`);
 if (gzip > LIVE_CHUNK_GZIP_BUDGET) {
   console.error(`live renderer gzip ${gzip} exceeds ${LIVE_CHUNK_GZIP_BUDGET}`);
+  process.exit(1);
+}
+
+const liveHtmlFiles = files().filter((name) => name.startsWith("live-html"));
+if (liveHtmlFiles.length === 0) {
+  console.error("live html chunk not found");
+  process.exit(2);
+}
+for (const name of liveHtmlFiles) {
+  if (mainGraph.has(name)) {
+    console.error(`${name} is in the main graph`);
+    process.exit(1);
+  }
+}
+const liveHtmlGraph = graph(liveHtmlFiles, allImports);
+let liveHtmlGzip = 0;
+const liveHtmlCounted = [];
+for (const name of liveHtmlGraph) {
+  if (mainGraph.has(name)) continue;
+  const bytes = readFileSync(path.join(root, name));
+  liveHtmlGzip += gzipSync(bytes).length;
+  liveHtmlCounted.push(name);
+}
+console.log(`live html gzip ${liveHtmlGzip} across ${liveHtmlCounted.length} files (budget ${LIVE_HTML_CHUNK_GZIP_BUDGET})`);
+if (liveHtmlGzip > LIVE_HTML_CHUNK_GZIP_BUDGET) {
+  console.error(`live html gzip ${liveHtmlGzip} exceeds ${LIVE_HTML_CHUNK_GZIP_BUDGET}`);
   process.exit(1);
 }

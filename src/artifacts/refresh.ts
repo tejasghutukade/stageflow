@@ -12,10 +12,11 @@ import { FunctionStore } from "../functions/store.js";
 import { checkBinding } from "./bindings.js";
 import { expiredContentMessage } from "./content.js";
 import { LIVE_SNAPSHOT_MAX_BYTES, ArtifactPublishError } from "./limits.js";
-import { argsHash, parseStoredLiveManifest, type LiveBinding, type LiveManifest } from "./manifest.js";
+import { loadStoredLiveBindings } from "./htmlManifest.js";
+import { argsHash, type LiveBinding, type LiveBindingSet } from "./manifest.js";
 import { ArtifactQueryError } from "./query.js";
 import type { ArtifactOwner } from "./record.js";
-import { isLiveDeclarativeKind } from "./kinds.js";
+import { isLiveKind } from "./kinds.js";
 import {
   effectiveTtlSeconds,
   REFRESH_RETRY_AFTER_SECONDS,
@@ -370,7 +371,7 @@ function assertLiveRow(row: ArtifactLiveRow | undefined, projectRoot: string): A
   if (!row || row.deleted_at || !projectMatches(row.project_root_id, projectRoot)) {
     throw new ArtifactQueryError(404, "artifact.not_found", "Artifact not found");
   }
-  if (!isLiveDeclarativeKind(row.kind)) {
+  if (!isLiveKind(row.kind)) {
     throw new ArtifactQueryError(404, "artifact.not_live", "Artifact is not live");
   }
   if (row.status === "expired") {
@@ -384,13 +385,13 @@ export function readArtifactSnapshots(db: Database.Database, key: string, projec
   if (!row || row.deleted_at || (projectRoot !== undefined && !projectMatches(row.project_root_id, projectRoot))) {
     throw new ArtifactQueryError(404, "artifact.not_found", "Artifact not found");
   }
-  if (!isLiveDeclarativeKind(row.kind)) {
+  if (!isLiveKind(row.kind)) {
     throw new ArtifactQueryError(404, "artifact.not_live", "Artifact is not live");
   }
   if (row.status === "expired") {
     throw new ArtifactQueryError(404, "artifact.content_unavailable", expiredContentMessage(row.expired_reason));
   }
-  const manifest = parseStoredLiveManifest(row.manifest_json);
+  const manifest = loadStoredLiveBindings(row.manifest_json);
   const bindings = manifest?.bindings ?? [];
   return {
     status: row.live_status,
@@ -436,7 +437,7 @@ function capacityRefreshResult(
   options: ArtifactRefreshOptions,
 ): ArtifactRefreshResult {
   const row = assertLiveRow(loadRow(db, key), deps.projectRoot);
-  const manifest = parseStoredLiveManifest(row.manifest_json);
+  const manifest = loadStoredLiveBindings(row.manifest_json);
   const bindings = manifest?.bindings ?? [];
   const selected = manifest ? [...selectBindings(manifest, options.bindingIds, options.bindingIdsIssuePath ?? "bindingIds")] : [];
   for (const id of options.skipBindingIds ?? []) {
@@ -467,8 +468,8 @@ function freshIfStaleResult(
   if (options.ifStale !== true) return undefined;
   const row = loadRow(db, key);
   if (!row || row.deleted_at || !projectMatches(row.project_root_id, deps.projectRoot)) return undefined;
-  if (!isLiveDeclarativeKind(row.kind) || row.status === "expired") return undefined;
-  const manifest = parseStoredLiveManifest(row.manifest_json);
+  if (!isLiveKind(row.kind) || row.status === "expired") return undefined;
+  const manifest = loadStoredLiveBindings(row.manifest_json);
   if (!manifest) return undefined;
   let selected: Set<string>;
   try {
@@ -517,7 +518,7 @@ export async function refreshArtifact(
 function forceTerminal(db: Database.Database, key: string): void {
   const row = loadRow(db, key);
   if (!row || row.deleted_at || row.live_status !== "refreshing") return;
-  const manifest = parseStoredLiveManifest(row.manifest_json);
+  const manifest = loadStoredLiveBindings(row.manifest_json);
   const bindings = manifest?.bindings ?? [];
   const state = liveRefreshState(snapshotRows(db, key), bindings);
   const status = state.status === "fresh" ? "stale" : state.status;
@@ -592,7 +593,7 @@ async function refreshLocked(
   let markedRefreshing = false;
   try {
     const row = assertLiveRow(loadRow(db, key), deps.projectRoot);
-    const manifest = parseStoredLiveManifest(row.manifest_json);
+    const manifest = loadStoredLiveBindings(row.manifest_json);
     if (!manifest) {
       throw new ArtifactPublishError(400, "artifact.invalid_shape", "Live artifact manifest is not valid", [
         { path: "manifest", message: "Live artifact manifest is not valid" },
@@ -725,7 +726,7 @@ async function refreshLocked(
 }
 
 function selectBindings(
-  manifest: LiveManifest,
+  manifest: LiveBindingSet,
   bindingIds: readonly string[] | undefined,
   issuePath = "bindingIds",
 ): Set<string> {
@@ -806,7 +807,7 @@ export async function executeLiveBinding(
 export function reconcileLiveSnapshots(
   db: Database.Database,
   key: string,
-  manifest: LiveManifest | null,
+  manifest: LiveBindingSet | null,
 ): void {
   if (!manifest) {
     db.prepare(`DELETE FROM artifact_snapshots WHERE artifact_key = ?`).run(key);

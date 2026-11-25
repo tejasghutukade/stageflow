@@ -217,6 +217,8 @@ import { isListableExtension, listCatalogFiles } from "../config/listCatalogFile
 import { handleA2aRoutes } from "./a2aRoutes.js";
 import { createArchiveSlot, handleArchiveRoutes, type ArchiveSlot } from "./archiveRoutes.js";
 import { resolveHostInfo } from "./hostInfo.js";
+import { consoleOriginsFor } from "./sandboxPolicy.js";
+import { attachSandboxShutdown, startSandboxListener } from "./sandboxListener.js";
 import { handleChannelRoutes } from "./channelRoutes.js";
 import { handleBrowserProfileRoutes } from "./browserProfileRoutes.js";
 import { handleEvalInternalRoutes, isEvalInternalPath, type EvalServices } from "./evalInternalRoutes.js";
@@ -3998,9 +4000,25 @@ export async function startUiServer(
     ...(boot.boundPort !== undefined ? { bound: boot.boundPort } : {}),
   });
   boot.setEvalCallbackBase?.(envelope.url);
+  const sandbox = await startSandboxListener({
+    consoleOrigins: consoleOriginsFor({
+      listenHost: host,
+      port: envelope.port,
+      allowedHosts,
+      publicUrl: resolveHostInfo().publicUrl,
+    }),
+    hostPort: envelope.port,
+    listenHost: host,
+  });
+  boot.sandboxOrigin = sandbox.origin;
+  boot.sandboxOrigins = sandbox.origins;
+  attachSandboxShutdown(envelope.server, sandbox);
   const closeServer = envelope.server.close.bind(envelope.server);
   envelope.server.close = ((callback?: (error?: Error) => void) => closeServer(error => {
-    void (boot.email?.stop() ?? Promise.resolve()).then(() => callback?.(error), () => callback?.(error ?? new Error("Email host shutdown failed")));
+    void Promise.all([
+      boot.email?.stop() ?? Promise.resolve(),
+      sandbox.close(),
+    ]).then(() => callback?.(error), () => callback?.(error ?? new Error("Host shutdown failed")));
   })) as typeof envelope.server.close;
   shutdown = installShutdownController({
     server: envelope.server,

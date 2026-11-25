@@ -4,9 +4,10 @@ import type { FunctionDefinition } from "../config/loadFunction.js";
 import { createFunctionInvoker } from "../functions/invoke.js";
 import { argsFailure } from "./bindings.js";
 import { expiredContentMessage } from "./content.js";
-import { isLiveDeclarativeKind } from "./kinds.js";
+import { loadStoredLiveBindings } from "./htmlManifest.js";
+import { isLiveKind } from "./kinds.js";
 import { LIVE_BINDING_ARGS_MAX_BYTES, ArtifactPublishError } from "./limits.js";
-import { argsHash, parseStoredLiveManifest, type LiveBinding, type LiveManifest } from "./manifest.js";
+import { argsHash, type LiveBinding, type LiveBindingSet } from "./manifest.js";
 import { ArtifactQueryError } from "./query.js";
 import type { ArtifactOwner } from "./record.js";
 import {
@@ -159,7 +160,7 @@ function assertLiveRow(row: ArtifactLiveRow | undefined, projectRoot: string): A
   if (!row || row.deleted_at || !projectMatches(row.project_root_id, projectRoot)) {
     throw new ArtifactQueryError(404, "artifact.not_found", "Artifact not found");
   }
-  if (!isLiveDeclarativeKind(row.kind)) {
+  if (!isLiveKind(row.kind)) {
     throw new ArtifactQueryError(404, "artifact.not_live", "Artifact is not live");
   }
   if (row.status === "expired") {
@@ -447,7 +448,7 @@ export async function queryBinding(
   request: BindingQueryRequest,
 ): Promise<BindingQueryResult> {
   const row = assertLiveRow(loadRow(db, storageKey), deps.projectRoot);
-  const manifest = parseStoredLiveManifest(row.manifest_json);
+  const manifest = loadStoredLiveBindings(row.manifest_json);
   if (!manifest) {
     throw new ArtifactPublishError(400, "artifact.invalid_shape", "Live artifact manifest is not valid", [
       { path: "manifest", message: "Live artifact manifest is not valid" },
@@ -502,7 +503,7 @@ async function runVariant(
   db: Database.Database,
   deps: ArtifactRefreshDeps,
   storageKey: string,
-  manifest: LiveManifest,
+  manifest: LiveBindingSet,
   binding: LiveBinding,
   index: number,
   merged: Record<string, unknown>,
@@ -531,7 +532,7 @@ async function runVariant(
         if (!ifStale) return undefined;
         const live = loadRow(db, storageKey);
         if (!live || live.deleted_at || !projectMatches(live.project_root_id, deps.projectRoot)) return undefined;
-        if (!isLiveDeclarativeKind(live.kind) || live.status === "expired") return undefined;
+        if (!isLiveKind(live.kind) || live.status === "expired") return undefined;
         const stored = snapshotRow(db, storageKey, binding.id, hash);
         if (!stored || snapshotNeedsRefresh(stored, now(), ttl)) return undefined;
         return cacheResult(binding.id, hash, stored);

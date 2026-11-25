@@ -4,7 +4,7 @@ import path from "node:path";
 import * as readline from "node:readline";
 import { artifactStorageKey, parseOwnerKey, stageOwnerKey } from "../artifacts/keys.js";
 import { ArtifactPublishError } from "../artifacts/limits.js";
-import { isLiveDeclarativeKind } from "../artifacts/kinds.js";
+import { isLiveKind } from "../artifacts/kinds.js";
 import { deletePublishedArtifact, publishArtifact } from "../artifacts/publish.js";
 import { queryBinding } from "../artifacts/bindingQuery.js";
 import { refreshArtifact } from "../artifacts/refresh.js";
@@ -712,7 +712,7 @@ async function runRefreshSubcommand(
   try {
     const roots = await catalogRootsForArtifacts(store);
     const record = readArtifact(db, parts.ownerKey, parts.id, parsed.projectRoot, roots);
-    if (!isLiveDeclarativeKind(record.kind)) {
+    if (!isLiveKind(record.kind)) {
       return reportQueryError(new ArtifactQueryError(404, "artifact.not_live", "Artifact is not live"), parsed.json, out);
     }
     const root = roots.find((item) => item.project_root === record.project.id);

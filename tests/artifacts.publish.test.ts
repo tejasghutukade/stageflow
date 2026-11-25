@@ -216,7 +216,7 @@ describe("publish and version artifacts", () => {
     const cases: Array<{ patch: Record<string, unknown>; code: string }> = [
       { patch: { id: "Bad" }, code: "artifact.invalid_id" },
       { patch: { id: "bad::id" }, code: "artifact.invalid_id" },
-      { patch: { kind: "live.html" }, code: "artifact.invalid_kind" },
+      { patch: { kind: "live.html" }, code: "artifact.invalid_shape" },
       { patch: { kind: "nope" }, code: "artifact.invalid_kind" },
       { patch: { title: "a".repeat(121) }, code: "artifact.invalid_shape" },
       { patch: { tags: ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"] }, code: "artifact.invalid_shape" },

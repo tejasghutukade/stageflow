@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { htmlIdentityHash, parseStoredHtmlManifest } from "./htmlManifest.js";
 import { liveIdentityHash, parseStoredLiveManifest } from "./manifest.js";
 import { createReadStream } from "node:fs";
 import { lstat, readFile, readdir } from "node:fs/promises";
@@ -219,7 +220,12 @@ export async function readPublishedArtifactStoreReport(
       bytes += buf.length;
       if (row.content_hash) {
         const live = parseStoredLiveManifest(row.manifest_json);
-        const actual = live ? liveIdentityHash(buf, live) : createHash("sha256").update(buf).digest("hex");
+        const html = live ? undefined : parseStoredHtmlManifest(row.manifest_json);
+        const actual = live
+          ? liveIdentityHash(buf, live)
+          : html
+            ? htmlIdentityHash(buf, html)
+            : createHash("sha256").update(buf).digest("hex");
         if (actual !== row.content_hash) {
           empty.hash_mismatches.push({
             kind: "hash_mismatch",

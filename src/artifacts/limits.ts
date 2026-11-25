@@ -1,5 +1,12 @@
 export const STATIC_CONTENT_MAX_BYTES = 5 * 1024 * 1024;
 export const LIVE_PROGRAM_MAX_BYTES = 128 * 1024;
+export const LIVE_HTML_MAX_BYTES = 256 * 1024;
+export const HTML_CSP_LIST_MAX = 8;
+export const HTML_CSP_HOST_MAX = 253;
+export const HTML_SCAN_MAX_LINE_BYTES = 64 * 1024;
+export const HTML_SCAN_MAX_ATTR_BYTES = 16 * 1024;
+export const HTML_SCAN_MAX_ELEMENTS = 20_000;
+export const HTML_SCAN_BUDGET_MS = 150;
 export const LIVE_BINDING_MAX = 8;
 export const LIVE_BINDING_ARGS_MAX_BYTES = 8 * 1024;
 export const LIVE_SNAPSHOT_MAX_BYTES = 1024 * 1024;

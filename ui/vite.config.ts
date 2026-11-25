@@ -79,7 +79,7 @@ export default defineConfig({
     emptyOutDir: true,
     modulePreload: {
       resolveDependencies(_filename, deps) {
-        return deps.filter((dep) => !dep.includes("live-renderer"));
+        return deps.filter((dep) => !dep.includes("live-renderer") && !dep.includes("live-html"));
       },
     },
     rollupOptions: {
@@ -89,7 +89,9 @@ export default defineConfig({
       },
       output: {
         chunkFileNames(chunk) {
-          if (chunk.moduleIds.some((id) => id.replaceAll("\\", "/").includes("/redesign/artifacts/live/"))) return "assets/live-renderer-[hash].js";
+          const modules = chunk.moduleIds.map((id) => id.replaceAll("\\", "/"));
+          if (modules.some((id) => id.includes("/redesign/artifacts/liveHtml/"))) return "assets/live-html-[hash].js";
+          if (modules.some((id) => id.includes("/redesign/artifacts/live/"))) return "assets/live-renderer-[hash].js";
           return "assets/[name]-[hash].js";
         },
       },

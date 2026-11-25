@@ -59,11 +59,15 @@ export function viewedLiveVersion(record: ArtifactRecord | null, options: UseLiv
   return record?.version;
 }
 
+function isLiveFamily(kind: string | undefined): boolean {
+  return kind === "live.declarative" || kind === "live.html";
+}
+
 export function liveVersionStance(
   record: ArtifactRecord | null,
   options: UseLiveArtifactDataOptions,
 ): "current" | "historical" | "pending" {
-  if (!record || record.kind !== "live.declarative") return "current";
+  if (!record || !isLiveFamily(record.kind)) return "current";
   if (options.latestVersion === undefined) return "pending";
   const viewed = viewedLiveVersion(record, options);
   if (viewed === undefined) return "pending";
@@ -71,7 +75,7 @@ export function liveVersionStance(
 }
 
 export function liveArtifactScheduleConfig(record: ArtifactRecord | null, options: UseLiveArtifactDataOptions): LiveScheduleConfig {
-  const live = record?.kind === "live.declarative" ? record.live : undefined;
+  const live = isLiveFamily(record?.kind) ? record?.live : undefined;
   const current = liveVersionStance(record, options) === "current";
   const enabled = Boolean(live) && record?.status !== "expired" && options.hidden !== true && current;
   const auto = live?.refresh?.auto_seconds;
@@ -215,7 +219,7 @@ export function createLiveArtifactDataModel(input: {
     async start() {
       const record = input.record;
       const stance = liveVersionStance(record, input.options);
-      const live = record?.kind === "live.declarative";
+      const live = isLiveFamily(record?.kind);
       if (!record || !live || stance !== "current") {
         emit(emptyData(record));
         return;

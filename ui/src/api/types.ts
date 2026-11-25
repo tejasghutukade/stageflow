@@ -989,6 +989,9 @@ export type CapacityHealth = {
     cache_bytes?: number;
     free_bytes: number;
   };
+  sandbox_origin?: string | null;
+  /** Loopback shell origins (`localhost` and `127.0.0.1`). Empty when the listener is off. */
+  sandbox_origins?: string[];
 };
 
 export type CredentialSource = "sf_owned";

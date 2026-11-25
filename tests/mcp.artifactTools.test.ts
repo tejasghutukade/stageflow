@@ -473,7 +473,7 @@ stages:
 
     const badId = await call(tools, "save_artifact", stage(project, { id: "Bad", content: "x" }));
     expect(badId.payload.code).toBe("artifact.invalid_id");
-    const badKind = await call(tools, "save_artifact", stage(project, { id: "liveone", kind: "live.html", content: "x" }));
+    const badKind = await call(tools, "save_artifact", stage(project, { id: "liveone", kind: "live.other", content: "x" }));
     expect(badKind.payload.code).toBe("artifact.invalid_kind");
     const both = await call(tools, "save_artifact", stage(project, { id: "both", content: "x", content_base64: PNG.toString("base64") }));
     expect(both.payload.code).toBe("artifact.invalid_shape");

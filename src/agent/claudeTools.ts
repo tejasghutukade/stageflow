@@ -172,7 +172,7 @@ export const writeStageArtifactShape = {
 
 const publishArtifactShape = {
   id: z.string().min(1),
-  kind: z.enum(["static.markdown", "static.image", "static.table", "static.text", "static.html", "live.declarative"]),
+  kind: z.enum(["static.markdown", "static.image", "static.table", "static.text", "static.html", "live.declarative", "live.html"]),
   title: z.string().min(1),
   description: z.string().optional(),
   tags: z.array(z.string()).optional(),
@@ -184,6 +184,12 @@ const publishArtifactShape = {
   library: z.object({ name: z.string(), version: z.string() }).optional(),
   bindings: z.array(z.object({ id: z.string(), function: z.string(), args: z.record(z.string(), z.unknown()) })).optional(),
   refresh: z.object({ on_view: z.boolean().optional(), ttl_seconds: z.number().int().optional(), auto_seconds: z.number().int().optional() }).optional(),
+  csp: z.object({
+    connectDomains: z.array(z.string()).optional(),
+    resourceDomains: z.array(z.string()).optional(),
+    frameDomains: z.array(z.string()).optional(),
+    baseUriDomains: z.array(z.string()).optional(),
+  }).optional(),
 };
 
 const askOperatorShape = {

@@ -2,7 +2,7 @@
 
 An **artifact** is a published, indexed output with an owner and a stable id. A **run file** is any file in a stage attempt's `artifacts/` folder. A run file becomes an artifact only when it is indexed.
 
-This page covers the index and publishing static artifacts through the Host. Live artifacts are not part of this yet.
+This page covers the artifact index, static publishing, and live artifacts.
 
 ## What gets indexed
 
@@ -123,9 +123,109 @@ Before the frame is filled, the console removes `<meta http-equiv="refresh">`, `
 
 The preview can show text, structure, and inline styles, plus images that use a `data:` URL. The console fetches the file itself and passes the text into the frame. The frame does not request the content URL, because that request would need the control token.
 
-This is not live HTML. Live HTML is a separate kind and is not rendered by this preview.
+This is not live HTML. Live HTML is a separate kind. Its preview uses a second loopback origin; see [Live HTML artifacts: the sandbox origin](#live-html-sandbox).
 
 `GET /api/runs/<runId>/artifact` keeps the file body and `text/plain; charset=utf-8`. For a path whose name ends in `.html` or `.htm` it also sends `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox; default-src 'none'`.
+
+## Live HTML artifacts: the sandbox origin {#live-html-sandbox}
+
+A live-HTML document does not run on the console origin. `sf ui` starts a second listener in the same process. That listener binds loopback only and serves three resources: `GET /shell.html`, `GET /shell.js`, and `GET /livez`. Every other path is 404, including `/libs/` (reserved for a later library ticket) and anything under `/api`, `/mcp`, or `/a2a`. The listener never reads an artifact, a control token, or a cookie, and it never sends a cookie, a redirect, or an `Access-Control-*` header.
+
+The console page embeds the shell:
+
+`<iframe sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer" src="http://<sandbox-origin>/shell.html?parent=<console-origin>">`
+
+`allow-same-origin` on that outer frame keeps the shell on the sandbox origin, so `postMessage` has a real `event.origin`. The shell then creates a nested frame with `sandbox="allow-scripts"` only (no `allow-same-origin`, `allow-forms`, `allow-popups`, `allow-top-navigation`, `allow-modals`, or `allow-downloads`), `referrerpolicy="no-referrer"`, `allow=""`, and a `srcdoc` document. Model script runs only in that nested document. Its origin is opaque (`"null"`). The shell never trusts `"null"`: it accepts a nested message only when `event.source` is that frame's `contentWindow`.
+
+The artifact HTML is not fetched from this listener. The console sends it once, in `sf/sandbox-load`. The shell installs that document only when the CSP string matches the manifest policy shape below. It writes a fresh document: a head whose first element is that CSP meta, then the bridge client script, then the artifact markup in the body. A leading artifact doctype is removed so the meta stays first. `<base>` and `<meta http-equiv="refresh">` are removed. Scripts in the artifact are left in place, including a CSP meta the artifact itself brought: a meta policy can only add limits. The shell does not evaluate a string from the console.
+
+### Ports and hostname
+
+`GET /api/health` includes `sandbox_origin` (`string` or `null`) and `sandbox_origins` (`string[]`). `sandbox_origin` is the origin for the default console hostname: `http://localhost:<sandbox-port>` when the console is on `127.0.0.1`, and `http://127.0.0.1:<sandbox-port>` when the console is on `localhost`. `sandbox_origins` lists both of those names, in that order. The console picks the entry whose hostname differs from `location.hostname`. Null `sandbox_origin` and an empty `sandbox_origins` mean the listener is off and the console keeps the scriptless preview. It does not run the artifact script on the console origin. Both values are `http` origins whose hostname is `localhost` or `127.0.0.1`, with a port and no userinfo, path, or query.
+
+| Situation | Listener |
+|---|---|
+| `STAGEFLOW_SANDBOX_DISABLED=1` | Off |
+| `STAGEFLOW_SANDBOX_PORT` set but not an integer from 1024 to 65535 | Off |
+| `STAGEFLOW_SANDBOX_PORT` set and free | That port, no fallback if it is taken |
+| `STAGEFLOW_SANDBOX_PORT` unset | First free port in `[consolePort+1, consolePort+20]` |
+| None of those ports bind | Off |
+| Bind is `0.0.0.0`, or any non-loopback address, or `STAGEFLOW_IN_DOCKER=1` | Off, unless `STAGEFLOW_SANDBOX_PORT` is set |
+| Console hostname is an IPv6 literal (`::` or `::1`) | Off. The log event is `sandbox.ipv6_console_unsupported`. Chrome rejects `http://[::1]:port` in `frame-ancestors` |
+| Bind fails for a reason other than the port being taken (`EACCES`, an unexpected code) | Off. The log event is `sandbox.listen_failed` and the field is the error code only. The Host still starts |
+
+Cookies ignore ports, so the sandbox hostname is not the console's advertised hostname. A console on `127.0.0.1` advertises `http://localhost:<sandbox-port>`. A console on `localhost` advertises `http://127.0.0.1:<sandbox-port>`. The listener binds `127.0.0.1` and, when the socket exists, `::1` with `ipv6Only`, so both `127.0.0.1` and `localhost` answer (`localhost` may resolve to either). It does not emit an IPv6 literal in `frame-ancestors` or in the shell's allowed `parent` list. A console opened on `[::1]` does not get a sandbox. The page reads `sandbox_origins` and frames the entry whose hostname differs from `location.hostname`, so a console opened as `http://localhost:<console-port>` uses `http://127.0.0.1:<sandbox-port>` and the cookie jars stay apart. If no entry differs, or the list is empty, the page uses `sandbox_origin` when that value is a valid `http` loopback origin with a port. Invalid entries are ignored. Do not add the sandbox origin to `STAGEFLOW_ALLOWED_HOSTS`. The shell never calls the Host.
+
+On Host shutdown the sandbox listener stops accepting new connections at the start of the drain (`close` plus `closeIdleConnections`). Existing sockets are dropped with `closeAllConnections` when the drain finishes. The console can still finish its drain after the sandbox port is refusing new connections.
+
+`sf mcp` does not start this listener. `sandbox_origin` on its health response is null and `sandbox_origins` is `[]`.
+
+### What the shell guarantees
+
+Response headers on `GET /shell.html`:
+
+| Header | Value |
+|---|---|
+| `Content-Security-Policy` | `default-src 'none'; script-src 'self' 'unsafe-inline' https:; style-src 'unsafe-inline' https:; img-src data: https:; font-src data: https:; media-src data: https:; connect-src https:; frame-src about:; base-uri https:; form-action 'none'; object-src 'none'; frame-ancestors <console origins>` |
+| `X-Content-Type-Options` | `nosniff` |
+| `Referrer-Policy` | `no-referrer` |
+| `Cache-Control` | `no-store` |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), clipboard-read=(), usb=(), serial=(), payment=()` |
+| `Cross-Origin-Opener-Policy` | `same-origin` |
+
+The shell header is the ceiling. The browser applies it to the shell and, again, to the nested `srcdoc` document. A Content-Security-Policy `<meta>` can only add limits, so the nested document's effective policy is the intersection of this header and the manifest meta. The shell page is static audited code: the HTML contains no inline script and no event handler, the only script is `/shell.js`, and the query string is read in that script rather than written into the document. The header allows `https:` on the directives the nested document narrows (`script-src`, `style-src`, `img-src`, `font-src`, `media-src`, `connect-src`, and `base-uri`). `'unsafe-inline'` is on `script-src` and `style-src` so the inherited ceiling still lets the bridge script, the artifact script, and inline style run. `'self'` is on `script-src` for `/shell.js`. `frame-src` is `about:` only. A `srcdoc` document's URL is `about:srcdoc`, which `about:` allows, and `https:` is not on `frame-src`. `form-action` and `object-src` stay `'none'`. `default-src` stays `'none'`.
+
+The meta policy is the manifest string (`script-src 'unsafe-inline'` plus the declared `resourceDomains`, and the same shape for style, image, font, media, connect, and base). `frame-src` in that string is always `'none'`. The shell accepts the load only when that string is exactly that shape: those directives, in that order, using only `'none'`, `'unsafe-inline'`, `data:`, and canonical `https` origins or single-level wildcards, with `frame-src`, `form-action`, and `object-src` each exactly `'none'`. An unknown directive, an `http:` origin, a wildcard in any other position, `'unsafe-eval'`, `'self'`, a `frame-src` other than `'none'`, a duplicate or missing directive, a newline, or a value longer than 8192 characters is refused. The shell posts `sf/sandbox-error` with `{ reason: "csp" }` and does not set `srcdoc`. The meta cannot widen the header. This check is what stops a malformed policy from being dropped by the browser and leaving only the ceiling.
+
+`frame-ancestors` lists the console origins (the listen origin, both loopback names of that port, `STAGEFLOW_PUBLIC_URL` when set, and non-loopback allowed hosts). An IPv6 literal is left out. There is no `Cross-Origin-Resource-Policy` header: a framed navigation does not need one, and `same-origin` would refuse the embed.
+
+Navigation of a child frame is checked against the embedding document's `frame-src` (CSP Level 3), not against the frame's own `connect-src`. The shell is the embedder of the `srcdoc` document. `frame-src` is `about:` only, which is enough for `about:srcdoc` and is not enough for an `https` URL. In Chrome 152 the embedder reports `securitypolicyviolation` for `frame-src` when the nested script assigns `location.href`, calls `location.assign` or `location.replace`, assigns `window.location` or `document.location`, or injects a meta refresh to an `https` URL. That blocks the request. The same Chrome still unloads the opaque `srcdoc` document, so the sentinel does not survive those calls. The shell treats the following `load` as a second load, removes the nested frame, stops the relay, and posts `sf/sandbox-error` with `{ reason: "navigated" }`. `connect-src` does not govern that navigation. A programmatic link click is cancelled by the bridge and the document stays. `form.submit` and `form.requestSubmit` are blocked by the `allow-scripts`-only sandbox before CSP, with no `securitypolicyviolation`, and the document stays. `window.open` returns null and the document stays. The manifest meta cannot widen `frame-src`: `buildHtmlCsp` always emits `frame-src 'none'`, and the shell accepts a load only when the meta's `frame-src` is `'none'`. An artifact cannot embed an `iframe`, `frame`, `object`, or `embed`.
+
+The nested `sandbox="allow-scripts"` attribute is the isolation boundary. Inside it, inline script can run and `window.stageflow` can call the bridge. The document cannot read the console page, use the console origin's storage or cookies, open a popup, navigate the console tab, submit a form, or start a download. A link click whose `href` attribute starts with `#` (`<a>` and `<area>`) is cancelled and the document scrolls to that target: `#` and `#top` scroll to the top, and any other fragment uses `document.getElementById` after `decodeURIComponent`, then `getElementsByName`. The click does not write `location`. A missing target still does not navigate. Every other link is cancelled and reported as `ui/notifications/link-blocked`. A programmatic `location` write, including `location.hash`, `location.href`, `assign`, and `replace`, is unsupported. The bridge cannot reliably prevent it on an opaque `srcdoc` document. In Chrome 152 those `Location` properties are not replaceable, the Navigation API does not fire, and the fragment is resolved against the shell URL, so `frame-src about:` blocks it and the load guard removes the frame (`sf/sandbox-error` with `{ reason: "navigated" }`). The shell `frame-src` is what reports and blocks an `https` navigation. The sandbox keeps that navigation off the console tab.
+
+What an artifact can send off the machine is a request or a resource load to an `https` origin declared in `connectDomains` or `resourceDomains`. Network and base URLs follow the intersection of the shell header and the manifest meta:
+
+- `https` script, style, image, font, and media URLs are limited to `resourceDomains`. `data:` images, fonts, and media stay allowed.
+- `fetch`, XHR, `EventSource`, `WebSocket`, and other `https` connections are limited to `connectDomains`.
+- Child frames are not available. `frame-src` is `'none'` in the meta and `about:` on the shell, which is only enough for the shell's own `srcdoc` frame.
+- A base URL is limited to `baseUriDomains`.
+- Form submission, plugins, `http:` URLs, and any origin outside those lists are blocked. An empty manifest blocks every external request.
+
+Timing and other side channels are not closed by this policy. `default-src 'none'` is the fallback for fetch directives (`script-src`, `img-src`, `connect-src`, and the rest). DNS prefetch and `preconnect` are not those fetches. A dynamic `<link rel="dns-prefetch">` inside a live document produced no `securitypolicyviolation` in Chrome 152 (`scripts/sandbox-browser-check.ts`, count 0), so a DNS lookup from that hint stays an open side channel. `X-DNS-Prefetch-Control: off` was not verified to change that: the same hint already produced no violation without the header, so this document does not claim the header closes explicit `dns-prefetch` or `preconnect` hints. The publish scan still rejects a `dns-prefetch` or `preconnect` link whose origin is not in `connectDomains`.
+
+The shell relays only JSON-RPC messages that pass the bridge checks, only from the console origin named by `parent` (that value must be one of the origins baked into `/shell.js`) or from the nested frame. Every console message after the load carries the nonce from `sf/sandbox-load` (32 hex characters). Relay messages are capped at 256 KiB and 200 per second per direction, with at most 100 in-flight requests per direction. The HTML in the load is capped at 512 KiB. The shell sets the nested frame's height from `ui/notifications/size-changed`, clamped to 4,000 px, and forwards that notification. On the shell relay path only, `width` and `height` in that notification are clamped to 8,192 px and 4,000 px before the bridge parser runs; non-numeric dimensions are still rejected. The injected bridge client applies the same limits before it posts.
+
+The bridge script inside the artifact document handles `<a>` and `<area>` clicks in the capture phase. An `href` that starts with `#` scrolls in place and does not change `location`. Any other link is `ui/notifications/link-blocked` with `href` truncated to 200 characters. The script also posts `ui/notifications/size-changed` from a `ResizeObserver`, debounced by 100 ms, with `width` and `height` clamped to those protocol limits. Programmatic `location` writes are unsupported and end in the load guard tearing the frame down.
+
+When a nested request fails validation or exceeds relay limits, the shell replies to the nested frame with a JSON-RPC error (`-32600` invalid request, `-32602` invalid params, `-32601` method not found, or `-32000` rate or in-flight limit). Notifications with no usable id stay silent. Error messages are generic and do not echo attacker-controlled fields.
+
+### Bridge
+
+Messages are JSON-RPC 2.0. The protocol version string is `2026-01-26`. Methods:
+
+| Method | Direction | Role |
+|---|---|---|
+| `ui/initialize` | nested to host | Request. Result carries `hostContext`, including the `--sf-*` variables the host may pass |
+| `ui/notifications/initialized` | nested to host | Notification |
+| `ui/notifications/size-changed` | nested to host | `{ width?, height }` |
+| `ui/notifications/host-context-changed` | host to nested | Theme and variable updates |
+| `ui/notifications/link-blocked` | nested to host | `{ href? }` |
+| `ui/notifications/binding-updated` | host to nested | `{ binding_id }`. `binding_id` matches `^[a-z][a-z0-9_]{0,31}$` (1 to 32 characters). The shell forwards this only from the console into the nested frame |
+| `tools/call` | nested to host | `{ name, arguments? }` for one declared binding id. Result is `{ content, structuredContent, isError?, _meta: { source: "cache" or "executed", fetched_at, retryable? } }`. `retryable`, when present, is a boolean |
+| `ping` | either | Request |
+
+Any other method is JSON-RPC error `-32601`. An id is a safe integer or a string of 1 to 64 visible ASCII characters. Unknown fields are rejected. The control token is not a field on any of these messages.
+
+Shell messages, which are not bridge methods:
+
+- `sf/sandbox-ready` — shell to console, `{ version: 1 }`, targeted at the `parent` origin.
+- `sf/sandbox-load` — console to shell, once, `{ html, csp, nonce }`.
+- `sf/sandbox-error` — shell to console, `{ reason }`. `reason` is `"csp"` when that CSP string is not the manifest policy shape (the nested document is not installed) or `"navigated"` when a second nested load is observed (the frame is removed and the relay stops).
+- `sf/sandbox-relay` — either direction after the load, `{ nonce, message }` where `message` is a bridge message.
+
+The page-side object is `window.stageflow` with `initialize()`, `callBinding(bindingId, args?)`, `onHostContextChanged(cb)`, `onThemeChanged(cb)`, and `onBindingUpdated(cb)`. `initialize` applies the host variables to the document element. `callBinding` validates `arguments` against the same JSON-object rules as the bridge (`callBinding` rejects immediately with `Error` code `invalid_arguments` when a key, value, depth, or size is invalid). It resolves to `structuredContent` on success. When the host answers `tools/call` with `isError: true`, `callBinding` rejects with an `Error`. If that result's `_meta.retryable` is `true`, the error's `retryable` property is `true`. Each request times out after 30 seconds (`ping` after 10 seconds) with `Error` code `timeout`. At most 100 requests may be pending at once. `onBindingUpdated` may be registered more than once. Each callback receives the `binding_id` string from `ui/notifications/binding-updated`.
+
+Variables the host may pass: `--sf-ground`, `--sf-panel`, `--sf-raised`, `--sf-text-1`, `--sf-text-2`, `--sf-text-3`, `--sf-hairline`, `--sf-running`, `--sf-ok`, `--sf-needs`, `--sf-fail`, `--sf-font-ui`, `--sf-font-mono`.
 
 ## Publishing
 
@@ -170,7 +270,8 @@ Validation errors are `{ "error", "code", "issues": [{ "path", "message" }] }`.
 | Code | When |
 |---|---|
 | `artifact.invalid_id` | id, owner, or project id is missing, contains `::`, or is not a slug |
-| `artifact.invalid_kind` | kind is missing or not a static kind or `live.declarative` |
+| `artifact.invalid_kind` | kind is missing or not a static kind, `live.declarative`, or `live.html` |
+| `artifact.html_csp_violation` | a live HTML document references an origin, URL, form, or refresh that its manifest does not allow |
 | `artifact.invalid_shape` | any other field is the wrong shape, including tags, title, description, summary, image bytes, table text, and UTF-8 |
 | `artifact.too_large` | decoded content is over 5 MiB |
 | `artifact.not_found` | key or version does not exist |
@@ -322,6 +423,89 @@ Never publish secrets. Text kinds are UTF-8-checked and scrubbed before store. *
 A bad manifest is `400` `artifact.invalid_shape` with `issues[].path`. `args` are data. The Host does not run them as code.
 
 The stage and agent `publish_artifact` tools take the same program as `content` and pass `format`, `library`, `bindings`, and optional `refresh` instead of one `manifest` object. MCP `save_artifact` takes `manifest`, the same object as this route. The same bytes-and-manifest hash keeps the current version (`unchanged: true`). The hash is the program plus the canonical manifest JSON. Title, description, tags, and summary still update.
+
+## Live HTML artifacts
+
+`live.html` is one HTML document with inline JavaScript and CSS allowed. The content is UTF-8 and at most 256 KiB. The stored file is `document.html`. The manifest is:
+
+```json
+{
+  "format": "html",
+  "csp": {
+    "connectDomains": ["https://api.example.com"],
+    "resourceDomains": ["https://cdn.example.com"],
+    "baseUriDomains": ["https://app.example.com"]
+  },
+  "bindings": [{ "id": "rows", "function": "revenue_by_week", "args": { "weeks": 12 } }],
+  "refresh": { "on_view": true, "ttl_seconds": 300, "auto_seconds": 60 }
+}
+```
+
+`format` must be `html`. `library` is rejected. `libraries` may be omitted or `[]`. A non-empty `libraries` array is `artifact.invalid_shape` with the message `libraries are not available yet`. `bindings` and `refresh` use the same rules and the same eligibility checks as `live.declarative`. Omitting `bindings` stores an empty list. An unknown manifest key is `artifact.invalid_shape`.
+
+Each `csp` list is optional, has at most 8 entries, and defaults to none. An entry is `https://host[:port]` or a single-level wildcard `https://*.example.com`. The host is lowercased. Port 443 is omitted. Duplicates after that normalisation are rejected. A path, query, userinfo, `http:` URL, `data:` URL, `blob:` URL, `javascript:` URL, bare host, IP address, `localhost` name, or a name ending in `.local`, `.internal`, or `.localhost` is `artifact.invalid_shape`. Issue paths look like `manifest.csp.connectDomains[2]`. A hostname longer than 253 characters is rejected.
+
+`frameDomains` may be omitted or `[]`. A non-empty `frameDomains` is `400` `artifact.invalid_shape` with the message `frameDomains is not supported: sandboxed artifacts cannot embed frames`. The empty value stays accepted so an older manifest shape still parses. The built policy does not copy that list.
+
+The sandbox policy built from that manifest is exactly:
+
+```text
+default-src 'none'; script-src 'unsafe-inline' <resourceDomains>; style-src 'unsafe-inline' <resourceDomains>; img-src data: <resourceDomains>; font-src data: <resourceDomains>; media-src data: <resourceDomains>; connect-src <connectDomains or 'none'>; frame-src 'none'; base-uri <baseUriDomains or 'none'>; form-action 'none'; object-src 'none'
+```
+
+Declared origins are sorted. There is no `'unsafe-eval'` and no `'self'`. The nested document is an opaque `srcdoc` frame, so `'self'` would not name the sandbox origin.
+
+Publish scans the document before anything is written. The scan is one forward pass. It stops when the document is over 256 KiB, a line is over 64 KiB, an attribute value is over 16 KiB, there are more than 20,000 elements, or 150 ms have passed. It collects `script src`, `link href` and `imagesrcset` (including a stylesheet `<link>` in the body), `img src` and `srcset`, `source` / `video` / `audio` / `track src`, `video poster`, `background` on `body` / `table` / `td` / `th` / `tr`, `input type=image` `src`, `base href`, form `action` and `formaction`, `meta http-equiv=refresh`, CSS in `<style>` and `style` attributes (`url()`, `image-set()`, `src()`, `image()`, and `@import`, after comments are removed and CSS escapes are decoded), and SVG `use` / `image` / `feImage` `href` and `xlink:href`. Any `iframe`, `frame`, `object`, or `embed` element is rejected on its own, with or without `src`, `srcdoc`, or `data`. It does not parse `import()` or `new URL(` inside scripts. Those URLs cannot be known statically.
+
+An absolute or protocol-relative URL must be covered by the matching list: script, stylesheet, image, media, and font references use `resourceDomains`; a base URL uses `baseUriDomains`. Otherwise publish is `400` `artifact.html_csp_violation`. The issue path is the element and attribute, for example `img[0].src`, and the message names the origin and the list. An embedded frame or object uses the element path, for example `iframe[0]`, and the message `embedded frames and objects are not allowed`:
+
+```json
+{
+  "error": "origin https://cdn.example.com is not declared in resourceDomains",
+  "code": "artifact.html_csp_violation",
+  "issues": [
+    {
+      "path": "img[0].src",
+      "code": "html_csp_violation",
+      "message": "origin https://cdn.example.com is not declared in resourceDomains"
+    }
+  ]
+}
+```
+
+`javascript:` and `data:` URLs are rejected on `script`. `iframe`, `frame`, `object`, and `embed` are rejected as elements, before their URL is classified. `data:` is allowed on images, fonts, and media. A relative URL such as `script src="app.js"` is rejected with `relative URLs cannot be resolved inside a sandboxed document`. `meta http-equiv=refresh` is always rejected. A `form` `action` or `formaction` is always rejected. An `<a href>` is kept and returned as a warning, `links are disabled in the preview`. If a script body contains `fetch(`, `XMLHttpRequest`, `WebSocket`, or `EventSource` and `connectDomains` is empty, publish succeeds with the warning `script uses the network but connectDomains is empty: requests will be blocked`. Warnings use the same `warnings` array as a declarative publish.
+
+The same bytes and canonical manifest keep the current version. Search indexes the title, description, tags, and summary only, never the HTML body. Refresh, data, and query treat `live.html` as a live artifact: bindings run through the same engine as `live.declarative`. Eval-origin publishes are validated the same way and stay hidden.
+
+The console runs the document only when the Host has a sandbox origin. Until that origin is available, the preview does not execute the document. `GET` of the content from the console origin sends `Content-Security-Policy: sandbox; default-src 'none'`.
+
+### Live HTML artifacts: console behaviour
+
+The detail page reads `sandbox_origin` and `sandbox_origins` from `GET /api/health`. Both are absent until the catalog's health poll returns. The page frames the `sandbox_origins` entry whose hostname differs from `location.hostname`. A console opened as `http://localhost:<console-port>` uses `http://127.0.0.1:<sandbox-port>`. A console opened as `http://127.0.0.1:<console-port>` uses `http://localhost:<sandbox-port>`. Each candidate has to be `http`, hostname `localhost` or `127.0.0.1`, port 1–65535, and no userinfo, path, query, or hash. Anything else is ignored. If no entry differs, or the list is empty, the page uses `sandbox_origin` when that value passes the same check. An IPv6 literal `location.hostname` does not embed the shell. A null result keeps the scriptless preview. The same poll updates the origin when the Host comes back.
+
+When the origin is missing, the page shows: "Live preview needs the sandbox origin, which is not available on this Host. Showing a static preview with scripts disabled." The anchor text is "Live HTML artifacts: the sandbox origin" and it does not navigate. Under that notice, the page uses the same scriptless preview as `static.html` (Rendered / Source, empty sandbox, scripts disabled).
+
+When the origin is a string, the page embeds:
+
+`<iframe sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer" src="{chosen sandbox origin}/shell.html?parent={console origin}">`
+
+`allow-same-origin` is only on that outer frame. The page does not add `allow-forms`, `allow-popups`, `allow-top-navigation`, `allow-modals`, or `allow-downloads`. The iframe URL is the shell and the console origin. It does not carry the control token, an API path, or the artifact.
+
+The host bridge accepts `sf/sandbox-ready` only when `event.source` is that frame's `contentWindow` and `event.origin` is the chosen sandbox origin. It ignores `origin` `"null"`, other windows, a second ready, and any other `sf/*` method it does not handle. It then sends one `sf/sandbox-load` with the HTML, the CSP string built from `manifest.csp`, and a 128-bit hex nonce. `targetOrigin` is the chosen sandbox origin. Later host messages are `sf/sandbox-relay` with that nonce. Replies use the same envelope. The bridge drops a relay whose nonce does not match, whose inner message is over 256 KiB, or whose message fails the bridge parser, including an unknown method. It also drops traffic over 200 messages per second. It does not answer those drops. The console imports that parser from `src/artifacts/bridge/protocol.ts`. It does not keep a second copy. The CSP string the console sends is still built beside the frame (`liveHtmlDocumentCsp`), because `buildHtmlCsp` lives in a module that imports Node.
+
+`ui/initialize` is answered with the host context: theme `dark`, `platform` `web`, locale, time zone, the container width, and only the `--sf-*` variables named by the bridge. `hostCapabilities.sandbox.csp` is the same policy string as the load. `ping` answers `{}`. `ui/notifications/initialized` is accepted and not answered. `ui/notifications/size-changed` sets the outer frame height, clamped to 200–4,000 px. `ui/notifications/link-blocked` shows "A link in this artifact was blocked" for five seconds. The console does not open the href and does not navigate. Recreating the frame clears that timer and the ready timer.
+
+`sf/sandbox-error` replaces the tall frame with an alert. `navigated` says "This artifact tried to navigate away and was stopped for your safety." `csp` says "The sandbox refused this artifact's security policy (this is a bug: please report it)." Any other reason says "The sandbox stopped this artifact." Each alert has Retry and a collapsed Details block with the reason and the sandbox origin. Retry builds a new frame and a new nonce. The outer shell iframe is collapsed to a small height once the nested frame is gone. Messages that arrive after the error are ignored.
+
+`tools/call` runs only a declared binding id. An unknown id returns `isError` with the message `unknown binding`. On an older version (`?v=`), every known binding returns `isError` with `no data for this version`. Arguments that are absent or equal to the binding's default args use the stored snapshot for the current version. If that snapshot is not in yet and the page is still loading or refreshing, the call waits up to 10 seconds. The wait is cancelled when the frame unmounts. If there is still no snapshot, or the refresh failed, the result is `isError` with the text `no data yet` and `_meta.retryable` `true`. The artifact's `callBinding` turns that into an error whose `retryable` property is `true`. Different arguments call `POST /api/artifacts/.../query` for that binding id. Identical calls share one in-flight request and a 30 second cache, the same window as the declarative preview. The cache key includes the project root, owner, artifact id, and version, so two projects do not share variant results. A success is `{ content, structuredContent, _meta: { source, fetched_at } }`. A network error, a query error, or HTTP 503 is `isError` with a short message. HTTP 503 also puts `retry_after_seconds` on `_meta` when the Host sent one. The frame may have 8 calls in flight and 20 per second. Past either limit the result is `isError` with `rate limited`.
+
+When a default snapshot arrives, or its value changes, the page sends `ui/notifications/binding-updated` with `{ binding_id }` through `sf/sandbox-relay`. The message is the one `buildBindingUpdated` builds. The document can listen with `window.stageflow.onBindingUpdated`. The page sends that notice after **Refresh now** and after an automatic refresh when the value changed. The same value, including a new fetch time, does not send it. Variant results are not pushed; the document asks again with `tools/call`. The page sends at most 10 of these notices per second for each binding. A Host refresh still clears the 30 second variant cache.
+
+Nothing on the bridge is the control token, an API URL, or a credential. The HTML and the CSP string are the document the operator already opened.
+
+States: a skeleton while the HTML is loading and while the shell has not sent ready; "The sandbox did not start" after 5 seconds, with Retry and a Details block that shows the sandbox origin; the sandbox-stopped alert above; "Could not load the HTML" when the content request fails; the expiry card when the record is expired; "Library n/a" when the stored format is not `html`. The side panel still lists bindings, status, snapshots, declared origins, and Refresh now for the current version. HTML source stays in a collapsed block. An older version renders that version's HTML and says "Snapshots are for the current version." A fresh artifact with no stored snapshot shows its data when the first refresh lands. The page does not need a reload.
+
+`sf artifact publish --kind live.html --file page.html --manifest manifest.json` publishes the document. The stage and agent tools pass `format`, `csp`, `bindings`, and optional `refresh`.
 
 ### Live artifacts: programs
 

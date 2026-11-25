@@ -184,6 +184,8 @@ export type StageflowHostBootstrap = {
   email?: ReturnType<typeof emailHostFor> & { triggers: EmailTriggers; stop: () => Promise<void> };
   /** Filesystem classification for `$STAGEFLOW_HOME` (Slot 8). */
   storeFilesystem?: StoreFilesystemClassification;
+  sandboxOrigin?: string | null;
+  sandboxOrigins?: string[];
   /**
    * When set, Host must not serve API/MCP (restore.failed or failed boot apply).
    * /livez still answers; /readyz fails.

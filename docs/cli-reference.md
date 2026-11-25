@@ -746,7 +746,7 @@ sf artifact show <ownerKey>/<id> [--project-root <wire id or path>] [--json]
 
 **Exit codes:** `0` success; `1` not found (`artifact.not_found`), ambiguous owner/id across projects (`artifact.ambiguous`, project roots listed on stderr), invalid key, or other error.
 
-Human output is one field per line: `key`, `title`, `kind`, `status`, `owner`, `source` (run, stage, attempt), `updated`, and `expires` or `expired` (reason and time). A live artifact also prints `live` (`LIVE` or `LIVE/<status>`), `last refreshed`, `last error`, `bindings` (`id`, function, `read-only`), and `refresh` (the policy, or `-`). With `--json`, stdout is the artifact record object, including `live` when the kind is `live.declarative`, or `{ "error", "code" }` (and `project_roots` when ambiguous) on failure. `--json` is unchanged by the human summary.
+Human output is one field per line: `key`, `title`, `kind`, `status`, `owner`, `source` (run, stage, attempt), `updated`, and `expires` or `expired` (reason and time). A live artifact also prints `live` (`LIVE` or `LIVE/<status>`), `last refreshed`, `last error`, `bindings` (`id`, function, `read-only`), and `refresh` (the policy, or `-`). With `--json`, stdout is the artifact record object, including `live` when the kind is `live.declarative` or `live.html`, or `{ "error", "code" }` (and `project_roots` when ambiguous) on failure. `--json` is unchanged by the human summary.
 
 ### `sf artifact publish` {#sf-artifact-publish}
 
@@ -758,7 +758,7 @@ sf artifact publish --owner <pipeline:stage|agent:id> --id <id> --kind <kind> --
   [--project-root <wire id or path>] (--file <path> | --stdin) [--json]
 ```
 
-`--owner` is `pipeline:stage` (or `stage:<pipeline>:<stage>`) or `agent:<id>`. Pass exactly one of `--file` or `--stdin`. `--tag` may be repeated. The recorded source is `console`. `--kind live.declarative` stores the program from `--file` or `--stdin` and the JSON object in `--manifest` (`format`, `library`, `bindings`, optional `refresh`). `--manifest` is required for that kind.
+`--owner` is `pipeline:stage` (or `stage:<pipeline>:<stage>`) or `agent:<id>`. Pass exactly one of `--file` or `--stdin`. `--tag` may be repeated. The recorded source is `console`. `--kind live.declarative` stores the program from `--file` or `--stdin` and the JSON object in `--manifest` (`format`, `library`, `bindings`, optional `refresh`). `--kind live.html` stores the HTML document from `--file` or `--stdin` and the JSON object in `--manifest` (`format` `html`, `csp`, `bindings`, optional `refresh`). `--manifest` is required for both live kinds. A document that references an origin the manifest does not declare exits 1 with `artifact.html_csp_violation`.
 
 Human output is `Published <key> version <N>` or `Unchanged <key> version <N>`. `--json` prints `{ "key", "version", "project_root", "url", "unchanged" }`.
 

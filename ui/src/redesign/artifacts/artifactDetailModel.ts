@@ -53,7 +53,7 @@ export function liveExpiryPreview(
   unavailable: boolean,
   unavailableMessage?: string | null,
 ): StaticPreview | null {
-  if (record.kind !== "live.declarative") return null;
+  if (record.kind !== "live.declarative" && record.kind !== "live.html") return null;
   if (record.status === "expired") return previewFromContent({ record, text: null, binary: false });
   if (!unavailable) return null;
   return previewFromContent({
@@ -143,6 +143,11 @@ export function viewingVersionBanner(version: number, latest: number): string {
 }
 
 export const LIVE_VERSION_SNAPSHOT_NOTE = "Snapshots are for the current version.";
+
+export function showLiveRefresh(kind: string, historical: boolean, expired: boolean): boolean {
+  if (expired || historical) return false;
+  return kind === "live.declarative" || kind === "live.html";
+}
 export const LIVE_SNAPSHOT_DISPLAY_MAX_BYTES = 32 * 1024;
 
 export function formatLiveSnapshotJson(

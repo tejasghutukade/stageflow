@@ -24,6 +24,7 @@ import {
   formatLiveSnapshotJson,
   liveExpiryPreview,
   LIVE_VERSION_SNAPSHOT_NOTE,
+  showLiveRefresh,
   recordForViewedVersion,
   viewingVersionBanner,
   type ArtifactDetailMeta,
@@ -35,9 +36,14 @@ import { useLiveArtifactData } from "./useLiveArtifactData";
 import { previewFromContent, type StaticPreview } from "./renderers/previewModel";
 import { StaticArtifactBody } from "./renderers/StaticPreview";
 import type { LivePreviewInput } from "./livePreview";
+import type { LiveHtmlFrameProps } from "./liveHtml/LiveHtmlFrame";
 
 const LiveArtifactRenderer = lazy(() =>
   import("./live/LiveArtifactRenderer").then((mod) => ({ default: mod.LiveArtifactRenderer })),
+);
+
+const LiveHtmlFrame = lazy(() =>
+  import("./liveHtml/LiveHtmlFrame").then((mod) => ({ default: mod.LiveHtmlFrame })),
 );
 
 function MetaLine({ label, children }: { label: string; children: ReactNode }) {
@@ -142,6 +148,15 @@ function LiveSection({
             </span>
           </div>
         ))}
+        {live.csp ? (
+          <div className="text-[13px] text-[var(--sf-text-1)]">
+            <div className="text-[11px] uppercase tracking-wide text-[var(--sf-text-3)]">Declared origins</div>
+            <div>connect: {(live.csp.connectDomains ?? []).join(" ") || "none"}</div>
+            <div>resource: {(live.csp.resourceDomains ?? []).join(" ") || "none"}</div>
+            <div>frame: {(live.csp.frameDomains ?? []).join(" ") || "none"}</div>
+            <div>base: {(live.csp.baseUriDomains ?? []).join(" ") || "none"}</div>
+          </div>
+        ) : null}
         {historical ? <p className="text-[13px] text-[var(--sf-text-2)]">{LIVE_VERSION_SNAPSHOT_NOTE}</p> : null}
         {(data?.snapshots ?? []).map((snapshot) => {
           const shown = formatLiveSnapshotJson(snapshot.value);
@@ -243,6 +258,7 @@ export function ArtifactDetailView({
   nowMs,
   onRefresh,
   livePreview,
+  liveHtml,
 }: {
   meta: ArtifactDetailMeta;
   preview: StaticPreview | null;
@@ -272,8 +288,10 @@ export function ArtifactDetailView({
   nowMs?: number;
   onRefresh?: () => void;
   livePreview?: LivePreviewInput | null;
+  liveHtml?: LiveHtmlFrameProps | null;
 }) {
   const showLiveProgram = meta.kind === "live.declarative" && preview?.mode !== "unavailable";
+  const showLiveHtml = meta.kind === "live.html" && preview?.mode !== "unavailable";
   const refresh = preview?.mode === "unavailable" ? undefined : onRefresh;
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-[var(--sf-ground)]">
@@ -293,6 +311,23 @@ export function ArtifactDetailView({
           ) : null}
           {preview?.mode === "unavailable" ? (
             <StaticArtifactBody preview={preview} imageUrl={imageUrl} imageAlt={meta.title} />
+          ) : showLiveHtml ? (
+            <div>
+              {historicalSnapshots ? (
+                <p className="mb-3 text-[13px] text-[var(--sf-text-2)]">{LIVE_VERSION_SNAPSHOT_NOTE}</p>
+              ) : null}
+              {liveHtml ? (
+                <Suspense fallback={<p className="text-[13px] text-[var(--sf-text-3)]">Loading live HTML…</p>}>
+                  <LiveHtmlFrame {...liveHtml} />
+                </Suspense>
+              ) : (
+                <p className="text-[13px] text-[var(--sf-text-3)]">Loading live HTML…</p>
+              )}
+              <details className="mt-4">
+                <summary className="cursor-pointer text-[13px] text-[var(--sf-text-2)]">HTML source</summary>
+                <pre className="sf-mono mt-2 whitespace-pre-wrap text-[13px] text-[var(--sf-text-1)]">{liveHtml?.html ?? ""}</pre>
+              </details>
+            </div>
           ) : showLiveProgram ? (
             <div>
               {livePreview ? (
@@ -589,7 +624,7 @@ export function ArtifactDetailPage({
             )
       }
       onRefresh={
-        expiry || displayRecord.kind !== "live.declarative" || viewing !== null ? undefined : () => live.refresh()
+        showLiveRefresh(displayRecord.kind, viewing !== null, Boolean(expiry)) ? () => live.refresh() : undefined
       }
       livePreview={
         expiry || displayRecord.kind !== "live.declarative"
@@ -606,6 +641,27 @@ export function ArtifactDetailPage({
               settled: live.settled,
               refreshing: live.refreshing,
               historical: viewing !== null,
+              ownerKey,
+              artifactId: id,
+              projectRoot,
+            }
+      }
+      liveHtml={
+        expiry || displayRecord.kind !== "live.html"
+          ? null
+          : {
+              record: displayRecord,
+              version: displayRecord.version,
+              html: contentError || payload?.kind !== "text" ? null : payload.text,
+              htmlError: contentError
+                ? contentError.message
+                : payload && payload.kind !== "text"
+                  ? "This file cannot be shown as HTML"
+                  : null,
+              historical: viewing !== null,
+              snapshots: live.snapshots,
+              settled: live.settled,
+              refreshing: live.refreshing,
               ownerKey,
               artifactId: id,
               projectRoot,

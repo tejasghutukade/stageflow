@@ -221,6 +221,8 @@ export type CapacityHealth = {
   maxActiveStageProcesses: number | null;
   disk?: DiskBreakdown;
   artifact_store?: { computed_at: string; stale: boolean };
+  sandbox_origin?: string | null;
+  sandbox_origins?: string[];
   stage_env_passthrough?: boolean;
   proxy?: Record<string, unknown>;
   container?: {

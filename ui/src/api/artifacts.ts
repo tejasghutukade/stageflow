@@ -5,6 +5,15 @@ export type ArtifactOwner =
   | { kind: "stage"; pipeline: string; stage: string }
   | { kind: "agent"; agent: string };
 
+export type ArtifactPublishedKind =
+  | "static.markdown"
+  | "static.image"
+  | "static.table"
+  | "static.text"
+  | "static.html"
+  | "live.declarative"
+  | "live.html";
+
 export type ArtifactLiveStatus = "fresh" | "stale" | "refreshing" | "error";
 
 export type ArtifactLiveBinding = {
@@ -21,6 +30,12 @@ export type ArtifactLiveView = {
   refresh?: { on_view?: boolean; ttl_seconds?: number; auto_seconds?: number };
   library?: { name: string; version: string };
   format?: string;
+  csp?: {
+    connectDomains?: string[];
+    resourceDomains?: string[];
+    frameDomains?: string[];
+    baseUriDomains?: string[];
+  };
 };
 
 export type ArtifactSnapshot = {
@@ -65,7 +80,7 @@ export type ArtifactRecord = {
   title: string;
   description: string | null;
   tags: string[];
-  kind: string;
+  kind: ArtifactPublishedKind | (string & {});
   origin: string;
   owner: ArtifactOwner;
   source: {

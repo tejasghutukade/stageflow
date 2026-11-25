@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { ArtifactContentError, readArtifactContent, type ArtifactContentBody } from "../artifacts/content.js";
-import { isLiveDeclarativeKind } from "../artifacts/kinds.js";
+import { isLiveKind } from "../artifacts/kinds.js";
 import { artifactStorageKey, stageOwnerKey } from "../artifacts/keys.js";
 import { ArtifactPublishError } from "../artifacts/limits.js";
 import { deletePublishedArtifact, publishArtifact, type PublishRequest } from "../artifacts/publish.js";
@@ -263,7 +263,7 @@ export function registerArtifactTools(server: McpServer, deps: McpToolDeps): voi
         const view = value.view ?? "record";
         if (view === "data") {
           const artifact = readArtifact(db, parts.ownerKey, parts.id, value.project_root, roots);
-          if (!isLiveDeclarativeKind(artifact.kind)) {
+          if (!isLiveKind(artifact.kind)) {
             throw new ArtifactQueryError(404, "artifact.not_live", "Artifact is not live");
           }
           const data = readArtifactSnapshots(db, storageKeyFor(artifact));
@@ -317,7 +317,7 @@ export function registerArtifactTools(server: McpServer, deps: McpToolDeps): voi
   server.registerTool(
     "save_artifact",
     {
-      description: "Publish an artifact; live.declarative needs manifest. Same bytes keep the version.",
+      description: "Publish an artifact; live.declarative or live.html needs manifest. Same bytes keep the version.",
       inputSchema: saveArtifactSchema,
     },
     async (args) => {
@@ -380,7 +380,7 @@ export function registerArtifactTools(server: McpServer, deps: McpToolDeps): voi
         const db = open();
         const roots = await catalogRootsForArtifacts(deps.store);
         const artifact = readArtifact(db, parts.ownerKey, parts.id, value.project_root, roots);
-        if (!isLiveDeclarativeKind(artifact.kind)) {
+        if (!isLiveKind(artifact.kind)) {
           throw new ArtifactQueryError(404, "artifact.not_live", "Artifact is not live");
         }
         const root = roots.find((item) => item.project_root === artifact.project.id);

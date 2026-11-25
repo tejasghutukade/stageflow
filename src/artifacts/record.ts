@@ -1,4 +1,5 @@
-import { isLiveDeclarativeKind } from "./kinds.js";
+import { parseStoredHtmlManifest, type HtmlCsp } from "./htmlManifest.js";
+import { isLiveHtmlKind, isLiveKind } from "./kinds.js";
 import { parseStoredLiveManifest } from "./manifest.js";
 
 export type ArtifactOwner =
@@ -54,6 +55,7 @@ export type ArtifactLiveView = {
   refresh?: { on_view?: boolean; ttl_seconds?: number; auto_seconds?: number };
   library?: { name: string; version: string };
   format?: string;
+  csp?: HtmlCsp;
 };
 
 export type ArtifactRow = {
@@ -136,18 +138,36 @@ export function artifactRecord(row: ArtifactRow, registered: boolean): ArtifactR
   };
 }
 
+export function artifactLiveManifestFields(
+  kind: string,
+  manifestJson: string | null | undefined,
+): Pick<ArtifactLiveView, "bindings" | "refresh" | "library" | "format" | "csp"> {
+  if (isLiveHtmlKind(kind)) {
+    const manifest = parseStoredHtmlManifest(manifestJson);
+    return {
+      bindings: manifest?.bindings ?? [],
+      format: manifest?.format ?? "html",
+      ...(manifest?.csp ? { csp: manifest.csp } : {}),
+      ...(manifest?.refresh ? { refresh: manifest.refresh } : {}),
+    };
+  }
+  const manifest = parseStoredLiveManifest(manifestJson);
+  return {
+    bindings: manifest?.bindings ?? [],
+    ...(manifest?.format ? { format: manifest.format } : {}),
+    ...(manifest?.library ? { library: manifest.library } : {}),
+    ...(manifest?.refresh ? { refresh: manifest.refresh } : {}),
+  };
+}
+
 function liveView(row: ArtifactRow): { live: ArtifactLiveView } | Record<string, never> {
-  if (!isLiveDeclarativeKind(row.kind)) return {};
-  const manifest = parseStoredLiveManifest(row.manifest_json);
+  if (!isLiveKind(row.kind)) return {};
   const status = row.live_status && LIVE_STATUSES.has(row.live_status) ? (row.live_status as ArtifactLiveStatus) : null;
   const live: ArtifactLiveView = {
     status,
     last_refreshed_at: row.last_refreshed_at ?? null,
     last_error_code: row.last_error_code ?? null,
-    bindings: manifest?.bindings ?? [],
-    ...(manifest?.format ? { format: manifest.format } : {}),
-    ...(manifest?.library ? { library: manifest.library } : {}),
-    ...(manifest?.refresh ? { refresh: manifest.refresh } : {}),
+    ...artifactLiveManifestFields(row.kind, row.manifest_json),
   };
   return { live };
 }

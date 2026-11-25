@@ -15,7 +15,7 @@ Like Runs and the Inbox, it covers **every project** on the machine, because the
 |---------|---------------|--------|
 | **Headline** | "N things need you", plus runs in flight and runs that failed in the last hour | Run catalog |
 | **Needs you** | Pipeline gates and agent approvals, longest waiting first, then failed runs. **Accept** / **Reject** answer an agent approval in place; **Retry** retries a failed run's stage. A gate opens its run, because answering needs the evidence. | `GET /api/runs`, `GET /api/agents/approvals` |
-| **System health** | Agent slots (running, held by a gate, free), providers, connections that need attention, triggers armed, run store size and free disk | `GET /api/health`, `GET /api/connections`, `GET /api/triggers` |
+| **System health** | Agent slots (running, held by a gate, free), providers, connections that need attention, triggers armed, run store size and free disk. `sandbox_origin` is the live-HTML shell (and `sandbox_origins` lists both loopback names), or null and `[]` when that listener is off | `GET /api/health`, `GET /api/connections`, `GET /api/triggers` |
 | **KPIs** | Runs, success rate, longest waiting on you, pipeline spend. Runs, success rate and spend compare with the previous window of the same length | `GET /api/overview` |
 | **Live now** | Runs in flight with their stage track and elapsed time, then running or waiting agent sessions with their 7-day turn stats | Run catalog, `GET /api/agents/sessions` |
 | **Activity** | Recent finished runs and trigger fires | Run catalog, `GET /api/triggers` |

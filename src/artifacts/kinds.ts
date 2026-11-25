@@ -2,6 +2,7 @@ import path from "node:path";
 import { artifactMediaType } from "../runread/readArtifact.js";
 
 export const LIVE_DECLARATIVE_KIND = "live.declarative";
+export const LIVE_HTML_KIND = "live.html";
 
 export type StaticArtifactKind =
   | "static.markdown"
@@ -37,8 +38,17 @@ export function isLiveDeclarativeKind(kind: string): boolean {
   return kind === LIVE_DECLARATIVE_KIND;
 }
 
+export function isLiveHtmlKind(kind: string): boolean {
+  return kind === LIVE_HTML_KIND;
+}
+
+export function isLiveKind(kind: string): boolean {
+  return kind === LIVE_DECLARATIVE_KIND || kind === LIVE_HTML_KIND;
+}
+
 export function contentTypeForKind(kind: string, relativePath: string): string {
   if (kind === LIVE_DECLARATIVE_KIND) return "application/vnd.stageflow.openui";
+  if (kind === LIVE_HTML_KIND) return "text/html; charset=utf-8";
   switch (kind as StaticArtifactKind) {
     case "static.markdown":
       return "text/markdown";

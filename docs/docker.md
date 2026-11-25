@@ -140,6 +140,8 @@ docker run --rm --name stageflow \
 
 Open [http://127.0.0.1:3847](http://127.0.0.1:3847). The published port stays on `127.0.0.1`. The process inside the container still binds `0.0.0.0`. The container logs print `Control token: <token>` on first start. Later starts reuse it and print the file path. Copy that into the console prompt. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`.
 
+Live HTML preview needs the sandbox origin. It is not available by default in a container: the process binds `0.0.0.0`, so the shell listener stays off and `sandbox_origin` on `GET /api/health` is null. The console keeps the scriptless preview. To turn the shell on, set `STAGEFLOW_SANDBOX_PORT` to a free port inside the container and publish that port on `127.0.0.1` the same way as `3847` (`-p 127.0.0.1:<host-port>:<STAGEFLOW_SANDBOX_PORT>`). The browser origin of the console has to be one of the origins the shell will frame, which for this published mapping is `http://127.0.0.1:3847` when the console port is published as `3847`. The sandbox port is a second published port. Do not add it to `STAGEFLOW_ALLOWED_HOSTS`. See [Live HTML artifacts: the sandbox origin](artifacts.md#live-html-sandbox).
+
 Prefer a digest pin and a control token when the port is not limited to this machine:
 
 ```bash

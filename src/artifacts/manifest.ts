@@ -29,12 +29,15 @@ export type LiveLibrary = {
 };
 
 /** Spec manifest stored with a live.declarative artifact. `program` is opaque text. */
-export type LiveManifest = {
+export type LiveBindingSet = {
+  bindings: LiveBinding[];
+  refresh?: LiveRefresh;
+};
+
+export type LiveManifest = LiveBindingSet & {
   format: string;
   library: LiveLibrary;
   program: string;
-  bindings: LiveBinding[];
-  refresh?: LiveRefresh;
 };
 
 const FUNCTION_ID = /^[a-z][a-z0-9_]{0,63}$/;
@@ -50,6 +53,78 @@ function fail(issues: ArtifactIssue[]): never {
 
 function jsonBytes(value: unknown): number {
   return Buffer.byteLength(canonicalJson(value), "utf8");
+}
+
+export function collectLiveBindings(bindingsRaw: unknown, issues: ArtifactIssue[]): LiveBinding[] {
+  const bindings: LiveBinding[] = [];
+  if (!Array.isArray(bindingsRaw)) {
+    issues.push({ path: "manifest.bindings", message: "bindings must be an array" });
+    return bindings;
+  }
+  if (bindingsRaw.length > LIVE_BINDING_MAX) {
+    issues.push({ path: "manifest.bindings", message: `at most ${LIVE_BINDING_MAX} bindings` });
+    return bindings;
+  }
+  const seen = new Set<string>();
+  for (let index = 0; index < bindingsRaw.length; index += 1) {
+    const entry = bindingsRaw[index];
+    const base = `manifest.bindings[${index}]`;
+    if (!isRecord(entry)) {
+      issues.push({ path: base, message: "binding must be an object" });
+      continue;
+    }
+    const id = entry.id;
+    if (typeof id !== "string" || !LIVE_BINDING_ID_PATTERN.test(id)) {
+      issues.push({ path: `${base}.id`, message: "binding id must match ^[a-z][a-z0-9_]{0,31}$" });
+    } else if (seen.has(id)) {
+      issues.push({ path: `${base}.id`, message: `binding id ${id} is repeated` });
+    } else {
+      seen.add(id);
+    }
+    const functionId = entry.function;
+    if (typeof functionId !== "string" || !FUNCTION_ID.test(functionId)) {
+      issues.push({ path: `${base}.function`, message: "function must be a function id" });
+    }
+    const args = entry.args;
+    if (!isRecord(args)) {
+      issues.push({ path: `${base}.args`, message: "args must be an object" });
+    } else if (jsonBytes(args) > LIVE_BINDING_ARGS_MAX_BYTES) {
+      issues.push({ path: `${base}.args`, message: `args must be at most ${LIVE_BINDING_ARGS_MAX_BYTES} bytes` });
+    }
+    if (typeof id === "string" && typeof functionId === "string" && isRecord(args) && issues.every((issue) => !issue.path.startsWith(base))) {
+      bindings.push({ id, function: functionId, args });
+    }
+  }
+  return bindings;
+}
+
+export function collectLiveRefresh(refreshRaw: unknown, issues: ArtifactIssue[]): LiveRefresh | undefined {
+  if (refreshRaw === undefined) return undefined;
+  if (!isRecord(refreshRaw)) {
+    issues.push({ path: "manifest.refresh", message: "refresh must be an object" });
+    return undefined;
+  }
+  const refresh: LiveRefresh = {};
+  if (refreshRaw.on_view !== undefined) {
+    if (typeof refreshRaw.on_view !== "boolean") {
+      issues.push({ path: "manifest.refresh.on_view", message: "on_view must be a boolean" });
+    } else {
+      refresh.on_view = refreshRaw.on_view;
+    }
+  }
+  for (const key of ["ttl_seconds", "auto_seconds"] as const) {
+    if (refreshRaw[key] === undefined) continue;
+    const value = refreshRaw[key];
+    if (typeof value !== "number" || !Number.isInteger(value) || value < LIVE_REFRESH_MIN_SECONDS) {
+      issues.push({
+        path: `manifest.refresh.${key}`,
+        message: `${key} must be an integer of at least ${LIVE_REFRESH_MIN_SECONDS}`,
+      });
+    } else {
+      refresh[key] = value;
+    }
+  }
+  return Object.keys(refresh).length > 0 ? refresh : undefined;
 }
 
 export function validateLiveManifest(raw: unknown, program: string): LiveManifest {
@@ -87,71 +162,8 @@ export function validateLiveManifest(raw: unknown, program: string): LiveManifes
       [{ path: "program", message: `program is larger than ${LIVE_PROGRAM_MAX_BYTES} bytes` }],
     );
   }
-  const bindingsRaw = raw.bindings;
-  const bindings: LiveBinding[] = [];
-  if (!Array.isArray(bindingsRaw)) {
-    issues.push({ path: "manifest.bindings", message: "bindings must be an array" });
-  } else if (bindingsRaw.length > LIVE_BINDING_MAX) {
-    issues.push({ path: "manifest.bindings", message: `at most ${LIVE_BINDING_MAX} bindings` });
-  } else {
-    const seen = new Set<string>();
-    for (let index = 0; index < bindingsRaw.length; index += 1) {
-      const entry = bindingsRaw[index];
-      const base = `manifest.bindings[${index}]`;
-      if (!isRecord(entry)) {
-        issues.push({ path: base, message: "binding must be an object" });
-        continue;
-      }
-      const id = entry.id;
-      if (typeof id !== "string" || !LIVE_BINDING_ID_PATTERN.test(id)) {
-        issues.push({ path: `${base}.id`, message: "binding id must match ^[a-z][a-z0-9_]{0,31}$" });
-      } else if (seen.has(id)) {
-        issues.push({ path: `${base}.id`, message: `binding id ${id} is repeated` });
-      } else {
-        seen.add(id);
-      }
-      const functionId = entry.function;
-      if (typeof functionId !== "string" || !FUNCTION_ID.test(functionId)) {
-        issues.push({ path: `${base}.function`, message: "function must be a function id" });
-      }
-      const args = entry.args;
-      if (!isRecord(args)) {
-        issues.push({ path: `${base}.args`, message: "args must be an object" });
-      } else if (jsonBytes(args) > LIVE_BINDING_ARGS_MAX_BYTES) {
-        issues.push({ path: `${base}.args`, message: `args must be at most ${LIVE_BINDING_ARGS_MAX_BYTES} bytes` });
-      }
-      if (typeof id === "string" && typeof functionId === "string" && isRecord(args) && issues.every((issue) => !issue.path.startsWith(base))) {
-        bindings.push({ id, function: functionId, args });
-      }
-    }
-  }
-  let refresh: LiveRefresh | undefined;
-  if (raw.refresh !== undefined) {
-    if (!isRecord(raw.refresh)) {
-      issues.push({ path: "manifest.refresh", message: "refresh must be an object" });
-    } else {
-      refresh = {};
-      if (raw.refresh.on_view !== undefined) {
-        if (typeof raw.refresh.on_view !== "boolean") {
-          issues.push({ path: "manifest.refresh.on_view", message: "on_view must be a boolean" });
-        } else {
-          refresh.on_view = raw.refresh.on_view;
-        }
-      }
-      for (const key of ["ttl_seconds", "auto_seconds"] as const) {
-        if (raw.refresh[key] === undefined) continue;
-        const value = raw.refresh[key];
-        if (typeof value !== "number" || !Number.isInteger(value) || value < LIVE_REFRESH_MIN_SECONDS) {
-          issues.push({
-            path: `manifest.refresh.${key}`,
-            message: `${key} must be an integer of at least ${LIVE_REFRESH_MIN_SECONDS}`,
-          });
-        } else {
-          refresh[key] = value;
-        }
-      }
-    }
-  }
+  const bindings = collectLiveBindings(raw.bindings, issues);
+  const refresh = collectLiveRefresh(raw.refresh, issues);
   if (issues.length > 0) fail(issues);
   const libraryRecord = library as Record<string, unknown>;
   const manifest: LiveManifest = {

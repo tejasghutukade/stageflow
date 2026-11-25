@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ArtifactRecord } from "../../api/artifacts";
 import { ArtifactDetailView } from "./ArtifactDetailPage";
-import { artifactDetailMeta, artifactVersionRows, deleteArtifactConfirm, formatLiveRefreshed, formatLiveSnapshotJson, liveExpiryPreview, LIVE_SNAPSHOT_DISPLAY_MAX_BYTES, LIVE_VERSION_SNAPSHOT_NOTE, recordForViewedVersion, viewingVersionBanner } from "./artifactDetailModel";
+import { artifactDetailMeta, artifactVersionRows, deleteArtifactConfirm, formatLiveRefreshed, formatLiveSnapshotJson, liveExpiryPreview, LIVE_SNAPSHOT_DISPLAY_MAX_BYTES, LIVE_VERSION_SNAPSHOT_NOTE, recordForViewedVersion, showLiveRefresh, viewingVersionBanner } from "./artifactDetailModel";
 import { expiredReasonText, previewFromContent } from "./renderers/previewModel";
 
 function record(patch: Partial<ArtifactRecord> = {}): ArtifactRecord {
@@ -312,6 +312,15 @@ describe("artifact detail", () => {
     expect(expiredHtml).toContain(expiredReasonText("run_deleted"));
     expect(expiredHtml).not.toContain("Program source");
     expect(expiredHtml).not.toContain("Refresh now");
+
+    expect(liveExpiryPreview(record({ kind: "live.html", title: "Weekly", status: "expired", expired_reason: "file_missing" }), false, null)).toMatchObject({
+      mode: "unavailable",
+      title: "This artifact has expired",
+    });
+    expect(showLiveRefresh("live.html", false, false)).toBe(true);
+    expect(showLiveRefresh("live.html", true, false)).toBe(false);
+    expect(showLiveRefresh("live.declarative", false, true)).toBe(false);
+    expect(showLiveRefresh("static.html", false, false)).toBe(false);
 
     const unavailable = liveExpiryPreview(record({ kind: "live.declarative", title: "Weekly" }), true, "This artifact has expired");
     expect(unavailable).toMatchObject({ mode: "unavailable", title: "This file is no longer available" });

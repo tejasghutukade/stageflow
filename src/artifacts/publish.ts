@@ -7,14 +7,17 @@ import { STAGE_ID_PATTERN } from "../config/createStage.js";
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
 import { ArtifactKeyError, artifactStorageKey, assertArtifactId, publicArtifactKey, stageOwnerKey } from "./keys.js";
 import { assertBindingsAtPublish } from "./bindings.js";
+import { assertHtmlDocumentAtPublish } from "./htmlScan.js";
+import { htmlDbManifest, htmlIdentityHash, validateHtmlManifest, type HtmlManifest } from "./htmlManifest.js";
 import { assertLiveProgramAtPublish } from "./program.js";
-import { contentTypeForKind, isLiveDeclarativeKind, LIVE_DECLARATIVE_KIND, type StaticArtifactKind } from "./kinds.js";
+import { contentTypeForKind, isLiveDeclarativeKind, isLiveHtmlKind, LIVE_DECLARATIVE_KIND, type StaticArtifactKind } from "./kinds.js";
 import {
   ARTIFACT_DESCRIPTION_MAX_CHARS,
   ARTIFACT_SUMMARY_MAX_CHARS,
   ARTIFACT_TAG_MAX,
   ARTIFACT_TAG_PATTERN,
   ARTIFACT_TITLE_MAX_CHARS,
+  LIVE_HTML_MAX_BYTES,
   LIVE_PROGRAM_MAX_BYTES,
   STATIC_CONTENT_MAX_BYTES,
   ArtifactPublishError,
@@ -115,7 +118,7 @@ export type PublishRequest = {
   tags?: string[];
   summary?: string | null;
   bytes: Buffer;
-  /** Required for `live.declarative`. The program text is `bytes`. */
+  /** Required for a live artifact. The program or HTML document is `bytes`. */
   manifest?: unknown;
   publishSource: PublishSource;
   /** When set, `artifacts.source` is `kind` and the version row stores the run, stage, attempt, and session. */
@@ -152,7 +155,7 @@ function fail(
 }
 
 function acceptedKind(kind: string): string {
-  if (kind === LIVE_DECLARATIVE_KIND || STATIC_KINDS.has(kind as StaticArtifactKind)) return kind;
+  if (kind === LIVE_DECLARATIVE_KIND || isLiveHtmlKind(kind) || STATIC_KINDS.has(kind as StaticArtifactKind)) return kind;
   fail(400, "artifact.invalid_kind", "kind", `Unsupported artifact kind: ${kind}`);
 }
 
@@ -333,6 +336,10 @@ function contentFileName(kind: string, bytes: Buffer): string {
     if (!isUtf8(bytes)) fail(400, "artifact.invalid_shape", "content", "Program must be valid UTF-8");
     return "program.txt";
   }
+  if (isLiveHtmlKind(kind)) {
+    if (!isUtf8(bytes)) fail(400, "artifact.invalid_shape", "content", "HTML must be valid UTF-8");
+    return "document.html";
+  }
   if (kind === "static.markdown") {
     if (!isUtf8(bytes)) fail(400, "artifact.invalid_shape", "content", "Markdown must be valid UTF-8");
     return "content.md";
@@ -371,6 +378,7 @@ function validateRequest(input: PublishRequest): {
   summary: string | null;
   fileName: string;
   live?: LiveManifest;
+  html?: HtmlManifest;
 } {
   if (typeof input.id !== "string") fail(400, "artifact.invalid_shape", "id", "id must be a string");
   try {
@@ -423,22 +431,43 @@ function validateRequest(input: PublishRequest): {
     summary = input.summary;
   }
   if (!Buffer.isBuffer(input.bytes)) fail(400, "artifact.invalid_shape", "content", "content is required");
-  const cap = isLiveDeclarativeKind(kind) ? LIVE_PROGRAM_MAX_BYTES : STATIC_CONTENT_MAX_BYTES;
+  const cap = isLiveHtmlKind(kind)
+    ? LIVE_HTML_MAX_BYTES
+    : isLiveDeclarativeKind(kind)
+      ? LIVE_PROGRAM_MAX_BYTES
+      : STATIC_CONTENT_MAX_BYTES;
   if (input.bytes.length > cap) {
     fail(413, "artifact.too_large", "content", `content is larger than ${cap} bytes`);
   }
   let live: LiveManifest | undefined;
+  let html: HtmlManifest | undefined;
   if (isLiveDeclarativeKind(kind)) {
     if (!isUtf8(input.bytes)) fail(400, "artifact.invalid_shape", "content", "Program must be valid UTF-8");
     if (input.manifest === undefined) {
       fail(400, "artifact.invalid_shape", "manifest", "manifest is required for a live artifact");
     }
     live = validateLiveManifest(input.manifest, input.bytes.toString("utf8"));
+  } else if (isLiveHtmlKind(kind)) {
+    if (!isUtf8(input.bytes)) fail(400, "artifact.invalid_shape", "content", "HTML must be valid UTF-8");
+    if (input.manifest === undefined) {
+      fail(400, "artifact.invalid_shape", "manifest", "manifest is required for a live artifact");
+    }
+    html = validateHtmlManifest(input.manifest);
   } else if (input.manifest !== undefined) {
-    fail(400, "artifact.invalid_shape", "manifest", "manifest is only valid for live.declarative");
+    fail(400, "artifact.invalid_shape", "manifest", "manifest is only valid for a live artifact");
   }
   const fileName = contentFileName(kind, input.bytes);
-  return { id: input.id, kind, title, description, tags, summary, fileName, ...(live ? { live } : {}) };
+  return {
+    id: input.id,
+    kind,
+    title,
+    description,
+    tags,
+    summary,
+    fileName,
+    ...(live ? { live } : {}),
+    ...(html ? { html } : {}),
+  };
 }
 
 function syncPublishedSearch(
@@ -556,11 +585,20 @@ export async function publishArtifact(
   if (fields.live) {
     await assertBindingsAtPublish(project.path, input.owner, fields.live.bindings);
     programWarnings = await assertLiveProgramAtPublish(project.path, fields.live);
+  } else if (fields.html) {
+    await assertBindingsAtPublish(project.path, input.owner, fields.html.bindings);
+    programWarnings = await assertHtmlDocumentAtPublish(input.bytes.toString("utf8"), fields.html.csp);
   }
-  const contentHash = fields.live
-    ? liveIdentityHash(input.bytes, fields.live)
-    : createHash("sha256").update(input.bytes).digest("hex");
-  const storedManifest = fields.live ? liveDbManifest(fields.live) : { kind: fields.kind };
+  const contentHash = fields.html
+    ? htmlIdentityHash(input.bytes, fields.html)
+    : fields.live
+      ? liveIdentityHash(input.bytes, fields.live)
+      : createHash("sha256").update(input.bytes).digest("hex");
+  const storedManifest = fields.html
+    ? htmlDbManifest(fields.html)
+    : fields.live
+      ? liveDbManifest(fields.live)
+      : { kind: fields.kind };
   const contentType = contentTypeForKind(fields.kind, fields.fileName);
   const provenance = provenanceOf(input);
   const flags = agentUnverified ? { agent_unverified: true as const } : {};
@@ -814,7 +852,7 @@ export async function publishArtifact(
           });
           recordAttemptPublish(db, input, storageKey, next, false, now);
           syncPublishedSearch(db, storageKey, fields, input, project.id, extractSearchBody(fields.kind, input.bytes));
-          reconcileLiveSnapshots(db, storageKey, isLiveDeclarativeKind(fields.kind) ? fields.live ?? null : null);
+          reconcileLiveSnapshots(db, storageKey, fields.live ?? fields.html ?? null);
           if (failAfterVersionInsert) {
             failAfterVersionInsert = false;
             throw new Error("injected publish version insert failure");

@@ -1578,6 +1578,10 @@ function toIssues(items: ProgramDiagnostic[]): ArtifactIssue[] {
 let activeValidations = 0;
 const validationWaiters: Array<() => void> = [];
 
+export async function withArtifactValidation<T>(run: () => Promise<T>): Promise<T> {
+  return withProgramValidation(run);
+}
+
 async function withProgramValidation<T>(run: () => Promise<T>): Promise<T> {
   if (activeValidations >= MAX_CONCURRENT_PROGRAM_VALIDATIONS) {
     if (validationWaiters.length >= MAX_QUEUED_PROGRAM_VALIDATIONS) {
