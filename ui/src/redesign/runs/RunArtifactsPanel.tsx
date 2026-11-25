@@ -83,11 +83,20 @@ export function resolveArtifactsPanelSelection(
   return { selected: diskPaths[0] ?? null, missingClaim: null };
 }
 
+/** Console link for a published artifact; names the run's project unless it is the workspace. */
+export function publishedArtifactHref(key: string, projectRoot?: string): string {
+  const base = `#/artifacts/${key}`;
+  if (projectRoot === undefined || projectRoot === "" || projectRoot === "workspace") return base;
+  return `${base}?${new URLSearchParams({ project_root: projectRoot })}`;
+}
+
 function PublishedList({
   label,
+  projectRoot,
   published,
 }: {
   label: string;
+  projectRoot?: string | undefined;
   published: NonNullable<StageSnapshot["published_artifacts"]>;
 }) {
   return (
@@ -100,7 +109,7 @@ function PublishedList({
           <li key={`${item.key}@${item.version}`}>
             <a
               className="flex items-baseline gap-3 py-1 text-[13px] text-[var(--sf-text-1)] hover:underline"
-              href={`#/artifacts/${item.key}`}
+              href={publishedArtifactHref(item.key, projectRoot)}
             >
               <span>{item.title}</span>
               <span className="font-['Geist_Mono',monospace] text-[11px] text-[#8b8f98]">
@@ -146,7 +155,7 @@ export function RunArtifactsPanel({
   const published = stage.published_artifacts ?? [];
 
   if (paths.length === 0 && published.length > 0) {
-    return <PublishedList label={label} published={published} />;
+    return <PublishedList label={label} projectRoot={run.project_root} published={published} />;
   }
 
   if (paths.length === 0) {
@@ -201,7 +210,7 @@ export function RunArtifactsPanel({
         </ul>
         {published.length > 0 ? (
           <div className="border-t border-t-[#ffffff12]">
-            <PublishedList label={label} published={published} />
+            <PublishedList label={label} projectRoot={run.project_root} published={published} />
           </div>
         ) : null}
       </div>

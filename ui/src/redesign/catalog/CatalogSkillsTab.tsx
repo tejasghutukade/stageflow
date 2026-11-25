@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { OtherProjectsNote } from "../shell/OtherProjectsNote";
+import { useHiddenInOtherProjects } from "../shell/useHiddenInOtherProjects";
 import type { ReactNode } from "react";
 import {
   fetchPipelines,
@@ -693,12 +695,20 @@ export function CatalogSkillsTab({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const listRef = useRef<HTMLDivElement>(null);
+  const [scope, setScope] = useState<string | undefined>(undefined);
+  const { hidden, roots } = useHiddenInOtherProjects({
+    enabled: !loading,
+    visible: skills,
+    load: (root) => fetchSkills(root).then((r) => r.skills),
+    keyOf: (skill) => skill.filePath,
+    scope,
+  });
 
   const load = useCallback(async () => {
     const [skillsResult, usageResult, pipelinesResult] =
       await Promise.allSettled([
-        fetchSkills(),
-        fetchSkillUsage(),
+        fetchSkills(scope),
+        fetchSkillUsage(scope),
         fetchPipelines(),
       ]);
     if (skillsResult.status === "fulfilled") {
@@ -720,7 +730,7 @@ export function CatalogSkillsTab({
       setPipelines(pipelinesResult.value.pipelines);
     }
     setLoading(false);
-  }, []);
+  }, [scope]);
 
   useEffect(() => {
     setLoading(true);
@@ -833,6 +843,12 @@ export function CatalogSkillsTab({
   return (
     <div className="flex min-h-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
+        <OtherProjectsNote
+          hidden={hidden}
+          scopeLabel={scope === undefined ? undefined : (roots.find((r) => r.project_root === scope)?.label ?? scope)}
+          onSwitch={setScope}
+          onReset={() => setScope(undefined)}
+        />
         <SkillsInfoStrip diagnostics={diagnostics} />
         <SkillFilterChips filter={filter} counts={counts} onChange={setFilter} />
         <SkillTableHeader />

@@ -1,3 +1,4 @@
+import { withSurfaceScope } from "./projectScope";
 import { authorizationHeaders, notifyControlTokenRequired } from "./controlToken";
 
 /** Wire types for `/api/agents` — mirror src/config/loadAgent.ts and src/agents/{service,store}.ts. */
@@ -266,7 +267,7 @@ export class AgentApiError extends Error {
 }
 
 async function request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(withSurfaceScope(path, "agents"), {
     method,
     headers: { "Content-Type": "application/json", ...authorizationHeaders() },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -285,6 +286,8 @@ const agentUrl = (id: string, tail = "") => `/api/agents/${enc(id)}${tail}`;
 
 export const agentsApi = {
   list: () => request<{ agents: AgentSummary[] }>("/api/agents").then((body) => body.agents),
+  listIn: (projectRoot: string) =>
+    request<{ agents: AgentSummary[] }>(`/api/agents?${new URLSearchParams({ project_root: projectRoot })}`).then((body) => body.agents),
   get: (id: string) => request<AgentDetail>(agentUrl(id)),
   validate: (definition: unknown) => request<AgentValidation>("/api/agents/validate", "POST", { definition }),
   /** Send a reply that failed or whose outcome was unknown again. */
@@ -339,7 +342,7 @@ export const agentsApi = {
     ),
   /** Download the session's traces as OTLP/JSON. */
   async exportOtlp(id: string, sessionId: string): Promise<Blob> {
-    const res = await fetch(agentUrl(id, `/sessions/${enc(sessionId)}/otlp`), { headers: authorizationHeaders() });
+    const res = await fetch(withSurfaceScope(agentUrl(id, `/sessions/${enc(sessionId)}/otlp`), "agents"), { headers: authorizationHeaders() });
     if (res.status === 401) notifyControlTokenRequired();
     if (!res.ok) throw new AgentApiError(`http_${res.status}`, res.status, "Export failed");
     return res.blob();
@@ -356,7 +359,7 @@ export async function streamAgentChat(
   input: { message: string; sessionId?: string },
   handlers: { onDelta?: (text: string) => void; onSession?: (sessionId: string) => void; signal?: AbortSignal } = {},
 ): Promise<AgentSessionDetail> {
-  const res = await fetch(agentUrl(id, "/chat"), {
+  const res = await fetch(withSurfaceScope(agentUrl(id, "/chat"), "agents"), {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/x-ndjson", ...authorizationHeaders() },
     body: JSON.stringify({ ...input, stream: true }),

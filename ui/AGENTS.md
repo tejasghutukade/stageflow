@@ -33,6 +33,17 @@ Rules for Astryx leftovers:
 Check first, every time: is the screen you are changing under `ui/src/redesign/`? `ui/src/components/` and `ui/src/pages/` hold older code, and `components/COMPONENT-MAP.md` describes that older tree. Use it for those files only, not as the pattern for new work.
 
 
+## Project scope: never hide items silently
+
+A Host has several projects (`workspace` plus every registered root), and work an outside agent creates often lands in a project the operator is not looking at. One rule for every console view that lists project-owned items:
+
+- **Default to All projects** when the API can return every project in one call (Pipelines, Tasks, Triggers, Evals, Runs, Artifacts, Catalog stages). Do not send `project_root` unless the operator picked a project. A filter the operator picks is fine; a default that drops other projects is not.
+- **If a view must keep one project by default** because its API is scoped to a single root (Agents, Functions, Catalog skills today), it shows `OtherProjectsNote` (`redesign/shell/`) fed by `useHiddenInOtherProjects`: a visible "N more in other projects" line with one button per project, which switches the view to that project, plus a "Back to the default project" button while switched. Counts come from listing each available catalog root and keeping items the visible list lacks (`countHiddenInOtherProjects`), so the key you pass must identify an item stably across roots.
+- Switching scope in the API clients goes through `api/projectScope.ts` (`setSurfaceScope`, applied by `withSurfaceScope` in the agents and functions clients). Never invent a second mechanism.
+- No cheap way to count hidden items (no list-per-root endpoint)? Default the view to All projects instead, or extend the API. Never leave the hiding silent.
+- Links the UI builds to a run or artifact carry the project (`project_root`) when it is not `workspace` (see `publishedArtifactHref`, `artifactDetailPath`).
+- Add a UI test for each view you change (hidden-count or default scope). Host-level views (Memories, Connections, Settings) are not project-scoped and need no note.
+
 ## Chrome exception (Phase 6, legacy)
 
 Older run-page chrome primitives (rail, page-head, zone, block, run-row, track-mini, drawer, kv, graph-view, run-page workspace, and similar) are CSS classes in `ui/src/console.css`, written against Astryx tokens (`var(--color-*)`, `var(--spacing-*)`, `var(--radius-*)`). Native HTML elements are allowed there. This applies only to code that still uses `console.css`; new chrome belongs in `redesign/` with `--sf-*` tokens.
