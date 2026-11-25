@@ -19,6 +19,7 @@ vi.mock("../src/compaction/scrub.js", async (importOriginal) => {
 });
 import { createAgentPublishArtifactTool } from "../src/agents/artifactTools.js";
 import { agentProjectKey } from "../src/agents/store.js";
+import { queryBinding } from "../src/artifacts/bindingQuery.js";
 import { setBindingCatalogReadForTests } from "../src/artifacts/bindings.js";
 import { indexDeclaredDeliverables } from "../src/artifacts/indexDeclared.js";
 import { artifactStorageKey, stageOwnerKey } from "../src/artifacts/keys.js";
@@ -409,6 +410,39 @@ source: |
     const result = await refreshArtifact(db, { projectRoot: project, projectId: "workspace", invoke }, key);
     expect(result.snapshots).toHaveLength(1);
     expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves refresh, variant query, read and delete for a symbolic workspace project", async () => {
+    const { store, project } = await setup();
+    const db = sqliteConnectionFromStore(store)!;
+    const roots = [{ project_root: "workspace", path: project, kind: "workspace" as const, read_only: false }];
+    await publishLive(store, project, { roots });
+    const key = artifactStorageKey("workspace", stageOwnerKey("sales", "summarize"), "weekly");
+    expect(db.prepare(`SELECT project_root_id FROM artifacts WHERE key = ?`).get(key)).toEqual({ project_root_id: "workspace" });
+    const invoke = vi.fn(async () => okView({ weeks: 12 }));
+    const deps = { projectRoot: project, projectId: "workspace", invoke };
+    expect((await refreshArtifact(db, deps, key)).snapshots).toHaveLength(1);
+    const variant = await queryBinding(db, deps, key, { bindingId: "rows", args: { weeks: 4 } });
+    expect(variant.errors).toEqual([]);
+    expect(readArtifact(db, "stage:sales:summarize", "weekly", project, roots).project.id).toBe("workspace");
+    const other = await mkdtemp(path.join(tmpdir(), "sf-live-other-"));
+    cleanups.push(() => rm(other, { recursive: true, force: true }));
+    await expect(refreshArtifact(db, { ...deps, projectRoot: other, projectId: "other" }, key)).rejects.toMatchObject({
+      status: 404,
+      code: "artifact.not_found",
+    });
+    await expect(
+      queryBinding(db, { ...deps, projectRoot: other, projectId: "other" }, key, { bindingId: "rows" }),
+    ).rejects.toMatchObject({ code: "artifact.not_found" });
+    expect(() => readArtifact(db, "stage:sales:summarize", "weekly", other, roots)).toThrowError(
+      expect.objectContaining({ code: "artifact.not_found" }),
+    );
+    await expect(deletePublishedArtifact(db, "stage:sales:summarize", "weekly", other, roots)).rejects.toMatchObject({
+      code: "artifact.not_found",
+    });
+    await expect(deletePublishedArtifact(db, "stage:sales:summarize", "weekly", project, roots)).resolves.toMatchObject({
+      project_root: "workspace",
+    });
   });
 
   it("drops a snapshot when a republish points the binding at another function", async () => {

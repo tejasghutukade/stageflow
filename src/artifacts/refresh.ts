@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import path from "node:path";
 import type Database from "better-sqlite3";
 import { scrubSecrets, SECRET_KEY_RE } from "../compaction/scrub.js";
 import { payloadInstanceMismatch } from "../envelope/payloadSchema.js";
@@ -17,6 +16,7 @@ import { argsHash, type LiveBinding, type LiveBindingSet } from "./manifest.js";
 import { ArtifactQueryError } from "./query.js";
 import type { ArtifactOwner } from "./record.js";
 import { isLiveKind } from "./kinds.js";
+import { storedProjectMatches } from "./projectIdentity.js";
 import {
   effectiveTtlSeconds,
   REFRESH_RETRY_AFTER_SECONDS,
@@ -206,9 +206,7 @@ function ownerOf(row: ArtifactLiveRow): ArtifactOwner {
 }
 
 export function projectMatches(stored: string, projectRoot: string, projectId?: string): boolean {
-  if (projectId !== undefined && stored === projectId) return true;
-  if (stored === projectRoot) return true;
-  return path.resolve(stored) === path.resolve(projectRoot);
+  return storedProjectMatches(stored, { id: projectId, path: projectRoot });
 }
 
 function jsonByteUpperBound(value: unknown): number {

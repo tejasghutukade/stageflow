@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import type { AgentDefinition } from "../config/loadAgent.js";
 import { grantedStageflowTools } from "../toolkit/meta.js";
@@ -19,6 +18,7 @@ import {
   type ArtifactIssue,
 } from "../artifacts/limits.js";
 import { SessionPublishError, type SessionPublishBody, type SessionPublishSuccess } from "../artifacts/sessionPublish.js";
+import { storedProjectMatches } from "../artifacts/projectIdentity.js";
 import { bindableFunctionsFromAttachments } from "../artifacts/bindable.js";
 import { liveArtifactsPromptSection } from "../artifacts/livePrompt.js";
 import { LIVE_DECLARATIVE_KIND, LIVE_HTML_KIND } from "../artifacts/kinds.js";
@@ -238,17 +238,6 @@ export function createAgentPublishArtifactTool(options: {
   };
 }
 
-function sameProject(left: string, right: string): boolean {
-  const a = path.resolve(left);
-  const b = path.resolve(right);
-  if (a === b) return true;
-  try {
-    return fs.realpathSync(a) === fs.realpathSync(b);
-  } catch {
-    return false;
-  }
-}
-
 function artifactNotFound() {
   const payload = { code: "artifact.not_found", message: "Artifact not found", status: 404 };
   return { ok: false as const, text: JSON.stringify(payload) };
@@ -260,7 +249,7 @@ function bindAgentOwnedArtifact(tool: ToolkitTool, agentId: string, projectRoot:
     ...tool,
     async run(args, ctx) {
       const supplied = args.project_root;
-      if (typeof supplied === "string" && supplied.trim().length > 0 && !sameProject(supplied, projectRoot)) {
+      if (typeof supplied === "string" && supplied.trim().length > 0 && !storedProjectMatches(supplied, { path: projectRoot })) {
         return artifactNotFound();
       }
       const key = typeof args.key === "string" ? args.key : "";
@@ -287,7 +276,7 @@ export function bindAgentArtifactRead(tool: ToolkitTool, projectRoot: string): T
     ...tool,
     async run(args, ctx) {
       const supplied = args.project_root;
-      if (typeof supplied === "string" && supplied.trim().length > 0 && !sameProject(supplied, projectRoot)) {
+      if (typeof supplied === "string" && supplied.trim().length > 0 && !storedProjectMatches(supplied, { path: projectRoot })) {
         return artifactNotFound();
       }
       return tool.run({ ...args, project_root: projectRoot }, ctx);
