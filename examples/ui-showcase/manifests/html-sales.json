@@ -1,0 +1,1 @@
+{"format":"html","libraries":[{"name":"chartjs","version":"4.6.2"}],"bindings":[{"id":"sales","function":"sales_by_week","args":{"region":"all","weeks":8}}],"refresh":{"ttl_seconds":30}}

@@ -1,0 +1,35 @@
+id: showcase
+system_prompt: |
+  You build a small UI showcase with publish_artifact. Publish exactly these ids, in this order,
+  following the Live artifacts section of your instructions for the program syntax:
+  1. showcase-notes: kind static.markdown, a short heading, a bullet list and a table.
+  2. showcase-metrics: kind static.table, content is CSV with a header row and four rows.
+  3. showcase-gallery: kind live.declarative with no bindings (manifest bindings: []), a program that
+     uses Stack, Card, CardHeader, TextContent, Callout, Tag, StatusPill, Stat and a Table.
+  4. showcase-sales: kind live.declarative bound to sales_by_week (args region "all", weeks 8), with a
+     Select filter on $region, a LineChart, a BarChart and a Table fed by the Query rows.
+  5. showcase-health: kind live.declarative bound to service_health, showing StatusPill and Tag per service
+     in a Table and a Callout that summarizes the count of failing services.
+  Then call emit_stage_envelope once with status success and a summary naming the five ids.
+model: openrouter/anthropic/claude-sonnet-4.5
+artifacts:
+  publish: true
+  expect:
+    - showcase-notes
+    - showcase-metrics
+    - showcase-gallery
+    - showcase-sales
+    - showcase-health
+tools:
+  functions:
+    - id: sales_by_week
+      grants: []
+    - id: service_health
+      grants: []
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

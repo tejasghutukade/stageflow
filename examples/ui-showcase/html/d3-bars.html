@@ -1,0 +1,20 @@
+<style>
+  body { font-family: system-ui, sans-serif; margin: 12px; background: #fff; color: #222; }
+  .bar { fill: #58a; } .bar:hover { fill: #8cf; }
+  text { fill: currentColor; font-size: 11px; }
+</style>
+<h3 style="margin:0 0 8px">D3: static bar chart</h3>
+<div id="host"></div>
+<script>
+  var data = [["Mon", 12], ["Tue", 19], ["Wed", 7], ["Thu", 24], ["Fri", 16], ["Sat", 5], ["Sun", 9]];
+  var w = 520, h = 220, m = 28;
+  var x = d3.scaleBand().domain(data.map(function (d) { return d[0]; })).range([m, w - 8]).padding(0.2);
+  var y = d3.scaleLinear().domain([0, 26]).range([h - m, 8]);
+  var svg = d3.select("#host").append("svg").attr("viewBox", "0 0 " + w + " " + h).attr("width", "100%");
+  svg.selectAll("rect").data(data).enter().append("rect").attr("class", "bar")
+    .attr("x", function (d) { return x(d[0]); }).attr("y", function (d) { return y(d[1]); })
+    .attr("width", x.bandwidth()).attr("height", function (d) { return h - m - y(d[1]); });
+  svg.append("g").attr("transform", "translate(0," + (h - m) + ")").call(d3.axisBottom(x));
+  svg.append("g").attr("transform", "translate(" + m + ",0)").call(d3.axisLeft(y).ticks(5));
+  window.stageflow.initialize();
+</script>

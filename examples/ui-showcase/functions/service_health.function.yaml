@@ -1,0 +1,23 @@
+id: service_health
+name: Service health
+description: Demo service status list. One service changes state every minute.
+kind: tool
+tool_name: service_health
+tool_description: Read demo service health (name, status, latency_ms, uptime).
+timeout_ms: 5000
+input_schema:
+  type: object
+  properties: {}
+  additionalProperties: false
+source: |
+  export const access = { artifacts: "none", env: [], network: [] };
+  export default function execute() {
+    const minute = Math.floor(Date.now() / 60000);
+    const states = ["ok", "ok", "needs", "fail"];
+    const names = ["api", "worker", "database", "queue", "search"];
+    const services = names.map((name, index) => {
+      const status = index === minute % names.length ? states[minute % states.length] : "ok";
+      return { name, status, latency_ms: 20 + ((minute * 7 + index * 13) % 180), uptime: 99 + ((index * 17) % 10) / 10 };
+    });
+    return { services, generated_at: new Date().toISOString() };
+  }

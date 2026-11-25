@@ -1,0 +1,13 @@
+root = Stack([filters, kpis, revenueCard, ordersCard, tableCard], "column", "l")
+$region = "all"
+data = Query("sales_by_week", {region: $region, weeks: 8}, {rows: [], total: 0})
+filters = Stack([regionSelect, reload], "row", "m", "end")
+regionSelect = Select("region", [SelectItem("all", "All regions"), SelectItem("north", "North"), SelectItem("south", "South"), SelectItem("west", "West")], "Region", null, $region)
+reload = Button("Reload", @Run(data), "secondary")
+kpis = Stack([revenueStat, regionStat, statusPill], "row", "m", "center")
+revenueStat = Stat("Revenue, 8 weeks", "$" + data.total, "ok")
+regionStat = Stat("Region", $region, "neutral")
+statusPill = StatusPill("running", "live data")
+revenueCard = Card([CardHeader("Revenue by week", "USD"), LineChart(data.rows.week, [Series("Revenue", data.rows.revenue)], "natural", "Week", "USD", 240)])
+ordersCard = Card([CardHeader("Orders by week"), BarChart(data.rows.week, [Series("Orders", data.rows.orders)], "grouped", "Week", "Orders", 220)])
+tableCard = Card([CardHeader("Rows"), Table([Col("Week", data.rows.week), Col("Revenue", data.rows.revenue, "number"), Col("Orders", data.rows.orders, "number")])])

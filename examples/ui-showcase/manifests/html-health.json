@@ -1,0 +1,1 @@
+{"format":"html","libraries":[{"name":"echarts","version":"6.1.0"}],"bindings":[{"id":"health","function":"service_health","args":{}}],"refresh":{"ttl_seconds":30}}

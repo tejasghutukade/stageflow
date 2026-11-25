@@ -1,0 +1,48 @@
+<style>
+  body { font-family: system-ui, sans-serif; margin: 12px; background: #fff; color: #222; }
+  .row { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
+  button { padding: 4px 10px; border-radius: 6px; border: 1px solid #889; background: transparent; color: inherit; cursor: pointer; }
+  button.on { background: #3b6; color: #000; }
+  .meta { font-size: 12px; opacity: .8; margin-top: 6px; }
+  canvas { max-height: 280px; }
+</style>
+<div class="row" id="filters"></div>
+<canvas id="chart"></canvas>
+<div class="meta" id="meta">loading…</div>
+<script>
+  var region = "all", chart;
+  async function load() {
+    try {
+      var data = await window.stageflow.callBinding("sales", { region: region, weeks: 8 });
+      var rows = data.rows || [];
+      var labels = rows.map(function (r) { return r.week; });
+      var values = rows.map(function (r) { return r.revenue; });
+      if (!chart) {
+        chart = new Chart(document.getElementById("chart"), {
+          type: "line",
+          data: { labels: labels, datasets: [{ label: "Revenue", data: values, borderColor: "#3b6", tension: 0.3 }] },
+          options: { animation: false, responsive: true }
+        });
+      } else {
+        chart.data.labels = labels; chart.data.datasets[0].data = values; chart.update();
+      }
+      document.getElementById("meta").textContent = "region " + region + " · total " + data.total + " · " + data.generated_at;
+    } catch (e) {
+      document.getElementById("meta").textContent = "error: " + (e && e.message);
+    }
+  }
+  var bar = document.getElementById("filters");
+  ["all", "north", "south", "west"].forEach(function (name) {
+    var b = document.createElement("button");
+    b.textContent = name; b.className = name === region ? "on" : "";
+    b.onclick = function () {
+      region = name;
+      Array.prototype.forEach.call(bar.children, function (c) { c.className = c.textContent === region ? "on" : ""; });
+      load();
+    };
+    bar.appendChild(b);
+  });
+  window.stageflow.initialize();
+  window.stageflow.onBindingUpdated(function () { load(); });
+  load();
+</script>
