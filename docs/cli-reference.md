@@ -732,7 +732,7 @@ sf artifact list [--q <text>] [--kind <kind>] [--owner <pipeline:stage|agent:id>
 | `--limit` | Max rows (`1`–`100`, default `50`). |
 | `--json` | Print `{ "artifacts": […], "next_cursor": string \| null }` (same field names as `GET /api/artifacts`). With `--q`, the page also includes `match_count`, and `next_cursor` continues the ranked search. |
 
-Human output is a compact table: `KEY`, `KIND`, `TITLE`, `OWNER`, `RUN` (the same short run id the console uses, so a timestamp-prefixed id is not cut to `2026-11-`), `STATUS` (blank, or `expired`), `UPDATED` (UTC). Newest first. Empty index: `No artifacts.`
+Human output is a compact table: `KEY`, `KIND`, `TITLE`, `OWNER`, `RUN` (the same short run id the console uses, so a timestamp-prefixed id is not cut to `2026-11-`), `STATUS` (blank, `expired`, or `LIVE` / `LIVE/fresh` / `LIVE/stale` / `LIVE/error` / `LIVE/refreshing`), `UPDATED` (UTC). Newest first. Empty index: `No artifacts.`
 
 **Exit codes:** `0` success; `1` usage error, invalid query, or store unavailable.
 
@@ -746,7 +746,7 @@ sf artifact show <ownerKey>/<id> [--project-root <wire id or path>] [--json]
 
 **Exit codes:** `0` success; `1` not found (`artifact.not_found`), ambiguous owner/id across projects (`artifact.ambiguous`, project roots listed on stderr), invalid key, or other error.
 
-Human output is one field per line: `key`, `title`, `kind`, `status`, `owner`, `source` (run, stage, attempt), `updated`, and `expires` or `expired` (reason and time). With `--json`, stdout is the artifact record object, or `{ "error", "code" }` (and `project_roots` when ambiguous) on failure. `--json` is unchanged by the human summary.
+Human output is one field per line: `key`, `title`, `kind`, `status`, `owner`, `source` (run, stage, attempt), `updated`, and `expires` or `expired` (reason and time). A live artifact also prints `live` (`LIVE` or `LIVE/<status>`), `last refreshed`, `last error`, `bindings` (`id`, function, `read-only`), and `refresh` (the policy, or `-`). With `--json`, stdout is the artifact record object, including `live` when the kind is `live.declarative`, or `{ "error", "code" }` (and `project_roots` when ambiguous) on failure. `--json` is unchanged by the human summary.
 
 ### `sf artifact publish` {#sf-artifact-publish}
 
@@ -754,15 +754,27 @@ Copy a static file into the keep-class artifact store. Same caps and version rul
 
 ```bash
 sf artifact publish --owner <pipeline:stage|agent:id> --id <id> --kind <kind> --title <title>
-  [--description <text>] [--tag <tag>]... [--summary <text>]
+  [--description <text>] [--tag <tag>]... [--summary <text>] [--manifest <file>]
   [--project-root <wire id or path>] (--file <path> | --stdin) [--json]
 ```
 
-`--owner` is `pipeline:stage` (or `stage:<pipeline>:<stage>`) or `agent:<id>`. Pass exactly one of `--file` or `--stdin`. `--tag` may be repeated. The recorded source is `console`.
+`--owner` is `pipeline:stage` (or `stage:<pipeline>:<stage>`) or `agent:<id>`. Pass exactly one of `--file` or `--stdin`. `--tag` may be repeated. The recorded source is `console`. `--kind live.declarative` stores the program from `--file` or `--stdin` and the JSON object in `--manifest` (`format`, `library`, `bindings`, optional `refresh`). `--manifest` is required for that kind.
 
 Human output is `Published <key> version <N>` or `Unchanged <key> version <N>`. `--json` prints `{ "key", "version", "project_root", "url", "unchanged" }`.
 
 **Exit codes:** `0` success; `1` validation error, ambiguous project, or store unavailable. With `--json`, stdout is `{ "error", "code" }` and `issues` when the body was rejected.
+
+### `sf artifact refresh <key>`
+
+```bash
+sf artifact refresh <ownerKey>/<id> [--binding <id>]... [--project-root <wire id or path>] [--json]
+```
+
+Runs the live bindings now, or only the ids passed with `--binding` (repeat the flag). Same path as the refresh route. The command runs in its own process, so function-executor limits apply to that process. Human output is `status`, `last refreshed`, `last error`, one line per snapshot (`<id>: ok` or a status), and one line per binding error. `--json` prints `{ "status", "snapshots", "last_refreshed_at", "last_error_code", "errors" }`.
+
+**Exit codes:** `0` when every requested binding succeeded; `1` when a binding failed (stdout is still that JSON object with `--json`), or for `artifact.not_found`, `artifact.ambiguous`, `artifact.not_live`, `artifact.content_unavailable`, an unknown binding id, or another error (`{ "error", "code" }` with `--json`).
+
+List human output puts `LIVE`, `LIVE/fresh`, `LIVE/stale`, `LIVE/error`, or `LIVE/refreshing` in the `STATUS` column. An expired indexed row still shows `expired`.
 
 ### `sf artifact delete <key>` {#sf-artifact-delete}
 

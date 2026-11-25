@@ -2,9 +2,11 @@ import { writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import * as readline from "node:readline";
-import { parseOwnerKey } from "../artifacts/keys.js";
+import { artifactStorageKey, parseOwnerKey, stageOwnerKey } from "../artifacts/keys.js";
 import { ArtifactPublishError } from "../artifacts/limits.js";
+import { isLiveDeclarativeKind } from "../artifacts/kinds.js";
 import { deletePublishedArtifact, publishArtifact } from "../artifacts/publish.js";
+import { refreshArtifact } from "../artifacts/refresh.js";
 import {
   ArtifactQueryError,
   listArtifacts,
@@ -27,6 +29,7 @@ import type { RunStore } from "../runstore/port.js";
 import { ensureGlobalService } from "../server/ensureGlobalService.js";
 import {
   formatArtifactListTable,
+  formatArtifactRefresh,
   formatArtifactShow,
   parseArtifactShowKey,
 } from "./artifactListFormat.js";
@@ -35,7 +38,8 @@ import { resolveSafeOutPath } from "./resolveSafeOutPath.js";
 export const ARTIFACT_USAGE = `Usage:
   sf artifact list [--q <text>] [--kind <kind>] [--owner <pipeline:stage|agent:id>] [--tag <tag>] [--status <available|expired>] [--live] [--sort <updated|title|size>] [--order <asc|desc>] [--project-root <wire id or path>] [--limit <n>] [--json]
   sf artifact show <key> [--project-root <wire id or path>] [--json]
-  sf artifact publish --owner <pipeline:stage|agent:id> --id <id> --kind <kind> --title <title> [--description <text>] [--tag <tag>]... [--summary <text>] [--project-root <wire id or path>] (--file <path> | --stdin) [--json]
+  sf artifact refresh <key> [--binding <id>]... [--project-root <wire id or path>] [--json]
+  sf artifact publish --owner <pipeline:stage|agent:id> --id <id> --kind <kind> --title <title> [--description <text>] [--tag <tag>]... [--summary <text>] [--manifest <file>] [--project-root <wire id or path>] (--file <path> | --stdin) [--json]
   sf artifact delete <key> [--project-root <wire id or path>] [--yes] [--json]
   sf artifact read --run <runId> --path <relPath> [--out <file>]`;
 
@@ -93,7 +97,17 @@ type ParsedPublishArgs = {
   summary?: string;
   projectRoot?: string;
   file?: string;
+  manifest?: string;
   stdin: boolean;
+  json: boolean;
+};
+
+type ParsedRefreshArgs = {
+  help: boolean;
+  subcommand: "refresh";
+  key: string;
+  bindings: string[];
+  projectRoot?: string;
   json: boolean;
 };
 
@@ -112,6 +126,7 @@ type ParsedArtifactArgs =
   | ParsedShowArgs
   | ParsedReadArgs
   | ParsedPublishArgs
+  | ParsedRefreshArgs
   | ParsedDeleteArgs
   | { help: false };
 
@@ -291,6 +306,7 @@ function parsePublishArgs(args: string[]): ParsedPublishArgs {
   let summary: string | undefined;
   let projectRoot: string | undefined;
   let file: string | undefined;
+  let manifest: string | undefined;
   let stdin = false;
   let json = false;
   let help = false;
@@ -308,6 +324,7 @@ function parsePublishArgs(args: string[]): ParsedPublishArgs {
     else if (arg === "--summary") summary = requireFlag(args[++i], "--summary");
     else if (arg === "--project-root") projectRoot = requireFlag(args[++i], "--project-root");
     else if (arg === "--file") file = requireFlag(args[++i], "--file");
+    else if (arg === "--manifest") manifest = requireFlag(args[++i], "--manifest");
     else if (arg?.startsWith("-")) throw new Error(`Unknown flag: ${arg}`);
     else throw new Error(`Unexpected argument: ${arg}`);
   }
@@ -318,7 +335,26 @@ function parsePublishArgs(args: string[]): ParsedPublishArgs {
     requireFlag(title, "--title");
     if (Boolean(file) === stdin) throw new Error("Pass exactly one of --file or --stdin");
   }
-  return { help, subcommand: "publish", owner, id, kind, title, description, tags, summary, projectRoot, file, stdin, json };
+  return { help, subcommand: "publish", owner, id, kind, title, description, tags, summary, projectRoot, file, manifest, stdin, json };
+}
+
+function parseRefreshArgs(args: string[]): ParsedRefreshArgs {
+  if (args.length < 2) throw new Error("Missing artifact key");
+  const key = args[1]!;
+  const bindings: string[] = [];
+  let projectRoot: string | undefined;
+  let json = false;
+  let help = false;
+  for (let i = 2; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--help" || arg === "-h") help = true;
+    else if (arg === "--json") json = true;
+    else if (arg === "--binding") bindings.push(requireFlag(args[++i], "--binding"));
+    else if (arg === "--project-root") projectRoot = requireFlag(args[++i], "--project-root");
+    else if (arg?.startsWith("-")) throw new Error(`Unknown flag: ${arg}`);
+    else throw new Error(`Unexpected argument: ${arg}`);
+  }
+  return { help, subcommand: "refresh", key, bindings, projectRoot, json };
 }
 
 function parseDeleteArgs(args: string[]): ParsedDeleteArgs {
@@ -353,6 +389,7 @@ export function parseArtifactArgs(args: string[]): ParsedArtifactArgs {
   if (subcommand === "show") return parseShowArgs(args);
   if (subcommand === "read") return parseReadArgs(args);
   if (subcommand === "publish") return parsePublishArgs(args);
+  if (subcommand === "refresh") return parseRefreshArgs(args);
   if (subcommand === "delete") return parseDeleteArgs(args);
   throw new Error(`Unknown artifact subcommand: ${subcommand}`);
 }
@@ -567,6 +604,15 @@ async function runPublishSubcommand(
   }
   try {
     const bytes = parsed.file ? await readFile(path.resolve(cwd, parsed.file)) : await readStdin();
+    let manifest: unknown;
+    if (parsed.manifest) {
+      const raw = await readFile(path.resolve(cwd, parsed.manifest), "utf8");
+      try {
+        manifest = JSON.parse(raw) as unknown;
+      } catch {
+        return reportCommandError("manifest is not JSON", "artifact.invalid_shape", parsed.json, out);
+      }
+    }
     const result = await publishArtifact(db, {
       owner: parsePublishOwner(parsed.owner ?? ""),
       projectRoot: parsed.projectRoot,
@@ -577,12 +623,60 @@ async function runPublishSubcommand(
       tags: parsed.tags,
       summary: parsed.summary,
       bytes,
+      ...(manifest !== undefined ? { manifest } : {}),
       publishSource: "console",
       roots: await catalogRootsForArtifacts(store),
     });
     if (parsed.json) out.log(JSON.stringify(result));
     else out.log(`${result.unchanged ? "Unchanged" : "Published"} ${result.key} version ${result.version}`);
     return 0;
+  } catch (error) {
+    if (error instanceof ArtifactPublishError) return reportPublishError(error, parsed.json, out);
+    if (error instanceof ArtifactQueryError) return reportQueryError(error, parsed.json, out);
+    const message = error instanceof Error ? error.message : String(error);
+    return reportCommandError(message, "artifact.invalid_shape", parsed.json, out);
+  }
+}
+
+function storageKeyFor(record: ArtifactRecord): string {
+  const ownerKey =
+    record.owner.kind === "agent"
+      ? `agent:${record.owner.agent}`
+      : stageOwnerKey(record.owner.pipeline, record.owner.stage);
+  return artifactStorageKey(record.project.id, ownerKey, record.id);
+}
+
+async function runRefreshSubcommand(
+  parsed: ParsedRefreshArgs,
+  store: RunStore,
+  out: ArtifactCommandIo,
+): Promise<number> {
+  const parts = parseArtifactShowKey(parsed.key);
+  if (!parts) return reportCommandError("Artifact key is not valid", "artifact.invalid_id", parsed.json, out);
+  const db = sqliteConnectionFromStore(store);
+  if (db === undefined) {
+    return reportQueryError(
+      new ArtifactQueryError(503, "artifact.store_unavailable", "Artifact index is unavailable"),
+      parsed.json,
+      out,
+    );
+  }
+  try {
+    const roots = await catalogRootsForArtifacts(store);
+    const record = readArtifact(db, parts.ownerKey, parts.id, parsed.projectRoot, roots);
+    if (!isLiveDeclarativeKind(record.kind)) {
+      return reportQueryError(new ArtifactQueryError(404, "artifact.not_live", "Artifact is not live"), parsed.json, out);
+    }
+    const root = roots.find((item) => item.project_root === record.project.id);
+    const result = await refreshArtifact(
+      db,
+      { projectRoot: root?.path ?? record.project.id },
+      storageKeyFor(record),
+      parsed.bindings.length > 0 ? { bindingIds: parsed.bindings } : {},
+    );
+    if (parsed.json) out.log(JSON.stringify(result));
+    else out.log(formatArtifactRefresh(result));
+    return result.errors.length > 0 ? 1 : 0;
   } catch (error) {
     if (error instanceof ArtifactPublishError) return reportPublishError(error, parsed.json, out);
     if (error instanceof ArtifactQueryError) return reportQueryError(error, parsed.json, out);
@@ -704,6 +798,9 @@ export async function runArtifactCommand(
   }
   if (parsed.subcommand === "publish") {
     return runPublishSubcommand(parsed, store, cwd, out, options.readStdin ?? readStdinBytes);
+  }
+  if (parsed.subcommand === "refresh") {
+    return runRefreshSubcommand(parsed, store, out);
   }
   if (parsed.subcommand === "delete") {
     return runDeleteSubcommand(parsed, store, out, options);

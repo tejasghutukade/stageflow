@@ -99,6 +99,31 @@ describe("ArtifactsPageView", () => {
     expect(html).toContain("Run was purged");
   });
 
+  it("renders a live kind label and fresh status pill", () => {
+    const rows = artifactListRows([
+      record({
+        kind: "live.declarative",
+        title: "Weekly",
+        live: { status: "fresh" },
+      }),
+    ]);
+    expect(rows[0]?.kindLabel).toBe("Live");
+    expect(rows[0]?.statusPill).toEqual({ label: "Fresh", variant: "ok" });
+    const html = renderToStaticMarkup(createElement(ArtifactsPageView, {
+      ...defaultViewProps,
+      tabCounts: { all: 1, live: 1, static: 0 },
+      rows,
+      error: null,
+      loading: false,
+      scopeOptions: [],
+      scopeId: "",
+      showLoadMore: false,
+    }));
+    expect(html).toContain("Live");
+    expect(html).toContain("Fresh");
+    expect(html).toContain("sf-pill--ok");
+  });
+
   it("renders filter bar and filtered empty state", () => {
     const html = renderToStaticMarkup(createElement(ArtifactsPageView, {
       ...defaultViewProps,

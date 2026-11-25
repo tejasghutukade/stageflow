@@ -4,14 +4,19 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { deletePublishedArtifact, publishArtifact } from "../src/artifacts/publish.js";
+import { refreshArtifact } from "../src/artifacts/refresh.js";
+import { artifactStorageKey } from "../src/artifacts/keys.js";
+import { functionFilePath } from "../src/config/loadFunction.js";
 import type { CatalogRoot } from "../src/config/resolveCatalogRoots.js";
 import { grantedToolIds, parseAgentDefinition } from "../src/config/loadAgent.js";
 import { AgentChatController } from "../src/agents/chatTurn.js";
 import {
   AGENT_ARTIFACT_DELETE_SENTENCE,
   AGENT_ARTIFACT_READ_SENTENCE,
+  AGENT_ARTIFACT_REFRESH_SENTENCE,
   appendAgentArtifactPrompt,
   bindAgentArtifactDelete,
+  bindAgentArtifactRefresh,
   createAgentPublishArtifactTool,
 } from "../src/agents/artifactTools.js";
 import { createEvalGate, EvalGateRegistry } from "../src/agents/evalGate.js";
@@ -162,8 +167,28 @@ describe("agent artifact grants", () => {
     expect(ids.has("publish_artifact")).toBe(true);
     expect(ids.has("stageflow.get_artifact")).toBe(true);
     expect(ids.has("stageflow.delete_artifact")).toBe(true);
+    expect(ids.has("stageflow.refresh_artifact")).toBe(true);
     expect(ids.has("stageflow.save_artifact")).toBe(false);
-    expect([...ids].some((id) => id.includes("refresh"))).toBe(false);
+    const refreshAsk = parseAgentDefinition({
+      id: "helper",
+      name: "Helper",
+      instructions: "Help.",
+      tools: { stageflow: { groups: ["artifacts.refresh"] } },
+      approvals: { ask_first: ["stageflow.refresh_artifact"] },
+    });
+    expect(refreshAsk.ok).toBe(true);
+    const refreshDenied = parseAgentDefinition({
+      id: "helper",
+      name: "Helper",
+      instructions: "Help.",
+      tools: { stageflow: { groups: ["artifacts.read"] } },
+      approvals: { ask_first: ["stageflow.refresh_artifact"] },
+    });
+    expect(refreshDenied.ok).toBe(false);
+    if (!refreshDenied.ok) expect(refreshDenied.issues.map((issue) => issue.code)).toContain("agent.ask_first_not_granted");
+    expect(describeToolkit().groups.find((group) => group.id === "artifacts.refresh")?.tools.map((tool) => tool.name)).toEqual([
+      "refresh_artifact",
+    ]);
     const bare = parseAgentDefinition({
       id: "helper",
       name: "Helper",
@@ -212,6 +237,9 @@ describe("agent artifact grants", () => {
     expect(readOnly.opened[0]!.stageflowTools?.map((tool) => tool.name)).toEqual(["get_artifact"]);
     const cleanupOnly = await openRuntime({ tools: { stageflow: { groups: ["artifacts.cleanup"] } } });
     expect(cleanupOnly.opened[0]!.systemPrompt).toBe(`Help.\n\n${AGENT_ARTIFACT_DELETE_SENTENCE}`);
+    const refreshOnly = await openRuntime({ tools: { stageflow: { groups: ["artifacts.refresh"] } } });
+    expect(refreshOnly.opened[0]!.systemPrompt).toBe(`Help.\n\n${AGENT_ARTIFACT_REFRESH_SENTENCE}`);
+    expect(refreshOnly.opened[0]!.systemPrompt).toContain("stageflow_refresh_artifact");
     expect(cleanupOnly.opened[0]!.systemPrompt).toContain("stageflow_delete_artifact");
     const published: Array<{ sessionId: string; agentId: string }> = [];
     const fake = fakeOpen(async (emit, input) => {
@@ -264,7 +292,10 @@ describe("agent artifact grants", () => {
 
   it("does not give a sub-agent the caller's artifact grant", async () => {
     const fx = await setup({
-      boss: { ...writeGrant, sub_agents: ["worker"] },
+      boss: {
+        tools: { stageflow: { groups: ["artifacts.read", "artifacts.write", "artifacts.cleanup", "artifacts.refresh"] } },
+        sub_agents: ["worker"],
+      },
       worker: { instructions: "Work." },
     });
     const seen: string[] = [];
@@ -278,7 +309,9 @@ describe("agent artifact grants", () => {
     const worker = (await fx.service.get(fx.project, "worker")).definition!;
     const boss = (await fx.service.get(fx.project, "boss")).definition!;
     expect(grantedToolIds(boss).has("publish_artifact")).toBe(true);
+    expect(grantedToolIds(boss).has("stageflow.refresh_artifact")).toBe(true);
     expect(grantedToolIds(worker).has("publish_artifact")).toBe(false);
+    expect(grantedToolIds(worker).has("stageflow.refresh_artifact")).toBe(false);
     expect(seen).toContain("subtask");
     const child = await openRuntime({ id: "worker", instructions: "Work." }, "child");
     expect(child.opened[0]!.agentPublishTool).toBeUndefined();
@@ -384,6 +417,98 @@ describe("agent publish tool", () => {
     const removed = await wrapped.run({ key: "agent:helper/mine" }, { signal: new AbortController().signal });
     expect(removed.ok).toBe(true);
     expect(fx.connection.prepare(`SELECT id FROM artifacts WHERE id = ?`).get("mine")).toBeUndefined();
+  });
+
+  it("refreshes this agent's live artifact and refuses another owner or project", async () => {
+    const fx = await agentsFixture();
+    fixtures.push(fx);
+    process.env.STAGEFLOW_HOME = fx.home;
+    resetGlobalStageflowHomeForTests();
+    const source = "export const access = { network: [] };\nexport default async function execute(context) {\n  return { weeks: context.input && context.input.weeks };\n}\n";
+    const file = functionFilePath(fx.project, "revenue_by_week");
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(
+      file,
+      `id: revenue_by_week
+name: revenue_by_week
+kind: tool
+tool_name: revenue_by_week
+tool_description: Read revenue
+input_schema:
+  type: object
+  properties:
+    weeks:
+      type: integer
+  required: [weeks]
+  additionalProperties: false
+source: |
+${source
+  .trimEnd()
+  .split("\n")
+  .map((line) => `  ${line}`)
+  .join("\n")}
+`,
+    );
+    await fx.service.create(
+      fx.project,
+      agentInput("helper", {
+        tools: {
+          functions: [{ id: "revenue_by_week" }],
+          stageflow: { groups: ["artifacts.refresh"] },
+        },
+      }),
+      { source: "console" },
+    );
+    await publishArtifact(fx.connection, {
+      owner: { kind: "agent", agent: "helper" },
+      projectRoot: fx.project,
+      id: "weekly",
+      kind: "live.declarative",
+      title: "Weekly",
+      bytes: Buffer.from("card\n"),
+      manifest: {
+        format: "openui-lang",
+        library: { name: "stageflow", version: "1.0.0" },
+        bindings: [{ id: "rows", function: "revenue_by_week", args: { weeks: 12 } }],
+      },
+      publishSource: "api",
+      source: { kind: "api" },
+      roots: roots(fx.project),
+    });
+    const ran: string[] = [];
+    const wrapped = bindAgentArtifactRefresh(
+      {
+        name: "refresh_artifact",
+        grantId: "stageflow.refresh_artifact",
+        groups: ["artifacts.refresh"],
+        risk: "external",
+        toolset: "artifacts",
+        description: "refresh",
+        parameters: {},
+        async run(args) {
+          ran.push(String(args.key));
+          const key = String(args.key);
+          const slash = key.lastIndexOf("/");
+          const storageKey = artifactStorageKey(fx.project, key.slice(0, slash), key.slice(slash + 1));
+          const result = await refreshArtifact(fx.connection, { projectRoot: fx.project }, storageKey, {});
+          return { ok: true, text: JSON.stringify(result) };
+        },
+      },
+      "helper",
+      fx.project,
+    );
+    const ctx = { signal: new AbortController().signal };
+    const foreign = await wrapped.run({ key: "agent:other/weekly" }, ctx);
+    expect(JSON.parse(foreign.text).code).toBe("artifact.not_found");
+    const otherProject = await mkdtemp(path.join(tmpdir(), "sf-agent-refresh-b-"));
+    cleanups.push(() => rm(otherProject, { recursive: true, force: true }));
+    const cross = await wrapped.run({ key: "agent:helper/weekly", project_root: otherProject }, ctx);
+    expect(JSON.parse(cross.text).code).toBe("artifact.not_found");
+    expect(ran).toEqual([]);
+    const refreshed = await wrapped.run({ key: "agent:helper/weekly" }, ctx);
+    expect(refreshed.ok).toBe(true);
+    expect(JSON.parse(refreshed.text).status).toBe("fresh");
+    expect(ran).toEqual(["agent:helper/weekly"]);
   });
 
   it("binds publish and delete to the session project through the runtime", async () => {
@@ -707,6 +832,8 @@ describe("eval sessions and artifact tools", () => {
     expect(classifyTool(parsed, "publish_artifact").readOnly).toBe(false);
     expect(classifyTool(parsed, "stageflow.delete_artifact").class).toBe("destructive");
     expect(classifyTool(parsed, "stageflow.get_artifact")).toEqual({ class: "read", readOnly: true });
+    const refreshGrant = definition({ tools: { stageflow: { groups: ["artifacts.refresh"] } } });
+    expect(classifyTool(refreshGrant, "stageflow.refresh_artifact")).toEqual({ class: "external", readOnly: false });
     const summary = toolRiskSummary(parsed);
     expect(summary).toEqual(
       expect.arrayContaining([
@@ -719,7 +846,7 @@ describe("eval sessions and artifact tools", () => {
 
   it("stubs publish under read_only, hides an eval publish when real, and creates no approval", async () => {
     const fx = await setup({
-      helper: { tools: { stageflow: { groups: ["artifacts.read", "artifacts.write", "artifacts.cleanup"] } } },
+      helper: { tools: { stageflow: { groups: ["artifacts.read", "artifacts.write", "artifacts.cleanup", "artifacts.refresh"] } } },
       asker: {
         tools: { stageflow: { groups: ["artifacts.write"] } },
         approvals: { ask_first: ["publish_artifact"], timeout_minutes: 30, on_timeout: "skip" },
@@ -744,8 +871,11 @@ describe("eval sessions and artifact tools", () => {
       });
       const read = await ctx.tool("stageflow.get_artifact", { list: true }, async () => "listed");
       const removed = await ctx.tool("stageflow.delete_artifact", { key: "agent:helper/weekly" }, async () => "deleted");
+      const refreshed = await ctx.tool("stageflow.refresh_artifact", { key: "agent:helper/weekly" }, async () => "refreshed");
       expect(read.ran).toBe(true);
       expect(removed.ran).toBe(false);
+      expect(refreshed.ran).toBe(false);
+      expect(refreshed.output).toContain("was not executed");
       expect(removed.output).toContain("was not executed");
       return result.output;
     });

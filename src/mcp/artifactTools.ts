@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { ArtifactContentError, readArtifactContent, type ArtifactContentBody } from "../artifacts/content.js";
+import { isLiveDeclarativeKind } from "../artifacts/kinds.js";
 import { artifactStorageKey, stageOwnerKey } from "../artifacts/keys.js";
 import { ArtifactPublishError } from "../artifacts/limits.js";
 import { deletePublishedArtifact, publishArtifact, type PublishRequest } from "../artifacts/publish.js";
@@ -19,6 +20,7 @@ import {
   readArtifact,
   type ArtifactListQuery,
 } from "../artifacts/query.js";
+import { readArtifactSnapshots, refreshArtifact, type ArtifactSnapshotView } from "../artifacts/refresh.js";
 import type { ArtifactRecord } from "../artifacts/record.js";
 import { capUtf8 } from "../artifacts/search.js";
 import { artifactVersionKind, listArtifactVersions, readArtifactVersionRow } from "../artifacts/versions.js";
@@ -65,12 +67,58 @@ const saveArtifactSchema = z.object({
   summary: z.string().nullable().optional(),
   content: z.string().optional(),
   content_base64: z.string().optional(),
+  manifest: z.record(z.string(), z.unknown()).optional(),
 });
 
 const deleteArtifactSchema = z.object({
   key: z.string(),
   project_root: z.string().optional(),
 });
+
+const refreshArtifactSchema = z.object({
+  key: z.string(),
+  project_root: z.string().optional(),
+  binding_ids: z.array(z.string()).optional(),
+});
+
+export type McpArtifactSnapshot = ArtifactSnapshotView & {
+  truncated?: boolean;
+  size_bytes?: number;
+};
+
+export function capArtifactSnapshotsForMcp(snapshots: readonly ArtifactSnapshotView[]): {
+  snapshots: McpArtifactSnapshot[];
+  truncated: boolean;
+} {
+  const sized = snapshots.map((snapshot) => ({
+    snapshot,
+    size: Buffer.byteLength(JSON.stringify(snapshot.value ?? null), "utf8"),
+  }));
+  const dropped = new Set<number>();
+  const render = (): McpArtifactSnapshot[] =>
+    sized.map((entry, index) => {
+      if (!dropped.has(index)) return { ...entry.snapshot };
+      return { ...entry.snapshot, value: null, truncated: true, size_bytes: entry.size };
+    });
+  let rendered = render();
+  let truncated = false;
+  while (Buffer.byteLength(JSON.stringify(rendered), "utf8") > MCP_TEXT_CONTENT_MAX_BYTES) {
+    let largest = -1;
+    let largestSize = -1;
+    for (let index = 0; index < sized.length; index += 1) {
+      if (dropped.has(index)) continue;
+      if (sized[index]!.size > largestSize) {
+        largest = index;
+        largestSize = sized[index]!.size;
+      }
+    }
+    if (largest < 0) break;
+    dropped.add(largest);
+    truncated = true;
+    rendered = render();
+  }
+  return { snapshots: rendered, truncated };
+}
 
 type ArtifactFailure = ArtifactQueryError | ArtifactContentError | ArtifactPublishError;
 
@@ -214,8 +262,13 @@ export function registerArtifactTools(server: McpServer, deps: McpToolDeps): voi
         }
         const view = value.view ?? "record";
         if (view === "data") {
-          readArtifact(db, parts.ownerKey, parts.id, value.project_root, roots);
-          throw new ArtifactQueryError(404, "artifact.not_live", "Live artifact data is not available");
+          const artifact = readArtifact(db, parts.ownerKey, parts.id, value.project_root, roots);
+          if (!isLiveDeclarativeKind(artifact.kind)) {
+            throw new ArtifactQueryError(404, "artifact.not_live", "Artifact is not live");
+          }
+          const data = readArtifactSnapshots(db, storageKeyFor(artifact));
+          const capped = capArtifactSnapshotsForMcp(data.snapshots);
+          return textResult({ ...data, snapshots: capped.snapshots, truncated: capped.truncated });
         }
         if (view === "versions") {
           const artifact = readArtifact(db, parts.ownerKey, parts.id, value.project_root, roots);
@@ -264,7 +317,7 @@ export function registerArtifactTools(server: McpServer, deps: McpToolDeps): voi
   server.registerTool(
     "save_artifact",
     {
-      description: "Publish a static artifact. Same bytes keep the version.",
+      description: "Publish an artifact; live.declarative needs manifest. Same bytes keep the version.",
       inputSchema: saveArtifactSchema,
     },
     async (args) => {
@@ -284,6 +337,7 @@ export function registerArtifactTools(server: McpServer, deps: McpToolDeps): voi
           tags: value.tags,
           summary: value.summary,
           bytes: bytesFrom(value),
+          ...(value.manifest !== undefined ? { manifest: value.manifest } : {}),
           publishSource: "api",
           source: { kind: "mcp" },
           roots,
@@ -295,6 +349,52 @@ export function registerArtifactTools(server: McpServer, deps: McpToolDeps): voi
           project_root: published.project_root,
           ...(published.agent_unverified ? { agent_unverified: true } : {}),
         });
+      } catch (error) {
+        if (
+          error instanceof ArtifactQueryError ||
+          error instanceof ArtifactContentError ||
+          error instanceof ArtifactPublishError
+        ) {
+          return failureResult(error);
+        }
+        throw error;
+      }
+    },
+  );
+
+  server.registerTool(
+    "refresh_artifact",
+    {
+      description: "Refresh a live artifact.",
+      inputSchema: refreshArtifactSchema,
+    },
+    async (args) => {
+      const parsed = refreshArtifactSchema.safeParse(args);
+      if (!parsed.success) return schemaError(parsed.error.issues[0]?.message ?? "Invalid arguments");
+      const value = parsed.data;
+      try {
+        const parts = parseArtifactShowKey(value.key);
+        if (parts === undefined) {
+          throw new ArtifactQueryError(400, "artifact.invalid_id", "Artifact key must be <ownerKey>/<id>");
+        }
+        const db = open();
+        const roots = await catalogRootsForArtifacts(deps.store);
+        const artifact = readArtifact(db, parts.ownerKey, parts.id, value.project_root, roots);
+        if (!isLiveDeclarativeKind(artifact.kind)) {
+          throw new ArtifactQueryError(404, "artifact.not_live", "Artifact is not live");
+        }
+        const root = roots.find((item) => item.project_root === artifact.project.id);
+        const result = await refreshArtifact(
+          db,
+          { projectRoot: root?.path ?? artifact.project.id },
+          storageKeyFor(artifact),
+          {
+            ...(value.binding_ids !== undefined ? { bindingIds: value.binding_ids } : {}),
+            bindingIdsIssuePath: "binding_ids",
+          },
+        );
+        const capped = capArtifactSnapshotsForMcp(result.snapshots);
+        return textResult({ ...result, snapshots: capped.snapshots, truncated: capped.truncated });
       } catch (error) {
         if (
           error instanceof ArtifactQueryError ||

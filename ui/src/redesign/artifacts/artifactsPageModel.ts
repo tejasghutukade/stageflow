@@ -326,7 +326,10 @@ export function artifactLiveStatusPill(status: ArtifactLiveStatus): ArtifactStat
 }
 
 export function artifactStatusPillForRecord(record: ArtifactRecord): ArtifactStatusPill {
-  if (record.live?.status) return artifactLiveStatusPill(record.live.status);
+  if (record.live) {
+    if (record.live.status) return artifactLiveStatusPill(record.live.status);
+    return { label: "Live", variant: "muted" };
+  }
   return artifactIndexedStatusPill(record);
 }
 

@@ -1,3 +1,6 @@
+import { isLiveDeclarativeKind } from "./kinds.js";
+import { parseStoredLiveManifest } from "./manifest.js";
+
 export type ArtifactOwner =
   | { kind: "stage"; pipeline: string; stage: string }
   | { kind: "agent"; agent: string };
@@ -38,6 +41,18 @@ export type ArtifactRecord = {
   expired_at: string | null;
   expired_reason: ArtifactExpiredReason | null;
   project: { id: string; registered: boolean };
+  live?: ArtifactLiveView | null;
+};
+
+export type ArtifactLiveStatus = "fresh" | "stale" | "refreshing" | "error";
+
+export type ArtifactLiveView = {
+  status: ArtifactLiveStatus | null;
+  last_refreshed_at: string | null;
+  last_error_code: string | null;
+  bindings: Array<{ id: string; function: string; args: Record<string, unknown> }>;
+  refresh?: { on_view?: boolean; ttl_seconds?: number; auto_seconds?: number };
+  library?: { name: string; version: string };
 };
 
 export type ArtifactRow = {
@@ -69,7 +84,13 @@ export type ArtifactRow = {
   deleted_at: string | null;
   content_type: string | null;
   size_bytes: number | null;
+  live_status?: string | null;
+  last_refreshed_at?: string | null;
+  last_error_code?: string | null;
+  manifest_json?: string | null;
 };
+
+const LIVE_STATUSES = new Set(["fresh", "stale", "refreshing", "error"]);
 
 export function artifactRecord(row: ArtifactRow, registered: boolean): ArtifactRecord {
   const owner: ArtifactOwner =
@@ -110,7 +131,23 @@ export function artifactRecord(row: ArtifactRow, registered: boolean): ArtifactR
     expired_at: row.expired_at,
     expired_reason: expiredReason(row.expired_reason),
     project: { id: row.project_root_id, registered },
+    ...liveView(row),
   };
+}
+
+function liveView(row: ArtifactRow): { live: ArtifactLiveView } | Record<string, never> {
+  if (!isLiveDeclarativeKind(row.kind)) return {};
+  const manifest = parseStoredLiveManifest(row.manifest_json);
+  const status = row.live_status && LIVE_STATUSES.has(row.live_status) ? (row.live_status as ArtifactLiveStatus) : null;
+  const live: ArtifactLiveView = {
+    status,
+    last_refreshed_at: row.last_refreshed_at ?? null,
+    last_error_code: row.last_error_code ?? null,
+    bindings: manifest?.bindings ?? [],
+    ...(manifest?.library ? { library: manifest.library } : {}),
+    ...(manifest?.refresh ? { refresh: manifest.refresh } : {}),
+  };
+  return { live };
 }
 
 function expiredReason(value: string | null): ArtifactExpiredReason | null {

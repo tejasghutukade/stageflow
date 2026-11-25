@@ -35,6 +35,7 @@ import type { StageBrowserSupport } from "../browser/browserHost.js";
 import { consoleStageBrowserSupport } from "../browser/stageBrowserEnv.js";
 import { createHostProfileCatalog, type ProfileCatalog } from "../browser/profileCatalog.js";
 import { createRunLiveness } from "../browser/runLiveness.js";
+import { recoverRefreshingArtifacts } from "../artifacts/refresh.js";
 import { ensureArtifactSearchIndex, repairArtifactSearchOnHostStart, stopArtifactSearchRepair } from "../artifacts/search.js";
 import { RunManager } from "../runtime/runManager.js";
 import { EvalRunManager } from "../evals/manager.js";
@@ -449,6 +450,7 @@ export async function bootstrapStageflowHost(
   if (sqliteConnection !== undefined) {
     try {
       ensureArtifactSearchIndex(sqliteConnection);
+      recoverRefreshingArtifacts(sqliteConnection);
       await repairArtifactSearchOnHostStart(sqliteConnection, (runId) => store.getWorkspaceDir(runId));
     } catch (error) {
       bootLog.error(

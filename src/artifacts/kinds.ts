@@ -1,6 +1,8 @@
 import path from "node:path";
 import { artifactMediaType } from "../runread/readArtifact.js";
 
+export const LIVE_DECLARATIVE_KIND = "live.declarative";
+
 export type StaticArtifactKind =
   | "static.markdown"
   | "static.image"
@@ -31,8 +33,13 @@ export function inferStaticKind(relativePath: string): StaticArtifactKind {
   }
 }
 
-export function contentTypeForKind(kind: StaticArtifactKind, relativePath: string): string {
-  switch (kind) {
+export function isLiveDeclarativeKind(kind: string): boolean {
+  return kind === LIVE_DECLARATIVE_KIND;
+}
+
+export function contentTypeForKind(kind: string, relativePath: string): string {
+  if (kind === LIVE_DECLARATIVE_KIND) return "application/vnd.stageflow.openui";
+  switch (kind as StaticArtifactKind) {
     case "static.markdown":
       return "text/markdown";
     case "static.image":
@@ -45,5 +52,7 @@ export function contentTypeForKind(kind: StaticArtifactKind, relativePath: strin
       return "text/html; charset=utf-8";
     case "static.text":
       return "text/plain; charset=utf-8";
+    default:
+      return "application/octet-stream";
   }
 }

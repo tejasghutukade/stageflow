@@ -5,10 +5,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { artifactIdFromRelative, artifactStorageKey, publicArtifactKey, stageOwnerKey } from "../src/artifacts/keys.js";
 import { reindexArtifactSearchKey } from "../src/artifacts/search.js";
-import {
-  runArtifactCommand,
-} from "../src/cli/artifactCommand.js";
+import { ARTIFACT_USAGE, runArtifactCommand } from "../src/cli/artifactCommand.js";
 import { artifactRunShortId } from "../src/cli/artifactListFormat.js";
+import { functionFilePath } from "../src/config/loadFunction.js";
 import { createRunStore, sqliteConnectionFromStore } from "../src/runstore/createStore.js";
 import { globalStageflowHome, resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import { attemptArtifactsDir } from "../src/runstore/workspaceLayout.js";
@@ -728,5 +727,190 @@ describe("runArtifactCommand", () => {
       { cwd: projectRoot, projectRoot, io: accepted.io, confirm: async () => true },
     );
     expect(confirmed).toBe(0);
+  });
+
+  it("publishes a live artifact from --manifest and refreshes it", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-art-live-"));
+    const home = globalStageflowHome();
+    const store = createRunStore({ rootDir: home });
+    await store.ensureProject(projectRoot);
+    await store.close();
+    const source = "export const access = { network: [] };\nexport default async function execute(context) {\n  return { weeks: context.input && context.input.weeks };\n}\n";
+    const file = functionFilePath(projectRoot, "revenue_by_week");
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(
+      file,
+      `id: revenue_by_week
+name: revenue_by_week
+kind: tool
+tool_name: revenue_by_week
+tool_description: Read revenue
+input_schema:
+  type: object
+  properties:
+    weeks:
+      type: integer
+  required: [weeks]
+  additionalProperties: false
+source: |
+${source
+  .trimEnd()
+  .split("\n")
+  .map((line) => `  ${line}`)
+  .join("\n")}
+`,
+    );
+    await writeFile(
+      path.join(projectRoot, "stageflow.yaml"),
+      "version: 1\nmodel: openrouter/openai/gpt-4o-mini\ncatalog:\n  pipelines:\n    - .\n  tasks: []\n",
+    );
+    await writeFile(
+      path.join(projectRoot, "sales.pipeline.yaml"),
+      `id: sales
+stages:
+  - id: summarize
+    tools:
+      functions:
+        - id: revenue_by_week
+`,
+    );
+    const program = path.join(projectRoot, "program.txt");
+    const manifest = path.join(projectRoot, "manifest.json");
+    await writeFile(program, "card\n");
+    await writeFile(
+      manifest,
+      JSON.stringify({
+        format: "openui-lang",
+        library: { name: "stageflow", version: "1.0.0" },
+        bindings: [{ id: "rows", function: "revenue_by_week", args: { weeks: 12 } }],
+        refresh: { on_view: true, ttl_seconds: 30 },
+      }),
+    );
+    expect(ARTIFACT_USAGE).toContain("sf artifact refresh");
+    expect(ARTIFACT_USAGE).toContain("--manifest");
+    const published = captureIo();
+    expect(
+      await runArtifactCommand(
+        [
+          "publish",
+          "--owner",
+          "sales:summarize",
+          "--id",
+          "weekly",
+          "--kind",
+          "live.declarative",
+          "--title",
+          "Weekly",
+          "--file",
+          program,
+          "--manifest",
+          manifest,
+          "--project-root",
+          projectRoot,
+          "--json",
+        ],
+        { cwd: projectRoot, projectRoot, io: published.io },
+      ),
+    ).toBe(0);
+    const key = (JSON.parse(published.stdout.join("\n")) as { key: string }).key;
+    const shown = captureIo();
+    expect(await runArtifactCommand(["show", key, "--project-root", projectRoot], { cwd: projectRoot, projectRoot, io: shown.io })).toBe(0);
+    expect(shown.stdout.join("\n")).toContain("LIVE");
+    expect(shown.stdout.join("\n")).toContain("rows revenue_by_week read-only");
+    expect(shown.stdout.join("\n")).toContain("ttl_seconds=30");
+    const jsonShow = captureIo();
+    expect(await runArtifactCommand(["show", key, "--project-root", projectRoot, "--json"], { cwd: projectRoot, projectRoot, io: jsonShow.io })).toBe(0);
+    expect(JSON.parse(jsonShow.stdout.join("\n")).live.bindings[0].id).toBe("rows");
+    const listed = captureIo();
+    expect(await runArtifactCommand(["list", "--project-root", projectRoot, "--live"], { cwd: projectRoot, projectRoot, io: listed.io })).toBe(0);
+    expect(listed.stdout.join("\n")).toContain("LIVE");
+    const note = path.join(projectRoot, "note.md");
+    await writeFile(note, "# n\n");
+    const noted = captureIo();
+    expect(
+      await runArtifactCommand(
+        ["publish", "--owner", "sales:summarize", "--id", "note", "--kind", "static.markdown", "--title", "Note", "--file", note, "--project-root", projectRoot, "--json"],
+        { cwd: projectRoot, projectRoot, io: noted.io },
+      ),
+    ).toBe(0);
+    const staticRefresh = captureIo();
+    expect(
+      await runArtifactCommand(["refresh", "stage:sales:summarize/note", "--project-root", projectRoot, "--json"], {
+        cwd: projectRoot,
+        projectRoot,
+        io: staticRefresh.io,
+      }),
+    ).toBe(1);
+    expect(JSON.parse(staticRefresh.stdout.join("\n")).code).toBe("artifact.not_live");
+    const homeStore = createRunStore({ rootDir: globalStageflowHome() });
+    const homeDb = sqliteConnectionFromStore(homeStore)!;
+    homeDb.prepare(`UPDATE artifacts SET status = 'expired', expired_reason = 'file_missing' WHERE id = 'weekly' AND kind = 'live.declarative'`).run();
+    const expired = captureIo();
+    expect(
+      await runArtifactCommand(["refresh", key, "--project-root", projectRoot, "--json"], {
+        cwd: projectRoot,
+        projectRoot,
+        io: expired.io,
+      }),
+    ).toBe(1);
+    expect(JSON.parse(expired.stdout.join("\n")).code).toBe("artifact.content_unavailable");
+    homeDb.prepare(`UPDATE artifacts SET status = 'available', expired_reason = NULL WHERE id = 'weekly' AND kind = 'live.declarative'`).run();
+    const emptyRoot = await mkdtemp(path.join(tmpdir(), "sf-art-empty-"));
+    await homeStore.ensureProject(emptyRoot);
+    const foreign = captureIo();
+    expect(
+      await runArtifactCommand(["refresh", key, "--project-root", emptyRoot, "--json"], {
+        cwd: projectRoot,
+        projectRoot,
+        io: foreign.io,
+      }),
+    ).toBe(1);
+    expect(JSON.parse(foreign.stdout.join("\n")).code).toBe("artifact.not_found");
+    const otherRoot = await mkdtemp(path.join(tmpdir(), "sf-art-other-"));
+    const other = await homeStore.ensureProject(otherRoot);
+    homeDb.prepare(
+      `INSERT INTO artifacts (
+         key, owner_kind, owner_pipeline, owner_stage, project_root_id, id, title, tags_json,
+         kind, origin, current_version, hidden, created_at, updated_at
+       ) VALUES (
+         ?, 'stage', 'sales', 'summarize', ?, 'weekly', 'Other', '[]',
+         'live.declarative', 'published', 1, 0, '2026-11-24T00:00:00.000Z', '2026-11-24T00:00:00.000Z'
+       )`,
+    ).run(artifactStorageKey(other, stageOwnerKey("sales", "summarize"), "weekly"), other);
+    const ambiguous = captureIo();
+    expect(await runArtifactCommand(["refresh", key, "--json"], { cwd: projectRoot, projectRoot, io: ambiguous.io })).toBe(1);
+    expect(JSON.parse(ambiguous.stdout.join("\n")).code).toBe("artifact.ambiguous");
+    homeDb.prepare(`DELETE FROM artifacts WHERE project_root_id = ? AND id = 'weekly'`).run(other);
+    await homeStore.close();
+    const missing = captureIo();
+    expect(
+      await runArtifactCommand(["refresh", "stage:sales:summarize/missing", "--project-root", projectRoot, "--json"], {
+        cwd: projectRoot,
+        projectRoot,
+        io: missing.io,
+      }),
+    ).toBe(1);
+    expect(JSON.parse(missing.stdout.join("\n")).code).toBe("artifact.not_found");
+    const refreshed = captureIo();
+    expect(
+      await runArtifactCommand(["refresh", key, "--binding", "rows", "--project-root", projectRoot, "--json"], {
+        cwd: projectRoot,
+        projectRoot,
+        io: refreshed.io,
+      }),
+    ).toBe(0);
+    const body = JSON.parse(refreshed.stdout.join("\n")) as { status: string; snapshots: Array<{ binding_id: string; value: { weeks: number } }>; errors: unknown[] };
+    expect(body.status).toBe("fresh");
+    expect(body.errors).toEqual([]);
+    expect(body.snapshots[0]?.value).toEqual({ weeks: 12 });
+    const badBinding = captureIo();
+    expect(
+      await runArtifactCommand(["refresh", key, "--binding", "nope", "--project-root", projectRoot, "--json"], {
+        cwd: projectRoot,
+        projectRoot,
+        io: badBinding.io,
+      }),
+    ).toBe(1);
+    expect(JSON.parse(badBinding.stdout.join("\n")).code).toBe("artifact.invalid_shape");
   });
 });

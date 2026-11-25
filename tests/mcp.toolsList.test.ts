@@ -12,8 +12,13 @@ import { TOOL_META, toolsInToolset } from "../src/toolkit/meta.js";
 import { FIXTURES_ROOT } from "./helpers/fixturePaths.js";
 import { MCP_TOOLSETS_ALL_QUERY, mcpUrl } from "./helpers/mcpCall.js";
 
-/** Measured 2026-11-24 fix pass F: 46,673 bytes for 60 tools and 17,425 bytes for the 17 core tools. */
-const TOOLS_LIST_MAX_BYTES = 47_000;
+/**
+ * Measured 2026-11-24 after the live-artifact fix pass: 47,050 bytes for 61 tools.
+ * Before this pass: 46,993 (cap 47,000, 7 bytes of headroom).
+ * Restoring get/save/delete facts and shortening sort_eval_failures prose netted +57 bytes.
+ * All-tools cap raised by 250 to 47,250 (headroom 200). Core payload stayed 17,425; core cap 18,200 was not raised.
+ */
+const TOOLS_LIST_MAX_BYTES = 47_250;
 
 /** Measured 2026-11-14 after Plan 3 core toolsets: 17,918 bytes for 17 tools (≤ 20,269 = 20% of 101,347 baseline). */
 const CORE_TOOLS_LIST_MAX_BYTES = 18_200;
@@ -80,6 +85,7 @@ const APPENDIX_TOOL_NAMES = [
   "delete_eval_run",
   "get_artifact",
   "save_artifact",
+  "refresh_artifact",
   "delete_artifact",
 ] as const;
 
@@ -164,10 +170,10 @@ describe("MCP tools/list", () => {
     expect(coreTools).toHaveLength(17);
   });
 
-  it("lists exactly the 60 Appendix tools", () => {
+  it("lists exactly the 61 Appendix tools", () => {
     expect(tools.map((tool) => tool.name).sort()).toEqual([...APPENDIX_TOOL_NAMES].sort());
     expect(tools.map((tool) => tool.name).sort()).toEqual(Object.keys(TOOL_META).sort());
-    expect(tools).toHaveLength(60);
+    expect(tools).toHaveLength(61);
   });
 
   it("labels every tool with annotations that match its risk", () => {

@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ArtifactRecord } from "../../api/artifacts";
 import { ArtifactDetailView } from "./ArtifactDetailPage";
-import { artifactDetailMeta, artifactVersionRows, deleteArtifactConfirm, recordForViewedVersion, viewingVersionBanner } from "./artifactDetailModel";
+import { artifactDetailMeta, artifactVersionRows, deleteArtifactConfirm, formatLiveSnapshotJson, LIVE_RENDERER_NOTE, LIVE_SNAPSHOT_DISPLAY_MAX_BYTES, LIVE_VERSION_SNAPSHOT_NOTE, recordForViewedVersion, viewingVersionBanner } from "./artifactDetailModel";
 import { expiredReasonText, previewFromContent } from "./renderers/previewModel";
 
 function record(patch: Partial<ArtifactRecord> = {}): ArtifactRecord {
@@ -214,5 +214,69 @@ describe("artifact detail", () => {
     expect(html).toContain("Delete");
     expect(html).toContain('role="alert"');
     expect(html).toContain("Delete failed");
+  });
+
+  it("shows a live program, bindings, snapshots, and refresh", () => {
+    const big = formatLiveSnapshotJson("x".repeat(LIVE_SNAPSHOT_DISPLAY_MAX_BYTES + 20));
+    expect(big.truncated).toBe(true);
+    expect(big.text.length).toBeLessThan(LIVE_SNAPSHOT_DISPLAY_MAX_BYTES + 20);
+    const live = record({
+      kind: "live.declarative",
+      title: "Weekly",
+      live: {
+        status: "fresh",
+        last_refreshed_at: "2026-11-24T13:00:00.000Z",
+        last_error_code: null,
+        bindings: [{ id: "rows", function: "revenue_by_week", args: { weeks: 12 } }],
+        refresh: { on_view: true, ttl_seconds: 30 },
+      },
+    });
+    const html = renderToStaticMarkup(createElement(ArtifactDetailView, {
+      meta: artifactDetailMeta(live),
+      preview: null,
+      program: "card",
+      live: live.live,
+      liveData: {
+        status: "fresh",
+        last_refreshed_at: "2026-11-24T13:00:00.000Z",
+        last_error_code: null,
+        errors: [],
+        snapshots: [{
+          binding_id: "rows",
+          args_hash: "h",
+          value: { weeks: 12 },
+          fetched_at: "2026-11-24T13:00:00.000Z",
+          duration_ms: 4,
+          status: "ok",
+          error_code: null,
+        }],
+      },
+      refreshing: true,
+      refreshError: "queue full",
+      onRefresh: () => undefined,
+      onBack: () => undefined,
+    }));
+    expect(html).toContain(LIVE_RENDERER_NOTE);
+    expect(html).toContain("card");
+    expect(html).toContain("rows");
+    expect(html).toContain("revenue_by_week");
+    expect(html).toContain("Read-only");
+    expect(html).toContain("Fresh");
+    expect(html).toContain("Refreshing…");
+    expect(html).toContain("disabled");
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("queue full");
+    expect(html).toContain("weeks");
+    const historical = renderToStaticMarkup(createElement(ArtifactDetailView, {
+      meta: artifactDetailMeta(live),
+      preview: null,
+      program: "old card",
+      live: live.live,
+      historicalSnapshots: true,
+      onBack: () => undefined,
+    }));
+    expect(historical).toContain(LIVE_VERSION_SNAPSHOT_NOTE);
+    expect(historical).toContain("old card");
+    expect(historical).not.toContain("Refresh now");
   });
 });

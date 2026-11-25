@@ -100,7 +100,7 @@ Put every granted tool whose risk is write, destructive, or external into `ask_f
 | `artifacts.read` | `stageflow_get_artifact` with `list: true`, or with `view: record`, `versions`, or `content` | `stageflow.get_artifact` |
 | `artifacts.write` | | `publish_artifact` (session tool; owner is this agent). Not Host MCP `save_artifact`. |
 | `artifacts.cleanup` | | `stageflow.delete_artifact` → `stageflow_delete_artifact` (this agent's rows in this project only) |
-| `artifacts.refresh` | (no tool yet) | |
+| `artifacts.refresh` | | `stageflow.refresh_artifact` → `stageflow_refresh_artifact` (this agent's live artifacts in this project only) |
 | `evals.read` | `get_eval` with `list: true` or `view: definition` or `calibrations`, `validate` with `kind: eval`, `get_eval_run` (list or `view: export`), `get_eval_results` (table or `case_id`), `compare_eval_runs`, `get_eval_failures` with `view: suggestions` or `sort_status` | |
 | `evals.run` | | `run_eval`, `sort_eval_failures`, `calibrate_eval_grader`, `cancel_eval_run`, `try_eval_case` |
 | `evals.write` | | `save_eval` with `mode: create`, `update`, or `source: sample`, `save_dataset` with `action: create`, `ops`, or `convert`, `review_eval_results` with `action: label`, `accept`, or `dismiss` |

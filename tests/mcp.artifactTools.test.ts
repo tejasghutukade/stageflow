@@ -1,12 +1,13 @@
 import { createServer } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { ZodType } from "zod";
 import { parseAgentDefinition } from "../src/config/loadAgent.js";
-import { MCP_IMAGE_CONTENT_MAX_BYTES, MCP_TEXT_CONTENT_MAX_BYTES, registerArtifactTools } from "../src/mcp/artifactTools.js";
+import { functionFilePath } from "../src/config/loadFunction.js";
+import { MCP_IMAGE_CONTENT_MAX_BYTES, MCP_TEXT_CONTENT_MAX_BYTES, capArtifactSnapshotsForMcp, registerArtifactTools } from "../src/mcp/artifactTools.js";
 import { toolAnnotations } from "../src/mcp/defineTool.js";
 import type { McpToolDeps } from "../src/mcp/deps.js";
 import { createMcpHttpHandler } from "../src/mcp/server.js";
@@ -105,9 +106,9 @@ function stage(project: string, patch: Record<string, unknown> = {}) {
 }
 
 describe("artifact MCP tools", () => {
-  it("registers the three tools without route paths in the descriptions", async () => {
+  it("registers the artifact tools without route paths in the descriptions", async () => {
     const { tools } = await open();
-    expect(tools.map((tool) => tool.name)).toEqual(["get_artifact", "save_artifact", "delete_artifact"]);
+    expect(tools.map((tool) => tool.name)).toEqual(["get_artifact", "save_artifact", "refresh_artifact", "delete_artifact"]);
     for (const tool of tools) {
       expect(tool.description.includes("/api/")).toBe(false);
       expect(TOOL_META[tool.name]).toBeDefined();
@@ -137,10 +138,21 @@ describe("artifact MCP tools", () => {
       idempotentHint: false,
       openWorldHint: false,
     });
-    expect(toolsInGroup("artifacts.refresh")).toEqual([]);
+    expect(TOOL_META.refresh_artifact).toMatchObject({
+      groups: ["artifacts.refresh"],
+      risk: "external",
+      toolset: "artifacts",
+    });
+    expect(toolAnnotations("refresh_artifact")).toEqual({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    });
+    expect(toolsInGroup("artifacts.refresh")).toEqual(["refresh_artifact"]);
     expect(resolveToolsets(undefined).tools).not.toContain("get_artifact");
     expect(resolveToolsets("artifacts").tools).toEqual(
-      [...new Set([...resolveToolsets(undefined).tools, "get_artifact", "save_artifact", "delete_artifact"])].sort(),
+      [...new Set([...resolveToolsets(undefined).tools, "get_artifact", "save_artifact", "refresh_artifact", "delete_artifact"])].sort(),
     );
   });
 
@@ -325,6 +337,121 @@ describe("artifact MCP tools", () => {
     expect(projectDir).not.toBe(otherDir);
   });
 
+  it("refreshes a live artifact and returns snapshots from view data", async () => {
+    const { project, projectDir, store, tools } = await open();
+    const source = "export const access = { network: [] };\nexport default async function execute(context) {\n  return { weeks: context.input && context.input.weeks };\n}\n";
+    const file = functionFilePath(projectDir, "revenue_by_week");
+    await mkdir(file.slice(0, file.lastIndexOf("/")), { recursive: true });
+    await writeFile(
+      file,
+      `id: revenue_by_week
+name: revenue_by_week
+kind: tool
+tool_name: revenue_by_week
+tool_description: Read revenue
+input_schema:
+  type: object
+  properties:
+    weeks:
+      type: integer
+  required: [weeks]
+  additionalProperties: false
+source: |
+${source
+  .trimEnd()
+  .split("\n")
+  .map((line) => `  ${line}`)
+  .join("\n")}
+`,
+    );
+    await writeFile(
+      `${projectDir}/stageflow.yaml`,
+      "version: 1\nmodel: openrouter/openai/gpt-4o-mini\ncatalog:\n  pipelines:\n    - .\n  tasks: []\n",
+    );
+    await writeFile(
+      `${projectDir}/sales.pipeline.yaml`,
+      `id: sales
+stages:
+  - id: summarize
+    tools:
+      functions:
+        - id: revenue_by_week
+`,
+    );
+    const saved = await call(
+      tools,
+      "save_artifact",
+      stage(project, {
+        kind: "live.declarative",
+        content: "card\n",
+        manifest: {
+          format: "openui-lang",
+          library: { name: "stageflow", version: "1.0.0" },
+          bindings: [{ id: "rows", function: "revenue_by_week", args: { weeks: 12 } }],
+        },
+      }),
+    );
+    expect(saved.isError).toBe(false);
+    const refreshed = await call(tools, "refresh_artifact", { key: `${OWNER_KEY}/weekly`, project_root: project });
+    expect(refreshed.isError).toBe(false);
+    expect(refreshed.payload).toMatchObject({
+      status: "fresh",
+      truncated: false,
+      errors: [],
+      snapshots: [expect.objectContaining({ binding_id: "rows", status: "ok", value: { weeks: 12 } })],
+    });
+    const live = await call(tools, "get_artifact", { key: `${OWNER_KEY}/weekly`, project_root: project, view: "data" });
+    expect(live.isError).toBe(false);
+    expect(live.payload).toMatchObject({
+      status: "fresh",
+      truncated: false,
+      snapshots: [expect.objectContaining({ binding_id: "rows", value: { weeks: 12 } })],
+    });
+    const missing = await call(tools, "refresh_artifact", { key: `${OWNER_KEY}/missing`, project_root: project });
+    expect(missing.payload).toMatchObject({ code: "artifact.not_found" });
+    const capped = capArtifactSnapshotsForMcp([
+      {
+        binding_id: "rows",
+        args_hash: "h",
+        value: "x".repeat(MCP_TEXT_CONTENT_MAX_BYTES + 10),
+        fetched_at: "t",
+        duration_ms: 1,
+        status: "ok",
+        error_code: null,
+      },
+    ]);
+    expect(capped.truncated).toBe(true);
+    expect(capped.snapshots[0]?.value).toBeNull();
+    expect(capped.snapshots[0]?.truncated).toBe(true);
+    expect(capped.snapshots[0]?.size_bytes).toBeGreaterThan(MCP_TEXT_CONTENT_MAX_BYTES);
+    expect(tools.find((tool) => tool.name === "get_artifact")?.description).toContain("list true");
+    expect(tools.find((tool) => tool.name === "save_artifact")?.description).toContain("Same bytes keep the version.");
+    expect(tools.find((tool) => tool.name === "delete_artifact")?.description).toContain("Indexed artifacts are refused.");
+    const db = sqliteConnectionFromStore(store)!;
+    db.prepare(`UPDATE artifacts SET status = 'expired', expired_reason = 'file_missing' WHERE id = 'weekly'`).run();
+    const expired = await call(tools, "refresh_artifact", { key: `${OWNER_KEY}/weekly`, project_root: project });
+    expect(expired.payload.code).toBe("artifact.content_unavailable");
+    const expiredData = await call(tools, "get_artifact", {
+      key: `${OWNER_KEY}/weekly`,
+      project_root: project,
+      view: "data",
+    });
+    expect(expiredData.payload.code).toBe("artifact.content_unavailable");
+    const emptyDir = await mkdtemp(path.join(tmpdir(), "sf-art-mcp-empty-"));
+    dirs.push(emptyDir);
+    const empty = await store.ensureProject(emptyDir);
+    const foreign = await call(tools, "refresh_artifact", { key: `${OWNER_KEY}/weekly`, project_root: empty });
+    expect(foreign.payload.code).toBe("artifact.not_found");
+    db.prepare(`UPDATE artifacts SET status = 'available', expired_reason = NULL WHERE id = 'weekly'`).run();
+    const otherDir = await mkdtemp(path.join(tmpdir(), "sf-art-mcp-other-"));
+    dirs.push(otherDir);
+    const other = await store.ensureProject(otherDir);
+    const copy = await call(tools, "save_artifact", stage(other, { content: "other" }));
+    expect(copy.isError).toBe(false);
+    const ambiguous = await call(tools, "refresh_artifact", { key: `${OWNER_KEY}/weekly` });
+    expect(ambiguous.payload.code).toBe("artifact.ambiguous");
+  });
+
   it("publishes each static kind and returns validation codes", async () => {
     const { project, store, tools } = await open();
     const cases = [
@@ -389,6 +516,7 @@ describe("artifact MCP tools", () => {
     expect(grantedStageflowTools({ groups: ["artifacts.read", "artifacts.write", "artifacts.cleanup", "artifacts.refresh"], tools: [] })).toEqual([
       "delete_artifact",
       "get_artifact",
+      "refresh_artifact",
       "save_artifact",
     ]);
     const unknown = parseAgentDefinition({
@@ -443,9 +571,9 @@ describe("artifact MCP tools", () => {
 
     const listed = await rpc("?toolsets=artifacts", "tools/list", {});
     const names = listed.result?.tools?.map((tool) => tool.name) ?? [];
-    expect(names).toEqual(expect.arrayContaining(["get_artifact", "save_artifact", "delete_artifact"]));
+    expect(names).toEqual(expect.arrayContaining(["get_artifact", "save_artifact", "refresh_artifact", "delete_artifact"]));
     expect(names).not.toContain("get_eval");
-    for (const name of ["get_artifact", "save_artifact", "delete_artifact"] as const) {
+    for (const name of ["get_artifact", "save_artifact", "refresh_artifact", "delete_artifact"] as const) {
       const tool = listed.result?.tools?.find((entry) => entry.name === name);
       expect(tool?.annotations).toEqual(toolAnnotations(name));
       expect(tool?.description?.includes("/api/")).toBe(false);

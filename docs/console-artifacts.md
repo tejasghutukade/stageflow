@@ -41,6 +41,14 @@ The panel shows the title, kind, owner (pipeline and stage), size, content type,
 
 Published artifacts also list **Versions** in that panel: version number, created time, size, a short hash, and a Current marker on the latest one. A pinned version is marked Pinned. Choosing an older version opens it read-only at `#/artifacts/<ownerKey>/<id>?v=<N>` (and `project_root` when the page already has one). A banner says `Viewing version N of M` and links back to the latest. The main area renders that version with the kind stored for it, so an older markdown version stays on the markdown view after a later publish uses another kind. There is no editor.
 
+### Live
+
+A `live.declarative` detail page shows the program as monospace text under the note **Live artifact: the visual renderer comes in a later update**. The visual renderer is a later update.
+
+The **Details** panel has a **Live** section: each binding's id, function id, compact JSON args, and a **Read-only** badge; a status pill (**Fresh** when every binding has a snapshot, **Stale** when some do, **Error** when none do, **Refreshing** while a refresh runs, or **Live** before the first refresh); last refreshed time; last error code; and each snapshot as collapsed JSON. A value longer than 32 KB says `showing first 32 KB`. **Refresh now** posts to the refresh route, stays disabled with **Refreshing…** while it runs, shows an error with `role=alert`, and replaces the snapshots and status when it succeeds. Opening the page loads current snapshots from the data route and does not run functions.
+
+`?v=<N>` shows that version's program and that version's manifest bindings. Snapshots stay the current version's; the page says **Snapshots are for the current version.** Refresh now is hidden on an older version.
+
 A published artifact has **Delete**. The dialog names the artifact and says that every version and the stored files will be removed, and that this cannot be undone. After it is deleted, the console returns to the list. If the delete fails, the dialog closes and the error is shown next to **Delete**. Indexed artifacts do not show Delete.
 
 Rendering:
@@ -52,6 +60,7 @@ Rendering:
 | Table | A CSV file, or a JSON array of objects. Column headers sort the visible rows. The first click sorts ascending, the second descending, and the third returns to file order. The header exposes that state. Numbers sort numerically, and equal values keep their order. The table shows the first 500 rows and says `showing first 500 of N` when the file has more |
 | Text | Monospace text, including an extension the index stores as text |
 | HTML | A static preview. See [Static HTML](#static-html) below |
+| Live | The program as monospace text, plus the note that the visual renderer comes later |
 
 A file the console cannot preview (unknown kind, or binary content) shows a card with the file info. Invalid CSV or JSON is shown as text with a note. When the record is expired, the main area explains the reason in a sentence (slimmed to save space, purged, deleted, or the file is missing) and the side panel still shows the metadata. An unknown reason code is included in that sentence. The content route answers an expired row with `404` `artifact.content_unavailable` and names the reason, including when the file is still on disk.
 

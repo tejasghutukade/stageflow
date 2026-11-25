@@ -10,6 +10,7 @@ import {
   repairDirtyArtifactSearch,
   unindexArtifactSearch,
 } from "../artifacts/search.js";
+import { recoverRefreshingArtifacts } from "../artifacts/refresh.js";
 import { retentionWindowsFromEnv } from "./retention.js";
 import { attemptArtifactsDir } from "./workspaceLayout.js";
 
@@ -312,6 +313,11 @@ export async function repairMissingIndexed(
   limit: number = INDEXED_ARTIFACT_REPAIR_BATCH,
   afterKey = "",
 ): Promise<string> {
+  try {
+    recoverRefreshingArtifacts(db, "sweep");
+  } catch (error) {
+    logArtifactIndexFailure("artifact refresh recovery", error);
+  }
   if (limit <= 0) return afterKey;
   let rows = selectRepairBatch(db, afterKey, limit);
   if (rows.length === 0 && afterKey !== "") {

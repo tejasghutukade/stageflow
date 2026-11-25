@@ -579,7 +579,7 @@ describe("indexed artifacts follow run retention", () => {
     const freshRoot = await temp("sf-art-m24-fresh-");
     const fresh = createRunStore({ rootDir: freshRoot, kind: "sqlite" });
     const freshDb = sqliteConnectionFromStore(fresh)!;
-    expect(freshDb.pragma("user_version", { simple: true })).toBe(28);
+    expect(freshDb.pragma("user_version", { simple: true })).toBe(29);
     const freshCols = freshDb.prepare(`PRAGMA table_info(artifacts)`).all() as Array<{ name: string }>;
     expect(freshCols.map((col) => col.name)).toEqual(expect.arrayContaining(["status", "expired_at", "expired_reason"]));
     expect(
@@ -606,7 +606,7 @@ describe("indexed artifacts follow run retention", () => {
 
     const migrated = createRunStore({ rootDir: existingRoot, kind: "sqlite" });
     const migratedDb = sqliteConnectionFromStore(migrated)!;
-    expect(migratedDb.pragma("user_version", { simple: true })).toBe(28);
+    expect(migratedDb.pragma("user_version", { simple: true })).toBe(29);
     const row = migratedDb
       .prepare(`SELECT status, expired_at, expired_reason, source_run_id FROM artifacts`)
       .get() as { status: string; expired_at: string | null; expired_reason: string | null; source_run_id: string };

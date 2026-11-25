@@ -1,4 +1,10 @@
 export const STATIC_CONTENT_MAX_BYTES = 5 * 1024 * 1024;
+export const LIVE_PROGRAM_MAX_BYTES = 512 * 1024;
+export const LIVE_BINDING_MAX = 8;
+export const LIVE_BINDING_ARGS_MAX_BYTES = 8 * 1024;
+export const LIVE_SNAPSHOT_MAX_BYTES = 1024 * 1024;
+export const LIVE_REFRESH_MIN_SECONDS = 30;
+export const LIVE_BINDING_ID_PATTERN = /^[a-z][a-z0-9_]{0,31}$/;
 export const ARTIFACT_TITLE_MAX_CHARS = 120;
 export const ARTIFACT_DESCRIPTION_MAX_CHARS = 2000;
 export const ARTIFACT_SUMMARY_MAX_CHARS = 2000;

@@ -23,7 +23,8 @@ const SELECT_COLS = `
   a.id, a.title, a.description, a.tags_json, a.summary, a.kind, a.origin, a.current_version,
   a.source_run_id, a.source_stage_id, a.source_attempt, a.source_session_id, a.hidden,
   a.expires_at, a.status, a.expired_at, a.expired_reason, a.created_at, a.updated_at, a.deleted_at,
-  v.content_type, v.size_bytes
+  a.live_status, a.last_refreshed_at, a.last_error_code,
+  v.content_type, v.size_bytes, v.manifest_json
 `;
 
 const FROM = `

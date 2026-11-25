@@ -31,7 +31,7 @@ import { AgentError } from "../errors.js";
 import { MEMORY_STORE_BASH_DENIED, memoryStorePathInCommand } from "../../memory/bashDeny.js";
 import { compactionUsageCost, type CompactionEndSessionEvent } from "../../agent/compactionEvents.js";
 import { memoryHome } from "../../memory/host.js";
-import { appendAgentArtifactPrompt, bindAgentArtifactDelete, createAgentPublishArtifactTool, type AgentPublishTool } from "../artifactTools.js";
+import { appendAgentArtifactPrompt, bindAgentArtifactDelete, bindAgentArtifactRefresh, createAgentPublishArtifactTool, type AgentPublishTool } from "../artifactTools.js";
 import { SessionPublishError, type SessionPublishBody, type SessionPublishSuccess } from "../../artifacts/sessionPublish.js";
 import { forbiddenWriteTarget } from "../policy.js";
 import { prepareExecutionLaunch, type SandboxRunner } from "../sandbox.js";
@@ -461,9 +461,11 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
     const grantedSf = new Set(grantedStageflowTools(definition.tools.stageflow));
     const stageflowTools = (options.toolkit?.() ?? [])
       .filter((tool) => grantedSf.has(tool.name) && tool.name !== "save_artifact" && !isOperatorOnlyTool(tool.name))
-      .map((tool) =>
-        tool.name === "delete_artifact" ? bindAgentArtifactDelete(tool, definition.id, projectRoot) : tool,
-      );
+      .map((tool) => {
+        if (tool.name === "delete_artifact") return bindAgentArtifactDelete(tool, definition.id, projectRoot);
+        if (tool.name === "refresh_artifact") return bindAgentArtifactRefresh(tool, definition.id, projectRoot);
+        return tool;
+      });
     const agentPublishTool = grantedSf.has("save_artifact")
       ? createAgentPublishArtifactTool({
           agentId: definition.id,

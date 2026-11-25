@@ -58,6 +58,8 @@ export type FunctionCallInput = {
   stageId?: string | null;
   attempt?: number | null;
   sessionId?: string | null;
+  /** Overrides the history row kind. Artifact refresh records `artifact`. */
+  historyKind?: FunctionInvocationKind;
   roots?: { artifacts?: string; workspace?: string };
   containerName?: string;
   containerDockerBin?: string;
@@ -196,7 +198,7 @@ export class FunctionInvoker {
       source: definition.source,
       sourceHash,
       revision,
-      historyKind: historyKind(definition.kind),
+      historyKind: input.historyKind ?? historyKind(definition.kind),
       grants: intersectGrants(definition, input.grants ?? []),
       context: input.input,
       timeoutMs: input.timeoutMs ?? definition.timeout_ms,

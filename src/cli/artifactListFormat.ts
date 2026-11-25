@@ -1,4 +1,5 @@
-import type { ArtifactOwner, ArtifactRecord } from "../artifacts/record.js";
+import type { ArtifactRefreshResult } from "../artifacts/refresh.js";
+import type { ArtifactOwner, ArtifactLiveView, ArtifactRecord } from "../artifacts/record.js";
 import { publicArtifactKey } from "../artifacts/keys.js";
 
 export function ownerDisplayText(owner: ArtifactOwner): string {
@@ -95,6 +96,37 @@ function shortRunId(runId: string | null): string {
   return artifactRunShortId(runId);
 }
 
+function formatRefreshPolicy(refresh: ArtifactLiveView["refresh"]): string {
+  if (!refresh) return "-";
+  const parts: string[] = [];
+  if (refresh.on_view !== undefined) parts.push(`on_view=${refresh.on_view}`);
+  if (refresh.ttl_seconds !== undefined) parts.push(`ttl_seconds=${refresh.ttl_seconds}`);
+  if (refresh.auto_seconds !== undefined) parts.push(`auto_seconds=${refresh.auto_seconds}`);
+  return parts.length > 0 ? parts.join(" ") : "-";
+}
+
+export function formatArtifactRefresh(result: ArtifactRefreshResult): string {
+  const lines = [
+    `status: ${result.status ?? "-"}`,
+    `last refreshed: ${result.last_refreshed_at ?? "-"}`,
+    `last error: ${result.last_error_code ?? "-"}`,
+  ];
+  for (const snapshot of result.snapshots) {
+    lines.push(`${snapshot.binding_id}: ${snapshot.status}${snapshot.error_code ? ` ${snapshot.error_code}` : ""}`);
+  }
+  for (const error of result.errors) {
+    lines.push(`${error.binding_id}: error ${error.code}`);
+  }
+  return lines.join("\n");
+}
+
+export function liveStatusMarker(record: Pick<ArtifactRecord, "status" | "kind" | "live">): string {
+  if (record.status === "expired") return "expired";
+  if (!record.kind.startsWith("live.")) return "";
+  const status = record.live?.status;
+  return status ? `LIVE/${status}` : "LIVE";
+}
+
 function formatUpdated(iso: string): string {
   const ms = Date.parse(iso);
   if (!Number.isFinite(ms)) return iso;
@@ -115,7 +147,7 @@ export function formatArtifactListTable(records: ArtifactRecord[]): string[] {
     title: record.title,
     owner: ownerDisplayText(record.owner),
     run: shortRunId(record.source.run_id),
-    status: record.status === "expired" ? "expired" : "",
+    status: liveStatusMarker(record),
     updated: formatUpdated(record.updated_at),
   }));
   const widths = {
@@ -166,6 +198,19 @@ export function formatArtifactShow(record: ArtifactRecord): string {
     `title: ${record.title}`,
     `kind: ${record.kind}`,
     `status: ${record.status}`,
+    ...(record.live
+      ? [
+          `live: ${liveStatusMarker(record) || "LIVE"}`,
+          `last refreshed: ${record.live.last_refreshed_at ?? "-"}`,
+          `last error: ${record.live.last_error_code ?? "-"}`,
+          `bindings: ${
+            record.live.bindings.length === 0
+              ? "-"
+              : record.live.bindings.map((binding) => `${binding.id} ${binding.function} read-only`).join("; ")
+          }`,
+          `refresh: ${formatRefreshPolicy(record.live.refresh)}`,
+        ]
+      : []),
     `owner: ${ownerDisplayText(record.owner)}`,
     `source: ${source}`,
     `updated: ${formatUpdated(record.updated_at)}`,

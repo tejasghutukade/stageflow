@@ -7,6 +7,39 @@ export type ArtifactOwner =
 
 export type ArtifactLiveStatus = "fresh" | "stale" | "refreshing" | "error";
 
+export type ArtifactLiveBinding = {
+  id: string;
+  function: string;
+  args: Record<string, unknown>;
+};
+
+export type ArtifactLiveView = {
+  status: ArtifactLiveStatus | null;
+  last_refreshed_at?: string | null;
+  last_error_code?: string | null;
+  bindings?: ArtifactLiveBinding[];
+  refresh?: { on_view?: boolean; ttl_seconds?: number; auto_seconds?: number };
+  library?: { name: string; version: string };
+};
+
+export type ArtifactSnapshot = {
+  binding_id: string;
+  args_hash: string;
+  value: unknown;
+  fetched_at: string;
+  duration_ms: number;
+  status: string;
+  error_code: string | null;
+};
+
+export type ArtifactDataResponse = {
+  status: ArtifactLiveStatus | string | null;
+  snapshots: ArtifactSnapshot[];
+  last_refreshed_at: string | null;
+  last_error_code: string | null;
+  errors: Array<{ binding_id: string; code: string }>;
+};
+
 export type ArtifactRecord = {
   key: string;
   id: string;
@@ -33,7 +66,7 @@ export type ArtifactRecord = {
   expired_at: string | null;
   expired_reason: string | null;
   content_hash?: string | null;
-  live?: { status: ArtifactLiveStatus };
+  live?: ArtifactLiveView;
 };
 
 export type ArtifactListSort = "updated" | "title" | "size";
@@ -199,4 +232,26 @@ export function fetchArtifactVersions(
 
 export function deleteArtifact(ownerKey: string, id: string, projectRoot?: string): Promise<{ key: string }> {
   return api(artifactRecordPath(ownerKey, id, projectRoot), { method: "DELETE" });
+}
+
+function artifactActionPath(ownerKey: string, id: string, action: "data" | "refresh", projectRoot?: string): string {
+  return `/api/artifacts/${encodeURIComponent(ownerKey)}/${encodeURIComponent(id)}/${action}${artifactQuery(projectRoot)}`;
+}
+
+export async function fetchArtifactData(ownerKey: string, id: string, projectRoot?: string): Promise<ArtifactDataResponse> {
+  const res = await fetch(artifactActionPath(ownerKey, id, "data", projectRoot), {
+    headers: { ...authorizationHeaders() },
+  });
+  if (!res.ok) throw await readArtifactError(res);
+  return (await res.json()) as ArtifactDataResponse;
+}
+
+export async function refreshArtifact(ownerKey: string, id: string, projectRoot?: string): Promise<ArtifactDataResponse> {
+  const res = await fetch(artifactActionPath(ownerKey, id, "refresh", projectRoot), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authorizationHeaders() },
+    body: "{}",
+  });
+  if (!res.ok) throw await readArtifactError(res);
+  return (await res.json()) as ArtifactDataResponse;
 }

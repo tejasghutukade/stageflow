@@ -137,6 +137,14 @@ function deleteIndexed(
     .prepare(`SELECT key FROM artifacts WHERE origin = 'indexed' AND ${clause}${keep}`)
     .all(bound) as { key: string }[];
   for (const row of keys) unindexArtifactSearch(db, row.key);
+  if (keys.length > 0) {
+    const names = keys.map((_, index) => `@snap${index}`).join(", ");
+    const snapParams: Record<string, string> = {};
+    keys.forEach((row, index) => {
+      snapParams[`snap${index}`] = row.key;
+    });
+    db.prepare(`DELETE FROM artifact_snapshots WHERE artifact_key IN (${names})`).run(snapParams);
+  }
   db.prepare(`DELETE FROM artifacts WHERE origin = 'indexed' AND ${clause}${keep}`).run(bound);
 }
 

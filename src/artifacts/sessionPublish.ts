@@ -36,6 +36,7 @@ export type SessionPublishBody = {
   tags?: string[];
   summary?: string | null;
   bytes: Buffer;
+  manifest?: unknown;
 };
 
 export type SessionPublishSuccess = {
@@ -112,6 +113,7 @@ export function publishSessionArtifact(
     tags: body.tags,
     summary: body.summary,
     bytes: body.bytes,
+    ...(body.manifest !== undefined ? { manifest: body.manifest } : {}),
     publishSource: "api",
     source: {
       kind: context.owner.kind === "agent" ? "agent" : "stage",
@@ -321,6 +323,7 @@ export type ArtifactWorkerPublishInput = {
   tags?: string[];
   summary?: string | null;
   content_base64: string;
+  manifest?: unknown;
 };
 
 export function isArtifactWorkerMessage(
@@ -398,6 +401,7 @@ export function workerPublishArtifact(body: SessionPublishBody): Promise<Session
     ...(body.description !== undefined ? { description: body.description } : {}),
     ...(body.tags !== undefined ? { tags: body.tags } : {}),
     ...(body.summary !== undefined ? { summary: body.summary } : {}),
+    ...(body.manifest !== undefined ? { manifest: body.manifest } : {}),
     content_base64: body.bytes.toString("base64"),
   };
   return workerCall("artifact.publish", input, (response) => {

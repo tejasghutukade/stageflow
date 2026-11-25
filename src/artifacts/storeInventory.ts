@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { liveIdentityHash, parseStoredLiveManifest } from "./manifest.js";
 import { createReadStream } from "node:fs";
 import { lstat, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
@@ -129,6 +130,7 @@ export type PublishedArtifactVersionRow = {
   version: number;
   content_hash: string | null;
   relative_path: string | null;
+  manifest_json?: string | null;
 };
 
 export type PublishedArtifactDriftIssue =
@@ -181,7 +183,7 @@ export async function readPublishedArtifactStoreReport(
 
   const versionRows = db
     .prepare(
-      `SELECT key, version, content_hash, relative_path, storage
+      `SELECT key, version, content_hash, relative_path, storage, manifest_json
        FROM artifact_versions
        WHERE COALESCE(storage, 'store') = 'store'`,
     )
@@ -216,7 +218,8 @@ export async function readPublishedArtifactStoreReport(
       const buf = await readFile(absolute);
       bytes += buf.length;
       if (row.content_hash) {
-        const actual = createHash("sha256").update(buf).digest("hex");
+        const live = parseStoredLiveManifest(row.manifest_json);
+        const actual = live ? liveIdentityHash(buf, live) : createHash("sha256").update(buf).digest("hex");
         if (actual !== row.content_hash) {
           empty.hash_mismatches.push({
             kind: "hash_mismatch",

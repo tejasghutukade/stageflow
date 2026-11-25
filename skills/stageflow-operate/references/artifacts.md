@@ -33,12 +33,13 @@ Owner key form: `stage:<pipeline>:<stage>/<id>` or `agent:<id>/<id>` (CLI also a
 
 ## MCP
 
-Load toolset `artifacts` (`/mcp?toolsets=artifacts` or `all`). Groups: `artifacts.read`, `artifacts.write`, `artifacts.cleanup`. `artifacts.refresh` has no tool yet.
+Load toolset `artifacts` (`/mcp?toolsets=artifacts` or `all`). Groups: `artifacts.read`, `artifacts.write`, `artifacts.refresh` (external), `artifacts.cleanup`.
 
 | Tool | Group | Use |
 |---|---|---|
-| `get_artifact` | read | `list: true` with the same filters as the API, or `key` + `view`: `record`, `versions`, `content`. |
-| `save_artifact` | write | Same body as REST publish; explicit `owner`. Source `mcp`. |
+| `get_artifact` | read | `list: true` with the same filters as the API, or `key` + `view`: `record`, `versions`, `content`, `data` (live snapshots; static is `artifact.not_live`). |
+| `save_artifact` | write | Same body as REST publish; explicit `owner`. `live.declarative` takes `manifest`. Source `mcp`. |
+| `refresh_artifact` | refresh | Runs read-only bindings. `key`, optional `binding_ids`. |
 | `delete_artifact` | cleanup | Deletes all versions of a **published** artifact. |
 
 Hidden eval publishes never appear. `project_root` disambiguates duplicate keys across projects.

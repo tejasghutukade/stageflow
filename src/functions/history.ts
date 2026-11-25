@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { scrubSecrets } from "../compaction/scrub.js";
 
-export const FUNCTION_INVOCATION_KINDS = ["test", "verification", "route", "tool"] as const;
+export const FUNCTION_INVOCATION_KINDS = ["test", "verification", "route", "tool", "artifact"] as const;
 export type FunctionInvocationKind = (typeof FUNCTION_INVOCATION_KINDS)[number];
 
 export const FUNCTION_INVOCATION_STATUSES = ["succeeded", "failed", "uncertain"] as const;

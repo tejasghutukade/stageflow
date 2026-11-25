@@ -107,6 +107,31 @@ export function viewingVersionBanner(version: number, latest: number): string {
   return `Viewing version ${version} of ${latest}`;
 }
 
+export const LIVE_RENDERER_NOTE = "Live artifact: the visual renderer comes in a later update";
+export const LIVE_VERSION_SNAPSHOT_NOTE = "Snapshots are for the current version.";
+export const LIVE_SNAPSHOT_DISPLAY_MAX_BYTES = 32 * 1024;
+
+export function formatLiveSnapshotJson(
+  value: unknown,
+  maxBytes = LIVE_SNAPSHOT_DISPLAY_MAX_BYTES,
+): { text: string; truncated: boolean; capKb: number } {
+  const full = JSON.stringify(value ?? null, null, 2);
+  const bytes = new TextEncoder().encode(full);
+  const capKb = Math.max(1, Math.round(maxBytes / 1024));
+  if (bytes.length <= maxBytes) return { text: full, truncated: false, capKb };
+  let end = maxBytes;
+  while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1;
+  return { text: new TextDecoder().decode(bytes.slice(0, end)), truncated: true, capKb };
+}
+
+export function compactJson(value: unknown): string {
+  try {
+    return JSON.stringify(value ?? {});
+  } catch {
+    return "{}";
+  }
+}
+
 export function deleteArtifactConfirm(title: string, versionCount: number): { title: string; body: string } {
   const count = versionCount === 1 ? "1 version" : `${versionCount} versions`;
   return {

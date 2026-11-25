@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { LuCode, LuFile, LuFileText, LuImage, LuTable } from "react-icons/lu";
+import { LuActivity, LuCode, LuFile, LuFileText, LuImage, LuTable } from "react-icons/lu";
 import type { IconType } from "react-icons";
 import { fetchCatalogRoots, fetchRuns } from "../../api/client";
 import { fetchArtifacts } from "../../api/artifacts";
@@ -45,6 +45,7 @@ const KIND_ICONS: Record<string, IconType> = {
   "static.table": LuTable,
   "static.html": LuCode,
   "static.text": LuFile,
+  "live.declarative": LuActivity,
 };
 
 function KindIcon({ kind }: { kind: string }) {

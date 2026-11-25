@@ -6,18 +6,21 @@ import { agentProjectKey } from "../agents/store.js";
 import { STAGE_ID_PATTERN } from "../config/createStage.js";
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
 import { ArtifactKeyError, artifactStorageKey, assertArtifactId, publicArtifactKey, stageOwnerKey } from "./keys.js";
-import { contentTypeForKind, type StaticArtifactKind } from "./kinds.js";
+import { assertBindingsAtPublish } from "./bindings.js";
+import { contentTypeForKind, isLiveDeclarativeKind, LIVE_DECLARATIVE_KIND, type StaticArtifactKind } from "./kinds.js";
 import {
   ARTIFACT_DESCRIPTION_MAX_CHARS,
   ARTIFACT_SUMMARY_MAX_CHARS,
   ARTIFACT_TAG_MAX,
   ARTIFACT_TAG_PATTERN,
   ARTIFACT_TITLE_MAX_CHARS,
+  LIVE_PROGRAM_MAX_BYTES,
   STATIC_CONTENT_MAX_BYTES,
   ArtifactPublishError,
   artifactVersionsToKeep,
   type ArtifactIssue,
 } from "./limits.js";
+import { liveDbManifest, liveIdentityHash, validateLiveManifest, type LiveManifest } from "./manifest.js";
 import type { ArtifactOwner } from "./record.js";
 import { canonicalProjectWireId } from "./projectScope.js";
 import {
@@ -27,6 +30,7 @@ import {
   unindexArtifactSearch,
 } from "./search.js";
 import { ArtifactQueryError, readArtifact } from "./query.js";
+import { reconcileLiveSnapshots, withRefreshLock } from "./refresh.js";
 import {
   promoteStagedVersionSync,
   removeOrphanVersionSync,
@@ -49,6 +53,7 @@ const STATIC_KINDS = new Set<StaticArtifactKind>([
 const OWNER_ID_MAX = 64;
 const PUBLISH_VERSION_ATTEMPTS = 8;
 
+/** Publish lock. Delete also takes the refresh lock after this one. See withRefreshLock. */
 const publishChains = new Map<string, Promise<void>>();
 let keyOperationTrace: ((op: "publish" | "delete") => void) | undefined;
 let failAfterVersionInsert = false;
@@ -109,6 +114,8 @@ export type PublishRequest = {
   tags?: string[];
   summary?: string | null;
   bytes: Buffer;
+  /** Required for `live.declarative`. The program text is `bytes`. */
+  manifest?: unknown;
   publishSource: PublishSource;
   /** When set, `artifacts.source` is `kind` and the version row stores the run, stage, attempt, and session. */
   source?: PublishProvenance;
@@ -142,11 +149,9 @@ function fail(
   throw new ArtifactPublishError(status, code, message, issues, projectRoots);
 }
 
-function asStaticKind(kind: string): StaticArtifactKind {
-  if (!STATIC_KINDS.has(kind as StaticArtifactKind)) {
-    fail(400, "artifact.invalid_kind", "kind", `Unsupported artifact kind: ${kind}`);
-  }
-  return kind as StaticArtifactKind;
+function acceptedKind(kind: string): string {
+  if (kind === LIVE_DECLARATIVE_KIND || STATIC_KINDS.has(kind as StaticArtifactKind)) return kind;
+  fail(400, "artifact.invalid_kind", "kind", `Unsupported artifact kind: ${kind}`);
 }
 
 function assertOwnerId(value: string, issuePath: string, pattern: RegExp, label: string): void {
@@ -321,7 +326,11 @@ function tableIsCsv(text: string): boolean {
   return width > 0 && rows.every((item) => item.length === width);
 }
 
-function contentFileName(kind: StaticArtifactKind, bytes: Buffer): string {
+function contentFileName(kind: string, bytes: Buffer): string {
+  if (isLiveDeclarativeKind(kind)) {
+    if (!isUtf8(bytes)) fail(400, "artifact.invalid_shape", "content", "Program must be valid UTF-8");
+    return "program.txt";
+  }
   if (kind === "static.markdown") {
     if (!isUtf8(bytes)) fail(400, "artifact.invalid_shape", "content", "Markdown must be valid UTF-8");
     return "content.md";
@@ -353,12 +362,13 @@ function contentFileName(kind: StaticArtifactKind, bytes: Buffer): string {
 
 function validateRequest(input: PublishRequest): {
   id: string;
-  kind: StaticArtifactKind;
+  kind: string;
   title: string;
   description: string | null;
   tags: string[];
   summary: string | null;
   fileName: string;
+  live?: LiveManifest;
 } {
   if (typeof input.id !== "string") fail(400, "artifact.invalid_shape", "id", "id must be a string");
   try {
@@ -368,7 +378,7 @@ function validateRequest(input: PublishRequest): {
     fail(400, "artifact.invalid_id", "id", message);
   }
   if (typeof input.kind !== "string") fail(400, "artifact.invalid_shape", "kind", "kind must be a string");
-  const kind = asStaticKind(input.kind);
+  const kind = acceptedKind(input.kind);
   if (typeof input.title !== "string") fail(400, "artifact.invalid_shape", "title", "title must be a string");
   const title = input.title.trim();
   if (title.length === 0) fail(400, "artifact.invalid_shape", "title", "title is required");
@@ -411,16 +421,22 @@ function validateRequest(input: PublishRequest): {
     summary = input.summary;
   }
   if (!Buffer.isBuffer(input.bytes)) fail(400, "artifact.invalid_shape", "content", "content is required");
-  if (input.bytes.length > STATIC_CONTENT_MAX_BYTES) {
-    fail(
-      413,
-      "artifact.too_large",
-      "content",
-      `content is larger than ${STATIC_CONTENT_MAX_BYTES} bytes`,
-    );
+  const cap = isLiveDeclarativeKind(kind) ? LIVE_PROGRAM_MAX_BYTES : STATIC_CONTENT_MAX_BYTES;
+  if (input.bytes.length > cap) {
+    fail(413, "artifact.too_large", "content", `content is larger than ${cap} bytes`);
+  }
+  let live: LiveManifest | undefined;
+  if (isLiveDeclarativeKind(kind)) {
+    if (!isUtf8(input.bytes)) fail(400, "artifact.invalid_shape", "content", "Program must be valid UTF-8");
+    if (input.manifest === undefined) {
+      fail(400, "artifact.invalid_shape", "manifest", "manifest is required for a live artifact");
+    }
+    live = validateLiveManifest(input.manifest, input.bytes.toString("utf8"));
+  } else if (input.manifest !== undefined) {
+    fail(400, "artifact.invalid_shape", "manifest", "manifest is only valid for live.declarative");
   }
   const fileName = contentFileName(kind, input.bytes);
-  return { id: input.id, kind, title, description, tags, summary, fileName };
+  return { id: input.id, kind, title, description, tags, summary, fileName, ...(live ? { live } : {}) };
 }
 
 function syncPublishedSearch(
@@ -534,7 +550,11 @@ export async function publishArtifact(
   const storageKey = artifactStorageKey(project.id, ownerKey, fields.id);
   const publicKey = publicArtifactKey(ownerKey, fields.id);
   const now = input.now ?? new Date().toISOString();
-  const contentHash = createHash("sha256").update(input.bytes).digest("hex");
+  if (fields.live) await assertBindingsAtPublish(project.path, input.owner, fields.live.bindings);
+  const contentHash = fields.live
+    ? liveIdentityHash(input.bytes, fields.live)
+    : createHash("sha256").update(input.bytes).digest("hex");
+  const storedManifest = fields.live ? liveDbManifest(fields.live) : { kind: fields.kind };
   const contentType = contentTypeForKind(fields.kind, fields.fileName);
   const provenance = provenanceOf(input);
   const flags = agentUnverified ? { agent_unverified: true as const } : {};
@@ -677,6 +697,7 @@ export async function publishArtifact(
               size_bytes: input.bytes.length,
               content_type: contentType,
               created_at: now,
+              ...storedManifest,
             },
           });
           const exists = db.prepare(`SELECT 1 AS ok FROM artifacts WHERE key = ?`).get(storageKey) as
@@ -775,7 +796,7 @@ export async function publishArtifact(
             content_type: contentType,
             size_bytes: input.bytes.length,
             content_hash: contentHash,
-            manifest_json: JSON.stringify({ kind: fields.kind }),
+            manifest_json: JSON.stringify(storedManifest),
             source_run_id: provenance.source_run_id,
             source_stage_id: provenance.source_stage_id,
             source_attempt: provenance.source_attempt,
@@ -785,6 +806,7 @@ export async function publishArtifact(
           });
           recordAttemptPublish(db, input, storageKey, next, false, now);
           syncPublishedSearch(db, storageKey, fields, input, project.id, extractSearchBody(fields.kind, input.bytes));
+          reconcileLiveSnapshots(db, storageKey, isLiveDeclarativeKind(fields.kind) ? fields.live ?? null : null);
           if (failAfterVersionInsert) {
             failAfterVersionInsert = false;
             throw new Error("injected publish version insert failure");
@@ -854,7 +876,10 @@ export async function deletePublishedArtifact(
   roots: readonly CatalogRoot[],
 ): Promise<{ key: string; project_root: string }> {
   const located = locateDeleteTarget(db, ownerKey, id, projectRoot, roots);
-  return withPublishLock(located.storageKey, async () => {
+  return withPublishLock(located.storageKey, () =>
+    withRefreshLock(
+      located.storageKey,
+      async () => {
     try {
       const record = readArtifact(db, ownerKey, id, located.projectId, roots);
       if (record.origin !== "published") {
@@ -872,6 +897,7 @@ export async function deletePublishedArtifact(
       const storageKey = artifactStorageKey(record.project.id, owner, record.id);
       db.transaction(() => {
         unindexArtifactSearch(db, storageKey);
+        db.prepare(`DELETE FROM artifact_snapshots WHERE artifact_key = ?`).run(storageKey);
         db.prepare(`DELETE FROM artifact_versions WHERE key = ?`).run(storageKey);
         db.prepare(`DELETE FROM artifacts WHERE key = ?`).run(storageKey);
       }).immediate();
@@ -888,5 +914,8 @@ export async function deletePublishedArtifact(
     } finally {
       keyOperationTrace?.("delete");
     }
-  });
+      },
+      "mutate",
+    ),
+  );
 }

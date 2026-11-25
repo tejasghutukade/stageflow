@@ -2,7 +2,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RunStore } from "../runstore/port.js";
 import { sqliteConnectionFromStore } from "../runstore/createStore.js";
 import { ArtifactContentError, readArtifactContent, STATIC_HTML_CONTENT_SECURITY_POLICY } from "../artifacts/content.js";
+import { isLiveDeclarativeKind } from "../artifacts/kinds.js";
 import { artifactStorageKey, stageOwnerKey } from "../artifacts/keys.js";
+import { parseStoredLiveManifest } from "../artifacts/manifest.js";
 import { ArtifactPublishError, STATIC_CONTENT_MAX_BYTES } from "../artifacts/limits.js";
 import { deletePublishedArtifact, publishArtifact, type PublishRequest } from "../artifacts/publish.js";
 import {
@@ -20,6 +22,7 @@ import {
   readArtifact,
 } from "../artifacts/query.js";
 import { catalogRootsForArtifacts } from "../artifacts/projectScope.js";
+import { readArtifactSnapshots, refreshArtifact } from "../artifacts/refresh.js";
 import type { ArtifactOwner } from "../artifacts/record.js";
 import { artifactVersionKind, listArtifactVersions, readArtifactVersionRow } from "../artifacts/versions.js";
 
@@ -264,9 +267,20 @@ function publishRequestFromBody(
     tags: tags as string[] | undefined,
     summary: optionalString(body, "summary"),
     bytes: bytesFromBody(body),
+    ...(Object.prototype.hasOwnProperty.call(body, "manifest") ? { manifest: body.manifest } : {}),
     publishSource: body.source === "console" ? "console" : "api",
     roots,
   };
+}
+
+function bindingIdsFromBody(body: unknown): string[] | undefined {
+  if (body === undefined || (isRecord(body) && Object.keys(body).length === 0)) return undefined;
+  if (!isRecord(body) || !Array.isArray(body.bindingIds) || body.bindingIds.some((id) => typeof id !== "string")) {
+    throw new ArtifactPublishError(400, "artifact.invalid_shape", "bindingIds must be an array of binding ids", [
+      { path: "bindingIds", message: "must be an array of binding ids" },
+    ]);
+  }
+  return body.bindingIds as string[];
 }
 
 function storageKeyFor(record: {
@@ -293,8 +307,10 @@ export async function handleArtifactRoutes(
   const list = pathname === "/api/artifacts";
   const versions = /^\/api\/artifacts\/([^/]+)\/([^/]+)\/versions$/.exec(pathname);
   const content = /^\/api\/artifacts\/([^/]+)\/([^/]+)\/content$/.exec(pathname);
+  const refresh = /^\/api\/artifacts\/([^/]+)\/([^/]+)\/refresh$/.exec(pathname);
+  const data = /^\/api\/artifacts\/([^/]+)\/([^/]+)\/data$/.exec(pathname);
   const record = /^\/api\/artifacts\/([^/]+)\/([^/]+)$/.exec(pathname);
-  if (!list && versions === null && content === null && record === null) return false;
+  if (!list && versions === null && content === null && refresh === null && data === null && record === null) return false;
   if (list && method !== "GET" && method !== "POST") {
     json(res, 405, { error: "Method not allowed", code: "artifact.invalid_shape" });
     return true;
@@ -303,7 +319,11 @@ export async function handleArtifactRoutes(
     json(res, 405, { error: "Method not allowed", code: "artifact.invalid_shape" });
     return true;
   }
-  if ((versions || content) && method !== "GET") {
+  if ((versions || content || data) && method !== "GET") {
+    json(res, 405, { error: "Method not allowed", code: "artifact.invalid_shape" });
+    return true;
+  }
+  if (refresh && method !== "POST") {
     json(res, 405, { error: "Method not allowed", code: "artifact.invalid_shape" });
     return true;
   }
@@ -341,7 +361,7 @@ export async function handleArtifactRoutes(
       json(res, 200, page);
       return true;
     }
-    const match = versions ?? content ?? record;
+    const match = versions ?? content ?? refresh ?? data ?? record;
     const ownerKey = decodeURIComponent(match![1]!);
     const id = decodeURIComponent(match![2]!);
     const projectRoot = url.searchParams.get("project_root") ?? undefined;
@@ -354,6 +374,25 @@ export async function handleArtifactRoutes(
     if (versions) {
       const artifact = readArtifact(db, ownerKey, id, projectRoot, roots);
       json(res, 200, { versions: listArtifactVersions(db, storageKeyFor(artifact), artifact.version) });
+      return true;
+    }
+    if (refresh || data) {
+      const artifact = readArtifact(db, ownerKey, id, projectRoot, roots);
+      const root = roots.find((item) => item.project_root === artifact.project.id);
+      const storageKey = storageKeyFor(artifact);
+      if (data) {
+        json(res, 200, readArtifactSnapshots(db, storageKey));
+        return true;
+      }
+      const body = await readLimitedJson(req);
+      const bindingIds = bindingIdsFromBody(body);
+      const result = await refreshArtifact(
+        db,
+        { projectRoot: root?.path ?? artifact.project.id },
+        storageKey,
+        bindingIds ? { bindingIds } : {},
+      );
+      json(res, 200, result);
       return true;
     }
     if (content) {
@@ -371,14 +410,28 @@ export async function handleArtifactRoutes(
       throw new ArtifactQueryError(404, "artifact.not_found", "Artifact version not found");
     }
     const versionKind = artifactVersionKind(row.manifest_json);
-    json(res, 200, {
+    const viewed = {
       ...artifact,
       version: row.version,
       size_bytes: row.size_bytes,
       content_type: row.content_type,
       content_hash: row.content_hash,
       ...(versionKind !== null ? { kind: versionKind } : {}),
-    });
+    };
+    if (versionKind !== null && isLiveDeclarativeKind(versionKind)) {
+      const manifest = parseStoredLiveManifest(row.manifest_json);
+      viewed.live = {
+        status: artifact.live?.status ?? null,
+        last_refreshed_at: artifact.live?.last_refreshed_at ?? null,
+        last_error_code: artifact.live?.last_error_code ?? null,
+        bindings: manifest?.bindings ?? [],
+        ...(manifest?.library ? { library: manifest.library } : {}),
+        ...(manifest?.refresh ? { refresh: manifest.refresh } : {}),
+      };
+    } else if (versionKind !== null) {
+      delete viewed.live;
+    }
+    json(res, 200, viewed);
     return true;
   } catch (error) {
     if (error instanceof URIError) {

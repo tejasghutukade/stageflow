@@ -13,7 +13,7 @@ Stageflow uses the word **artifact** in three places. Keep them separate:
 2. **\`publish_artifact\`** — an opted-in stage or an agent with \`artifacts.write\` copies content into the **keep-class store** with a stable author id. Versions stay when the run is deleted.
 3. **Function \`access.artifacts\`** — which run files a **function** may read. That is not the artifact index.
 
-This topic covers (1) indexing and (2) publishing. Live artifacts with bindings are not shipped yet.
+This topic covers (1) indexing and (2) publishing. A live artifact (\`live.declarative\`) stores an opaque program and read-only function bindings. Refresh runs those bindings from the CLI (\`sf artifact refresh\`), MCP (\`refresh_artifact\`), or the console **Refresh now** button. The visual renderer comes later.
 
 ## Opt in
 
@@ -27,7 +27,7 @@ artifacts:
 
 \`publish: true\` registers \`publish_artifact\` and a short prompt section. Omit the block or set \`publish: false\` and behavior is unchanged. \`expect\` lists ids the attempt must publish before a success envelope; a missing id is \`artifact.expected_missing\`. \`expect\` without \`publish: true\` is \`stage.invalid_artifacts\` at validate time.
 
-**Agent:** grant \`tools.stageflow.groups\`: \`artifacts.read\` (model tool \`stageflow_get_artifact\`), \`artifacts.write\` (\`publish_artifact\`), \`artifacts.cleanup\` (\`stageflow_delete_artifact\`). Put \`publish_artifact\`, \`stageflow.get_artifact\`, and \`stageflow.delete_artifact\` in \`approvals.ask_first\` when those groups are granted. The Host MCP tool \`save_artifact\` is operator-only; agents never receive it.
+**Agent:** grant \`tools.stageflow.groups\`: \`artifacts.read\` (model tool \`stageflow_get_artifact\`), \`artifacts.write\` (\`publish_artifact\`), \`artifacts.cleanup\` (\`stageflow_delete_artifact\`), \`artifacts.refresh\` (\`stageflow_refresh_artifact\`, this agent's artifacts in this project only). Put \`publish_artifact\`, \`stageflow.get_artifact\`, \`stageflow.delete_artifact\`, and \`stageflow.refresh_artifact\` in \`approvals.ask_first\` when those groups are granted. The Host MCP tool \`save_artifact\` is operator-only; agents never receive it.
 
 ## Publishing
 
@@ -44,8 +44,8 @@ Pick **envelope listing** when the file is only for the next stage or run retent
 | Surface | Use |
 |---|---|
 | Console | **Artifacts** in the Activity sidebar, \`#/artifacts\`. Filter by kind, owner, tag, status. Detail: \`#/artifacts/<ownerKey>/<id>\`. |
-| CLI | \`sf artifact list\`, \`sf artifact show <ownerKey>/<id>\`, \`sf artifact publish\`, \`sf artifact delete\`. \`sf artifact read --run --path\` reads a **run file**, not the index. |
-| MCP | Toolset \`artifacts\`: \`get_artifact\` (list or read), \`save_artifact\`, \`delete_artifact\`. Bare \`/mcp\` does not load it; add \`?toolsets=artifacts\` or \`all\`. |
+| CLI | \`sf artifact list\`, \`sf artifact show <ownerKey>/<id>\`, \`sf artifact publish\` (\`--manifest\` for \`live.declarative\`), \`sf artifact refresh\`, \`sf artifact delete\`. \`sf artifact read --run --path\` reads a **run file**, not the index. |
+| MCP | Toolset \`artifacts\`: \`get_artifact\` (list or read; \`view: data\` for live snapshots), \`save_artifact\`, \`refresh_artifact\`, \`delete_artifact\`. Bare \`/mcp\` does not load it; add \`?toolsets=artifacts\` or \`all\`. |
 | Run | Indexed paths from the envelope appear on the stage **Artifacts** tab and in \`run_files\`. Published rows appear in \`published_artifacts\` on \`sf run --json --include stages\`. |
 
 Use \`--project-root\` when the same owner and id exist in more than one project (\`artifact.ambiguous\`).

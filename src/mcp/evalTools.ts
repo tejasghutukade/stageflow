@@ -497,7 +497,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "sort_eval_failures",
-    "Sort failed and errored results into buckets (agent_wrong, grader_wrong, case_wrong, unclear) and failure types, each with a confidence. Sends case, output, and grader reasons to an external classifier: TypeSafe Jev (about $0.04 per million input tokens; needs a TypeSafe key) or the judge model (one call per result, real cost). Manual only. Nothing is tagged until reviewed and accepted by the author in the console or API. Eval sessions stay hidden. classifier auto: jev if a key exists, else judge, else EVAL_CLASSIFIER_UNAVAILABLE. only_unsorted (default) skips existing suggestions. Fails EVAL_RUN_ACTIVE while the run is running.",
+    "Sort failed and errored results into buckets (agent_wrong, grader_wrong, case_wrong, unclear) and failure types, each with a confidence. Sends case, output, and grader reasons to an external classifier: TypeSafe Jev (about $0.04 per million input tokens; needs a TypeSafe key) or the judge model (one call per result). Manual only. Nothing is tagged until accepted. Eval sessions stay hidden. classifier auto: jev if a key exists, else judge, else EVAL_CLASSIFIER_UNAVAILABLE. only_unsorted (default) skips existing suggestions. Fails EVAL_RUN_ACTIVE while the run is running.",
     z.object({
       eval_run_id: z.string(),
       classifier: z.enum(["auto", "jev", "judge"]).optional().describe("Default auto"),

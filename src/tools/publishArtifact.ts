@@ -10,11 +10,12 @@ import {
   ARTIFACT_SUMMARY_MAX_CHARS,
   ARTIFACT_TAG_MAX,
   ARTIFACT_TITLE_MAX_CHARS,
+  LIVE_PROGRAM_MAX_BYTES,
   STATIC_CONTENT_MAX_BYTES,
   ArtifactPublishError,
   type ArtifactIssue,
 } from "../artifacts/limits.js";
-import type { StaticArtifactKind } from "../artifacts/kinds.js";
+import { LIVE_DECLARATIVE_KIND, type StaticArtifactKind } from "../artifacts/kinds.js";
 import { SessionPublishError, type SessionPublishBody, type SessionPublishSuccess } from "../artifacts/sessionPublish.js";
 import { PUBLISH_ARTIFACT_TOOL_NAME } from "./stageToolNames.js";
 
@@ -25,6 +26,8 @@ export const STATIC_KINDS = [
   "static.text",
   "static.html",
 ] as const satisfies readonly StaticArtifactKind[];
+
+const PUBLISH_KINDS = [...STATIC_KINDS, LIVE_DECLARATIVE_KIND] as const;
 
 export type PublishArtifactCaller = (body: SessionPublishBody) => Promise<SessionPublishSuccess>;
 
@@ -72,7 +75,7 @@ export function artifactPublishPromptSection(expect?: readonly string[]): string
     "",
     "The id is a lowercase slug: it starts with a letter, then has up to 63 letters, digits, underscores, or hyphens (`^[a-z][a-z0-9_-]{0,63}$`). Publishing the same id again creates a new version. If the bytes and kind are unchanged, the current version is kept and the tool returns unchanged. That unchanged publish still counts for this attempt.",
     "",
-    `Kinds: ${STATIC_KINDS.join(", ")}. Content is at most ${mib} MiB. The title is at most ${ARTIFACT_TITLE_MAX_CHARS} characters. You may set at most ${ARTIFACT_TAG_MAX} tags, each matching [a-z0-9_-] and at most 32 characters. Description and summary are at most ${ARTIFACT_DESCRIPTION_MAX_CHARS} and ${ARTIFACT_SUMMARY_MAX_CHARS} characters.`,
+    `Kinds: ${PUBLISH_KINDS.join(", ")}. Static content is at most ${mib} MiB. A live.declarative program is the content string, at most 512 KiB, with format, library, bindings, and optional refresh. The title is at most ${ARTIFACT_TITLE_MAX_CHARS} characters. You may set at most ${ARTIFACT_TAG_MAX} tags, each matching [a-z0-9_-] and at most 32 characters. Description and summary are at most ${ARTIFACT_DESCRIPTION_MAX_CHARS} and ${ARTIFACT_SUMMARY_MAX_CHARS} characters.`,
     "",
     "Give path, content, or content_base64, and only one of them. path is a run-relative path inside this attempt's artifacts directory, or a path relative to that directory. content is inline text. content_base64 is an image (png, jpeg, gif, or webp).",
     "",
@@ -216,7 +219,7 @@ export function publishArtifactParameterSchema() {
   return Type.Object(
     {
       id: Type.String({ minLength: 1 }),
-      kind: Type.Union(STATIC_KINDS.map((kind) => Type.Literal(kind)) as [
+      kind: Type.Union(PUBLISH_KINDS.map((kind) => Type.Literal(kind)) as [
         ReturnType<typeof Type.Literal>,
         ReturnType<typeof Type.Literal>,
         ...ReturnType<typeof Type.Literal>[],
@@ -228,6 +231,18 @@ export function publishArtifactParameterSchema() {
       path: Type.Optional(Type.String()),
       content: Type.Optional(Type.String()),
       content_base64: Type.Optional(Type.String()),
+      format: Type.Optional(Type.String()),
+      library: Type.Optional(Type.Object({ name: Type.String(), version: Type.String() })),
+      bindings: Type.Optional(
+        Type.Array(Type.Object({ id: Type.String(), function: Type.String(), args: Type.Record(Type.String(), Type.Unknown()) })),
+      ),
+      refresh: Type.Optional(
+        Type.Object({
+          on_view: Type.Optional(Type.Boolean()),
+          ttl_seconds: Type.Optional(Type.Integer()),
+          auto_seconds: Type.Optional(Type.Integer()),
+        }),
+      ),
     },
     { additionalProperties: false },
   );
@@ -237,7 +252,7 @@ export function createPublishArtifactTool(options: PublishArtifactToolOptions) {
   return {
     name: PUBLISH_ARTIFACT_TOOL_NAME,
     label: "Publish artifact",
-    description: `Publish a titled, versioned artifact a person can open later. Kinds: ${STATIC_KINDS.join(", ")}. Content at most ${Math.floor(STATIC_CONTENT_MAX_BYTES / (1024 * 1024))} MiB. Pass path (inside this attempt's artifacts directory), content, or content_base64. Publishing the same id again creates a new version. This call does not end the turn. A validation error returns a code and issues; fix the arguments and call again.`,
+    description: `Publish a titled, versioned artifact a person can open later. Kinds: ${PUBLISH_KINDS.join(", ")}. Static content at most ${Math.floor(STATIC_CONTENT_MAX_BYTES / (1024 * 1024))} MiB. live.declarative takes content as the program plus format, library, bindings, and optional refresh. Pass path, content, or content_base64. Publishing the same id again creates a new version. This call does not end the turn. A validation error returns a code and issues; fix the arguments and call again.`,
     parameters: publishArtifactParameterSchema(),
     execute: async (_toolCallId: string, params: unknown): Promise<{
       content: Array<{ type: "text"; text: string }>;
@@ -279,7 +294,7 @@ export async function publishBodyFromToolParams(
       { path: "id", message: "id, kind, and title are required" },
     ]);
   }
-  if (!(STATIC_KINDS as readonly string[]).includes(record.kind)) {
+  if (!(PUBLISH_KINDS as readonly string[]).includes(record.kind)) {
     throw new ArtifactPublishError(400, "artifact.invalid_kind", `Unsupported artifact kind: ${record.kind}`, [
       { path: "kind", message: `Unsupported artifact kind: ${record.kind}` },
     ]);
@@ -334,6 +349,12 @@ export async function publishBodyFromToolParams(
       { path: "tags", message: "tags must be an array of strings" },
     ]);
   }
+  const cap = record.kind === LIVE_DECLARATIVE_KIND ? LIVE_PROGRAM_MAX_BYTES : STATIC_CONTENT_MAX_BYTES;
+  if (bytes.length > cap) {
+    throw new ArtifactPublishError(413, "artifact.too_large", `content is larger than ${cap} bytes`, [
+      { path: bytePath, message: `content is larger than ${cap} bytes` },
+    ]);
+  }
   return {
     id: record.id,
     kind: record.kind,
@@ -342,5 +363,27 @@ export async function publishBodyFromToolParams(
     ...(tags !== undefined ? { tags: (tags as string[]).map((tag) => scrubSecrets(tag)) } : {}),
     ...(typeof record.summary === "string" ? { summary: scrubSecrets(record.summary) } : {}),
     bytes,
+    ...liveManifestFields(record),
+  };
+}
+
+function liveManifestFields(record: Record<string, unknown>): { manifest?: unknown } {
+  const liveFields = ["format", "library", "bindings", "refresh"] as const;
+  const present = liveFields.some((key) => record[key] !== undefined);
+  if (record.kind !== LIVE_DECLARATIVE_KIND) {
+    if (present) {
+      throw new ArtifactPublishError(400, "artifact.invalid_shape", "bindings and refresh are only valid for live.declarative", [
+        { path: "bindings", message: "bindings and refresh are only valid for live.declarative" },
+      ]);
+    }
+    return {};
+  }
+  return {
+    manifest: {
+      format: record.format,
+      library: record.library,
+      bindings: record.bindings ?? [],
+      ...(record.refresh !== undefined ? { refresh: record.refresh } : {}),
+    },
   };
 }

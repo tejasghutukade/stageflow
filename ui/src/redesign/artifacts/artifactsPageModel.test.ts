@@ -9,6 +9,7 @@ import {
   activeArtifactProjectWireId,
   applyArtifactPage,
   artifactExpiredShortReason,
+  artifactKindLabel,
   artifactListFiltersActive,
   artifactListFiltersToQuery,
   artifactListRows,
@@ -80,6 +81,7 @@ describe("artifacts page model", () => {
       now,
     );
     expect(row?.kindLabel).toBe("Markdown");
+    expect(artifactKindLabel("live.declarative")).toBe("Live");
     expect(row?.ownerLabel).toBe("sales / summarize");
     expect(row?.runId).toBe("run_abcdef123456");
     expect(row?.updatedLabel).toBe("5m ago");

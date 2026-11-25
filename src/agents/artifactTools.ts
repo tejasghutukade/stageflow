@@ -33,6 +33,9 @@ export const AGENT_ARTIFACT_READ_SENTENCE =
 export const AGENT_ARTIFACT_DELETE_SENTENCE =
   `You can delete an artifact this agent owns in this project with ${STAGEFLOW_PI_PREFIX}delete_artifact.`;
 
+export const AGENT_ARTIFACT_REFRESH_SENTENCE =
+  `You can refresh a live artifact this agent owns in this project with ${STAGEFLOW_PI_PREFIX}refresh_artifact.`;
+
 export function agentHoldsArtifactWrite(definition: Pick<AgentDefinition, "tools">): boolean {
   return grantedStageflowTools(definition.tools.stageflow).includes("save_artifact");
 }
@@ -43,6 +46,10 @@ export function agentHoldsArtifactRead(definition: Pick<AgentDefinition, "tools"
 
 function agentHoldsArtifactCleanup(definition: Pick<AgentDefinition, "tools">): boolean {
   return grantedStageflowTools(definition.tools.stageflow).includes("delete_artifact");
+}
+
+function agentHoldsArtifactRefresh(definition: Pick<AgentDefinition, "tools">): boolean {
+  return grantedStageflowTools(definition.tools.stageflow).includes("refresh_artifact");
 }
 
 export function agentArtifactPromptSection(definition: Pick<AgentDefinition, "tools">): string | undefined {
@@ -62,21 +69,26 @@ export function agentArtifactPromptSection(definition: Pick<AgentDefinition, "to
     if (agentHoldsArtifactRead(definition)) {
       lines.push("", AGENT_ARTIFACT_READ_SENTENCE);
     }
-    return withCleanupSentence(definition, lines.join("\n"));
+    return withArtifactSentences(definition, lines.join("\n"));
   }
-  if (agentHoldsArtifactRead(definition)) return withCleanupSentence(definition, AGENT_ARTIFACT_READ_SENTENCE);
-  return withCleanupSentence(definition, undefined);
+  if (agentHoldsArtifactRead(definition)) return withArtifactSentences(definition, AGENT_ARTIFACT_READ_SENTENCE);
+  return withArtifactSentences(definition, undefined);
 }
 
-function withCleanupSentence(
+function withArtifactSentences(
   definition: Pick<AgentDefinition, "tools">,
   section: string | undefined,
 ): string | undefined {
-  if (!agentHoldsArtifactCleanup(definition)) return section;
-  return section === undefined ? AGENT_ARTIFACT_DELETE_SENTENCE : `${section}\n\n${AGENT_ARTIFACT_DELETE_SENTENCE}`;
+  const extras = [
+    agentHoldsArtifactCleanup(definition) ? AGENT_ARTIFACT_DELETE_SENTENCE : undefined,
+    agentHoldsArtifactRefresh(definition) ? AGENT_ARTIFACT_REFRESH_SENTENCE : undefined,
+  ].filter((line): line is string => line !== undefined);
+  if (extras.length === 0) return section;
+  const tail = extras.join("\n\n");
+  return section === undefined ? tail : `${section}\n\n${tail}`;
 }
 
-/** Leaves the prompt unchanged when the agent has no artifact read, write, or cleanup grant. */
+/** Leaves the prompt unchanged when the agent has no artifact read, write, cleanup, or refresh grant. */
 export function appendAgentArtifactPrompt(systemPrompt: string, definition: Pick<AgentDefinition, "tools">): string {
   const section = agentArtifactPromptSection(definition);
   if (section === undefined) return systemPrompt;
@@ -186,7 +198,7 @@ export function createAgentPublishArtifactTool(options: {
   return {
     name: PUBLISH_ARTIFACT_TOOL_NAME,
     label: "Publish artifact",
-    description: `Publish a titled, versioned artifact owned by this agent. Kinds: ${STATIC_KINDS.join(", ")}. Content at most ${mib} MiB. Pass path (a project-relative file this agent can read), content, or content_base64. Publishing the same id again creates a new version. A validation error returns a code and issues; fix the arguments and call again.`,
+    description: `Publish a titled, versioned artifact owned by this agent. Kinds: ${STATIC_KINDS.join(", ")}, live.declarative. Static content at most ${mib} MiB. live.declarative takes content as the program plus format, library, bindings, and optional refresh. Pass path, content, or content_base64. Publishing the same id again creates a new version. A validation error returns a code and issues; fix the arguments and call again.`,
     parameters: publishArtifactParameterSchema(),
     execute: async (_toolCallId, params) => {
       try {
@@ -222,8 +234,7 @@ function artifactNotFound() {
   return { ok: false as const, text: JSON.stringify(payload) };
 }
 
-/** delete_artifact for an agent session: another owner, or another project, is artifact.not_found. */
-export function bindAgentArtifactDelete(tool: ToolkitTool, agentId: string, projectRoot: string): ToolkitTool {
+function bindAgentOwnedArtifact(tool: ToolkitTool, agentId: string, projectRoot: string): ToolkitTool {
   const own = `agent:${agentId}`;
   return {
     ...tool,
@@ -238,4 +249,14 @@ export function bindAgentArtifactDelete(tool: ToolkitTool, agentId: string, proj
       return tool.run({ ...args, project_root: projectRoot }, ctx);
     },
   };
+}
+
+/** delete_artifact for an agent session: another owner, or another project, is artifact.not_found. */
+export function bindAgentArtifactDelete(tool: ToolkitTool, agentId: string, projectRoot: string): ToolkitTool {
+  return bindAgentOwnedArtifact(tool, agentId, projectRoot);
+}
+
+/** refresh_artifact for an agent session: another owner, or another project, is artifact.not_found. */
+export function bindAgentArtifactRefresh(tool: ToolkitTool, agentId: string, projectRoot: string): ToolkitTool {
+  return bindAgentOwnedArtifact(tool, agentId, projectRoot);
 }

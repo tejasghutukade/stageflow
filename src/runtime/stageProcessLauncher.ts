@@ -819,6 +819,7 @@ export class StageProcessLauncher {
                     tags: wire.tags,
                     summary: wire.summary,
                     bytes: decodeWorkerPublishBytes(wire.content_base64),
+                    ...(wire.manifest !== undefined ? { manifest: wire.manifest } : {}),
                   },
                 );
                 response = { result };

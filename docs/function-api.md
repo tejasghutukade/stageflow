@@ -162,7 +162,7 @@ When it failed, `ok` is `false` and `code` and `message` say why (see the [resul
 
 `GET /api/functions/<id>/revisions` returns `{ "revisions": [ ... ] }`, oldest first, each with `revision`, `source` (`console`, `file` or `api`), `author`, `summary`, `sourceHash`, `contractVersion` and `createdAt`. `GET /api/functions/<id>/revisions/<n>` returns that revision with its full definition and YAML. A revision that does not exist is `404 function.revision_not_found`.
 
-`GET /api/functions/<id>/invocations` returns `{ "invocations": [ ... ] }`, newest first. Each row has `id`, `revision`, `sourceHash`, `kind` (`test`, `verification`, `route` or `tool`), `status`, `durationMs`, `code` and `createdAt`. Inputs and results are not stored.
+`GET /api/functions/<id>/invocations` returns `{ "invocations": [ ... ] }`, newest first. Each row has `id`, `revision`, `sourceHash`, `kind` (`test`, `verification`, `route`, `tool`, or `artifact`), `status`, `durationMs`, `code` and `createdAt`. Inputs and results are not stored. `artifact` is a live-artifact refresh. The history row stores a code, never the arguments, the snapshot, a request URL, or a secret. Refresh runs the revision it checked. Output that fails `output_schema` is `invalid_output`. The artifact snapshot stores the return value after pattern and key-name scrubbing, which does not remove every secret a function might return.
 
 ## Errors
 

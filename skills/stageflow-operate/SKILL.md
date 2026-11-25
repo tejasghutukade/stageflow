@@ -156,7 +156,7 @@ Read [references/runs.md](references/runs.md) first; it has the full table and t
 | Stop a whole run | `cancel_run` (`reason` required) | `sf runs cancel --run <id> --reason <text> --json` |
 | Start over from the same inputs | `start_run` with `from_run` (`pinned`) | `sf runs rerun --run <id> [--pinned] --json` |
 | Envelope, run files, diff | `get_stage` with `view: envelope`, `run_files` with `view: artifact`, `changes`, `diff`, or `file` | `sf envelope get`, `sf artifact read --run`, `sf export-run` |
-| Artifact index (list, show, publish, delete) | `get_artifact`, `save_artifact`, `delete_artifact` (toolset `artifacts`) | `sf artifact list`, `show`, `publish`, `delete` |
+| Artifact index (list, show, publish, refresh, delete) | `get_artifact`, `save_artifact`, `refresh_artifact`, `delete_artifact` (toolset `artifacts`) | `sf artifact list`, `show`, `publish`, `refresh`, `delete` |
 | Delete, reclaim disk | `delete_runs`, `delete_runs` with `gc: true` | `sf runs delete --run <id> [--force]`, `sf runs gc [--dry-run]` |
 
 `stage_action` with `action: retry`, `stage_action` with `action: resume` and `start_run` with `from_run` start model work again: confirm first. Waiting stages cannot be retried or abandoned; answer them.

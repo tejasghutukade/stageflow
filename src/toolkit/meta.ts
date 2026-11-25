@@ -72,7 +72,7 @@ export const TOOLSETS: readonly Toolset[] = [
   { id: "triggers", title: "Triggers", summary: "List, configure and fire triggers." },
   { id: "connections", title: "Connections", summary: "Manage send channels and test recipients." },
   { id: "memories", title: "Memories", summary: "Manage host memories and their cards." },
-  { id: "artifacts", title: "Artifacts", summary: "Publish, read and delete artifacts." },
+  { id: "artifacts", title: "Artifacts", summary: "Publish, read, refresh and delete artifacts." },
 ];
 
 export const TOOL_GROUPS: readonly ToolGroup[] = [
@@ -199,6 +199,7 @@ export const TOOL_META: Readonly<Record<string, ToolMeta>> = {
 
   get_artifact: t("artifacts.read", "read", "artifacts"),
   save_artifact: t("artifacts.write", "write", "artifacts"),
+  refresh_artifact: t("artifacts.refresh", "external", "artifacts"),
   delete_artifact: t("artifacts.cleanup", "destructive", "artifacts"),
 };
 

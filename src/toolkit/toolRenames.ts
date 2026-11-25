@@ -115,6 +115,7 @@ export const TOOL_RENAMES: Readonly<Record<string, ToolRenameEntry>> = {
   delete_memory_card: row("delete_memory_card"),
   get_artifact: row("get_artifact"),
   save_artifact: row("save_artifact"),
+  refresh_artifact: row("refresh_artifact"),
   delete_artifact: row("delete_artifact"),
   list_evals: row("get_eval", { list: true }),
   get_eval: row("get_eval", { view: "definition" }),
