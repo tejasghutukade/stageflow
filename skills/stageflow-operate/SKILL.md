@@ -173,6 +173,7 @@ Each has a reference with the exact calls. Read it before acting.
 | Inbox, agent approvals, agent sessions and schedules at the operate level | [references/agents-and-inbox.md](references/agents-and-inbox.md) |
 | Backup, restore, export, retention, cost and usage | [references/backup-export-cost.md](references/backup-export-cost.md) |
 | Artifact index (console, CLI, MCP, backup scope) | [references/artifacts.md](references/artifacts.md) |
+| Creating and running work on a Host that is already up (Docker console, project choice, verify it shows in the console) | [references/working-against-a-host.md](references/working-against-a-host.md) |
 | JSON shapes and exit codes of `sf run`, `sf runs`, `sf browser` and friends | [references/cli-json-and-exit-codes.md](references/cli-json-and-exit-codes.md) |
 
 ## Troubleshooting

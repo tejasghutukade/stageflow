@@ -59,6 +59,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 |-----|-------------------|
 | [Data directory](data-directory.md) | Durable root layout, keep vs disposable, image user, version support |
 | [Docker and self-hosting](docker.md) | Local Compose try (`.env.example`, control token, providers), pull/run, Compose stage sandbox, browser image recipes (`Dockerfile.browser`, `Dockerfile.browser-sandbox`) and container browser host config, backup/restore, provenance, hardened egress (docs-only) |
+| [Working against a running Host](working-against-a-host.md) | Checklist for agents that create and run work on an already-running Host: find the Host and `home_id`, pick the project, run through the Host, verify it is visible |
 | [Operator console](operator-console.md) | Navigation, command palette, keyboard shortcuts and routes |
 | [Console: Overview](console-overview.md) | Control center: what needs you, what is running, system health, run trends |
 | [Console: Inbox](console-inbox.md) | Gates and agent approvals waiting on you, desktop notifications |

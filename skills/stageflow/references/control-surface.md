@@ -10,6 +10,7 @@ Every Stageflow skill follows this rule. Two ways drive the same Host: the MCP t
 - JSON and exit codes
 - Things only one surface can do
 - Safety on both surfaces
+- Working against a running Host
 
 ## The rule
 
@@ -110,3 +111,13 @@ When MCP is the only way (connections, memories), and no Host is up, tell the us
 - MCP tool calls carry no confirmation prompt of their own. You are the gate. Ask the user before calling anything that starts a real run, an eval, a trigger, an agent turn that uses real tools, a send, or a delete.
 - Arguments appear in tool logs and chat. Never pass a secret as an argument. For connections, keys are entered in the console or exported by the user; see the skill that owns the task.
 - The CLI inherits your shell environment, including provider keys. Do not echo it, and do not run `env` or `printenv` to debug.
+
+## Working against a running Host
+
+When asked to create or run work while a Host is already up (often a Docker console), the full checklist is `stageflow-operate`, `references/working-against-a-host.md`. In short:
+
+1. Find the Host and its `home_id` with `GET /livez`. Never run a bare `sf run` on the machine against a container Host: use MCP, the API, or `docker exec <container> sf ...`.
+2. Write into `workspace` through the Host (MCP `write_pipeline`, passing the workspace `project_root` from `get_started`). Create a separate project only when the user asks, register it, and name it.
+3. Run through the Host, with `project_root` when it is not `workspace`.
+4. Done means visible: the pipeline, task, run and `published_artifacts` appear in `GET /api/pipelines`, `/api/tasks` and `/api/runs/<id>`. Give console links and name the project.
+5. Never edit `project_root` or workspace settings to make something appear.

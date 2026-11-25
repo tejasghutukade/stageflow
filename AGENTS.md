@@ -96,6 +96,10 @@ Related docs: [evals.md](docs/evals.md), [envelopes.md](docs/envelopes.md), [hit
 
 Read [docs/functions.md](docs/functions.md) before changing function authoring, execution, access or attachments. The field reference is [YAML catalog: Functions](docs/yaml-catalog.md#functions), the REST routes are in [docs/function-api.md](docs/function-api.md), and the MCP tools are in [docs/mcp.md](docs/mcp.md#function-tools). The design spec `docs/specs/reusable-functions.md` is not in the repository; it may exist in a maintainer's local checkout, so ask for it if you need its requirement ids. Where merged code differs from it, the code and the user docs win. Record a contract change in the user docs in the same change.
 
+### Working against a running Host
+
+When asked to create or run a pipeline while a Host (often the Docker console) is already up, follow **[docs/working-against-a-host.md](docs/working-against-a-host.md)**: find the Host and its `home_id` from `GET /livez`, never run a bare `sf run` on the machine against a container Host (`docker exec` or MCP instead), write into `workspace` through the Host unless the user asks for a separate project, run through the Host, and confirm the pipeline, task, run and published artifacts appear in the Host's API before saying done. Never change `project_root` or workspace settings to make something show up.
+
 ### CLI / runtime work
 
 - JSON output and exit codes are part of the public contract — see `docs/ci.md` and `tests/cli.*.test.ts`
