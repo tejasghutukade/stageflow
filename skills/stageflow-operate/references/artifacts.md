@@ -38,7 +38,7 @@ Load toolset `artifacts` (`/mcp?toolsets=artifacts` or `all`). Groups: `artifact
 | Tool | Group | Use |
 |---|---|---|
 | `get_artifact` | read | `list: true` with the same filters as the API, or `key` + `view`: `record`, `versions`, `content`, `data` (live snapshots; static is `artifact.not_live`). |
-| `save_artifact` | write | Same body as REST publish; explicit `owner`. `live.declarative` takes `manifest`. Source `mcp`. |
+| `save_artifact` | write | Same body as REST publish; explicit `owner`. `live.declarative` and `live.html` take `manifest`. Source `mcp`. |
 | `refresh_artifact` | refresh | Runs read-only bindings. `key`, optional `binding_ids`. |
 | `delete_artifact` | cleanup | Deletes all versions of a **published** artifact. |
 

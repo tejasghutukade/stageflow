@@ -90,7 +90,7 @@ Published and indexed artifacts share one API. Add MCP toolset `artifacts` (`?to
 |---|---|---|
 | List or search | `get_artifact` with `list: true`, filters, `q`, `cursor` | `sf artifact list` (`--json`, same filters) |
 | Read record or bytes | `get_artifact` with `key`, `view: record`, `versions`, or `content` | `sf artifact show`, or content via REST/console |
-| Publish static file or live program | `save_artifact` (pick `owner`; `--manifest` on the CLI) | `sf artifact publish` (`--manifest` for `live.declarative`) |
+| Publish static file or live program | `save_artifact` (pick `owner`; `--manifest` on the CLI) | `sf artifact publish` (`--manifest` for `live.declarative` and `live.html`) |
 | Refresh a live artifact | `refresh_artifact` | `sf artifact refresh` |
 | Delete published key | `delete_artifact` | `sf artifact delete` |
 | Read a run workspace path | `run_files` with `view: artifact` | `sf artifact read --run --path` |

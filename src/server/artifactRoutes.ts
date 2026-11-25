@@ -411,6 +411,14 @@ function storageKeyFor(record: {
   return artifactStorageKey(record.project.id, ownerKey, record.id);
 }
 
+function unexpectedFailure(method: string, pathname: string): { error: string; code: string } {
+  if (method === "DELETE") return { error: "Delete failed", code: "artifact.delete_failed" };
+  if (/\/refresh$/.test(pathname)) return { error: "Refresh failed", code: "artifact.refresh_failed" };
+  if (/\/query$/.test(pathname)) return { error: "Query failed", code: "artifact.query_failed" };
+  if (/\/origins\/(approve|revoke)$/.test(pathname)) return { error: "Origin approval failed", code: "artifact.approve_failed" };
+  return { error: "Publish failed", code: "artifact.publish_failed" };
+}
+
 export async function handleArtifactRoutes(
   req: IncomingMessage,
   method: string,
@@ -664,10 +672,8 @@ export async function handleArtifactRoutes(
       console.error(
         `artifact ${method} failed: ${error instanceof Error ? error.message : String(error)}`,
       );
-      json(res, 500, {
-        error: method === "DELETE" ? "Delete failed" : "Publish failed",
-        code: method === "DELETE" ? "artifact.delete_failed" : "artifact.publish_failed",
-      });
+      const failure = unexpectedFailure(method, pathname);
+      json(res, 500, { error: failure.error, code: failure.code });
       return true;
     }
     throw error;

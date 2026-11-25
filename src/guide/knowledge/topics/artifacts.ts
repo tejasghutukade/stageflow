@@ -44,7 +44,7 @@ Pick **envelope listing** when the file is only for the next stage or run retent
 | Surface | Use |
 |---|---|
 | Console | **Artifacts** in the Activity sidebar, \`#/artifacts\`. Filter by kind, owner, tag, status. Detail: \`#/artifacts/<ownerKey>/<id>\`. |
-| CLI | \`sf artifact list\`, \`sf artifact show <ownerKey>/<id>\`, \`sf artifact publish\` (\`--manifest\` for \`live.declarative\`), \`sf artifact refresh\`, \`sf artifact delete\`. \`sf artifact read --run --path\` reads a **run file**, not the index. |
+| CLI | \`sf artifact list\`, \`sf artifact show <ownerKey>/<id>\`, \`sf artifact publish\` (\`--manifest\` for \`live.declarative\` and \`live.html\`), \`sf artifact refresh\`, \`sf artifact delete\`. \`sf artifact read --run --path\` reads a **run file**, not the index. |
 | MCP | Toolset \`artifacts\`: \`get_artifact\` (list or read; \`view: data\` for live snapshots), \`save_artifact\`, \`refresh_artifact\`, \`delete_artifact\`. Bare \`/mcp\` does not load it; add \`?toolsets=artifacts\` or \`all\`. |
 | Run | Indexed paths from the envelope appear on the stage **Artifacts** tab and in \`run_files\`. Published rows appear in \`published_artifacts\` on \`sf run --json --include stages\`. |
 
