@@ -102,12 +102,12 @@ describe("published artifact store report", () => {
     });
     const first = await manager.getHealthWithDisk();
     expect(first.disk?.published_artifact_count).toBe(count);
-    expect(first.disk?.artifact_store_computed_at).toEqual(expect.any(String));
-    expect(first.disk?.artifact_store_stale).toBe(false);
+    expect(first.artifact_store?.computed_at).toEqual(expect.any(String));
+    expect(first.artifact_store?.stale).toBe(false);
     const secondStarted = Date.now();
     const second = await manager.getHealthWithDisk();
     expect(Date.now() - secondStarted).toBeLessThan(200);
-    expect(second.disk?.artifact_store_computed_at).toBe(first.disk?.artifact_store_computed_at);
+    expect(second.artifact_store?.computed_at).toBe(first.artifact_store?.computed_at);
     expect(second.disk?.published_version_count).toBe(count);
   }, 60_000);
 });

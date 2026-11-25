@@ -14,10 +14,6 @@ export type DiskBreakdown = {
   artifacts_bytes: number;
   published_artifact_count: number;
   published_version_count: number;
-  /** When the published-artifact store report in this payload was computed. */
-  artifact_store_computed_at?: string;
-  /** True when this payload is a previous report served while a newer one is due. */
-  artifact_store_stale?: boolean;
   /** Shared dependency cache ($STAGEFLOW_HOME/cache); excluded from slim GC / per-run quotas. */
   cache_bytes: number;
   free_bytes: number;

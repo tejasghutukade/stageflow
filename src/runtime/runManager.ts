@@ -220,6 +220,7 @@ export type CapacityHealth = {
   activeStageProcesses: number;
   maxActiveStageProcesses: number | null;
   disk?: DiskBreakdown;
+  artifact_store?: { computed_at: string; stale: boolean };
   stage_env_passthrough?: boolean;
   proxy?: Record<string, unknown>;
   container?: {
@@ -600,7 +601,7 @@ export class RunManager {
   private readonly projectRoot: string;
   private readonly isGitProject: boolean;
   private acceptingWork = true;
-  private publishedStoreHealthCache?: { home: string; at: number; disk: import("../runstore/diskUsage.js").DiskBreakdown };
+  private publishedStoreHealthCache?: { home: string; at: number; computedAt: string; disk: import("../runstore/diskUsage.js").DiskBreakdown };
 
   constructor(
     private readonly options: {
@@ -854,7 +855,7 @@ export class RunManager {
       const cached = this.publishedStoreHealthCache;
       const { PUBLISHED_ARTIFACT_REPORT_TTL_MS } = await import("../artifacts/storeInventory.js");
       if (cached !== undefined && cached.home === home && now - cached.at < PUBLISHED_ARTIFACT_REPORT_TTL_MS) {
-        return { ...base, disk: { ...cached.disk, artifact_store_stale: false } };
+        return { ...base, disk: cached.disk, artifact_store: { computed_at: cached.computedAt, stale: false } };
       }
       let disk = await durableRootDiskBreakdown(home);
       const connection = (
@@ -868,13 +869,9 @@ export class RunManager {
         const report = await readPublishedArtifactStoreReport(connection, home);
         disk = enrichDiskBreakdownWithPublishedArtifactCounts(disk, report);
       }
-      disk = {
-        ...disk,
-        artifact_store_computed_at: new Date().toISOString(),
-        artifact_store_stale: false,
-      };
-      this.publishedStoreHealthCache = { home, at: Date.now(), disk };
-      return { ...base, disk };
+      const computedAt = new Date().toISOString();
+      this.publishedStoreHealthCache = { home, at: Date.now(), computedAt, disk };
+      return { ...base, disk, artifact_store: { computed_at: computedAt, stale: false } };
     } catch {
       return {
         ...base,
