@@ -125,6 +125,8 @@ Each `stages[]` item is a `StageProjection` (snake_case): `stage_id`, `status`, 
 
 `--include stages` without `--json` exits `1`. See [CI / headless](ci.md#including-stage-projections).
 
+`sf run`, `sf runs` and `sf artifact` check the Host on the configured port before they start. If that Host reports a different `home_id` than this process, they print a warning on stderr that names both homes and points at `docker exec <container> sf …` or the Host's MCP endpoint, then continue. Runs started here will not appear in that Host's console. Set `STAGEFLOW_NO_HOST_HOME_WARNING=1` to silence it. stdout, `--json` output and exit codes are unchanged.
+
 ## `sf run-stage` {#sf-run-stage}
 
 Run a single stage directly against the shared Stageflow service, without authoring a pipeline file — the CLI counterpart of the MCP [`start_run` with `stage`](mcp.md#tools) tool (it talks to the same running `sf ui`/`sf mcp` service over MCP). Distinct from the internal-only, worker-process-only `sf internal run-stage` below.

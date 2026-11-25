@@ -72,6 +72,7 @@ import {
   resolveClientBearerToken,
   type EnsuredHostControlToken,
 } from "./server/controlToken.js";
+import { warnIfHostUsesOtherHome } from "./cli/hostHomeWarning.js";
 import { readStageflowHomeId } from "./diagnostics/checks.js";
 import { mintConsoleLoginCode } from "./server/consoleLoginCode.js";
 import {
@@ -564,6 +565,8 @@ export async function main(argv: string[]): Promise<number> {
     }
 
     const ctx = await resolveStageflowContext(process.cwd());
+
+    await warnIfHostUsesOtherHome(parsed.command);
 
     if (parsed.command === "a2a") {
       return runA2aCommand(argv.slice(3), { cwd: ctx.invocationCwd, projectRoot: ctx.projectRoot });
