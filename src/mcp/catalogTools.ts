@@ -37,6 +37,7 @@ import {
 import type { McpToolDeps } from "./deps.js";
 import { projectRun } from "../projection/projectRun.js";
 import { textResult } from "./toolResults.js";
+import { runConsoleUrl } from "./writeTarget.js";
 import { listCatalogFlatSchema, validateFlatSchema } from "../toolkit/catalogToolModes.js";
 import {
   envelopeRefField,
@@ -546,6 +547,9 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
       });
       return textResult({
         runId: result.runId,
+        project_root: wireRoot.project_root,
+        project_path: wireRoot.path,
+        console_url: runConsoleUrl(deps, result.runId),
         ...(result.queued === true
           ? {
               queued: true,
@@ -589,6 +593,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         return textResult({
           ...projectRun(detail),
           run_manifest: redactRunManifestForRead(detail.run_manifest),
+          console_url: runConsoleUrl(deps, runId),
         });
       } catch (err) {
         const mapped = mapStoreLookupError(err, { policy: "run" });

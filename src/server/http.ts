@@ -1391,6 +1391,8 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           });
           json(res, 202, {
             runId: result.runId,
+            project_root: wireRoot.project_root,
+            project_path: wireRoot.path,
             ...(result.queued === true
               ? {
                   queued: true,

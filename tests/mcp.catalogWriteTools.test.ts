@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, realpath, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ZodType } from "zod";
@@ -209,8 +209,10 @@ describe("catalog write MCP tools", () => {
           repo: "acme/api",
           number: 3,
           directory: "tasks",
+          project_root: root,
         });
         expect(imported.isError).toBe(false);
+        expect(imported.payload.project_path).toBe(await realpath(root));
         expect(imported.payload.task).toMatchObject({
           id: "ship-the-catalog-tool",
           goal: "Ship the catalog tool",

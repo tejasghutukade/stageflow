@@ -29,6 +29,7 @@ import { decodeBase64 } from "../server/artifactRoutes.js";
 import { parseArtifactShowKey } from "../cli/artifactListFormat.js";
 import type { McpToolDeps } from "./deps.js";
 import { textResult } from "./toolResults.js";
+import { consoleUrl } from "./writeTarget.js";
 
 export const MCP_TEXT_CONTENT_MAX_BYTES = 200 * 1024;
 export const MCP_IMAGE_CONTENT_MAX_BYTES = 256 * 1024;
@@ -347,6 +348,7 @@ export function registerArtifactTools(server: McpServer, deps: McpToolDeps): voi
           version: published.version,
           unchanged: published.unchanged,
           project_root: published.project_root,
+          url: consoleUrl(deps, published.url),
           ...(published.agent_unverified ? { agent_unverified: true } : {}),
           ...(published.warnings && published.warnings.length > 0 ? { warnings: published.warnings } : {}),
         });

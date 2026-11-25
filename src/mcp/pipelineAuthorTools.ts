@@ -1,4 +1,3 @@
-import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
@@ -30,15 +29,21 @@ import {
 import { runReadPipelineDag } from "./validateMcpKinds.js";
 import type { McpToolDeps } from "./deps.js";
 import { textResult } from "./toolResults.js";
+import {
+  catching,
+  pipelineConsoleUrl,
+  projectFields,
+  resolveWriteTarget,
+} from "./writeTarget.js";
 
 type Built = { ok: true; nextDraft: DraftPackage } | { ok: false; error: string };
 
 const record = z.record(z.string(), z.unknown());
 
-async function projectRootOf(deps: McpToolDeps, projectRoot: string | undefined): Promise<string> {
-  const resolved = path.resolve(projectRoot ?? deps.projectRoot ?? deps.cwd);
-  return realpath(resolved).catch(() => resolved);
-}
+const guarded =
+  (handler: (args: unknown) => Promise<ReturnType<typeof textResult>>) =>
+  (args: unknown) =>
+    catching(() => handler(args));
 
 /**
  * Author pipelines and tasks straight on disk. Each mutation loads the package,
@@ -46,7 +51,6 @@ async function projectRootOf(deps: McpToolDeps, projectRoot: string | undefined)
  * Workshop's publish path (validate first, nothing written when invalid).
  */
 export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps): void {
-  const root = () => deps.projectRoot ?? deps.cwd;
 
   async function mutate(
     relPath: string,
@@ -54,7 +58,8 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
     build: (draft: DraftPackage) => Built,
     options: { taskPath?: string; allowInvalid?: boolean; projectRoot?: string } = {},
   ) {
-    const projectRoot = await projectRootOf(deps, options.projectRoot);
+    const target = await resolveWriteTarget(deps, options.projectRoot);
+    const projectRoot = target.path;
     let draft: DraftPackage = { pipeline: { id: "", stages: [] } };
     let baseHashes: DraftFileHashes | undefined;
     if (mode === "overwrite") {
@@ -84,11 +89,16 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
         true,
       );
     }
+    const pipelineId = built.nextDraft.pipeline.id;
     return textResult({
       pipelinePath: published.pipelinePath,
       stagePaths: published.stagePaths,
       taskPath: published.taskPath ?? null,
       fileHashes: published.fileHashes,
+      ...projectFields(target),
+      ...(typeof pipelineId === "string" && pipelineId !== ""
+        ? { console_url: pipelineConsoleUrl(deps, pipelineId, target.project_root) }
+        : {}),
     });
   }
 
@@ -99,7 +109,7 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
         "Read a pipeline package (view package) or its stage DAG (view dag).",
       inputSchema: readPipelineFlatSchema,
     },
-    async (args) => {
+    guarded(async (args: unknown) => {
       const parsed = readPipelineFlatSchema.safeParse(args);
       if (!parsed.success) {
         return textResult(
@@ -111,7 +121,7 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
       if (view === "dag") {
         return runReadPipelineDag(deps, relPath, project_root);
       }
-      const readRoot = await projectRootOf(deps, project_root);
+      const readRoot = (await resolveWriteTarget(deps, project_root)).path;
       const loaded = await loadDraftPackage(readRoot, relPath, task_path ? { taskPath: task_path } : {});
       if (!loaded.ok) return textResult({ error: loaded.error, status: loaded.status }, true);
       const validation = await validateDraftPackage(loaded.draft, { cwd: deps.cwd, projectRoot: readRoot });
@@ -122,7 +132,7 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
         fileHashes: loaded.fileHashes,
         has_include: loaded.hasInclude,
       });
-    },
+    }),
   );
 
   server.registerTool(
@@ -131,7 +141,7 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
       description: "Create or update a pipeline package on disk. mode create writes a new package; mode update patches with patch.",
       inputSchema: writePipelineFlatSchema,
     },
-    async (args) => {
+    guarded(async (args: unknown) => {
       const parsed = writePipelineFlatSchema.safeParse(args);
       if (!parsed.success) {
         return textResult(
@@ -168,7 +178,7 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
         (draft) => buildEditPipelineDraft(draft, { patch: value.patch! }),
         { allowInvalid: value.allow_invalid, projectRoot: value.project_root },
       );
-    },
+    }),
   );
 
   server.registerTool(
@@ -178,7 +188,7 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
         "Create or update stages on disk. With a pipeline path, create adds a stage; update patches a stage. Without a pipeline path, create makes a standalone stage file; update with content overwrites a stage file.",
       inputSchema: writeStageFlatSchema,
     },
-    async (args) => {
+    guarded(async (args: unknown) => {
       const parsed = writeStageFlatSchema.safeParse(args);
       if (!parsed.success) {
         return textResult(
@@ -201,7 +211,8 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
         if ("ok" in stageParsed) {
           return textResult({ error: stageParsed.error, status: stageParsed.status }, true);
         }
-        const result = await createStage(await projectRootOf(deps, value.project_root), stageParsed);
+        const stageTarget = await resolveWriteTarget(deps, value.project_root);
+        const result = await createStage(stageTarget.path, stageParsed);
         if (!result.ok) {
           return textResult(
             {
@@ -212,11 +223,12 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
             true,
           );
         }
-        return textResult(result.stage);
+        return textResult({ ...result.stage, ...projectFields(stageTarget) });
       }
       if (value.content !== undefined) {
         const relPath = value.path!.trim();
-        const rootDir = await projectRootOf(deps, value.project_root);
+        const fileTarget = await resolveWriteTarget(deps, value.project_root);
+        const rootDir = fileTarget.path;
         const roots: CatalogRoot[] = [
           { project_root: rootDir, path: rootDir, kind: "registered", read_only: false },
         ];
@@ -239,7 +251,7 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
               true,
             );
           }
-          return textResult({ path: result.path, content: result.content });
+          return textResult({ path: result.path, content: result.content, ...projectFields(fileTarget) });
         } catch (err) {
           if (err instanceof CatalogPathError) {
             return textResult(
@@ -284,7 +296,7 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
         },
         { allowInvalid: value.allow_invalid, projectRoot: value.project_root },
       );
-    },
+    }),
   );
 
   server.registerTool(
@@ -293,7 +305,7 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
       description: "Create or update task files on disk, beside a pipeline or as a standalone catalog task.",
       inputSchema: writeTaskFlatSchema,
     },
-    async (args) => {
+    guarded(async (args: unknown) => {
       const parsed = writeTaskFlatSchema.safeParse(args);
       if (!parsed.success) {
         return textResult(
@@ -318,9 +330,10 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
           if ("ok" in taskParsed) {
             return textResult({ error: taskParsed.error, status: taskParsed.status }, true);
           }
-          const result = await createTask(await projectRootOf(deps, value.project_root), taskParsed);
+          const taskTarget = await resolveWriteTarget(deps, value.project_root);
+          const result = await createTask(taskTarget.path, taskParsed);
           if (!result.ok) return textResult({ error: result.error, status: result.status }, true);
-          return textResult({ task: result.task });
+          return textResult({ task: result.task, ...projectFields(taskTarget) });
         }
         const updateBody = {
           goal: value.goal!,
@@ -334,15 +347,16 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
         if ("ok" in taskParsed) {
           return textResult({ error: taskParsed.error, status: taskParsed.status }, true);
         }
+        const updateTarget = await resolveWriteTarget(deps, value.project_root);
         const result = await updateTask({
           store: deps.store,
           bootCwd: deps.cwd,
           taskId: value.id!,
           input: taskParsed,
-          projectRootFilter: await projectRootOf(deps, value.project_root),
+          projectRootFilter: updateTarget.path,
         });
         if (!result.ok) return textResult({ error: result.error, status: result.status }, true);
-        return textResult({ task: result.task });
+        return textResult({ task: result.task, ...projectFields(updateTarget) });
       }
       const taskArgs = {
         id: value.id,
@@ -367,7 +381,7 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
           projectRoot: value.project_root,
         },
       );
-    },
+    }),
   );
 
 }
