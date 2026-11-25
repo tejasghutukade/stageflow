@@ -1,4 +1,3 @@
-import path from "node:path";
 import type Database from "better-sqlite3";
 import type { FunctionDefinition } from "../config/loadFunction.js";
 import { createFunctionInvoker } from "../functions/invoke.js";
@@ -20,6 +19,7 @@ import { coordinateRefresh, type RefreshShareOptions } from "./refreshShare.js";
 import {
   executeLiveBinding,
   loadPinnedFunction,
+  projectMatches,
   refreshArtifact,
   type ArtifactRefreshDeps,
   type ArtifactRefreshResult,
@@ -132,10 +132,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function projectMatches(stored: string, projectRoot: string): boolean {
-  if (stored === projectRoot) return true;
-  return path.resolve(stored) === path.resolve(projectRoot);
-}
 
 function ownerOf(row: ArtifactLiveRow): ArtifactOwner {
   if (row.owner_kind === "agent") return { kind: "agent", agent: row.owner_agent ?? "" };
@@ -156,8 +152,8 @@ function loadRow(db: Database.Database, key: string): ArtifactLiveRow | undefine
     .get(key) as ArtifactLiveRow | undefined;
 }
 
-function assertLiveRow(row: ArtifactLiveRow | undefined, projectRoot: string): ArtifactLiveRow {
-  if (!row || row.deleted_at || !projectMatches(row.project_root_id, projectRoot)) {
+function assertLiveRow(row: ArtifactLiveRow | undefined, projectRoot: string, projectId?: string): ArtifactLiveRow {
+  if (!row || row.deleted_at || !projectMatches(row.project_root_id, projectRoot, projectId)) {
     throw new ArtifactQueryError(404, "artifact.not_found", "Artifact not found");
   }
   if (!isLiveKind(row.kind)) {
@@ -397,7 +393,7 @@ function storeVariant(
   const now = deps.now ?? (() => new Date().toISOString());
   return db.transaction(() => {
     const current = loadRow(db, key);
-    if (!current || current.deleted_at || !projectMatches(current.project_root_id, deps.projectRoot)) return "missing";
+    if (!current || current.deleted_at || !projectMatches(current.project_root_id, deps.projectRoot, deps.projectId)) return "missing";
     if (current.current_version !== startedVersion) return "superseded";
     const existing = snapshotRow(db, key, bindingId, hash);
     if (!existing) {
@@ -447,7 +443,7 @@ export async function queryBinding(
   storageKey: string,
   request: BindingQueryRequest,
 ): Promise<BindingQueryResult> {
-  const row = assertLiveRow(loadRow(db, storageKey), deps.projectRoot);
+  const row = assertLiveRow(loadRow(db, storageKey), deps.projectRoot, deps.projectId);
   const manifest = loadStoredLiveBindings(row.manifest_json);
   if (!manifest) {
     throw new ArtifactPublishError(400, "artifact.invalid_shape", "Live artifact manifest is not valid", [
@@ -531,7 +527,7 @@ async function runVariant(
       freshCache: () => {
         if (!ifStale) return undefined;
         const live = loadRow(db, storageKey);
-        if (!live || live.deleted_at || !projectMatches(live.project_root_id, deps.projectRoot)) return undefined;
+        if (!live || live.deleted_at || !projectMatches(live.project_root_id, deps.projectRoot, deps.projectId)) return undefined;
         if (!isLiveKind(live.kind) || live.status === "expired") return undefined;
         const stored = snapshotRow(db, storageKey, binding.id, hash);
         if (!stored || snapshotNeedsRefresh(stored, now(), ttl)) return undefined;
@@ -554,7 +550,7 @@ async function executeVariant(
   now: () => string,
   pinned: { definition: FunctionDefinition; revision: number } | undefined,
 ): Promise<BindingQueryResult> {
-  const row = assertLiveRow(loadRow(db, storageKey), deps.projectRoot);
+  const row = assertLiveRow(loadRow(db, storageKey), deps.projectRoot, deps.projectId);
   const startedVersion = row.current_version;
   const nowIso = now();
   if (ifStale) {

@@ -387,7 +387,7 @@ export function registerArtifactTools(server: McpServer, deps: McpToolDeps): voi
         const root = roots.find((item) => item.project_root === artifact.project.id);
         const result = await refreshArtifact(
           db,
-          { projectRoot: root?.path ?? artifact.project.id },
+          { projectRoot: root?.path ?? artifact.project.id, projectId: artifact.project.id },
           storageKeyFor(artifact),
           {
             ...(value.binding_ids !== undefined ? { bindingIds: value.binding_ids } : {}),

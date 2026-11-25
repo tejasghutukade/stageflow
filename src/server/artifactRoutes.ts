@@ -553,6 +553,7 @@ export async function handleArtifactRoutes(
             db,
             {
               projectRoot: root?.path ?? artifact.project.id,
+              projectId: artifact.project.id,
               ...(refreshInvokeForTests ? { invoke: refreshInvokeForTests } : {}),
             },
             storageKey,
@@ -587,6 +588,7 @@ export async function handleArtifactRoutes(
           db,
           {
             projectRoot: root?.path ?? artifact.project.id,
+            projectId: artifact.project.id,
             ...(refreshInvokeForTests ? { invoke: refreshInvokeForTests } : {}),
           },
           storageKey,

@@ -398,6 +398,19 @@ source: |
     expect((db.prepare(`SELECT COUNT(*) AS c FROM runs`).get() as { c: number }).c).toBe(runsBefore);
   });
 
+  it("refreshes an artifact whose project id is symbolic and differs from the catalog path", async () => {
+    const { store, project } = await setup();
+    await publishLive(store, project);
+    const db = sqliteConnectionFromStore(store)!;
+    const key = storageKey(project);
+    db.prepare(`UPDATE artifacts SET project_root_id = 'workspace' WHERE key = ?`).run(key);
+    const invoke = vi.fn(async () => okView({ weeks: 12 }));
+    await expect(refreshArtifact(db, { projectRoot: project, invoke }, key)).rejects.toMatchObject({ status: 404 });
+    const result = await refreshArtifact(db, { projectRoot: project, projectId: "workspace", invoke }, key);
+    expect(result.snapshots).toHaveLength(1);
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the previous snapshot on failure and uses error when none succeeded", async () => {
     const { store, project } = await setup();
     await publishLive(store, project);

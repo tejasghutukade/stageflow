@@ -759,7 +759,7 @@ async function runRefreshSubcommand(
     const root = roots.find((item) => item.project_root === record.project.id);
     const result = await refreshArtifact(
       db,
-      { projectRoot: root?.path ?? record.project.id },
+      { projectRoot: root?.path ?? record.project.id, projectId: record.project.id },
       storageKeyFor(record),
       {
         ...(parsed.bindings.length > 0 ? { bindingIds: parsed.bindings } : {}),
@@ -817,7 +817,7 @@ async function runQuerySubcommand(
     const args = parseQueryArgsJson(parsed.args);
     const result = await queryBinding(
       db,
-      { projectRoot: root?.path ?? record.project.id },
+      { projectRoot: root?.path ?? record.project.id, projectId: record.project.id },
       storageKeyFor(record),
       {
         bindingId: parsed.binding ?? "",

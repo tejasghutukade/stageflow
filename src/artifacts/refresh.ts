@@ -26,7 +26,10 @@ import {
 import { coordinateRefresh, refreshInFlightCount, type RefreshShareOptions } from "./refreshShare.js";
 
 export type ArtifactRefreshDeps = {
+  /** Absolute catalog path (or the wire id when the project has no catalog root). Used to load functions. */
   projectRoot: string;
+  /** The artifact's wire project id, as stored in `project_root_id`. Symbolic ids (`workspace`) differ from `projectRoot`. */
+  projectId?: string;
   now?: () => string;
   /** Defaults to the Host function invoker. Tests pass a spy. Eligibility failures do not call it. */
   invoke?: (projectRoot: string, input: FunctionCallInput) => Promise<FunctionRunView>;
@@ -202,7 +205,8 @@ function ownerOf(row: ArtifactLiveRow): ArtifactOwner {
   return { kind: "stage", pipeline: row.owner_pipeline ?? "", stage: row.owner_stage ?? "" };
 }
 
-function projectMatches(stored: string, projectRoot: string): boolean {
+export function projectMatches(stored: string, projectRoot: string, projectId?: string): boolean {
+  if (projectId !== undefined && stored === projectId) return true;
   if (stored === projectRoot) return true;
   return path.resolve(stored) === path.resolve(projectRoot);
 }
@@ -367,8 +371,8 @@ export function liveRefreshState(
   return { status: "error", last_refreshed_at: null };
 }
 
-function assertLiveRow(row: ArtifactLiveRow | undefined, projectRoot: string): ArtifactLiveRow {
-  if (!row || row.deleted_at || !projectMatches(row.project_root_id, projectRoot)) {
+function assertLiveRow(row: ArtifactLiveRow | undefined, projectRoot: string, projectId?: string): ArtifactLiveRow {
+  if (!row || row.deleted_at || !projectMatches(row.project_root_id, projectRoot, projectId)) {
     throw new ArtifactQueryError(404, "artifact.not_found", "Artifact not found");
   }
   if (!isLiveKind(row.kind)) {
@@ -380,9 +384,14 @@ function assertLiveRow(row: ArtifactLiveRow | undefined, projectRoot: string): A
   return row;
 }
 
-export function readArtifactSnapshots(db: Database.Database, key: string, projectRoot?: string): ArtifactRefreshResult {
+export function readArtifactSnapshots(
+  db: Database.Database,
+  key: string,
+  projectRoot?: string,
+  projectId?: string,
+): ArtifactRefreshResult {
   const row = loadRow(db, key);
-  if (!row || row.deleted_at || (projectRoot !== undefined && !projectMatches(row.project_root_id, projectRoot))) {
+  if (!row || row.deleted_at || (projectRoot !== undefined && !projectMatches(row.project_root_id, projectRoot, projectId))) {
     throw new ArtifactQueryError(404, "artifact.not_found", "Artifact not found");
   }
   if (!isLiveKind(row.kind)) {
@@ -436,7 +445,7 @@ function capacityRefreshResult(
   key: string,
   options: ArtifactRefreshOptions,
 ): ArtifactRefreshResult {
-  const row = assertLiveRow(loadRow(db, key), deps.projectRoot);
+  const row = assertLiveRow(loadRow(db, key), deps.projectRoot, deps.projectId);
   const manifest = loadStoredLiveBindings(row.manifest_json);
   const bindings = manifest?.bindings ?? [];
   const selected = manifest ? [...selectBindings(manifest, options.bindingIds, options.bindingIdsIssuePath ?? "bindingIds")] : [];
@@ -467,7 +476,7 @@ function freshIfStaleResult(
 ): ArtifactRefreshResult | undefined {
   if (options.ifStale !== true) return undefined;
   const row = loadRow(db, key);
-  if (!row || row.deleted_at || !projectMatches(row.project_root_id, deps.projectRoot)) return undefined;
+  if (!row || row.deleted_at || !projectMatches(row.project_root_id, deps.projectRoot, deps.projectId)) return undefined;
   if (!isLiveKind(row.kind) || row.status === "expired") return undefined;
   const manifest = loadStoredLiveBindings(row.manifest_json);
   if (!manifest) return undefined;
@@ -592,7 +601,7 @@ async function refreshLocked(
 ): Promise<ArtifactRefreshResult> {
   let markedRefreshing = false;
   try {
-    const row = assertLiveRow(loadRow(db, key), deps.projectRoot);
+    const row = assertLiveRow(loadRow(db, key), deps.projectRoot, deps.projectId);
     const manifest = loadStoredLiveBindings(row.manifest_json);
     if (!manifest) {
       throw new ArtifactPublishError(400, "artifact.invalid_shape", "Live artifact manifest is not valid", [
@@ -652,7 +661,7 @@ async function refreshLocked(
 
     const stored = db.transaction(() => {
       const current = loadRow(db, key);
-      if (!current || current.deleted_at || !projectMatches(current.project_root_id, deps.projectRoot)) {
+      if (!current || current.deleted_at || !projectMatches(current.project_root_id, deps.projectRoot, deps.projectId)) {
         return { kind: "missing" as const };
       }
       if (current.current_version !== startedVersion) return { kind: "superseded" as const };
@@ -712,7 +721,7 @@ async function refreshLocked(
     if (stored.kind === "missing") {
       throw new ArtifactQueryError(404, "artifact.not_found", "Artifact not found");
     }
-    if (stored.kind === "superseded") return readArtifactSnapshots(db, key, deps.projectRoot);
+    if (stored.kind === "superseded") return readArtifactSnapshots(db, key, deps.projectRoot, deps.projectId);
     return finishRefreshResult(stored.result);
   } finally {
     if (markedRefreshing) {
