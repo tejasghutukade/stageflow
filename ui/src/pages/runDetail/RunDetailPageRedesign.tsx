@@ -460,7 +460,7 @@ export function RunDetailPageRedesign({
           stage={stage}
           stageLabel={streamStageLabel}
           eventCount={stage.events.length}
-          artifactCount={stage.artifacts?.length ?? 0}
+          artifactCount={(stage.artifacts?.length ?? 0) + (stage.published_artifacts?.length ?? 0)}
         />
         {centerTab === "transcript" ? (
           <RunDetailTranscriptBody

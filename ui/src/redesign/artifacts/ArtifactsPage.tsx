@@ -322,7 +322,7 @@ export function ArtifactsPage() {
       setRoots(nextRoots);
       setRunsById(new Map(listed.runs.map((run) => [run.run_id, run])));
       const parsed = parseArtifactListFiltersFromHash();
-      const defaultScope = parsed.projectRoot ?? activeArtifactProjectWireId(nextRoots);
+      const defaultScope = parsed.projectRoot ?? ALL_PROJECTS_SCOPE;
       setScope(defaultScope);
       if (parsed.filters) setFilters(parsed.filters);
     })();

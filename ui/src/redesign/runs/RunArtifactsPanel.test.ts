@@ -89,6 +89,21 @@ describe("RunArtifactsPanel missing claim UI", () => {
     expect(out).toContain("notes.json");
   });
 
+  it("lists published artifacts with links when the stage has no envelope files", () => {
+    const published = { key: "stage:p:s/report", version: 2, kind: "live.declarative", title: "Weekly report" };
+    const publishedStage = { ...stage, artifacts: [], published_artifacts: [published] };
+    const html = renderToStaticMarkup(
+      createElement(RunArtifactsPanel, {
+        runId: "run-1",
+        run: { ...run, stages: [publishedStage] },
+        stage: publishedStage,
+      }),
+    );
+    expect(text(html)).toContain("Weekly report");
+    expect(text(html)).toContain("live.declarative · v2");
+    expect(html).toContain('href="#/artifacts/stage:p:s/report"');
+  });
+
   it("shows missing when the stage has no disk artifacts at all", () => {
     const emptyStage = { ...stage, artifacts: [] };
     const html = renderToStaticMarkup(

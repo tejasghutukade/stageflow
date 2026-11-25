@@ -7,7 +7,7 @@ title: Console — Artifacts
 
 **Artifacts** is in the left rail, in the **Activity** group, after **Pipeline runs**. The route is `#/artifacts`.
 
-The page lists indexed deliverables. The project control defaults to the active catalog project (the same write root the Workshop and evals use: the workspace catalog when it is available, otherwise the first writable root). The control also lists each other catalog project, and **All projects**. All projects calls the list API with no `project_root`, and each row shows a short project label so the same stage in two projects stays distinct.
+The page lists indexed deliverables. The project control defaults to **All projects**, because a run can belong to any registered catalog. A project in the page address (`project_root` in the hash) wins. The control lists each catalog project too. All projects calls the list API with no `project_root`, and each row shows a short project label so the same stage in two projects stays distinct.
 
 **Load more** requests the next page with `next_cursor` when the list is longer than one page.
 

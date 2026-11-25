@@ -308,7 +308,7 @@ An eval session publishes with `hidden = 1` under `eval:agent:<id>/<artifact id>
 
 The Artifacts page shows an agent owner as `agent · <id>` and links to that agent's page.
 
-`sf run --json --include stages` and `sf runs show --json` add `published_artifacts` (`key`, `version`, `kind`, `title`) on a stage that published during that run. The list is the versions that run published, including an unchanged republish of a version another run created. `version` is the version that attempt published, not a later current version. A later run that republishes the same id does not remove an earlier run's entry. The field is left off when the list is empty. Hidden eval publishes are left off.
+`GET /api/runs/<id>` (the console run page), `sf run --json --include stages` and `sf runs show --json` add `published_artifacts` (`key`, `version`, `kind`, `title`) on a stage that published during that run. The list is the versions that run published, including an unchanged republish of a version another run created. `version` is the version that attempt published, not a later current version. A later run that republishes the same id does not remove an earlier run's entry. The field is left off when the list is empty. Hidden eval publishes are left off.
 
 ## CLI
 

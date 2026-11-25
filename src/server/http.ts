@@ -165,6 +165,7 @@ import {
   runDetailWithRedactedManifest,
 } from "../runstore/exportRunPayload.js";
 import { buildDebugBundle } from "../runstore/debugBundle.js";
+import { publishedArtifactsForRun } from "../artifacts/sessionPublish.js";
 import { parseShutdownGraceMs } from "./shutdown.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
@@ -284,6 +285,25 @@ function draftCatalogRootWire(root: CatalogRoot): {
     root_kind: root.kind,
     read_only: root.read_only,
   };
+}
+
+/** Adds the artifacts each stage published (not the files its envelope lists) so the run page can link them. */
+function withPublishedStageArtifacts<T extends { stages?: Array<{ stage_id: string }> }>(store: RunStore, runId: string, detail: T): T {
+  const db = sqliteConnectionFromStore(store);
+  if (!db || !Array.isArray(detail.stages)) return detail;
+  try {
+    const grouped = publishedArtifactsForRun(db, runId);
+    if (grouped.size === 0) return detail;
+    return {
+      ...detail,
+      stages: detail.stages.map((stage) => {
+        const published = grouped.get(stage.stage_id);
+        return published && published.length > 0 ? { ...stage, published_artifacts: published } : stage;
+      }),
+    };
+  } catch {
+    return detail;
+  }
 }
 
 export type UiServerOptions = {
@@ -1153,7 +1173,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           if (rest && !rest.includes("/")) {
             try {
               const detail = await store.readRun(decodeURIComponent(rest));
-              json(res, 200, runDetailWithRedactedManifest(detail));
+              json(res, 200, withPublishedStageArtifacts(store, decodeURIComponent(rest), runDetailWithRedactedManifest(detail)));
             } catch (err) {
               const mapped = mapStoreLookupError(err, { policy: "run" });
               json(res, 404, { error: mapped.error });

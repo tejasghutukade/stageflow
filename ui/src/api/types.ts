@@ -310,6 +310,8 @@ export type StageSnapshot = {
   events: StageLogEvent[];
   envelope: StageEnvelopeView | null;
   artifacts: string[];
+  /** Artifacts this stage published to the Artifacts page (not envelope files). */
+  published_artifacts?: { key: string; version: number; kind: string; title: string }[];
   last_at?: string;
   pending_prompt?: PendingPrompt;
   attempt_count: number;
