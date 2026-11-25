@@ -143,7 +143,7 @@ Rules every change must keep:
 
 ## UI work
 
-Operator console code lives in **`ui/`**. Read **[ui/AGENTS.md](ui/AGENTS.md)** for UI-specific rules (Astryx workflow, chrome exception, UX docs, component map). Do not duplicate that file here.
+Operator console code lives in **`ui/`**. Read **[ui/AGENTS.md](ui/AGENTS.md)** for UI-specific rules (redesign design system and tokens, how much Astryx is left, legacy chrome exception, UX docs, component map). Do not duplicate that file here.
 
 ### Connections (communication channels and tools)
 
