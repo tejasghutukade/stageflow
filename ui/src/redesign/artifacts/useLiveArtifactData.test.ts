@@ -298,7 +298,7 @@ describe("stored snapshots on open", () => {
     refreshBody?: LiveHttpBody;
   }) {
     const calls: string[] = [];
-    let state: Omit<ReturnType<typeof useLiveArtifactData>, "refresh"> | undefined;
+    let state: Omit<ReturnType<typeof useLiveArtifactData>, "refresh" | "settled"> | undefined;
     const subject = options.record ?? record();
     const { omitLatest, ...view } = options.view ?? {};
     const model = createLiveArtifactDataModel({

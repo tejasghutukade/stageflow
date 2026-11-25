@@ -706,7 +706,7 @@ HTTP: `GET /api/export` (**read** scope) with the same query filters.
 
 ## `sf artifact`
 
-List, show, publish, and delete artifacts in the artifact index, or read a run workspace file as UTF-8 text.
+List, show, publish, refresh, query, and delete artifacts in the artifact index, or read a run workspace file as UTF-8 text.
 
 Like other store verbs, `list` and `show` open `$STAGEFLOW_HOME` SQLite directly. `publish` and `delete` do the same. When the database is missing or its schema is behind this binary, they start the Host to apply migrations, then open again (same as `sf runs list` and `sf artifact read`).
 
@@ -770,9 +770,21 @@ Human output is `Published <key> version <N>` or `Unchanged <key> version <N>`. 
 sf artifact refresh <ownerKey>/<id> [--binding <id>]... [--if-stale] [--project-root <wire id or path>] [--json]
 ```
 
-Runs the live bindings now, or only the ids passed with `--binding` (repeat the flag). `--if-stale` runs a binding only when its snapshot is missing, failed, or older than the effective TTL (the manifest `ttl_seconds`, or 300 seconds when that field is omitted). A fresh snapshot is reused: the function is not called, no invocation row is written, and `last_refreshed_at` stays as it was. Same path as the refresh route. The command runs in its own process, so function-executor limits apply to that process. Human output is `status`, `last refreshed`, `last error`, one line per snapshot (`<id>: ok` or a status), and one line per binding error. `--json` prints `{ "status", "snapshots", "last_refreshed_at", "last_error_code", "errors" }`. Each snapshot may include `source`: `executed` when this refresh stored it, `cache` when the snapshot was already stored. A full executor queue or a full refresh queue adds `retry_after_seconds`.
+Runs the live bindings now, or only the ids passed with `--binding` (repeat the flag). `--if-stale` runs a binding only when its snapshot is missing, failed, or older than the effective TTL (the manifest `ttl_seconds`, or 300 seconds when that field is omitted). A fresh snapshot is reused: the function is not called, no invocation row is written, and `last_refreshed_at` stays as it was. Same path as the refresh route. The command runs in its own process, so function-executor limits, the variant cache, the rate-limit windows, and in-flight coalescing apply to that process and are not shared with the Host. Human output is `status`, `last refreshed`, `last error`, one line per snapshot (`<id>: ok` or a status), and one line per binding error. `--json` prints `{ "status", "snapshots", "last_refreshed_at", "last_error_code", "errors" }`. Each snapshot may include `source`: `executed` when this refresh stored it, `cache` when the snapshot was already stored. A full executor queue or a full refresh queue adds `retry_after_seconds`.
 
 **Exit codes:** `0` when every requested binding succeeded; `1` when a binding failed (stdout is still that JSON object with `--json`), or for `artifact.not_found`, `artifact.ambiguous`, `artifact.not_live`, `artifact.content_unavailable`, an unknown binding id, or another error (`{ "error", "code" }` with `--json`).
+
+### `sf artifact query <key>`
+
+```bash
+sf artifact query <ownerKey>/<id> --binding <id> [--args <json>] [--if-stale|--no-if-stale] [--project-root <wire id or path>] [--json]
+```
+
+Runs one live binding with viewer arguments. The manifest `args` are the defaults. `--args` is a JSON object shallow-merged over them. Omitted `--args` uses the defaults and is the same as `sf artifact refresh` for that binding. Omitted staleness reuses a snapshot that is still inside the TTL. `--no-if-stale` runs the function again. Same path as `POST /api/artifacts/<ownerKey>/<id>/query`. The command runs in its own process, so its cache, rate limits, and in-flight coalescing are not shared with the Host. See [Live artifacts: interaction](artifacts.md#live-artifacts-interaction).
+
+`--json` prints `{ "binding_id", "args_hash", "snapshot", "errors" }`. `snapshot` is `{ "value", "fetched_at", "duration_ms", "status", "error_code", "source" }` or `null`. `source` is `cache` or `executed`. A refused execution adds `retry_after_seconds`. Human output prints the binding, the args hash, the source, and the status. It does not print the argument values or the snapshot value.
+
+**Exit codes:** `0` when the query has no binding error; `1` when it does (stdout is still that JSON object with `--json`), or for `artifact.not_found`, `artifact.ambiguous`, `artifact.not_live`, `artifact.content_unavailable`, an unknown binding, invalid arguments, or another error (`{ "error", "code" }` with `--json`).
 
 List human output puts `LIVE`, `LIVE/fresh`, `LIVE/stale`, `LIVE/error`, or `LIVE/refreshing` in the `STATUS` column. An expired indexed row still shows `expired`.
 

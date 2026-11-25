@@ -20,6 +20,7 @@ export type ArtifactLiveView = {
   bindings?: ArtifactLiveBinding[];
   refresh?: { on_view?: boolean; ttl_seconds?: number; auto_seconds?: number };
   library?: { name: string; version: string };
+  format?: string;
 };
 
 export type ArtifactSnapshot = {
@@ -38,6 +39,11 @@ export const DEFAULT_LIVE_TTL_SECONDS = 300;
 
 /** Matches the Host floor for `refresh.ttl_seconds` and `refresh.auto_seconds`. */
 export const LIVE_REFRESH_MIN_SECONDS = 30;
+
+/** Current live component library. Matches `LIBRARY_NAME` / `LIBRARY_VERSION` in `src/artifacts/library`. */
+export const LIVE_LIBRARY_NAME = "stageflow";
+export const LIVE_LIBRARY_VERSION = "1.0.0";
+export const LIVE_OPENUI_FORMAT = "openui-lang";
 
 export function effectiveLiveTtlSeconds(ttl: number | undefined): number {
   if (typeof ttl !== "number" || !Number.isInteger(ttl)) return DEFAULT_LIVE_TTL_SECONDS;
@@ -269,6 +275,44 @@ export async function fetchArtifactData(ownerKey: string, id: string, projectRoo
   });
   if (!res.ok) throw await readArtifactError(res);
   return (await res.json()) as ArtifactDataResponse;
+}
+
+export type ArtifactBindingQueryResponse = {
+  binding_id: string;
+  args_hash: string;
+  snapshot: ArtifactSnapshot | null;
+  errors: Array<{ binding_id: string; code: string }>;
+  retry_after_seconds?: number;
+};
+
+export async function queryArtifactBinding(
+  ownerKey: string,
+  id: string,
+  body: { binding_id: string; args: Record<string, unknown> },
+  projectRoot?: string,
+): Promise<{
+  status: number;
+  body: ArtifactBindingQueryResponse | { error?: string; code?: string; retry_after_seconds?: number } | null;
+  networkError?: string;
+}> {
+  try {
+    const res = await fetch(
+      `/api/artifacts/${encodeURIComponent(ownerKey)}/${encodeURIComponent(id)}/query${artifactQuery(projectRoot)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authorizationHeaders() },
+        body: JSON.stringify(body),
+      },
+    );
+    const parsed = (await res.json().catch(() => null)) as
+      | ArtifactBindingQueryResponse
+      | { error?: string; code?: string; retry_after_seconds?: number }
+      | null;
+    if (res.status === 401) notifyControlTokenRequired();
+    return { status: res.status, body: parsed };
+  } catch (error) {
+    return { status: 0, body: null, networkError: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export async function requestArtifactRefresh(

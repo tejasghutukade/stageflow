@@ -412,7 +412,7 @@ function errorCode(view: FunctionRunView): string {
   return "artifact.refresh_failed";
 }
 
-async function loadPinnedFunction(
+export async function loadPinnedFunction(
   db: Database.Database,
   projectRoot: string,
   functionId: string,
@@ -638,7 +638,7 @@ async function refreshLocked(
     for (let index = 0; index < manifest.bindings.length; index += 1) {
       const binding = manifest.bindings[index]!;
       if (!runnable.has(binding.id)) continue;
-      const outcome = await refreshBinding(db, deps.projectRoot, owner, binding, index, invoke);
+      const outcome = await executeLiveBinding(db, deps.projectRoot, owner, binding, index, invoke);
       if (outcome.code) errors.push({ binding_id: binding.id, code: outcome.code });
       else if (outcome.valueJson !== undefined) {
         ready.push({ binding, valueJson: outcome.valueJson, duration: outcome.duration ?? 0 });
@@ -678,11 +678,8 @@ async function refreshLocked(
           fetched_at: fetchedAt,
           duration_ms: Math.max(0, Math.round(item.duration)),
         });
-        db.prepare(
-          `DELETE FROM artifact_snapshots
-            WHERE artifact_key = ? AND binding_id = ? AND args_hash != ?`,
-        ).run(key, item.binding.id, hash);
       }
+
       const snapshots = snapshotRows(db, key);
       const state = liveRefreshState(snapshots, manifest.bindings, errors.length > 0);
       const lastError = errors[0]?.code ?? null;
@@ -758,26 +755,27 @@ function outputFailure(definition: FunctionDefinition, value: unknown): string |
   }
 }
 
-async function refreshBinding(
+export async function executeLiveBinding(
   db: Database.Database,
   projectRoot: string,
   owner: ArtifactOwner,
   binding: LiveBinding,
   index: number,
   invoke: NonNullable<ArtifactRefreshDeps["invoke"]>,
+  pinned?: { definition: FunctionDefinition; revision: number },
 ): Promise<{ code?: string; valueJson?: string; duration?: number }> {
   try {
-    const pinned = await loadPinnedFunction(db, projectRoot, binding.function);
-    const checked = await checkBinding(projectRoot, owner, binding, index, pinned?.definition);
+    const loaded = pinned ?? (await loadPinnedFunction(db, projectRoot, binding.function));
+    const checked = await checkBinding(projectRoot, owner, binding, index, loaded?.definition);
     if (checked.failure) return { code: checked.failure.code };
-    if (!pinned) return { code: "artifact.function_changed" };
+    if (!loaded) return { code: "artifact.function_changed" };
     const started = Date.now();
     let view: FunctionRunView;
     try {
       view = await invoke(projectRoot, {
         functionId: binding.function,
         kind: "tool",
-        revision: pinned.revision,
+        revision: loaded.revision,
         input: { kind: "tool", input: binding.args, envelope: null },
         historyKind: "artifact",
         grants: checked.grants,
@@ -790,7 +788,7 @@ async function refreshBinding(
     }
     const duration = view.durationMs > 0 ? view.durationMs : Date.now() - started;
     if (!view.ok) return { code: errorCode(view) };
-    if (outputFailure(pinned.definition, view.value ?? null)) return { code: "invalid_output" };
+    if (outputFailure(loaded.definition, view.value ?? null)) return { code: "invalid_output" };
     const limit = snapshotShapeLimit(view.value ?? null);
     if (limit === "depth") return { code: "artifact.refresh_failed" };
     if (limit === "nodes" || snapshotSerializedTooLarge(view.value ?? null)) {

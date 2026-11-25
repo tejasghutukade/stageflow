@@ -22,6 +22,7 @@ import {
   readArtifact,
 } from "../artifacts/query.js";
 import { catalogRootsForArtifacts } from "../artifacts/projectScope.js";
+import { bindingQueryHttpStatus, queryBinding } from "../artifacts/bindingQuery.js";
 import { refreshHttpStatus } from "../artifacts/refreshPolicy.js";
 import { readArtifactSnapshots, refreshArtifact, type ArtifactRefreshDeps } from "../artifacts/refresh.js";
 import type { ArtifactOwner } from "../artifacts/record.js";
@@ -30,6 +31,7 @@ import { artifactVersionKind, listArtifactVersions, readArtifactVersionRow } fro
 type Json = (res: ServerResponse, status: number, body: unknown) => void;
 
 const MAX_PUBLISH_BODY_BYTES = 8 * 1024 * 1024;
+const MAX_LIVE_POST_BODY_BYTES = 64 * 1024;
 
 function sendError(
   json: Json,
@@ -73,13 +75,13 @@ function parseVersionQuery(raw: string | null): number | undefined {
   return Number(raw);
 }
 
-async function readLimitedJson(req: IncomingMessage): Promise<unknown> {
+async function readLimitedJson(req: IncomingMessage, maxBytes = MAX_PUBLISH_BODY_BYTES): Promise<unknown> {
   const chunks: Buffer[] = [];
   let received = 0;
   for await (const chunk of req) {
     const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
     received += buffer.length;
-    if (received > MAX_PUBLISH_BODY_BYTES) {
+    if (received > maxBytes) {
       throw new ArtifactPublishError(413, "artifact.too_large", "Request body is too large", [
         { path: "content", message: "request body is too large" },
       ]);
@@ -318,6 +320,49 @@ function refreshRequestFromBody(body: unknown): { bindingIds?: string[]; ifStale
   };
 }
 
+function queryRequestFromBody(body: unknown): { bindingId: string; args?: Record<string, unknown>; ifStale?: boolean } {
+  if (!isRecord(body)) {
+    throw new ArtifactPublishError(400, "artifact.invalid_shape", "Query body must be an object", [
+      { path: "body", message: "must be an object" },
+    ]);
+  }
+  for (const key of Object.keys(body)) {
+    if (key !== "binding_id" && key !== "args" && key !== "ifStale") {
+      throw new ArtifactPublishError(400, "artifact.invalid_shape", "Query body has an unknown field", [
+        { path: key, message: "is not a query field" },
+      ]);
+    }
+  }
+  if (typeof body.binding_id !== "string" || body.binding_id.length === 0) {
+    throw new ArtifactPublishError(400, "artifact.invalid_shape", "binding_id is required", [
+      { path: "binding_id", message: "is required" },
+    ]);
+  }
+  let args: Record<string, unknown> | undefined;
+  if (Object.prototype.hasOwnProperty.call(body, "args")) {
+    if (body.args === null || typeof body.args !== "object" || Array.isArray(body.args)) {
+      throw new ArtifactPublishError(400, "artifact.binding_args_invalid", "Binding arguments are not valid", [
+        { path: "args", message: "must be an object" },
+      ]);
+    }
+    args = body.args as Record<string, unknown>;
+  }
+  let ifStale: boolean | undefined;
+  if (Object.prototype.hasOwnProperty.call(body, "ifStale")) {
+    if (typeof body.ifStale !== "boolean") {
+      throw new ArtifactPublishError(400, "artifact.invalid_shape", "ifStale must be a boolean", [
+        { path: "ifStale", message: "must be a boolean" },
+      ]);
+    }
+    ifStale = body.ifStale;
+  }
+  return {
+    bindingId: body.binding_id,
+    ...(args !== undefined ? { args } : {}),
+    ...(ifStale !== undefined ? { ifStale } : {}),
+  };
+}
+
 function storageKeyFor(record: {
   id: string;
   project: { id: string };
@@ -343,9 +388,10 @@ export async function handleArtifactRoutes(
   const versions = /^\/api\/artifacts\/([^/]+)\/([^/]+)\/versions$/.exec(pathname);
   const content = /^\/api\/artifacts\/([^/]+)\/([^/]+)\/content$/.exec(pathname);
   const refresh = /^\/api\/artifacts\/([^/]+)\/([^/]+)\/refresh$/.exec(pathname);
+  const query = /^\/api\/artifacts\/([^/]+)\/([^/]+)\/query$/.exec(pathname);
   const data = /^\/api\/artifacts\/([^/]+)\/([^/]+)\/data$/.exec(pathname);
   const record = /^\/api\/artifacts\/([^/]+)\/([^/]+)$/.exec(pathname);
-  if (!list && versions === null && content === null && refresh === null && data === null && record === null) return false;
+  if (!list && versions === null && content === null && refresh === null && query === null && data === null && record === null) return false;
   if (list && method !== "GET" && method !== "POST") {
     json(res, 405, { error: "Method not allowed", code: "artifact.invalid_shape" });
     return true;
@@ -358,7 +404,7 @@ export async function handleArtifactRoutes(
     json(res, 405, { error: "Method not allowed", code: "artifact.invalid_shape" });
     return true;
   }
-  if (refresh && method !== "POST") {
+  if ((refresh || query) && method !== "POST") {
     json(res, 405, { error: "Method not allowed", code: "artifact.invalid_shape" });
     return true;
   }
@@ -396,7 +442,7 @@ export async function handleArtifactRoutes(
       json(res, 200, page);
       return true;
     }
-    const match = versions ?? content ?? refresh ?? data ?? record;
+    const match = versions ?? content ?? refresh ?? query ?? data ?? record;
     const ownerKey = decodeURIComponent(match![1]!);
     const id = decodeURIComponent(match![2]!);
     const projectRoot = url.searchParams.get("project_root") ?? undefined;
@@ -411,7 +457,7 @@ export async function handleArtifactRoutes(
       json(res, 200, { versions: listArtifactVersions(db, storageKeyFor(artifact), artifact.version) });
       return true;
     }
-    if (refresh || data) {
+    if (refresh || query || data) {
       const artifact = readArtifact(db, ownerKey, id, projectRoot, roots);
       const root = roots.find((item) => item.project_root === artifact.project.id);
       const storageKey = storageKeyFor(artifact);
@@ -419,7 +465,42 @@ export async function handleArtifactRoutes(
         json(res, 200, readArtifactSnapshots(db, storageKey));
         return true;
       }
-      const body = await readLimitedJson(req);
+      if (query) {
+        const body = await readLimitedJson(req, MAX_LIVE_POST_BODY_BYTES);
+        const request = queryRequestFromBody(body);
+        const controller = new AbortController();
+        const onClose = () => {
+          if (res.writableFinished !== true) controller.abort();
+        };
+        if (typeof res.once === "function") res.once("close", onClose);
+        const clientGone = () =>
+          controller.signal.aborted || res.writableFinished === true || res.destroyed === true;
+        try {
+          const result = await queryBinding(
+            db,
+            {
+              projectRoot: root?.path ?? artifact.project.id,
+              ...(refreshInvokeForTests ? { invoke: refreshInvokeForTests } : {}),
+            },
+            storageKey,
+            {
+              bindingId: request.bindingId,
+              ...(request.args !== undefined ? { args: request.args } : {}),
+              ...(request.ifStale !== undefined ? { ifStale: request.ifStale } : {}),
+              signal: controller.signal,
+            },
+          );
+          if (clientGone()) return true;
+          json(res, bindingQueryHttpStatus(result), result);
+        } catch (error) {
+          if (clientGone() || (error instanceof Error && error.name === "AbortError")) return true;
+          throw error;
+        } finally {
+          if (typeof res.removeListener === "function") res.removeListener("close", onClose);
+        }
+        return true;
+      }
+      const body = await readLimitedJson(req, MAX_LIVE_POST_BODY_BYTES);
       const request = refreshRequestFromBody(body);
       const controller = new AbortController();
       const onClose = () => {

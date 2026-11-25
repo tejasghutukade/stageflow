@@ -18,6 +18,8 @@ import {
   worktreePathForRun,
 } from "./repositoryMaterialize.js";
 import { deleteRunEverywhere } from "./runDeletion.js";
+import { pruneFunctionInvocations } from "../functions/history.js";
+import { sqliteConnectionFromStore } from "../runstore/createStore.js";
 
 // Slot 6: $STAGEFLOW_HOME/cache is shared dependency state — never walk or
 // delete it from slim/purge; health reports it as disk.cache_bytes separately.
@@ -437,6 +439,16 @@ export async function runRetentionSweep(
     ttlMs: bareCacheTtlMs,
     execute,
   });
+
+  if (execute) {
+    try {
+      const db = sqliteConnectionFromStore(store);
+      if (db) pruneFunctionInvocations(db, now, env);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`runRetentionSweep: function history prune failed: ${message}`);
+    }
+  }
 
   return { slimmed, purged, bareCachesEvicted };
 }

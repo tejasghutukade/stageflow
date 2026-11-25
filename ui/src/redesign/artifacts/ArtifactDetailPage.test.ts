@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ArtifactRecord } from "../../api/artifacts";
 import { ArtifactDetailView } from "./ArtifactDetailPage";
-import { artifactDetailMeta, artifactVersionRows, deleteArtifactConfirm, formatLiveRefreshed, formatLiveSnapshotJson, liveExpiryPreview, LIVE_RENDERER_NOTE, LIVE_SNAPSHOT_DISPLAY_MAX_BYTES, LIVE_VERSION_SNAPSHOT_NOTE, recordForViewedVersion, viewingVersionBanner } from "./artifactDetailModel";
+import { artifactDetailMeta, artifactVersionRows, deleteArtifactConfirm, formatLiveRefreshed, formatLiveSnapshotJson, liveExpiryPreview, LIVE_SNAPSHOT_DISPLAY_MAX_BYTES, LIVE_VERSION_SNAPSHOT_NOTE, recordForViewedVersion, viewingVersionBanner } from "./artifactDetailModel";
 import { expiredReasonText, previewFromContent } from "./renderers/previewModel";
 
 function record(patch: Partial<ArtifactRecord> = {}): ArtifactRecord {
@@ -259,7 +259,8 @@ describe("artifact detail", () => {
       onRefresh: () => undefined,
       onBack: () => undefined,
     }));
-    expect(html).toContain(LIVE_RENDERER_NOTE);
+    expect(html).toContain("Loading live preview…");
+    expect(html).toContain("Program source");
     expect(html).toContain("card");
     expect(html).toContain("rows");
     expect(html).toContain("revenue_by_week");
@@ -309,7 +310,7 @@ describe("artifact detail", () => {
     }));
     expect(expiredHtml).toContain("artifact-unavailable");
     expect(expiredHtml).toContain(expiredReasonText("run_deleted"));
-    expect(expiredHtml).not.toContain(LIVE_RENDERER_NOTE);
+    expect(expiredHtml).not.toContain("Program source");
     expect(expiredHtml).not.toContain("Refresh now");
 
     const unavailable = liveExpiryPreview(record({ kind: "live.declarative", title: "Weekly" }), true, "This artifact has expired");
@@ -323,7 +324,7 @@ describe("artifact detail", () => {
       onBack: () => undefined,
     }));
     expect(unavailableHtml).toContain("This artifact has expired");
-    expect(unavailableHtml).not.toContain(LIVE_RENDERER_NOTE);
+    expect(unavailableHtml).not.toContain("Program source");
     expect(unavailableHtml).not.toContain("Refresh now");
   });
 });

@@ -620,6 +620,25 @@ describe("openui telemetry guard", () => {
     expect(() => assertOpenUiTelemetryDisabled({ OPENUI_TELEMETRY_DISABLED: "" })).toThrow(/OPENUI_TELEMETRY_DISABLED/);
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { allowScripts?: Record<string, boolean> };
     expect(Object.keys(pkg.allowScripts ?? {}).some((name) => name.startsWith("@openuidev/"))).toBe(false);
+    const uiPkg = JSON.parse(readFileSync("ui/package.json", "utf8")) as { allowScripts?: Record<string, boolean> };
+    expect(Object.keys(uiPkg.allowScripts ?? {}).some((name) => name.startsWith("@openuidev/"))).toBe(false);
+    const lock = JSON.parse(readFileSync("package-lock.json", "utf8")) as unknown;
+    const scripts: string[] = [];
+    const walk = (value: unknown) => {
+      if (!value || typeof value !== "object") return;
+      if (Array.isArray(value)) {
+        for (const item of value) walk(item);
+        return;
+      }
+      for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+        if (key === "allowScripts" && child && typeof child === "object" && !Array.isArray(child)) {
+          scripts.push(...Object.keys(child as Record<string, unknown>));
+        }
+        walk(child);
+      }
+    };
+    walk(lock);
+    expect(scripts.some((name) => name.startsWith("@openuidev/"))).toBe(false);
     const installed = JSON.parse(readFileSync("node_modules/@openuidev/lang-core/package.json", "utf8")) as {
       scripts?: { postinstall?: string };
     };

@@ -59,6 +59,7 @@
     "ui:dev": "npm run dev -w ui",
     "ui:build": "npm run build -w ui && npm run copy:ui-dist",
     "ui:test": "npm run test -w ui",
+    "ui:budget": "node ui/scripts/check-live-chunk-budget.mjs",
     "ui:astryx": "npm run astryx -w ui",
     "copy:ui-dist": "tsx scripts/copy-ui-dist.ts",
     "verify:pack": "tsx scripts/verify-pack.ts",

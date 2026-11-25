@@ -219,8 +219,8 @@ export class FunctionInvoker {
     });
   }
 
-  list(projectRoot: string, functionId: string): FunctionInvocationView[] {
-    return listFunctionInvocations(this.db, agentProjectKey(projectRoot), functionId);
+  list(projectRoot: string, functionId: string, limit?: number): FunctionInvocationView[] {
+    return listFunctionInvocations(this.db, agentProjectKey(projectRoot), functionId, limit);
   }
 
   cancel(invocationId: string): Promise<void> {

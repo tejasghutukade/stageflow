@@ -1,3 +1,4 @@
+import type { BindingQueryResult } from "../artifacts/bindingQuery.js";
 import type { ArtifactRefreshResult } from "../artifacts/refresh.js";
 import type { ArtifactOwner, ArtifactLiveView, ArtifactRecord } from "../artifacts/record.js";
 import { publicArtifactKey } from "../artifacts/keys.js";
@@ -103,6 +104,20 @@ function formatRefreshPolicy(refresh: ArtifactLiveView["refresh"]): string {
   if (refresh.ttl_seconds !== undefined) parts.push(`ttl_seconds=${refresh.ttl_seconds}`);
   if (refresh.auto_seconds !== undefined) parts.push(`auto_seconds=${refresh.auto_seconds}`);
   return parts.length > 0 ? parts.join(" ") : "-";
+}
+
+export function formatArtifactQuery(result: BindingQueryResult): string {
+  const snapshot = result.snapshot;
+  const lines = [
+    `binding: ${result.binding_id}`,
+    `args_hash: ${result.args_hash}`,
+    `source: ${snapshot?.source ?? "-"}`,
+    `status: ${snapshot?.status ?? "-"}`,
+  ];
+  if (snapshot?.error_code) lines.push(`snapshot_error: ${snapshot.error_code}`);
+  for (const error of result.errors) lines.push(`error: ${error.code}`);
+  if (result.retry_after_seconds !== undefined) lines.push(`retry_after_seconds: ${result.retry_after_seconds}`);
+  return lines.join("\n");
 }
 
 export function formatArtifactRefresh(result: ArtifactRefreshResult): string {

@@ -53,6 +53,7 @@ export type ArtifactLiveView = {
   bindings: Array<{ id: string; function: string; args: Record<string, unknown> }>;
   refresh?: { on_view?: boolean; ttl_seconds?: number; auto_seconds?: number };
   library?: { name: string; version: string };
+  format?: string;
 };
 
 export type ArtifactRow = {
@@ -144,6 +145,7 @@ function liveView(row: ArtifactRow): { live: ArtifactLiveView } | Record<string,
     last_refreshed_at: row.last_refreshed_at ?? null,
     last_error_code: row.last_error_code ?? null,
     bindings: manifest?.bindings ?? [],
+    ...(manifest?.format ? { format: manifest.format } : {}),
     ...(manifest?.library ? { library: manifest.library } : {}),
     ...(manifest?.refresh ? { refresh: manifest.refresh } : {}),
   };

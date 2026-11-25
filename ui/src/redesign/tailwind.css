@@ -1,4 +1,4 @@
-@layer theme, base, sf-components, components, utilities;
+@layer theme, base, openui, sf-components, components, utilities;
 
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities) important;

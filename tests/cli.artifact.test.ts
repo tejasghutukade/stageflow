@@ -932,5 +932,58 @@ stages:
       }),
     ).toBe(1);
     expect(JSON.parse(badBinding.stdout.join("\n")).code).toBe("artifact.invalid_shape");
+    expect(ARTIFACT_USAGE).toContain("sf artifact query");
+    const queried = captureIo();
+    expect(
+      await runArtifactCommand(
+        ["query", key, "--binding", "rows", "--args", "{\"weeks\":4}", "--project-root", projectRoot, "--json"],
+        { cwd: projectRoot, projectRoot, io: queried.io },
+      ),
+    ).toBe(0);
+    const queriedBody = JSON.parse(queried.stdout.join("\n")) as {
+      binding_id: string;
+      snapshot: { source?: string; value: { weeks: number } } | null;
+      errors: unknown[];
+    };
+    expect(queriedBody.binding_id).toBe("rows");
+    expect(queriedBody.errors).toEqual([]);
+    expect(queriedBody.snapshot?.value).toEqual({ weeks: 4 });
+    expect(queriedBody.snapshot?.source).toBe("executed");
+    const cachedQuery = captureIo();
+    expect(
+      await runArtifactCommand(["query", key, "--binding", "rows", "--args", "{\"weeks\":4}", "--if-stale", "--project-root", projectRoot, "--json"], {
+        cwd: projectRoot,
+        projectRoot,
+        io: cachedQuery.io,
+      }),
+    ).toBe(0);
+    expect(JSON.parse(cachedQuery.stdout.join("\n")).snapshot.source).toBe("cache");
+    const human = captureIo();
+    expect(
+      await runArtifactCommand(["query", key, "--binding", "rows", "--args", "{\"weeks\":4}", "--project-root", projectRoot], {
+        cwd: projectRoot,
+        projectRoot,
+        io: human.io,
+      }),
+    ).toBe(0);
+    expect(human.stdout.join("\n")).toContain("source: cache");
+    expect(human.stdout.join("\n")).not.toContain("weeks");
+    const forced = captureIo();
+    expect(
+      await runArtifactCommand(
+        ["query", key, "--binding", "rows", "--args", "{\"weeks\":4}", "--no-if-stale", "--project-root", projectRoot, "--json"],
+        { cwd: projectRoot, projectRoot, io: forced.io },
+      ),
+    ).toBe(0);
+    expect(JSON.parse(forced.stdout.join("\n")).snapshot.source).toBe("executed");
+    const badQuery = captureIo();
+    expect(
+      await runArtifactCommand(["query", key, "--binding", "nope", "--project-root", projectRoot, "--json"], {
+        cwd: projectRoot,
+        projectRoot,
+        io: badQuery.io,
+      }),
+    ).toBe(1);
+    expect(JSON.parse(badQuery.stdout.join("\n")).code).toBe("artifact.invalid_shape");
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import {
   ArtifactRequestError,
   deleteArtifact,
@@ -23,7 +23,6 @@ import {
   formatLiveRefreshed,
   formatLiveSnapshotJson,
   liveExpiryPreview,
-  LIVE_RENDERER_NOTE,
   LIVE_VERSION_SNAPSHOT_NOTE,
   recordForViewedVersion,
   viewingVersionBanner,
@@ -35,6 +34,11 @@ import { autoRefreshNote, formatUpdatedAgo } from "./liveRefreshSchedule";
 import { useLiveArtifactData } from "./useLiveArtifactData";
 import { previewFromContent, type StaticPreview } from "./renderers/previewModel";
 import { StaticArtifactBody } from "./renderers/StaticPreview";
+import type { LivePreviewInput } from "./livePreview";
+
+const LiveArtifactRenderer = lazy(() =>
+  import("./live/LiveArtifactRenderer").then((mod) => ({ default: mod.LiveArtifactRenderer })),
+);
 
 function MetaLine({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -238,6 +242,7 @@ export function ArtifactDetailView({
   autoNote,
   nowMs,
   onRefresh,
+  livePreview,
 }: {
   meta: ArtifactDetailMeta;
   preview: StaticPreview | null;
@@ -266,6 +271,7 @@ export function ArtifactDetailView({
   autoNote?: string | null;
   nowMs?: number;
   onRefresh?: () => void;
+  livePreview?: LivePreviewInput | null;
 }) {
   const showLiveProgram = meta.kind === "live.declarative" && preview?.mode !== "unavailable";
   const refresh = preview?.mode === "unavailable" ? undefined : onRefresh;
@@ -289,8 +295,17 @@ export function ArtifactDetailView({
             <StaticArtifactBody preview={preview} imageUrl={imageUrl} imageAlt={meta.title} />
           ) : showLiveProgram ? (
             <div>
-              <p className="mb-3 text-[13px] text-[var(--sf-text-2)]">{LIVE_RENDERER_NOTE}</p>
-              <pre className="sf-mono whitespace-pre-wrap text-[13px] text-[var(--sf-text-1)]">{program ?? ""}</pre>
+              {livePreview ? (
+                <Suspense fallback={<p className="text-[13px] text-[var(--sf-text-3)]">Loading live preview…</p>}>
+                  <LiveArtifactRenderer {...livePreview} />
+                </Suspense>
+              ) : (
+                <p className="text-[13px] text-[var(--sf-text-3)]">Loading live preview…</p>
+              )}
+              <details className="mt-4">
+                <summary className="cursor-pointer text-[13px] text-[var(--sf-text-2)]">Program source</summary>
+                <pre className="sf-mono mt-2 whitespace-pre-wrap text-[13px] text-[var(--sf-text-1)]">{program ?? ""}</pre>
+              </details>
             </div>
           ) : preview ? (
             <StaticArtifactBody preview={preview} imageUrl={imageUrl} imageAlt={meta.title} />
@@ -575,6 +590,26 @@ export function ArtifactDetailPage({
       }
       onRefresh={
         expiry || displayRecord.kind !== "live.declarative" || viewing !== null ? undefined : () => live.refresh()
+      }
+      livePreview={
+        expiry || displayRecord.kind !== "live.declarative"
+          ? null
+          : {
+              format: displayRecord.live?.format,
+              library: displayRecord.live?.library,
+              program: view.preview && "text" in view.preview ? view.preview.text : payload?.kind === "text" ? payload.text : "",
+              bindings: displayRecord.live?.bindings ?? [],
+              snapshots: live.snapshots,
+              status: live.status,
+              lastRefreshedAt: live.lastRefreshedAt,
+              lastErrorCode: live.lastErrorCode,
+              settled: live.settled,
+              refreshing: live.refreshing,
+              historical: viewing !== null,
+              ownerKey,
+              artifactId: id,
+              projectRoot,
+            }
       }
       onConfirmDelete={() => {
         if (deleting) return;

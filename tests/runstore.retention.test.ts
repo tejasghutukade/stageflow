@@ -756,3 +756,43 @@ describe("runRetentionSweep guards (U6)", () => {
     }
   });
 });
+
+describe("function invocation retention", () => {
+  it("prunes invocation rows during the sweep and logs an invalid limit without failing", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-fn-history-sweep-"));
+    temps.push(root);
+    const { store, connection } = createRunStoreWithConnection({ rootDir: root });
+    const now = new Date("2026-09-22T12:00:00.000Z");
+    const insert = connection.prepare(
+      `INSERT INTO function_invocations (
+         id, project_key, function_id, revision, source_hash, kind, status, duration_ms, code,
+         attachment_id, run_id, stage_id, attempt, session_id, created_at
+       ) VALUES (
+         @id, 'project', 'score', 1, 'hash', 'tool', 'succeeded', 1, NULL,
+         NULL, NULL, NULL, NULL, NULL, @created_at
+       )`,
+    );
+    for (let index = 0; index < 4; index += 1) {
+      insert.run({ id: `row-${index}`, created_at: new Date(now.getTime() - index * 1000).toISOString() });
+    }
+    await runRetentionSweep(store, undefined, {
+      now,
+      execute: true,
+      env: { STAGEFLOW_FUNCTION_HISTORY_MAX_ROWS: "2", STAGEFLOW_FUNCTION_HISTORY_DAYS: "30" },
+    });
+    const kept = connection.prepare(`SELECT id FROM function_invocations ORDER BY created_at DESC`).all() as Array<{ id: string }>;
+    expect(kept.map((row) => row.id)).toEqual(["row-0", "row-1"]);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await expect(
+      runRetentionSweep(store, undefined, {
+        now,
+        execute: true,
+        env: { STAGEFLOW_FUNCTION_HISTORY_DAYS: "nope" },
+      }),
+    ).resolves.toMatchObject({ slimmed: [], purged: [] });
+    expect(spy.mock.calls.some((args) => String(args[0]).includes("function history prune failed"))).toBe(true);
+    const still = connection.prepare(`SELECT COUNT(*) AS n FROM function_invocations`).get() as { n: number };
+    expect(still.n).toBe(2);
+    spy.mockRestore();
+  });
+});

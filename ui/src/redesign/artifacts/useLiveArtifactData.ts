@@ -35,11 +35,12 @@ export type LiveArtifactData = {
   lastError: string | null;
   unavailable: boolean;
   unavailableMessage: string | null;
+  settled: boolean;
 };
 
 export type LiveHttpBody = { status: number; body: unknown };
 
-function emptyData(record: ArtifactRecord | null): Omit<LiveArtifactData, "refresh"> {
+function emptyData(record: ArtifactRecord | null): Omit<LiveArtifactData, "refresh" | "settled"> {
   return {
     snapshots: [],
     status: record?.live?.status ?? null,
@@ -103,7 +104,7 @@ function outcomeFrom(data: ArtifactDataResponse): LiveScheduleOutcome {
   };
 }
 
-export function interpretStoredSnapshots(status: number, body: unknown): Omit<LiveArtifactData, "refresh" | "refreshing"> {
+export function interpretStoredSnapshots(status: number, body: unknown): Omit<LiveArtifactData, "refresh" | "refreshing" | "settled"> {
   if (status === 404 && isRecord(body) && body.code === "artifact.content_unavailable") {
     return {
       snapshots: [],
@@ -171,7 +172,7 @@ export function createLiveArtifactDataModel(input: {
   clock: LiveRefreshClock;
   loadStored: () => Promise<LiveHttpBody>;
   refresh: (request: LiveScheduleRequest) => Promise<LiveHttpBody>;
-  onChange: (state: Omit<LiveArtifactData, "refresh">) => void;
+  onChange: (state: Omit<LiveArtifactData, "refresh" | "settled">) => void;
 }): {
   start: () => Promise<void>;
   manual: () => void;
@@ -181,7 +182,7 @@ export function createLiveArtifactDataModel(input: {
   let state = emptyData(input.record);
   let stopped = false;
 
-  function emit(patch: Partial<Omit<LiveArtifactData, "refresh">>): void {
+  function emit(patch: Partial<Omit<LiveArtifactData, "refresh" | "settled">>): void {
     state = { ...state, ...patch };
     if (!stopped) input.onChange(state);
   }
@@ -242,7 +243,8 @@ export function createLiveArtifactDataModel(input: {
 }
 
 export function useLiveArtifactData(record: ArtifactRecord | null, options: UseLiveArtifactDataOptions): LiveArtifactData {
-  const [data, setData] = useState<Omit<LiveArtifactData, "refresh">>(() => emptyData(record));
+  const [data, setData] = useState<Omit<LiveArtifactData, "refresh" | "settled">>(() => emptyData(record));
+  const [settled, setSettled] = useState(false);
   const refreshRef = useRef<() => void>(() => undefined);
   const optionsRef = useRef(options);
   optionsRef.current = options;
@@ -266,6 +268,7 @@ export function useLiveArtifactData(record: ArtifactRecord | null, options: UseL
 
   useEffect(() => {
     const current = optionsRef.current;
+    setSettled(false);
     setData(emptyData(recordRef.current));
     const model = createLiveArtifactDataModel({
       record: recordRef.current,
@@ -294,7 +297,10 @@ export function useLiveArtifactData(record: ArtifactRecord | null, options: UseL
           ifStale: request.ifStale,
           signal: request.signal,
         }),
-      onChange: (state) => setData(state),
+      onChange: (state) => {
+        setData(state);
+        setSettled(true);
+      },
     });
     refreshRef.current = () => model.manual();
     const onVisibility = () => model.setVisible(document.visibilityState !== "hidden");
@@ -307,5 +313,5 @@ export function useLiveArtifactData(record: ArtifactRecord | null, options: UseL
     };
   }, [identity]);
 
-  return { ...data, refresh: () => refreshRef.current() };
+  return { ...data, settled, refresh: () => refreshRef.current() };
 }

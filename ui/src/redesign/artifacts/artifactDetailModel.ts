@@ -142,7 +142,6 @@ export function viewingVersionBanner(version: number, latest: number): string {
   return `Viewing version ${version} of ${latest}`;
 }
 
-export const LIVE_RENDERER_NOTE = "Live artifact: the visual renderer comes in a later update";
 export const LIVE_VERSION_SNAPSHOT_NOTE = "Snapshots are for the current version.";
 export const LIVE_SNAPSHOT_DISPLAY_MAX_BYTES = 32 * 1024;
 

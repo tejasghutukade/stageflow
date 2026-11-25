@@ -1,10 +1,28 @@
 import path from "node:path";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 const uiRoot = path.dirname(fileURLToPath(import.meta.url));
+const reactUiRoot = path.resolve(uiRoot, "../node_modules/@openuidev/react-ui");
+
+function openuiExtensionResolve(): Plugin {
+  return {
+    name: "openui-extension-resolve",
+    enforce: "pre",
+    resolveId(source, importer) {
+      if (!importer) return null;
+      const fromOpenUi = importer.includes(`${path.sep}@openuidev${path.sep}`) || importer.includes("/@openuidev/");
+      if (!fromOpenUi || !source.startsWith(".") || path.extname(source)) return null;
+      const base = path.resolve(path.dirname(importer), source);
+      if (existsSync(`${base}.js`)) return `${base}.js`;
+      if (existsSync(path.join(base, "index.js"))) return path.join(base, "index.js");
+      return null;
+    },
+  };
+}
 
 /** `/chat/<slug>` is its own page (chat.html); in dev, serve it for any chat path. */
 function chatPage(): Plugin {
@@ -21,7 +39,7 @@ function chatPage(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [tailwindcss(), react(), chatPage()],
+  plugins: [openuiExtensionResolve(), tailwindcss(), react(), chatPage()],
   resolve: {
     alias: {
       "@stageflow/workshop-catalog-filenames": path.resolve(
@@ -34,6 +52,8 @@ export default defineConfig({
       ),
       "@stageflow/guide-card-contract": path.resolve(uiRoot, "../src/guide/cardContract.ts"),
       "@stageflow/function-access": path.resolve(uiRoot, "../src/functions/accessDeclaration.ts"),
+      "@sf-openui": path.join(reactUiRoot, "dist/genui-lib"),
+      "@sf-openui-ui": path.join(reactUiRoot, "dist/components"),
     },
   },
   server: {
@@ -57,10 +77,21 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    modulePreload: {
+      resolveDependencies(_filename, deps) {
+        return deps.filter((dep) => !dep.includes("live-renderer"));
+      },
+    },
     rollupOptions: {
       input: {
         main: path.resolve(uiRoot, "index.html"),
         chat: path.resolve(uiRoot, "chat.html"),
+      },
+      output: {
+        chunkFileNames(chunk) {
+          if (chunk.moduleIds.some((id) => id.replaceAll("\\", "/").includes("/redesign/artifacts/live/"))) return "assets/live-renderer-[hash].js";
+          return "assets/[name]-[hash].js";
+        },
       },
     },
   },

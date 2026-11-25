@@ -1,10 +1,10 @@
-import type { ArtifactRefreshResult } from "./refresh.js";
 import { refreshLeaderEntered, tryBeginRefreshLeader } from "./refresh.js";
 
 export type RefreshShareOptions = {
   bindingIds?: readonly string[];
   bindingIdsIssuePath?: string;
   ifStale?: boolean;
+  coalesceNonCache?: boolean;
   skipBindingIds?: readonly string[];
   signal?: AbortSignal;
 };
@@ -14,7 +14,7 @@ type Flight = {
   excludes: readonly string[];
   ifStale: boolean;
   joiners: number;
-  promise: Promise<ArtifactRefreshResult>;
+  promise: Promise<unknown>;
 };
 
 /** Joiners only wait on a shared promise. Past this, a joiner is refused for memory safety. */
@@ -83,6 +83,7 @@ function covers(flight: Flight, options: RefreshShareOptions): boolean {
 }
 
 function overlaps(flight: Flight, options: RefreshShareOptions): boolean {
+  if (!sharesExecution(flight, options)) return false;
   if (flight.bindingIds === undefined && flight.excludes.length === 0) return true;
   if (options.bindingIds === undefined && (options.skipBindingIds?.length ?? 0) === 0 && flight.bindingIds === undefined) {
     return true;
@@ -115,7 +116,7 @@ const JOIN_CAPACITY = Symbol("join-capacity");
 async function joinFlight(
   flight: Flight,
   signal: AbortSignal | undefined,
-): Promise<ArtifactRefreshResult | typeof JOIN_CAPACITY> {
+): Promise<unknown | typeof JOIN_CAPACITY> {
   if (signal?.aborted) throw abortRefreshError();
   if (flight.joiners >= REFRESH_JOINERS_PER_FLIGHT) return JOIN_CAPACITY;
   flight.joiners += 1;
@@ -145,43 +146,44 @@ function stillNeeded(
   return { done: false, skipBindingIds: [...skip] };
 }
 
-export async function coordinateRefresh(
+export async function coordinateRefresh<T>(
   key: string,
   options: RefreshShareOptions,
-  start: () => Promise<ArtifactRefreshResult>,
-  again: (options: RefreshShareOptions) => Promise<ArtifactRefreshResult>,
+  start: () => Promise<T>,
+  again: (options: RefreshShareOptions) => Promise<T>,
   hooks: {
-    onCapacity: () => ArtifactRefreshResult;
-    freshCache?: () => ArtifactRefreshResult | undefined;
+    onCapacity: () => T;
+    freshCache?: () => T | undefined;
   },
-): Promise<ArtifactRefreshResult> {
-  const joinable = options.ifStale === true;
+): Promise<T> {
+  const joinable = options.ifStale === true || options.coalesceNonCache === true;
   if (joinable) {
     const active = listFlights(key);
     const covering = active.find((flight) => covers(flight, options));
     if (covering) {
       const joined = await joinFlight(covering, options.signal);
       if (joined === JOIN_CAPACITY) return hooks.onCapacity();
-      return joined;
+      return joined as T;
     }
     const overlapping = active.filter((flight) => overlaps(flight, options));
     if (overlapping.length > 0) {
       if (options.signal?.aborted) throw abortRefreshError();
-      let last: ArtifactRefreshResult | undefined;
+      let last: T | undefined;
       for (const flight of overlapping) {
         const joined = await joinFlight(flight, options.signal);
         if (joined === JOIN_CAPACITY) return hooks.onCapacity();
-        last = joined;
+        last = joined as T;
       }
       if (options.signal?.aborted) throw abortRefreshError();
       const needed = stillNeeded(options, overlapping);
       if (needed.done) {
-        if (!last) throw abortRefreshError();
+        if (last === undefined) throw abortRefreshError();
         return last;
       }
       const next: RefreshShareOptions = {
         ...(options.bindingIdsIssuePath ? { bindingIdsIssuePath: options.bindingIdsIssuePath } : {}),
         ...(options.ifStale === true ? { ifStale: true } : {}),
+        ...(options.coalesceNonCache === true ? { coalesceNonCache: true } : {}),
         ...(options.signal ? { signal: options.signal } : {}),
       };
       if (needed.bindingIds) next.bindingIds = needed.bindingIds;
@@ -193,9 +195,9 @@ export async function coordinateRefresh(
   }
 
   if (!tryBeginRefreshLeader(key)) return hooks.onCapacity();
-  let resolveRun!: (result: ArtifactRefreshResult) => void;
+  let resolveRun!: (result: T) => void;
   let rejectRun!: (error: unknown) => void;
-  const run = new Promise<ArtifactRefreshResult>((resolve, reject) => {
+  const run = new Promise<T>((resolve, reject) => {
     resolveRun = resolve;
     rejectRun = reject;
   });

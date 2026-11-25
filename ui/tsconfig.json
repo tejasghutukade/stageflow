@@ -27,7 +27,9 @@
       ],
       "@stageflow/function-access": [
         "../src/functions/accessDeclaration.ts"
-      ]
+      ],
+      "@sf-openui/*": ["../node_modules/@openuidev/react-ui/dist/genui-lib/*"],
+      "@sf-openui-ui/*": ["../node_modules/@openuidev/react-ui/dist/components/*"]
     }
   },
   "include": ["src"]

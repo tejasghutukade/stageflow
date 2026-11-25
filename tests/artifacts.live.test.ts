@@ -4,6 +4,19 @@ import { connect as netConnect } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const scrubCalls = vi.hoisted(() => ({ n: 0 }));
+
+vi.mock("../src/compaction/scrub.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/compaction/scrub.js")>();
+  return {
+    ...actual,
+    scrubSecrets(text: string) {
+      scrubCalls.n += 1;
+      return actual.scrubSecrets(text);
+    },
+  };
+});
 import { createAgentPublishArtifactTool } from "../src/agents/artifactTools.js";
 import { agentProjectKey } from "../src/agents/store.js";
 import { setBindingCatalogReadForTests } from "../src/artifacts/bindings.js";
@@ -237,6 +250,7 @@ describe("live artifact publish and refresh", () => {
       status: null,
       last_refreshed_at: null,
       last_error_code: null,
+      format: "openui-lang",
       library: { name: "stageflow", version: "1.0.0" },
       refresh: { on_view: true, ttl_seconds: 30 },
       bindings: [{ id: "rows", function: "revenue_by_week", args: { weeks: 12 } }],
@@ -848,7 +862,10 @@ describe("live artifact fix pass", () => {
        ) VALUES (?, 'rows', 'old-hash', '{"n":1}', '2020-01-01T00:00:00.000Z', 1, 'ok')`,
     ).run(key);
     await refreshArtifact(db, { projectRoot: project, invoke: async () => okView({ weeks: 3 }) }, key);
-    expect(db.prepare(`SELECT COUNT(*) AS c FROM artifact_snapshots WHERE artifact_key = ?`).get(key)).toEqual({ c: 1 });
+    expect(db.prepare(`SELECT COUNT(*) AS c FROM artifact_snapshots WHERE artifact_key = ?`).get(key)).toEqual({ c: 2 });
+    expect(db.prepare(`SELECT args_hash FROM artifact_snapshots WHERE artifact_key = ? AND args_hash = 'old-hash'`).get(key)).toEqual({
+      args_hash: "old-hash",
+    });
     const same = await publishLive(store, project, { title: "Weekly renamed" });
     expect(same.unchanged).toBe(true);
     expect(db.prepare(`SELECT live_status FROM artifacts WHERE key = ?`).get(key)).toEqual({ live_status: "fresh" });
@@ -1350,13 +1367,18 @@ stages:
     const db = sqliteConnectionFromStore(store)!;
     const key = storageKey(project);
     const huge = "x".repeat(50 * 1024 * 1024);
+    const probed = scrubCalls.n;
+    scrubSnapshotValue("plain");
+    expect(scrubCalls.n).toBe(probed + 1);
+    const marked = scrubCalls.n;
     const started = Date.now();
     const result = await refreshArtifact(
       db,
       { projectRoot: project, invoke: async () => okView(huge) },
       key,
     );
-    expect(Date.now() - started).toBeLessThan(100);
+    expect(scrubCalls.n).toBe(marked);
+    expect(Date.now() - started).toBeLessThan(2_000);
     expect(result.last_error_code).toBe("artifact.snapshot_too_large");
   });
 
