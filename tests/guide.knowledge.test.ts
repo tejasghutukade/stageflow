@@ -47,6 +47,7 @@ describe("guide knowledge topics", () => {
       "triggers",
       "connections",
       "memories",
+      "artifacts",
       "evals",
       "models_and_providers",
       "mcp_skills_browser",
@@ -82,6 +83,9 @@ describe("searchGuideKnowledge", () => {
     ["what does stageflow not do", "limitations"],
     ["ask_first approvals sub_agents", "agents"],
     ["route entry clone chain", "pipelines"],
+    ["publish an artifact static.markdown", "artifacts"],
+    ["artifact expect stage invalid_artifacts", "artifacts"],
+    ["sf artifact list search Artifacts page", "artifacts"],
   ])("ranks %s first as %s", (query, expected) => {
     expect(searchGuideKnowledge(query)[0]?.topic.id).toBe(expected);
   });

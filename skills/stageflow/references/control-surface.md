@@ -82,11 +82,25 @@ Use `--json` on `sf run`, `sf run-stage`, `sf runs ...`, `sf validate`, `sf doct
 
 A waiting run is not a failure. Exit 2 means a human must answer: hand off to `stageflow-operate`. A `sf runs wait` that exits 0 does not mean the run finished; check `reason`.
 
+## Artifact index (MCP versus CLI)
+
+Published and indexed artifacts share one API. Add MCP toolset `artifacts` (`?toolsets=artifacts` or `all`); bare `/mcp` does not load it.
+
+| Job | MCP (`artifacts` toolset) | CLI |
+|---|---|---|
+| List or search | `get_artifact` with `list: true`, filters, `q`, `cursor` | `sf artifact list` (`--json`, same filters) |
+| Read record or bytes | `get_artifact` with `key`, `view: record`, `versions`, or `content` | `sf artifact show`, or content via REST/console |
+| Publish static file | `save_artifact` (pick `owner`) | `sf artifact publish` |
+| Delete published key | `delete_artifact` | `sf artifact delete` |
+| Read a run workspace path | `run_files` with `view: artifact` | `sf artifact read --run --path` |
+
+`sf artifact list` and `show` work host-down when the schema is current. Publish and delete need a Host. Authoring stage `artifacts:` is `stageflow-pipelines`; operating the index is `stageflow-operate`.
+
 ## Things only one surface can do
 
 - CLI only: `sf init`, `sf graph`, `sf migrate-yaml`, `sf backup`, `sf archive`, `sf restore`, `sf doctor`, `sf providers login`, `sf browser login`, `sf eval engine install`.
 - MCP or REST (or the console) only: creating and editing connections, memories, and project registration. There is no `sf connections` command.
-- Both: starting and answering runs, validating, listing the catalog, agents, evals. MCP is richer for live inspection; the CLI is simpler in CI.
+- Both: starting and answering runs, validating, listing the catalog, agents, evals, the artifact index (list/read; publish/delete need Host). MCP is richer for live inspection; the CLI is simpler in CI.
 
 When MCP is the only way (connections, memories), and no Host is up, tell the user to run `sf ui` or `sf mcp`, then connect the harness (`references/host-and-mcp.md`).
 

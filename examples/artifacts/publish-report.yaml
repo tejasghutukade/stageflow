@@ -1,0 +1,19 @@
+id: publish-report
+system_prompt: |
+  Write weekly-report.md (Markdown) and metrics-table.csv (two-column CSV) under the attempt
+  artifacts directory with write_stage_artifact. Call publish_artifact for weekly-report
+  (static.markdown) and metrics-table (static.table). When finished, call emit_stage_envelope
+  once with status success, summary, artifacts listing the files, and a payload object.
+model: CHANGE_ME/<provider-model>
+artifacts:
+  publish: true
+  expect:
+    - weekly-report
+    - metrics-table
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

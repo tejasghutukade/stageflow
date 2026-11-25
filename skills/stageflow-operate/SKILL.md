@@ -155,7 +155,8 @@ Read [references/runs.md](references/runs.md) first; it has the full table and t
 | Mark a running stage failed | `abandon_stage` | `sf runs abandon ...` |
 | Stop a whole run | `cancel_run` (`reason` required) | `sf runs cancel --run <id> --reason <text> --json` |
 | Start over from the same inputs | `start_run` with `from_run` (`pinned`) | `sf runs rerun --run <id> [--pinned] --json` |
-| Envelope, artifacts, diff | `get_stage` with `view: envelope`, `run_files` with `view: artifact`, `changes`, `diff`, or `file` | `sf envelope get`, `sf artifact read`, `sf export-run` |
+| Envelope, run files, diff | `get_stage` with `view: envelope`, `run_files` with `view: artifact`, `changes`, `diff`, or `file` | `sf envelope get`, `sf artifact read --run`, `sf export-run` |
+| Artifact index (list, show, publish, delete) | `get_artifact`, `save_artifact`, `delete_artifact` (toolset `artifacts`) | `sf artifact list`, `show`, `publish`, `delete` |
 | Delete, reclaim disk | `delete_runs`, `delete_runs` with `gc: true` | `sf runs delete --run <id> [--force]`, `sf runs gc [--dry-run]` |
 
 `stage_action` with `action: retry`, `stage_action` with `action: resume` and `start_run` with `from_run` start model work again: confirm first. Waiting stages cannot be retried or abandoned; answer them.
@@ -171,6 +172,7 @@ Each has a reference with the exact calls. Read it before acting.
 | Triggers (list, show, fire, enable, create) and A2A (callers, publications, status) | [references/triggers-and-a2a.md](references/triggers-and-a2a.md) |
 | Inbox, agent approvals, agent sessions and schedules at the operate level | [references/agents-and-inbox.md](references/agents-and-inbox.md) |
 | Backup, restore, export, retention, cost and usage | [references/backup-export-cost.md](references/backup-export-cost.md) |
+| Artifact index (console, CLI, MCP, backup scope) | [references/artifacts.md](references/artifacts.md) |
 | JSON shapes and exit codes of `sf run`, `sf runs`, `sf browser` and friends | [references/cli-json-and-exit-codes.md](references/cli-json-and-exit-codes.md) |
 
 ## Troubleshooting

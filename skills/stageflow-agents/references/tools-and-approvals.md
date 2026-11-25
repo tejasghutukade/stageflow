@@ -97,12 +97,18 @@ Put every granted tool whose risk is write, destructive, or external into `ask_f
 | `connections.cleanup` | | `remove_connection` |
 | `memories` | `get_memory` with `list: true`, `get_memory` | `save_memory` with `mode: create`, `mode: update`, or `card: true` |
 | `memories.cleanup` | | `delete_memory_card` |
+| `artifacts.read` | `stageflow_get_artifact` with `list: true`, or with `view: record`, `versions`, or `content` | `stageflow.get_artifact` |
+| `artifacts.write` | | `publish_artifact` (session tool; owner is this agent). Not Host MCP `save_artifact`. |
+| `artifacts.cleanup` | | `stageflow.delete_artifact` → `stageflow_delete_artifact` (this agent's rows in this project only) |
+| `artifacts.refresh` | (no tool yet) | |
 | `evals.read` | `get_eval` with `list: true` or `view: definition` or `calibrations`, `validate` with `kind: eval`, `get_eval_run` (list or `view: export`), `get_eval_results` (table or `case_id`), `compare_eval_runs`, `get_eval_failures` with `view: suggestions` or `sort_status` | |
 | `evals.run` | | `run_eval`, `sort_eval_failures`, `calibrate_eval_grader`, `cancel_eval_run`, `try_eval_case` |
 | `evals.write` | | `save_eval` with `mode: create`, `update`, or `source: sample`, `save_dataset` with `action: create`, `ops`, or `convert`, `review_eval_results` with `action: label`, `accept`, or `dismiss` |
 | `evals.cleanup` | | `delete_eval_run` |
 
 Web chat plus `get_agent_session` (including `list: true`) warns `agent.web_chat_reads_conversations`: the public link's agent can read every agent's sessions. Do not combine them.
+
+**Artifacts.** `publish_artifact` takes the same fields as a stage publish: `id`, `kind`, `title`, optional `description`, `tags`, `summary`, and one of `path`, `content`, or `content_base64`. Agent `path` is project-relative and passes the path guard (no `..`, symlinks, `agents/*.agent.yaml`, or `$STAGEFLOW_HOME` outside the project). Put secrets only in scrubbed content; never publish raw credentials. Listing and deleting: `stageflow-operate` `references/artifacts.md`.
 
 The live list is `GET /api/agents/stageflow-tools`. There is no CLI for that registry.
 

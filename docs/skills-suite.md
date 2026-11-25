@@ -14,9 +14,9 @@ Install the suite into a consumer project with `npx skills add tejasghutukade/st
 | Directory | Role |
 |-----------|------|
 | [`stageflow`](../skills/stageflow/SKILL.md) | Router, and setup: install the CLI, `sf init`, provider login, the Host, Docker, and troubleshooting. |
-| [`stageflow-pipelines`](../skills/stageflow-pipelines/SKILL.md) | Design, write, and repair pipelines, stages, and tasks. Includes turning a chat or a past session into a pipeline, and turning a repeating request into a reusable one. |
-| [`stageflow-agents`](../skills/stageflow-agents/SKILL.md) | Design, write, and test project agents: tools, approvals, MCP servers, memories, schedules, channels, and protected chat. |
-| [`stageflow-operate`](../skills/stageflow-operate/SKILL.md) | Start, watch, and answer runs. HITL uses the host native question UI when the gate maps; otherwise chat. Also connections, saved browser logins, triggers, A2A callers, and approvals. |
+| [`stageflow-pipelines`](../skills/stageflow-pipelines/SKILL.md) | Design, write, and repair pipelines, stages, and tasks. Includes stage `artifacts:` opt-in, `publish_artifact`, and the three meanings of "artifacts". Includes turning a chat or a past session into a pipeline, and turning a repeating request into a reusable one. |
+| [`stageflow-agents`](../skills/stageflow-agents/SKILL.md) | Design, write, and test project agents: tools, approvals, MCP servers, memories, schedules, channels, artifact grants (`artifacts.read` / `write` / `cleanup`), and protected chat. |
+| [`stageflow-operate`](../skills/stageflow-operate/SKILL.md) | Start, watch, and answer runs. HITL uses the host native question UI when the gate maps; otherwise chat. Also the artifact index (`sf artifact`, MCP `get_artifact`), connections, saved browser logins, triggers, A2A callers, and approvals. |
 | [`stageflow-evals`](../skills/stageflow-evals/SKILL.md) | Write, validate, run, compare, and sort evals of a stage or an agent. |
 
 When a Host is up and its tools are in the agent's tool list, prefer MCP. Otherwise use the CLI with `--json`. Commands that talk to the Host start a headless service on `127.0.0.1:3847` unless `STAGEFLOW_NO_AUTOSTART` is set or `STAGEFLOW_SERVICE_PORT` points somewhere else. Tool and command names live in [MCP](mcp.md) and [CLI reference](cli-reference.md). The shared rule is [`skills/stageflow/references/control-surface.md`](../skills/stageflow/references/control-surface.md).

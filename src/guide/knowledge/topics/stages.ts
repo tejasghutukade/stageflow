@@ -24,13 +24,14 @@ A stage is one step. Each attempt runs in a fresh agent session on the Host. A s
 | \`requires\` | no | \`[{ tool, version? }]\` binaries that must be on PATH. Checked before the run starts. | Stageflow never installs tools. |
 | \`browser\` | no | A real browser session (\`profile\`, \`headed\`, \`allow_domains\`, \`login_url\`, \`check\`). Adds an \`agent-browser\` requirement. | The agent drives a logged-in browser. \`allow_domains\` is not enforced for profile stages. Sites may forbid automation. |
 | \`channels\` | no | One send channel: \`connection\`, pinned \`to\`, \`operations: [send]\`. Gives the \`send_message\` tool. Body only. | Sends real messages. Only one channel per stage. Pi backend only. |
+| \`artifacts\` | no | \`{ publish: true, expect?: [ids] }\`. Gives \`publish_artifact\` when \`publish: true\`. Body only. | Durable deliverables in the keep store; \`expect\` is checked at emit. See **artifacts** topic. |
 | \`timeout_ms\` | no | Wall-clock budget per attempt. Default 3600000 (60 minutes). | On timeout the attempt fails but the session is kept so a person can Resume. |
 
 Pipeline-entry wiring (not body): \`route\`, \`entry\`, \`on_verify_fail\`, \`replay_safe\`, \`clone_cap\`, \`clone_mode\`. \`memories\` is pipeline-level only; a stage cannot list its own.
 
 ## Tools every stage has
 
-\`emit_stage_envelope\` (ends the stage), \`write_stage_artifact\` (durable files under the attempt artifacts folder — the only durable handoff write) and, when \`gate_kinds\` is non-empty, \`ask_operator\`. On Pi, stages also have the Pi coding agent's own file and shell tools (for example \`read\` and \`bash\`). With memories attached, Pi stages get \`read_memory\`, \`replace_memory\`, \`add_memory_card\`, \`update_memory_card\`, \`read_memory_card\`, \`search_memory_cards\`. With a channel, Pi stages get \`send_message\`.
+\`emit_stage_envelope\` (ends the stage), \`write_stage_artifact\` (durable files under the attempt artifacts folder — the only durable handoff write), and when \`artifacts.publish\` is true, \`publish_artifact\` (copies into the artifact index). When \`gate_kinds\` is non-empty, \`ask_operator\`. On Pi, stages also have the Pi coding agent's own file and shell tools (for example \`read\` and \`bash\`). With memories attached, Pi stages get \`read_memory\`, \`replace_memory\`, \`add_memory_card\`, \`update_memory_card\`, \`read_memory_card\`, \`search_memory_cards\`. With a channel, Pi stages get \`send_message\`.
 
 Artifact handoff: list paths from \`write_stage_artifact\` on emit (non-empty lists must exist on disk). Under a stage sandbox, a later stage reads each prior file at the sandbox path in its assignment (a file grant is the file itself, under \`/workspace/grants/<stage>/…\`) or takes facts from \`payload\` — not host \`stages/…/artifacts\` paths and not \`/workspace/work\`. \`write_stage\` create mode does not auto-add after-phase artifact \`verify\`; add that only when you need hard proof of a named file.
 

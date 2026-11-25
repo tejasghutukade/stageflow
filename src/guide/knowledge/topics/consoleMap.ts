@@ -17,7 +17,8 @@ The console runs at the Host's address (\`sf ui\`, default \`http://127.0.0.1:38
 - **Inbox** — \`#/inbox\` (home page). Tabs: **Needs you** (pipeline gates and agent approvals; answer here), **Failed** (\`#/inbox?tab=failed\`, retry a stage), **Done today** (\`#/inbox?tab=done_today\`).
 
 **Activity**
-- **Pipeline runs** — \`#/runs\`. Run list with filters. A run: \`#/runs/<runId>\`; a stage: \`#/runs/<runId>/stages/<stageId>\` (Transcript, Events, Envelope, Artifacts, and Retry / Resume / Abandon / answer panel); the envelope: \`#/runs/<runId>/stages/<stageId>/envelope\`; an artifact: \`#/runs/<runId>/artifacts?path=…\`.
+- **Pipeline runs** — \`#/runs\`. Run list with filters. A run: \`#/runs/<runId>\`; a stage: \`#/runs/<runId>/stages/<stageId>\` (Transcript, Events, Envelope, Artifacts, and Retry / Resume / Abandon / answer panel); the envelope: \`#/runs/<runId>/stages/<stageId>/envelope\`; a run file: \`#/runs/<runId>/artifacts?path=…\`.
+- **Artifacts** — \`#/artifacts\`. Published and indexed deliverables for the project (search, filters, detail \`#/artifacts/<ownerKey>/<id>\`). See the **artifacts** knowledge topic.
 - **Agent sessions** — \`#/agent-sessions\`. Sessions across all agents.
 
 **Build**
@@ -54,5 +55,6 @@ The console runs at the Host's address (\`sf ui\`, default \`http://127.0.0.1:38
 | Enable an agent, share its web chat link | \`#/agents/<id>\` |
 | Delete a memory card | \`#/memories/<id>\` |
 | Run or compare an eval | \`#/evals/<id>\` |
+| Find a published report or table | **Artifacts** \`#/artifacts\` |
 `,
 };

@@ -22,7 +22,9 @@ Nothing in that chain is specific to software delivery. The YAML describes the w
 
 **Session and run.** A run is one execution of a pipeline (or one agent conversation, when you are talking about agents). A stage session is the agent process for a single stage attempt. It is always new. Retry opens another attempt. Resume continues the interrupted one. An agent session is the transcript of a chat with a project agent. Eval sessions are agent sessions the eval runner opens. They are hidden from the normal session list.
 
-**Envelope and artifact.** The envelope is the structured handoff between stages: status and a payload that must match the stage's output schema. An artifact is a file the stage wrote that a later stage or a person can read. The envelope can point at an artifact. The artifact is not the envelope.
+**Envelope and artifact.** The envelope is the structured handoff between stages: status and a payload that must match the stage's output schema. The envelope's `artifacts` list names run files to **index** after success. **Published** artifacts use `publish_artifact` (stage opt-in or agent grant) and live in the keep store with versions. The envelope is not a published artifact row.
+
+**Three artifact words.** (1) Envelope `artifacts` paths → indexed run files. (2) `publish_artifact` → durable index rows. (3) Function `access.artifacts` → function read grants. Authoring: `stageflow-pipelines` `references/artifacts.md`. Finding them: `stageflow-operate` `references/artifacts.md`.
 
 **Gate and approval.** A gate is a pause inside a pipeline run (human in the loop). An approval is a project agent asking to use a tool. They are different queues. Answering a gate is `stageflow-operate`. Answering a pending agent approval is `stageflow-operate`. Editing `approvals.ask_first` on the agent file is `stageflow-agents`.
 
@@ -48,7 +50,8 @@ Nothing in that chain is specific to software delivery. The YAML describes the w
 | Stage | One unit of work. Runs in a fresh agent session. Declares `io` (input and output schemas), a prompt, and usually a `model`. May live in its own file and be pulled in with `uses`. |
 | Task | The input to a run: an id, a goal, and optional structured input. A pipeline without a task has nothing to do. |
 | Envelope | The typed message a stage emits for the next stage. The shape is the stage's output contract. |
-| Artifact | A file produced during a run, stored with the run, readable later with `sf artifact` or the MCP tool `run_files` with `view: artifact`. |
+| Artifact (run file) | A file under the attempt `artifacts/` folder; listed on the envelope to index, or read with `run_files` / `sf artifact read --run`. |
+| Artifact (published) | A keep-store deliverable with owner and id; list with `sf artifact list`, MCP `get_artifact`, or console `#/artifacts`. |
 | Gate | A human checkpoint. The run stays `running`. The stage is `waiting_for_input`. `sf run` exits 2. There is no run status `waiting`. |
 | Run | One execution: a task plus a pipeline, with stage attempts and cost. Status is `created`, `queued`, `running`, `succeeded`, `failed`, or `cancelled`. A parked gate leaves the run `running`. |
 | Attempt | One try of one stage inside a run. Retry creates another attempt. Resume keeps the session. |

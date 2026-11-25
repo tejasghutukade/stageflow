@@ -1,0 +1,18 @@
+id: publish-report
+system_prompt: |
+  Write weekly-report.md and metrics-table.csv under the attempt artifacts directory
+  with write_stage_artifact. Call publish_artifact for each with the expected ids and kinds.
+  When finished, call emit_stage_envelope once with status success.
+model: anthropic/claude-sonnet-4-5
+artifacts:
+  publish: true
+  expect:
+    - weekly-report
+    - metrics-table
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

@@ -1,0 +1,4 @@
+id: publish-report
+goal: Publish a weekly Markdown report and a CSV metrics table as artifacts
+context: Demo walkthrough for artifacts publish and expect.
+input: {}
