@@ -16,6 +16,7 @@ import {
   AGENT_ARTIFACT_REFRESH_SENTENCE,
   appendAgentArtifactPrompt,
   bindAgentArtifactDelete,
+  bindAgentArtifactRead,
   bindAgentArtifactRefresh,
   createAgentPublishArtifactTool,
 } from "../src/agents/artifactTools.js";
@@ -419,6 +420,33 @@ describe("agent publish tool", () => {
     expect(fx.connection.prepare(`SELECT id FROM artifacts WHERE id = ?`).get("mine")).toBeUndefined();
   });
 
+  it("pins get_artifact to the agent's project and refuses another project root", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const wrapped = bindAgentArtifactRead(
+      {
+        name: "get_artifact",
+        grantId: "stageflow.get_artifact",
+        groups: ["artifacts.read"],
+        risk: "read",
+        toolset: "artifacts",
+        description: "get",
+        parameters: {},
+        async run(args) {
+          seen.push(args);
+          return { ok: true, text: "{}" };
+        },
+      },
+      "/tmp/sf-agent-project",
+    );
+    const ctx = { signal: new AbortController().signal };
+    const refused = await wrapped.run({ list: true, project_root: "/tmp/sf-other-project" }, ctx);
+    expect(JSON.parse(refused.text).code).toBe("artifact.not_found");
+    expect(seen).toEqual([]);
+    await wrapped.run({ list: true }, ctx);
+    await wrapped.run({ key: "stage:sales:summarize/theirs", project_root: "/tmp/sf-agent-project" }, ctx);
+    expect(seen.map((args) => args.project_root)).toEqual(["/tmp/sf-agent-project", "/tmp/sf-agent-project"]);
+  });
+
   it("refreshes this agent's live artifact and refuses another owner or project", async () => {
     const fx = await agentsFixture();
     fixtures.push(fx);
@@ -617,9 +645,12 @@ ${source
       hooks: hooks(),
     });
     const opened = fake.opened[0]!;
-    expect(opened.stageflowTools?.find((tool) => tool.name === "get_artifact")).toBe(getTool);
-    const listed = await getTool.run({ list: true, project_root: projectB }, { signal: new AbortController().signal });
-    expect(JSON.parse(listed.text).project_root).toBe(projectB);
+    const boundGet = opened.stageflowTools?.find((tool) => tool.name === "get_artifact")!;
+    expect(boundGet).toBeDefined();
+    const listed = await boundGet.run({ list: true, project_root: projectB }, { signal: new AbortController().signal });
+    expect(JSON.parse(listed.text).code).toBe("artifact.not_found");
+    const own = await boundGet.run({ list: true }, { signal: new AbortController().signal });
+    expect(JSON.parse(own.text).project_root).toBe(fx.project);
     const published = await opened.agentPublishTool!.execute("call", {
       id: "y",
       kind: "static.text",

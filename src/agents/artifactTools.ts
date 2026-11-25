@@ -280,3 +280,17 @@ export function bindAgentArtifactDelete(tool: ToolkitTool, agentId: string, proj
 export function bindAgentArtifactRefresh(tool: ToolkitTool, agentId: string, projectRoot: string): ToolkitTool {
   return bindAgentOwnedArtifact(tool, agentId, projectRoot);
 }
+
+/** get_artifact for an agent session: reads and lists stay in the agent's project; any owner in it is readable. */
+export function bindAgentArtifactRead(tool: ToolkitTool, projectRoot: string): ToolkitTool {
+  return {
+    ...tool,
+    async run(args, ctx) {
+      const supplied = args.project_root;
+      if (typeof supplied === "string" && supplied.trim().length > 0 && !sameProject(supplied, projectRoot)) {
+        return artifactNotFound();
+      }
+      return tool.run({ ...args, project_root: projectRoot }, ctx);
+    },
+  };
+}
