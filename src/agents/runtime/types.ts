@@ -32,6 +32,11 @@ export type CompleteInput = {
   signal: AbortSignal;
   onDelta: (text: string) => void;
   hooks: TurnHooks;
+  /**
+   * A chat action asked for this tool. The runtime gates it before anything runs,
+   * then calls it the same way a model tool call is called.
+   */
+  requestedTool?: ToolCall;
   consumerTools?: ConsumerRuntimeTool[];
   /** Sub-agents already checked as consumer-safe. Ambient sub-agents stay off the consumer turn. */
   consumerSafeSubAgents?: readonly string[];

@@ -22,11 +22,20 @@ export type ArtifactLiveBinding = {
   args: Record<string, unknown>;
 };
 
+export type ArtifactLiveAction = {
+  id: string;
+  type: "message" | "tool";
+  label: string;
+  template: string;
+  tool?: string;
+};
+
 export type ArtifactLiveView = {
   status: ArtifactLiveStatus | null;
   last_refreshed_at?: string | null;
   last_error_code?: string | null;
   bindings?: ArtifactLiveBinding[];
+  actions?: ArtifactLiveAction[];
   refresh?: { on_view?: boolean; ttl_seconds?: number; auto_seconds?: number };
   library?: { name: string; version: string };
   libraries?: Array<{ name: string; version: string; allowEval?: boolean }>;

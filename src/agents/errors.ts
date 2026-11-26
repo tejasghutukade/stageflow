@@ -11,6 +11,10 @@ export type AgentErrorCode =
   | "agent.session_not_found"
   | "agent.session_busy"
   | "agent.session_eval_readonly"
+  | "agent.ui_function_not_granted"
+  | "agent.ui_action_unknown"
+  | "agent.ui_args_invalid"
+  | "agent.ui_artifact_not_found"
   | "agent.tool_not_granted"
   | "agent.approval_not_required"
   | "agent.approval_not_pending"
@@ -41,6 +45,10 @@ const STATUS: Partial<Record<AgentErrorCode, number>> = {
   "agent.conflict": 409,
   "agent.session_busy": 409,
   "agent.session_eval_readonly": 403,
+  "agent.ui_function_not_granted": 403,
+  "agent.ui_action_unknown": 422,
+  "agent.ui_args_invalid": 422,
+  "agent.ui_artifact_not_found": 404,
   "agent.limit_reached": 409,
   "agent.model_timeout": 504,
   "agent.approval_forbidden": 403,

@@ -132,6 +132,7 @@ function MessageBlock({
   text,
   parts,
   event,
+  chat,
   children,
 }: {
   author: string;
@@ -139,6 +140,7 @@ function MessageBlock({
   text: string;
   parts?: unknown[];
   event?: string;
+  chat?: { agentId: string; sessionId: string };
   children?: React.ReactNode;
 }) {
   return (
@@ -151,6 +153,7 @@ function MessageBlock({
         {text ? <p className="whitespace-pre-wrap break-words text-[13px] leading-[1.7] text-[var(--sf-text-1)]">{text}</p> : null}
         <UiMessageParts
           parts={parts ?? []}
+          chat={chat}
           onOpenConsole={(href) => {
             const hash = href.includes("#") ? href.slice(href.indexOf("#") + 1) : href;
             navigate(hash.startsWith("/") ? hash : `/${hash}`);
@@ -568,7 +571,9 @@ function SessionView({ agent, sessionId }: { agent: AgentDetail; sessionId: stri
               </span>
             </div>
             <div className="flex flex-1 flex-col gap-6 px-7 py-5">
-              {runs.map((run) => (
+              {runs.map((run) => {
+                const chat = session && session.source !== "eval" ? { agentId, sessionId: session.id } : undefined;
+                return (
                 <div key={run.turn.id} className="flex flex-col gap-6">
                   {run.prompt ? (
                     <MessageBlock
@@ -579,14 +584,15 @@ function SessionView({ agent, sessionId }: { agent: AgentDetail; sessionId: stri
                     />
                   ) : null}
                   {run.reply ? (
-                    <MessageBlock author={agent.agent.name} time={clockTime(run.reply.createdAt)} text={run.reply.text} parts={run.reply.parts}>
+                    <MessageBlock author={agent.agent.name} time={clockTime(run.reply.createdAt)} text={run.reply.text} parts={run.reply.parts} chat={chat}>
                       <TraceSummary run={run} onOpen={() => runOf(run.turn.seq)} />
                     </MessageBlock>
                   ) : run.turn.status !== "running" && run.turn.status !== "waiting" ? (
                     <TraceSummary run={run} onOpen={() => runOf(run.turn.seq)} />
                   ) : null}
                 </div>
-              ))}
+              );
+              })}
               {streaming ? (
                 <>
                   <MessageBlock author="You" time="now" text={streaming.prompt} />

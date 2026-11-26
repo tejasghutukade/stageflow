@@ -84,7 +84,7 @@ Grant ids (used in `approvals.ask_first`): builtin tool name (`write`, `bash`), 
 |---|---|---|
 | `present` | boolean, `false` | Grants `present_ui`. Off until set |
 | `kinds` | list, `[]` | Required when `present` is true. `static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`, `live.declarative`, `live.html`. Unknown `agent.ui_kind_unknown`. Duplicate `agent.ui_kind_duplicate`. Empty while present `agent.ui_kinds_required` |
-| `functions` | list of function ids, `[]` | Ids a presented live artifact may call. Invalid `agent.ui_function_invalid`. Duplicate `agent.ui_function_duplicate` |
+| `functions` | list of function ids, `[]` | Ids a presented live artifact may call from chat. Invalid `agent.ui_function_invalid`. Duplicate `agent.ui_function_duplicate`. A binding query for any other id is `agent.ui_function_not_granted` |
 
 Kinds or functions while `present` is false is `agent.ui_present_required`.
 

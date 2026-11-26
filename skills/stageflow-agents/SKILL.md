@@ -25,7 +25,7 @@ This skill does what the console's Agent Author does (interview, draft, validate
 
 ## Presenting UI
 
-Show an artifact in the conversation only when the person should see it there, not as a substitute for the Artifacts page. Grant `ui.present: true` and the kinds they may see (`static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`, `live.declarative`, `live.html`). `ui.functions` lists function ids a live artifact may call. The default is off. Without the grant, `present_ui` is refused.
+Show an artifact in the conversation only when the person should see it there, not as a substitute for the Artifacts page. Grant `ui.present: true` and the kinds they may see (`static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`, `live.declarative`, `live.html`). `ui.functions` lists function ids a live artifact may call from chat. A binding query for any other id is refused. The default is off. Without the grant, `present_ui` is refused. Chat buttons come from the artifact manifest `actions` list (a user message, or a tool call that still goes through approvals). Eval sessions cannot use them.
 
 Publish with `publish_artifact`, then call `present_ui` with the returned key. Do not paste the artifact body into the reply. Omit `version` so the chat keeps the current version and refresh works. A key from another project is refused. A deleted or expired artifact shows an unavailable card after reload; the message keeps the reference and does not run the tool again.
 

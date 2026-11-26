@@ -48,6 +48,14 @@ export type ArtifactRecord = {
 
 export type ArtifactLiveStatus = "fresh" | "stale" | "refreshing" | "error";
 
+export type ArtifactLiveAction = {
+  id: string;
+  type: "message" | "tool";
+  label: string;
+  template: string;
+  tool?: string;
+};
+
 export type ArtifactLiveView = {
   status: ArtifactLiveStatus | null;
   last_refreshed_at: string | null;
@@ -59,6 +67,7 @@ export type ArtifactLiveView = {
   format?: string;
   csp?: HtmlCsp;
   origins?: ArtifactOriginView;
+  actions?: ArtifactLiveAction[];
 };
 
 export type ArtifactRow = {
@@ -141,10 +150,21 @@ export function artifactRecord(row: ArtifactRow, registered: boolean): ArtifactR
   };
 }
 
+function publicActions(actions: NonNullable<ReturnType<typeof parseStoredLiveManifest>>["actions"]): ArtifactLiveAction[] | undefined {
+  if (!actions || actions.length === 0) return undefined;
+  return actions.map((action) => ({
+    id: action.id,
+    type: action.type,
+    label: action.label ?? action.template.slice(0, 80),
+    template: action.template,
+    ...(action.tool ? { tool: action.tool } : {}),
+  }));
+}
+
 export function artifactLiveManifestFields(
   kind: string,
   manifestJson: string | null | undefined,
-): Pick<ArtifactLiveView, "bindings" | "refresh" | "library" | "libraries" | "format" | "csp"> {
+): Pick<ArtifactLiveView, "bindings" | "refresh" | "library" | "libraries" | "format" | "csp" | "actions"> {
   if (isLiveHtmlKind(kind)) {
     const manifest = parseStoredHtmlManifest(manifestJson);
     return {
@@ -156,11 +176,13 @@ export function artifactLiveManifestFields(
     };
   }
   const manifest = parseStoredLiveManifest(manifestJson);
+  const actions = publicActions(manifest?.actions);
   return {
     bindings: manifest?.bindings ?? [],
     ...(manifest?.format ? { format: manifest.format } : {}),
     ...(manifest?.library ? { library: manifest.library } : {}),
     ...(manifest?.refresh ? { refresh: manifest.refresh } : {}),
+    ...(actions ? { actions } : {}),
   };
 }
 

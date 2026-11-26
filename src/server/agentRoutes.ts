@@ -307,6 +307,20 @@ const routes: Route[] = [
     handle: async (ctx) => ctx.json(ctx.res, 200, await sessionFor(ctx, ctx.params[0]!, ctx.params[1]!)),
   },
   {
+    method: "POST",
+    pattern: /^\/api\/agents\/([^/]+)\/sessions\/([^/]+)\/ui-events$/,
+    handle: async (ctx) => {
+      const body = await readBody(ctx.req);
+      const result = await ctx.host.uiEvents({
+        projectRoot: ctx.projectRoot,
+        agentId: ctx.params[0]!,
+        sessionId: ctx.params[1]!,
+        body,
+      });
+      ctx.json(ctx.res, result.status, result.body);
+    },
+  },
+  {
     method: "GET",
     pattern: /^\/api\/agents\/([^/]+)\/sessions\/([^/]+)\/otlp$/,
     handle: async (ctx) => {

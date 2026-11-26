@@ -9,7 +9,7 @@ function ArtifactRefPart({ part, context }: UiPartRendererProps) {
   return (
     <div className="min-w-0">
       <div className="mb-1 text-[13px] font-medium text-[var(--sf-text-1)]">{title}</div>
-      <ArtifactView artifactKey={key} version={version} density="inline" onOpen={context.onOpenConsole} />
+      <ArtifactView artifactKey={key} version={version} density="inline" onOpen={context.onOpenConsole} chat={context.chat} />
       <button
         type="button"
         className="mt-2 text-[12px] text-[var(--sf-text-2)] underline decoration-[var(--sf-hairline)]"

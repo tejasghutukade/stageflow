@@ -13,12 +13,20 @@ export function uiPartsFromMetadata(metadata: unknown): unknown[] {
   return Array.isArray(custom?.uiParts) ? custom.uiParts : [];
 }
 
-export function UiMessageParts({ parts, onOpenConsole }: { parts: readonly unknown[]; onOpenConsole?: UiPartRendererContext["onOpenConsole"] }) {
+export function UiMessageParts({
+  parts,
+  onOpenConsole,
+  chat,
+}: {
+  parts: readonly unknown[];
+  onOpenConsole?: UiPartRendererContext["onOpenConsole"];
+  chat?: UiPartRendererContext["chat"];
+}) {
   if (parts.length === 0) return null;
   return (
     <div className="flex min-w-0 flex-col gap-3">
       {parts.map((part, index) => (
-        <div key={index}>{renderUiPart(part, { onOpenConsole })}</div>
+        <div key={index}>{renderUiPart(part, { onOpenConsole, chat })}</div>
       ))}
     </div>
   );

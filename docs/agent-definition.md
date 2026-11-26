@@ -72,7 +72,7 @@ ui:
 |-------|------|---------|-------|
 | `ui.present` | boolean | `false` | The model can call `present_ui` only when this is true. Kinds or functions with it off is `agent.ui_present_required`. |
 | `ui.kinds` | list of artifact kinds | `[]` | At least one when `present` is true (`agent.ui_kinds_required`). Each must be `static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`, `live.declarative`, or `live.html` (`agent.ui_kind_unknown`). No duplicates (`agent.ui_kind_duplicate`). A call for another kind is refused (`ui.kind_not_granted`). |
-| `ui.functions` | list of function ids | `[]` | Function ids a presented live artifact may call. Each id matches `^[a-z][a-z0-9_-]{0,63}$` (`agent.ui_function_invalid`). No duplicates (`agent.ui_function_duplicate`). |
+| `ui.functions` | list of function ids | `[]` | Function ids a presented live artifact may call from chat. Each id matches `^[a-z][a-z0-9_-]{0,63}$` (`agent.ui_function_invalid`). No duplicates (`agent.ui_function_duplicate`). A binding query whose function is not listed is `agent.ui_function_not_granted`. |
 
 A key from another project is refused (`ui.cross_project`). A missing key is `artifact.not_found`. After the message is stored, a deleted or expired artifact renders as an unavailable card. Eval sessions stub `present_ui` and do not run it.
 

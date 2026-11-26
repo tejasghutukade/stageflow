@@ -421,6 +421,7 @@ Never publish secrets. Text kinds are UTF-8-checked and scrubbed before store. *
 | `refresh.on_view` | Optional boolean. Omitted means the console refreshes when the artifact is opened. `false` skips that open refresh. Automatic refresh while the tab is open still follows `auto_seconds` |
 | `refresh.ttl_seconds` | Optional integer of at least 30. Omitted means 300 seconds. A snapshot is fresh while its age is less than or equal to this TTL |
 | `refresh.auto_seconds` | Optional integer of at least 30. When set, a visible console tab repeats the stale check on that interval |
+| `actions` | Optional, at most 16. Chat-only. Each entry is `{ id, type: message\|tool, template, label?, binding?, tool?, input? }`. `id` matches a binding id and is unique. `template` is 1–2000 characters and may contain `{{name}}` placeholders. `type: tool` requires `tool` (a grant id) and optional `input`. `binding`, when set, must name a binding in this manifest; viewer arguments are checked against that function. A message action does not take `tool` or `input` |
 
 A bad manifest is `400` `artifact.invalid_shape` with `issues[].path`. `args` are data. The Host does not run them as code.
 
@@ -765,7 +766,7 @@ Eligibility is checked again at call time against the function revision read for
 
 Every variant runs with the function's own access, not the viewer's, and the cached row is shared by every viewer of this Host. That matches the single-user control-token model. A hosted deployment has to key the cache and the rate limit by viewer scope before it can share a Host. The code marks that spot with `TODO(multi-tenant)`.
 
-Writes (level 3) and asking the agent (level 4) are not available. The Host constant is `artifact.interaction_disabled`. This version has no route that performs either one, and a query never runs a function that is not read-only. The program validator and the manifest rules are unchanged.
+On the Artifacts page, writes and asking the agent are not available. The Host constant is `artifact.interaction_disabled`. A query never runs a function that is not read-only. In operator chat, a rendered part sends those through [Chat actions](agent-api.md#chat-actions): a read-only binding, a user message from a declared template, or a tool call that waits on the normal approval card. The program validator still rejects `Mutation`, `@ToAssistant`, and `@OpenUrl`. Declared chat actions live on the manifest `actions` list, not in the program.
 
 The response is:
 
@@ -799,7 +800,7 @@ The response is:
 
 ### Chat UI parts
 
-Agent chat can carry typed **ui** parts that reference an artifact instead of inlining its body. The envelope lives in shared runtime code as `src/artifacts/uiPart.ts` (`v: 1`, `kind: artifact-ref`, fields `key`, optional `version`, `title`, and `fallback: { text, url }`). Unknown `v` or `kind` values parse to an unsupported result; fallback text is capped at 2000 characters. The operator console maps each `kind` through `ui/src/chat/parts/registry.ts` and reuses `ArtifactView` for rendering. Wiring from tools and channels is added in later tickets.
+Agent chat can carry typed **ui** parts that reference an artifact instead of inlining its body. The envelope lives in shared runtime code as `src/artifacts/uiPart.ts` (`v: 1`, `kind: artifact-ref`, fields `key`, optional `version`, `title`, and `fallback: { text, url }`). Unknown `v` or `kind` values parse to an unsupported result; fallback text is capped at 2000 characters. The operator console maps each `kind` through `ui/src/chat/parts/registry.ts` and reuses `ArtifactView` for rendering. In an operator session that is not an eval, the inline view sends viewer actions to `POST /api/agents/:id/sessions/:sid/ui-events` ([Chat actions](agent-api.md#chat-actions)). A Select re-queries a declared binding. A manifest action is a button that sends a user message or asks for a tool. Eval sessions do not get the buttons. The Artifacts page does not use this route.
 
 ### Console
 

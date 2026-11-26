@@ -694,8 +694,23 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
           text: m.text,
           ...(m.parts?.length ? { parts: m.parts } : {}),
         }));
-        const prompt = fresh && prior.length > 0 ? `${replayPrompt(prior)}\n\nuser: ${user.text}` : user.text;
+        let toolInstruction = "";
         arm();
+        if (input.requestedTool) {
+          const release = state.stall!.hold();
+          try {
+            const decision = await input.hooks.gate(input.requestedTool);
+            if (!decision.allow) {
+              text = decision.reason;
+              input.onDelta(text);
+              return { text, toolOutputs, usage };
+            }
+            toolInstruction = `\n\nCall the tool ${input.requestedTool.tool} with these arguments and no others: ${JSON.stringify(input.requestedTool.input)}`;
+          } finally {
+            release();
+          }
+        }
+        const prompt = (fresh && prior.length > 0 ? `${replayPrompt(prior)}\n\nuser: ${user.text}` : user.text) + toolInstruction;
         await session.prompt(prompt);
       } finally {
         if (stallTimer) clearTimeout(stallTimer);

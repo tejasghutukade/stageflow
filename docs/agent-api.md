@@ -33,6 +33,11 @@ Clients branch on `code`, never on `message`. Other statuses: `405 agent.method_
 | `agent.disabled` | 409 | The agent is disabled (new sessions, turns and approving are refused; denying still works) |
 | `agent.conflict` | 409 | `baseRevision` is not the current revision: someone saved in between |
 | `agent.session_busy` | 409 | A turn is already running in that session |
+| `agent.session_eval_readonly` | 403 | The session is an eval session. Chat actions are refused |
+| `agent.ui_function_not_granted` | 403 | The binding's function is not in `ui.functions` |
+| `agent.ui_action_unknown` | 422 | The action or binding is not declared on the artifact |
+| `agent.ui_args_invalid` | 422 | Viewer arguments do not match the binding schema |
+| `agent.ui_artifact_not_found` | 404 | The artifact is missing, hidden, expired, or in another project |
 | `agent.limit_reached` | 409 | The session hit `session_minutes`, `max_turns` or `cost_usd` |
 | `agent.model_timeout` | 504 | The model did not answer in time |
 | `agent.approval_forbidden` | 403 | The caller is not an allowed approver |
@@ -76,6 +81,7 @@ Saves from these routes are recorded as revision source `console`.
 | `GET /api/agents/sessions` | | Sessions of every agent in the project. Query: `agent`, plus the filters below |
 | `GET /api/agents/:id/sessions` | | `{ sessions, nextCursor, stats }` for one agent |
 | `GET /api/agents/:id/sessions/:sid` | | `{ session, messages, turns, spans, approvals, pendingApproval, evalScores, deliveries }` |
+| `POST /api/agents/:id/sessions/:sid/ui-events` | `{ id, key, version?, kind, action, args? }` | One chat action. See [Chat actions](#chat-actions) |
 | `GET /api/agents/:id/sessions/:sid/otlp` | | The session's traces as OTLP/JSON, sent as a download (`<sid>.otlp.json`) |
 | `GET /api/agents/approvals` | | `{ approvals: [approval + agentId] }`: every pending approval in the project |
 | `POST /api/agents/:id/sessions/:sid/approval/approve`, `.../deny` | | `{ approval, session }`. Decided as an operator. Approving a disabled agent is `agent.disabled`; denying always works |
@@ -90,6 +96,20 @@ Session list query: `status` (`open`, `running`, `waiting`, `held`, `closed`; an
 | `POST /api/agents/:id/chat/stop` | `{ sessionId }` | `{ stopped: boolean }`. `false` when nothing was running. The session stays open |
 
 Without streaming the call waits for the whole turn and answers `200` with the session (same shape as the session `GET`). With `"stream": true` or `Accept: application/x-ndjson` the reply is [NDJSON](#ndjson-frames). The turn is attributed to the console. If the client disconnects mid-stream, the turn is stopped.
+
+### Chat actions
+
+`POST /api/agents/:id/sessions/:sid/ui-events` is the only path from a rendered chat part back into the session. It uses the same control token and project as the other agent routes. The body is `{ "id", "key", "version"?, "kind", "action", "args"? }`. `id` is 1–80 characters of letters, digits, `_` and `-`. The same `id` on the same session returns the first result with `duplicate: true` and does not run again. `key` is `<ownerKey>/<id>`. `version`, when set, must be the current version.
+
+`kind` is one of three:
+
+| `kind` | `action` | What runs |
+|--------|----------|-----------|
+| `query` | a binding id | The read-only binding, with viewer `args`, through the same query path as `POST /api/artifacts/.../query`. The function must be listed in the session agent's `ui.functions` (`agent.ui_function_not_granted` otherwise). Arguments are checked against that function's input schema |
+| `message` | an action id | The manifest action's `template`, with `{{name}}` filled from arguments, is stored as a user message and starts a normal turn |
+| `tool` | an action id | The same visible user message, then a turn that calls the action's `tool` with its `input`. The call goes through the tool gate and approvals. Nothing runs before an ask-first approval is granted |
+
+Only bindings and `actions` declared on the live manifest are accepted (`agent.ui_action_unknown`). Eval sessions are refused (`agent.session_eval_readonly`). A query answer is the binding query body plus `id`, `duplicate`, and `kind`. A message or tool answer is `{ id, duplicate, kind, text, session }`. The tool request stays open while the turn waits on approval; `GET` the session to see `pendingApproval`.
 
 ### Channel status and delivery
 

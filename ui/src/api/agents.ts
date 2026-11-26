@@ -334,6 +334,11 @@ export const agentsApi = {
     return request<SessionPage>(`/api/agents/sessions${qs ? `?${qs}` : ""}`);
   },
   session: (id: string, sessionId: string) => request<AgentSessionDetail>(agentUrl(id, `/sessions/${enc(sessionId)}`)),
+  uiEvent: (
+    id: string,
+    sessionId: string,
+    body: { id: string; key: string; version?: number; kind: "query" | "message" | "tool"; action: string; args?: Record<string, unknown> },
+  ) => request<Record<string, unknown>>(agentUrl(id, `/sessions/${enc(sessionId)}/ui-events`), "POST", body),
   decide: (id: string, sessionId: string, decision: "approve" | "deny") =>
     request<{ approval: AgentApproval; session: AgentSessionDetail }>(
       agentUrl(id, `/sessions/${enc(sessionId)}/approval/${decision}`),

@@ -34,13 +34,33 @@ export type LiveBindingSet = {
   refresh?: LiveRefresh;
 };
 
+/** A chat action the program's manifest allows. The console never invents one. */
+export type LiveUiAction = {
+  id: string;
+  type: "message" | "tool";
+  template: string;
+  label?: string;
+  /** Viewer arguments are checked against this binding's function schema. */
+  binding?: string;
+  /** Grant id the turn asks the agent to call. Tool actions only. */
+  tool?: string;
+  /** Arguments of that call. Strings may contain `{{name}}` placeholders. */
+  input?: Record<string, unknown>;
+};
+
 export type LiveManifest = LiveBindingSet & {
   format: string;
   library: LiveLibrary;
   program: string;
+  actions?: LiveUiAction[];
 };
 
 const FUNCTION_ID = /^[a-z][a-z0-9_]{0,63}$/;
+const ACTION_ID = LIVE_BINDING_ID_PATTERN;
+const TOOL_ID = /^(agent:[a-z][a-z0-9_]{0,63}|[A-Za-z0-9_.-]{1,128})$/;
+const MAX_LIVE_ACTIONS = 16;
+const MAX_ACTION_TEMPLATE_CHARS = 2000;
+const MAX_ACTION_LABEL_CHARS = 80;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -96,6 +116,97 @@ export function collectLiveBindings(bindingsRaw: unknown, issues: ArtifactIssue[
     }
   }
   return bindings;
+}
+
+export function collectLiveActions(actionsRaw: unknown, bindings: readonly { id: string }[], issues: ArtifactIssue[]): LiveUiAction[] {
+  if (actionsRaw === undefined) return [];
+  if (!Array.isArray(actionsRaw)) {
+    issues.push({ path: "manifest.actions", message: "actions must be an array" });
+    return [];
+  }
+  if (actionsRaw.length > MAX_LIVE_ACTIONS) {
+    issues.push({ path: "manifest.actions", message: `at most ${MAX_LIVE_ACTIONS} actions` });
+    return [];
+  }
+  const bindingIds = new Set(bindings.map((binding) => binding.id));
+  const seen = new Set<string>();
+  const actions: LiveUiAction[] = [];
+  for (let index = 0; index < actionsRaw.length; index += 1) {
+    const entry = actionsRaw[index];
+    const base = `manifest.actions[${index}]`;
+    const start = issues.length;
+    if (!isRecord(entry)) {
+      issues.push({ path: base, message: "action must be an object" });
+      continue;
+    }
+    const id = entry.id;
+    if (typeof id !== "string" || !ACTION_ID.test(id)) {
+      issues.push({ path: `${base}.id`, message: "action id must match ^[a-z][a-z0-9_]{0,31}$" });
+    } else if (seen.has(id)) {
+      issues.push({ path: `${base}.id`, message: `action id ${id} is repeated` });
+    } else {
+      seen.add(id);
+    }
+    const type = entry.type;
+    if (type !== "message" && type !== "tool") {
+      issues.push({ path: `${base}.type`, message: "type must be message or tool" });
+    }
+    const template = entry.template;
+    if (typeof template !== "string" || template.trim().length === 0 || template.length > MAX_ACTION_TEMPLATE_CHARS) {
+      issues.push({ path: `${base}.template`, message: `template must be a string of 1 to ${MAX_ACTION_TEMPLATE_CHARS} characters` });
+    }
+    let label: string | undefined;
+    if (entry.label !== undefined) {
+      if (typeof entry.label !== "string" || entry.label.trim().length === 0 || entry.label.length > MAX_ACTION_LABEL_CHARS) {
+        issues.push({ path: `${base}.label`, message: `label must be a string of 1 to ${MAX_ACTION_LABEL_CHARS} characters` });
+      } else {
+        label = entry.label;
+      }
+    }
+    let binding: string | undefined;
+    if (entry.binding !== undefined) {
+      if (typeof entry.binding !== "string" || !ACTION_ID.test(entry.binding) || !bindingIds.has(entry.binding)) {
+        issues.push({ path: `${base}.binding`, message: "binding must name a binding in this manifest" });
+      } else {
+        binding = entry.binding;
+      }
+    }
+    let tool: string | undefined;
+    let input: Record<string, unknown> | undefined;
+    if (type === "tool") {
+      if (typeof entry.tool !== "string" || !TOOL_ID.test(entry.tool)) {
+        issues.push({ path: `${base}.tool`, message: "tool must be a tool id" });
+      } else {
+        tool = entry.tool;
+      }
+      if (entry.input !== undefined) {
+        if (!isRecord(entry.input)) {
+          issues.push({ path: `${base}.input`, message: "input must be an object" });
+        } else if (jsonBytes(entry.input) > LIVE_BINDING_ARGS_MAX_BYTES) {
+          issues.push({ path: `${base}.input`, message: `input must be at most ${LIVE_BINDING_ARGS_MAX_BYTES} bytes` });
+        } else {
+          input = entry.input;
+        }
+      }
+    } else if (entry.tool !== undefined || entry.input !== undefined) {
+      issues.push({ path: base, message: "message actions do not take tool or input" });
+    }
+    if (
+      issues.length === start &&
+      typeof id === "string" &&
+      (type === "message" || type === "tool") &&
+      typeof template === "string" &&
+      (type !== "tool" || typeof tool === "string")
+    ) {
+      const action: LiveUiAction = { id, type, template };
+      if (label !== undefined) action.label = label;
+      if (binding !== undefined) action.binding = binding;
+      if (tool !== undefined) action.tool = tool;
+      if (input !== undefined) action.input = input;
+      actions.push(action);
+    }
+  }
+  return actions;
 }
 
 export function collectLiveRefresh(refreshRaw: unknown, issues: ArtifactIssue[]): LiveRefresh | undefined {
@@ -164,6 +275,7 @@ export function validateLiveManifest(raw: unknown, program: string): LiveManifes
   }
   const bindings = collectLiveBindings(raw.bindings, issues);
   const refresh = collectLiveRefresh(raw.refresh, issues);
+  const actions = collectLiveActions(raw.actions, bindings, issues);
   if (issues.length > 0) fail(issues);
   const libraryRecord = library as Record<string, unknown>;
   const manifest: LiveManifest = {
@@ -173,6 +285,7 @@ export function validateLiveManifest(raw: unknown, program: string): LiveManifes
     bindings,
   };
   if (refresh !== undefined && Object.keys(refresh).length > 0) manifest.refresh = refresh;
+  if (actions.length > 0) manifest.actions = actions;
   return manifest;
 }
 

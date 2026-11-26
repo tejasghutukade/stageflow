@@ -139,8 +139,8 @@ export function LiveArtifactRenderer(input: LivePreviewInput) {
 
   const bindingKey = canonicalJson(input.bindings.map((binding) => ({ id: binding.id, function: binding.function, args: binding.args })));
   const query = useMemo<LiveQuery>(
-    () => liveQueryFromHost(input.ownerKey, input.artifactId, input.projectRoot),
-    [input.ownerKey, input.artifactId, input.projectRoot],
+    () => input.query ?? liveQueryFromHost(input.ownerKey, input.artifactId, input.projectRoot),
+    [input.query, input.ownerKey, input.artifactId, input.projectRoot],
   );
   const provider = useMemo(
     () =>

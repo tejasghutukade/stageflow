@@ -38,6 +38,8 @@ export type SendTurnInput = {
   onSessionOpened?: (sessionId: string) => void;
   /** Retry this earlier, interrupted turn: its user message is reused, not asked again. */
   resumeTurnId?: string;
+  /** Chat action: gate this tool call on the turn before the model runs anything else. */
+  requestedTool?: ToolCall;
 };
 
 export type ConversationOptions = {
@@ -375,6 +377,7 @@ export class AgentConversation {
         signal: controller.signal,
         onDelta: (text) => stream.push(text),
         hooks,
+        ...(input.requestedTool ? { requestedTool: input.requestedTool } : {}),
         ...(consumer && safeSubAgents ? { consumerSafeSubAgents: safeSubAgents } : {}),
         ...(external ? { consumerTools: consumer ? consumerAuth!.tools(sessionId, input.consumerSessionId!, input.agentId)
           .filter((tool) => isToolGranted(definition, tool.grantId)).map((tool) => ({ ...tool,

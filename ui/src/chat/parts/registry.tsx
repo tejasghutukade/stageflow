@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 
 export type UiPartRendererContext = {
   onOpenConsole?: (href: string) => void;
+  /** Operator chat session. Absent on the artifacts page and in eval sessions. */
+  chat?: { agentId: string; sessionId: string };
 };
 
 export type UiPartRendererProps = {

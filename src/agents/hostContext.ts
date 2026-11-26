@@ -15,6 +15,8 @@ import type { McpToolDeps } from "../mcp/deps.js";
 import { catalogRootsForArtifacts } from "../artifacts/projectScope.js";
 import { publishSessionArtifact } from "../artifacts/sessionPublish.js";
 import { presentArtifact } from "./presentUi.js";
+import { queryBinding } from "../artifacts/bindingQuery.js";
+import { createUiEventHandler, loadChatArtifact, validateChatBindingArgs, type UiEventHandler } from "./uiEvents.js";
 import { sqliteConnectionFromStore } from "../runstore/createStore.js";
 import { buildToolkit, type ToolkitTool } from "../toolkit/index.js";
 import { createPiAgentRuntime } from "./runtime/piRuntime.js";
@@ -31,6 +33,8 @@ export type AgentHostContext = {
   inbound: AgentInboundRouter;
   publicChat: PublicWebChat;
   chat: AgentChatController;
+  /** Chat artifact actions: read-only binding, user message, or a gated tool call. */
+  uiEvents: UiEventHandler;
   /** Eval tool gates by session id; the eval runner registers a gate for each eval session it opens. */
   evalGates: EvalGateRegistry;
   backend: ConversationBackend;
@@ -232,10 +236,26 @@ export function createAgentHostContext(options: {
     if (value?.contact.ok !== false) contactCache.set(connectionId, { at: Date.now(), value });
     return value;
   };
+  const uiEvents = createUiEventHandler({
+    service,
+    chat,
+    loadArtifact: async (projectRoot, key) => {
+      const roots = options.toolkitDeps?.store ? await catalogRootsForArtifacts(options.toolkitDeps.store) : [];
+      return loadChatArtifact(options.connection, roots, projectRoot, key);
+    },
+    query: (artifact, request) =>
+      queryBinding(
+        options.connection,
+        { projectRoot: artifact.projectRoot, projectId: artifact.projectId },
+        artifact.storageKey,
+        request,
+      ),
+    validateArgs: (projectRoot, functionId, args) => validateChatBindingArgs(options.connection, projectRoot, functionId, args),
+  });
   channelListeners?.start();
   if (options.listenOnChannels) delivery.start();
   if (options.listenOnChannels) void inbound.resumeInterrupted().catch((error) => console.error(`agent resume failed: ${String(error)}`));
-  return { service, chat, evalGates, backend, inbound, publicChat, channelContact, ...(channelListeners ? { channelListeners } : {}), delivery, stop: async () => {
+  return { service, chat, uiEvents, evalGates, backend, inbound, publicChat, channelContact, ...(channelListeners ? { channelListeners } : {}), delivery, stop: async () => {
       delivery.stop();
       await channelListeners?.stop();
       // The Host owns every runtime session's lifetime: nothing outlives it.

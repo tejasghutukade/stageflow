@@ -1,5 +1,7 @@
 import { lazy, Suspense, useState, type ReactNode } from "react";
 import { parseArtifactShowKey } from "../../../../src/cli/artifactListFormat.ts";
+import type { ArtifactLiveAction } from "../../api/artifacts";
+import { liveQueryFromChat, postChatAction, type ChatActionTarget } from "../../chat/parts/chatActions";
 import type { ArtifactDetailMeta } from "./artifactDetailModel";
 import { LIVE_VERSION_SNAPSHOT_NOTE, viewingVersionBanner } from "./artifactDetailModel";
 import { ExplanationCard, StaticArtifactBody } from "./renderers/StaticPreview";
@@ -32,6 +34,8 @@ export type ArtifactViewContentProps = {
   viewing?: { version: number; latest: number } | null;
   onViewLatest?: () => void;
   showSourceDetails?: boolean;
+  actions?: ArtifactLiveAction[];
+  onAction?: (action: ArtifactLiveAction) => void;
 };
 
 export function ArtifactViewContent({
@@ -46,6 +50,8 @@ export function ArtifactViewContent({
   viewing,
   onViewLatest,
   showSourceDetails = true,
+  actions,
+  onAction,
 }: ArtifactViewContentProps) {
   const showLiveProgram = meta.kind === "live.declarative" && (preview === null || preview.mode !== "unavailable");
   const showLiveHtml = meta.kind === "live.html" && (preview === null || preview.mode !== "unavailable");
@@ -127,6 +133,20 @@ export function ArtifactViewContent({
           </div>
         ) : null}
         {body}
+        {density === "inline" && onAction && actions && actions.length > 0 ? (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {actions.map((action) => (
+              <button
+                key={action.id}
+                type="button"
+                className="rounded-md border border-[var(--sf-hairline)] bg-[var(--sf-raised)] px-2.5 py-1 text-[12px] text-[var(--sf-text-1)]"
+                onClick={() => onAction(action)}
+              >
+                {action.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
         {density === "inline" ? (
           <div className="mt-2 flex justify-end">
             <button
@@ -143,7 +163,16 @@ export function ArtifactViewContent({
   );
 }
 
-function readyContent(model: ArtifactViewReady, density: ArtifactViewDensity, onViewLatest?: () => void) {
+function readyContent(
+  model: ArtifactViewReady,
+  density: ArtifactViewDensity,
+  onViewLatest?: () => void,
+  chat?: { target: ChatActionTarget; artifactKey: string; version?: number },
+) {
+  const livePreview =
+    model.livePreview && chat
+      ? { ...model.livePreview, query: liveQueryFromChat(chat.target, chat.artifactKey, chat.version) }
+      : model.livePreview;
   return (
     <ArtifactViewContent
       density={density}
@@ -151,12 +180,25 @@ function readyContent(model: ArtifactViewReady, density: ArtifactViewDensity, on
       preview={model.preview}
       imageUrl={model.imageUrl}
       program={model.program}
-      livePreview={model.livePreview}
+      livePreview={livePreview}
       liveHtml={model.liveHtml}
       historicalSnapshots={model.historicalSnapshots}
       viewing={density === "page" ? model.viewing : null}
       onViewLatest={onViewLatest}
       showSourceDetails={density === "page"}
+      actions={density === "inline" ? model.live?.actions : undefined}
+      onAction={
+        chat && density === "inline"
+          ? (action) => {
+              void postChatAction(chat.target, {
+                key: chat.artifactKey,
+                ...(chat.version !== undefined ? { version: chat.version } : {}),
+                kind: action.type,
+                action: action.id,
+              });
+            }
+          : undefined
+      }
     />
   );
 }
@@ -176,11 +218,13 @@ function ArtifactViewLoaded({
   identity,
   density,
   onOpen,
+  chat,
 }: {
   artifactKey: string;
   identity: ArtifactViewIdentity;
   density: ArtifactViewDensity;
   onOpen?: (href: string) => void;
+  chat?: ChatActionTarget;
 }) {
   const model = useArtifactViewModel(identity);
   if (model.phase === "loading") {
@@ -206,6 +250,7 @@ function ArtifactViewLoaded({
     model,
     density,
     onOpen && density === "page" && model.viewing ? () => onOpen(artifactKey) : undefined,
+    chat && density === "inline" ? { target: chat, artifactKey, version: identity.version } : undefined,
   );
 }
 
@@ -215,12 +260,14 @@ export function ArtifactView({
   projectRoot,
   density,
   onOpen,
+  chat,
 }: {
   artifactKey: string;
   version?: number;
   projectRoot?: string;
   density: ArtifactViewDensity;
   onOpen?: (href: string) => void;
+  chat?: ChatActionTarget;
 }) {
   const identity = artifactViewIdentityFromKey(artifactKey, projectRoot, version);
   if (!identity) {
@@ -230,7 +277,7 @@ export function ArtifactView({
       </p>
     );
   }
-  return <ArtifactViewLoaded artifactKey={artifactKey} identity={identity} density={density} onOpen={onOpen} />;
+  return <ArtifactViewLoaded artifactKey={artifactKey} identity={identity} density={density} onOpen={onOpen} chat={chat} />;
 }
 
 export function artifactViewContentFromReady(model: ArtifactViewReady, density: ArtifactViewDensity): ArtifactViewContentProps {
