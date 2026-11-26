@@ -1,4 +1,4 @@
-import { parseUiPart, type UiPartArtifactRef } from "../artifacts/uiPart.js";
+import { parseUiPart, UI_PART_KIND_ERROR, type UiPart } from "../artifacts/uiPart.js";
 import type { ChannelUiCapability } from "./types.js";
 import { channelUiCapabilityForProvider } from "./uiCapability.js";
 
@@ -10,10 +10,11 @@ export type RenderUiPartForChannelOptions = {
 };
 
 export function renderUiPartForChannel(
-  part: UiPartArtifactRef,
+  part: UiPart,
   capability: ChannelUiCapability,
   options: RenderUiPartForChannelOptions = {},
 ): string {
+  if (part.kind === UI_PART_KIND_ERROR) return part.fallback.text;
   switch (capability) {
     case "interactive":
       return part.fallback.text;
@@ -55,6 +56,6 @@ export function assistantMessageTextForChannel(
 }
 
 /** Protected web-chat visitors have no console token; summarize ui in plain text. */
-export function webChatVisitorAssistantText(message: { text: string; parts?: readonly UiPartArtifactRef[] }): string {
+export function webChatVisitorAssistantText(message: { text: string; parts?: readonly unknown[] }): string {
   return assistantMessageTextForChannel(message, "slack", { consoleAccess: false });
 }
