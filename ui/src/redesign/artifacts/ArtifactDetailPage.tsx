@@ -1,51 +1,25 @@
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
-import {
-  ArtifactRequestError,
-  deleteArtifact,
-  fetchArtifact,
-  fetchArtifactContent,
-  fetchArtifactVersions,
-  type ArtifactContentPayload,
-  type ArtifactDataResponse,
-  type ArtifactLiveView,
-  type ArtifactOriginView,
-  type ArtifactRecord,
-  type ArtifactVersionRecord,
-} from "../../api/artifacts";
+import { useState, type ReactNode } from "react";
+import { deleteArtifact, type ArtifactDataResponse, type ArtifactLiveView } from "../../api/artifacts";
 import { artifactDetailPath, artifactsPath, navigate } from "../../routes";
 import { MODAL_SCRIM_PT, OVERLAY_SCRIM_CLASS } from "../overlay/overlayScrimClasses";
 import { Inspector } from "../shell/Inspector";
 import { PageHeader } from "../shell/PageHeader";
 import {
-  artifactDetailMeta,
   artifactVersionRows,
   compactJson,
   deleteArtifactConfirm,
   formatLiveRefreshed,
   formatLiveSnapshotJson,
-  liveExpiryPreview,
   LIVE_VERSION_SNAPSHOT_NOTE,
-  showLiveRefresh,
-  recordForViewedVersion,
-  viewingVersionBanner,
   type ArtifactDetailMeta,
   type ArtifactVersionRowModel,
 } from "./artifactDetailModel";
 import { artifactLiveStatusPill, artifactStatusPillClass } from "./artifactsPageModel";
-import { autoRefreshNote, formatUpdatedAgo } from "./liveRefreshSchedule";
-import { useLiveArtifactData } from "./useLiveArtifactData";
-import { previewFromContent, type StaticPreview } from "./renderers/previewModel";
-import { StaticArtifactBody } from "./renderers/StaticPreview";
+import { useArtifactViewModel } from "./artifactViewModel";
+import { ArtifactViewContent } from "./ArtifactView";
+import type { StaticPreview } from "./renderers/previewModel";
 import type { LivePreviewInput } from "./livePreview";
 import type { LiveHtmlFrameProps } from "./liveHtml/LiveHtmlFrame";
-
-const LiveArtifactRenderer = lazy(() =>
-  import("./live/LiveArtifactRenderer").then((mod) => ({ default: mod.LiveArtifactRenderer })),
-);
-
-const LiveHtmlFrame = lazy(() =>
-  import("./liveHtml/LiveHtmlFrame").then((mod) => ({ default: mod.LiveHtmlFrame })),
-);
 
 function MetaLine({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -322,8 +296,6 @@ export function ArtifactDetailView({
   livePreview?: LivePreviewInput | null;
   liveHtml?: LiveHtmlFrameProps | null;
 }) {
-  const showLiveProgram = meta.kind === "live.declarative" && preview?.mode !== "unavailable";
-  const showLiveHtml = meta.kind === "live.html" && preview?.mode !== "unavailable";
   const refresh = preview?.mode === "unavailable" ? undefined : onRefresh;
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-[var(--sf-ground)]">
@@ -333,52 +305,18 @@ export function ArtifactDetailView({
       />
       <div className="flex min-h-0 flex-1">
         <main className="min-w-0 flex-1 overflow-auto px-5 py-4">
-          {viewing ? (
-            <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-[var(--sf-hairline)] bg-[var(--sf-raised)] px-3 py-2 text-[13px] text-[var(--sf-text-1)]">
-              <span>{viewingVersionBanner(viewing.version, viewing.latest)}</span>
-              <button type="button" className="underline decoration-[var(--sf-hairline)]" onClick={onViewLatest}>
-                View latest
-              </button>
-            </div>
-          ) : null}
-          {preview?.mode === "unavailable" ? (
-            <StaticArtifactBody preview={preview} imageUrl={imageUrl} imageAlt={meta.title} />
-          ) : showLiveHtml ? (
-            <div>
-              {historicalSnapshots ? (
-                <p className="mb-3 text-[13px] text-[var(--sf-text-2)]">{LIVE_VERSION_SNAPSHOT_NOTE}</p>
-              ) : null}
-              {liveHtml ? (
-                <Suspense fallback={<p className="text-[13px] text-[var(--sf-text-3)]">Loading live HTML…</p>}>
-                  <LiveHtmlFrame {...liveHtml} />
-                </Suspense>
-              ) : (
-                <p className="text-[13px] text-[var(--sf-text-3)]">Loading live HTML…</p>
-              )}
-              <details className="mt-4">
-                <summary className="cursor-pointer text-[13px] text-[var(--sf-text-2)]">HTML source</summary>
-                <pre className="sf-mono mt-2 whitespace-pre-wrap text-[13px] text-[var(--sf-text-1)]">{liveHtml?.html ?? ""}</pre>
-              </details>
-            </div>
-          ) : showLiveProgram ? (
-            <div>
-              {livePreview ? (
-                <Suspense fallback={<p className="text-[13px] text-[var(--sf-text-3)]">Loading live preview…</p>}>
-                  <LiveArtifactRenderer {...livePreview} />
-                </Suspense>
-              ) : (
-                <p className="text-[13px] text-[var(--sf-text-3)]">Loading live preview…</p>
-              )}
-              <details className="mt-4">
-                <summary className="cursor-pointer text-[13px] text-[var(--sf-text-2)]">Program source</summary>
-                <pre className="sf-mono mt-2 whitespace-pre-wrap text-[13px] text-[var(--sf-text-1)]">{program ?? ""}</pre>
-              </details>
-            </div>
-          ) : preview ? (
-            <StaticArtifactBody preview={preview} imageUrl={imageUrl} imageAlt={meta.title} />
-          ) : (
-            <p className="text-[13px] text-[var(--sf-text-3)]">Loading artifact…</p>
-          )}
+          <ArtifactViewContent
+            density="page"
+            meta={meta}
+            preview={preview}
+            imageUrl={imageUrl}
+            program={program}
+            livePreview={livePreview}
+            liveHtml={liveHtml}
+            historicalSnapshots={historicalSnapshots}
+            viewing={viewing}
+            onViewLatest={onViewLatest}
+          />
         </main>
         <Inspector title="Details">
           <dl>
@@ -460,58 +398,6 @@ export function ArtifactDetailView({
   );
 }
 
-function payloadPreview(
-  record: ArtifactRecord,
-  payload: ArtifactContentPayload | null,
-  error: ArtifactRequestError | null,
-): { preview: StaticPreview; hash: string | null; imageUrl: string | null } {
-  if (record.status === "expired") {
-    return {
-      preview: previewFromContent({ record, text: null, binary: false }),
-      hash: record.content_hash ?? null,
-      imageUrl: null,
-    };
-  }
-  if (error) {
-    return {
-      preview: previewFromContent({
-        record,
-        text: null,
-        binary: false,
-        contentError: { code: error.code, message: error.message },
-      }),
-      hash: record.content_hash ?? null,
-      imageUrl: null,
-    };
-  }
-  if (!payload) {
-    return {
-      preview: previewFromContent({ record, text: null, binary: record.kind !== "static.image" }),
-      hash: record.content_hash ?? null,
-      imageUrl: null,
-    };
-  }
-  if (payload.kind === "image") {
-    return {
-      preview: previewFromContent({ record, text: null, binary: false }),
-      hash: payload.contentHash ?? record.content_hash ?? null,
-      imageUrl: payload.objectUrl,
-    };
-  }
-  if (payload.kind === "binary") {
-    return {
-      preview: previewFromContent({ record, text: null, binary: true }),
-      hash: payload.contentHash ?? record.content_hash ?? null,
-      imageUrl: null,
-    };
-  }
-  return {
-    preview: previewFromContent({ record, text: payload.text, binary: false }),
-    hash: payload.contentHash ?? record.content_hash ?? null,
-    imageUrl: null,
-  };
-}
-
 export function ArtifactDetailPage({
   ownerKey,
   id,
@@ -523,91 +409,13 @@ export function ArtifactDetailPage({
   projectRoot?: string;
   version?: number;
 }) {
-  const originsEpoch = useRef(0);
-  const [record, setRecord] = useState<ArtifactRecord | null>(null);
-  const [versions, setVersions] = useState<ArtifactVersionRecord[]>([]);
-  const [payload, setPayload] = useState<ArtifactContentPayload | null>(null);
-  const [contentError, setContentError] = useState<ArtifactRequestError | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const model = useArtifactViewModel({ ownerKey, id, projectRoot, version });
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [originReview, setOriginReview] = useState(0);
-  const latestVersion = versions.length === 0
-    ? undefined
-    : versions.find((item) => item.current)?.version ?? versions.reduce((max, item) => Math.max(max, item.version), 0);
-  const live = useLiveArtifactData(record, {
-    ownerKey,
-    id,
-    projectRoot,
-    version,
-    latestVersion,
-    hidden: false,
-    recordEpoch: () => originsEpoch.current,
-    onRecord: (next) => {
-      setRecord((current) => {
-        if (!current?.live || current.version !== next.version) return current;
-        const previous = current.live.origins;
-        const incoming = next.live?.origins;
-        const previousKey = previous ? `${previous.hash}:${previous.approved}:${previous.approved_at ?? ""}` : "";
-        const incomingKey = incoming ? `${incoming.hash}:${incoming.approved}:${incoming.approved_at ?? ""}` : "";
-        if (previousKey === incomingKey) return current;
-        return { ...current, live: { ...current.live, origins: incoming } };
-      });
-    },
-  });
 
-  useEffect(() => {
-    let cancelled = false;
-    let imageUrl: string | null = null;
-    setLoading(true);
-    setError(null);
-    setRecord(null);
-    setPayload(null);
-    setContentError(null);
-    setConfirming(false);
-    setDeleteError(null);
-    void (async () => {
-      try {
-        const [next, versionPage] = await Promise.all([
-          fetchArtifact(ownerKey, id, projectRoot, version),
-          fetchArtifactVersions(ownerKey, id, projectRoot).catch(() => ({ versions: [] as ArtifactVersionRecord[] })),
-        ]);
-        if (cancelled) return;
-        setRecord(next);
-        setVersions(versionPage.versions);
-        if (next.status === "expired") {
-          setLoading(false);
-          return;
-        }
-        try {
-          const body = await fetchArtifactContent(ownerKey, id, projectRoot, version);
-          if (cancelled) {
-            if (body.kind === "image") URL.revokeObjectURL(body.objectUrl);
-            return;
-          }
-          if (body.kind === "image") imageUrl = body.objectUrl;
-          setPayload(body);
-        } catch (err) {
-          if (cancelled) return;
-          if (err instanceof ArtifactRequestError) setContentError(err);
-          else setError(err instanceof Error ? err.message : String(err));
-        }
-        setLoading(false);
-      } catch (err) {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : String(err));
-        setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      if (imageUrl) URL.revokeObjectURL(imageUrl);
-    };
-  }, [ownerKey, id, projectRoot, version]);
-
-  if (error && !record) {
+  if (model.phase === "error" && !model.record) {
+    const error = model.message;
     return (
       <div className="flex min-h-0 flex-1 flex-col bg-[var(--sf-ground)]">
         <PageHeader title="Artifact" crumbs={[{ label: "Artifacts", onClick: () => navigate(artifactsPath()) }]} />
@@ -615,7 +423,7 @@ export function ArtifactDetailPage({
       </div>
     );
   }
-  if (loading || !record) {
+  if (model.phase === "loading") {
     return (
       <div className="flex min-h-0 flex-1 flex-col bg-[var(--sf-ground)]">
         <PageHeader title="Artifact" crumbs={[{ label: "Artifacts", onClick: () => navigate(artifactsPath()) }]} />
@@ -623,112 +431,47 @@ export function ArtifactDetailPage({
       </div>
     );
   }
-  const displayRecord = recordForViewedVersion(record, versions, version);
-  const view = payloadPreview(displayRecord, payload, contentError);
-  const expiry = liveExpiryPreview(displayRecord, live.unavailable, live.unavailableMessage);
-  const preview = expiry ?? view.preview;
-  const meta = artifactDetailMeta(displayRecord, view.hash);
+  if (model.phase !== "ready") {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col bg-[var(--sf-ground)]">
+        <PageHeader title="Artifact" crumbs={[{ label: "Artifacts", onClick: () => navigate(artifactsPath()) }]} />
+        <p className="px-5 py-4 text-[13px] text-[var(--sf-fail)]">{model.message}</p>
+      </div>
+    );
+  }
+  const { record, versions } = model;
   const versionRows = artifactVersionRows(versions);
-  const viewing = version !== undefined && latestVersion !== undefined && version !== latestVersion
-    ? { version, latest: latestVersion }
-    : null;
   const confirm = confirming ? deleteArtifactConfirm(record.title, Math.max(versions.length, 1)) : null;
-  const liveData: ArtifactDataResponse | null =
-    displayRecord.kind === "live.declarative" || displayRecord.live
-      ? {
-          status: live.status,
-          snapshots: live.snapshots,
-          last_refreshed_at: live.lastRefreshedAt,
-          last_error_code: live.lastErrorCode,
-          errors: live.errors,
-        }
-      : null;
-  const autoSeconds = viewing ? null : displayRecord.live?.refresh?.auto_seconds;
   return (
     <ArtifactDetailView
-      meta={meta}
-      preview={preview}
-      imageUrl={view.imageUrl}
+      meta={model.meta}
+      preview={model.preview}
+      imageUrl={model.imageUrl}
       onBack={() => navigate(artifactsPath())}
-      onOpenRun={meta.runPath ? () => navigate(meta.runPath!) : undefined}
-      onOpenStage={meta.stagePath ? () => navigate(meta.stagePath!) : undefined}
-      onOpenOwner={meta.ownerPath ? () => navigate(meta.ownerPath!) : undefined}
+      onOpenRun={model.meta.runPath ? () => navigate(model.meta.runPath!) : undefined}
+      onOpenStage={model.meta.stagePath ? () => navigate(model.meta.stagePath!) : undefined}
+      onOpenOwner={model.meta.ownerPath ? () => navigate(model.meta.ownerPath!) : undefined}
       versions={versionRows}
       onOpenVersion={(next) => navigate(artifactDetailPath(ownerKey, id, projectRoot, next))}
-      viewing={viewing}
+      viewing={model.viewing}
       onViewLatest={() => navigate(artifactDetailPath(ownerKey, id, projectRoot))}
       canDelete={record.origin === "published"}
       onDelete={() => setConfirming(true)}
       confirmDelete={confirm}
       onCancelDelete={() => setConfirming(false)}
       actionError={deleteError}
-      program={view.preview && "text" in view.preview ? view.preview.text : payload?.kind === "text" ? payload.text : null}
-      live={displayRecord.live ?? null}
-      liveData={liveData}
-      historicalSnapshots={viewing !== null}
-      refreshing={live.refreshing}
-      refreshError={live.unavailable ? null : live.lastError}
-      updatedAgo={expiry ? null : formatUpdatedAgo(live.lastRefreshedAt, Date.now())}
-      autoNote={
-        expiry
-          ? null
-          : autoRefreshNote(
-              typeof autoSeconds === "number" ? autoSeconds : null,
-              displayRecord.live?.refresh?.ttl_seconds,
-            )
-      }
-      onRefresh={
-        showLiveRefresh(displayRecord.kind, viewing !== null, Boolean(expiry)) ? () => live.refresh() : undefined
-      }
-      onReviewOrigins={() => setOriginReview((value) => value + 1)}
-      livePreview={
-        expiry || displayRecord.kind !== "live.declarative"
-          ? null
-          : {
-              format: displayRecord.live?.format,
-              library: displayRecord.live?.library,
-              program: view.preview && "text" in view.preview ? view.preview.text : payload?.kind === "text" ? payload.text : "",
-              bindings: displayRecord.live?.bindings ?? [],
-              snapshots: live.snapshots,
-              status: live.status,
-              lastRefreshedAt: live.lastRefreshedAt,
-              lastErrorCode: live.lastErrorCode,
-              settled: live.settled,
-              refreshing: live.refreshing,
-              historical: viewing !== null,
-              ownerKey,
-              artifactId: id,
-              projectRoot,
-            }
-      }
-      liveHtml={
-        expiry || displayRecord.kind !== "live.html"
-          ? null
-          : {
-              record: displayRecord,
-              version: displayRecord.version,
-              html: contentError || payload?.kind !== "text" ? null : payload.text,
-              htmlError: contentError
-                ? contentError.message
-                : payload && payload.kind !== "text"
-                  ? "This file cannot be shown as HTML"
-                  : null,
-              historical: viewing !== null,
-              snapshots: live.snapshots,
-              settled: live.settled,
-              refreshing: live.refreshing,
-              ownerKey,
-              artifactId: id,
-              projectRoot,
-              reviewToken: originReview,
-              onOrigins: (origins: ArtifactOriginView) => {
-                originsEpoch.current += 1;
-                setRecord((current) =>
-                  current?.live ? { ...current, live: { ...current.live, origins } } : current,
-                );
-              },
-            }
-      }
+      program={model.program}
+      live={model.live}
+      liveData={model.liveData}
+      historicalSnapshots={model.historicalSnapshots}
+      refreshing={model.refreshing}
+      refreshError={model.refreshError}
+      updatedAgo={model.updatedAgo}
+      autoNote={model.autoNote}
+      onRefresh={model.onRefresh}
+      onReviewOrigins={model.onReviewOrigins}
+      livePreview={model.livePreview}
+      liveHtml={model.liveHtml}
       onConfirmDelete={() => {
         if (deleting) return;
         setDeleting(true);

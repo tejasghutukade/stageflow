@@ -56,3 +56,7 @@ Behind a reverse proxy every visitor shares the proxy's address, so the per-IP l
 | `web_chat.limit_reached` (409) | The agent hit `max_turns`, `session_minutes` or `cost_usd`; start a new conversation |
 | Browser CORS error from another site | Origin not in `STAGEFLOW_PUBLIC_CHAT_ORIGINS` |
 | Reply appears all at once | The agent has `guardrails.block_patterns`, so streamed text is held until the check passes; or a proxy is buffering |
+
+## Generative UI (experimental)
+
+Web chat will render typed **ui** message parts (today: `artifact-ref` pointing at `<ownerKey>/<id>`) through the console part registry, using the same `ArtifactView` component as the Artifacts page. Unsupported kinds show an open-in-console fallback card. See [Chat UI parts](artifacts.md#chat-ui-parts) for the shared schema.

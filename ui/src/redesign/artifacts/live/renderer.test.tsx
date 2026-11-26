@@ -481,7 +481,9 @@ describe("live renderer", () => {
         if (relative.startsWith(`redesign/artifacts/live${path.sep}`) || relative.startsWith("redesign/artifacts/live/")) continue;
         const text = readFileSync(full, "utf8");
         if (text.includes("@openuidev/") || text.includes("@sf-openui")) offenders.push(relative);
-        const page = relative.endsWith(`redesign${path.sep}artifacts${path.sep}ArtifactDetailPage.tsx`) || relative.endsWith("redesign/artifacts/ArtifactDetailPage.tsx");
+        const page =
+          relative.endsWith(`redesign${path.sep}artifacts${path.sep}ArtifactView.tsx`) ||
+          relative.endsWith("redesign/artifacts/ArtifactView.tsx");
         for (const ref of liveModuleRefs(text)) {
           if (page && ref.includes('import("./live/LiveArtifactRenderer")')) continue;
           offenders.push(`${relative} ${ref}`);
@@ -490,7 +492,7 @@ describe("live renderer", () => {
     };
     walk(root);
     expect(offenders).toEqual([]);
-    const page = readFileSync(path.resolve(root, "redesign/artifacts/ArtifactDetailPage.tsx"), "utf8");
+    const page = readFileSync(path.resolve(root, "redesign/artifacts/ArtifactView.tsx"), "utf8");
     expect(page).toContain('import("./live/LiveArtifactRenderer")');
     const beside = 'import { LiveArtifactRenderer } from "./live/LiveArtifactRenderer";\nconst lazy = import("./live/LiveArtifactRenderer");\n';
     expect(liveModuleRefs(beside).some((ref) => ref.includes("import { LiveArtifactRenderer }"))).toBe(true);
