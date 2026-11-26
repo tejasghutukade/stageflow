@@ -296,6 +296,38 @@ describe("sandbox listener", () => {
     expect((await start({ STAGEFLOW_SANDBOX_DISABLED: "1" }, "127.0.0.1", 26200)).reason).toBe("disabled");
   });
 
+  it("binds all interfaces in a container when STAGEFLOW_SANDBOX_PORT is set, loopback otherwise", async () => {
+    const binds: Array<{ host: string; port: number; ipv6Only: boolean }> = [];
+    const capture: SandboxBind = async (host, port, ipv6Only, handler) => {
+      binds.push({ host, port, ipv6Only });
+      return new Promise((resolve, reject) => {
+        const server = createServer(handler);
+        server.once("error", reject);
+        server.listen({ port, host, ipv6Only }, () => resolve(server));
+      });
+    };
+    const local = await start({}, "127.0.0.1", 26300, ["http://127.0.0.1:3847"], capture);
+    expect(local.reason).toBe("listening");
+    expect(binds.some((entry) => entry.host === "127.0.0.1")).toBe(true);
+    expect(binds.some((entry) => entry.host === "0.0.0.0")).toBe(false);
+    binds.length = 0;
+    const probe = await listen();
+    const port = probe.port;
+    await new Promise<void>((resolve) => probe.server.close(() => resolve()));
+    servers.splice(servers.indexOf(probe.server), 1);
+    const docker = await start(
+      { STAGEFLOW_IN_DOCKER: "1", STAGEFLOW_SANDBOX_PORT: String(port) },
+      "0.0.0.0",
+      26400,
+      ["http://127.0.0.1:3847"],
+      capture,
+    );
+    expect(docker.reason).toBe("listening");
+    expect(docker.port).toBe(port);
+    expect(binds).toEqual([{ host: "0.0.0.0", port, ipv6Only: false }]);
+    expect(binds.some((entry) => entry.host === "127.0.0.1" || entry.host === "::1")).toBe(false);
+  });
+
   it("returns null when every scanned port is taken", async () => {
     let hostPort = 0;
     for (let attempt = 0; attempt < 20 && hostPort === 0; attempt += 1) {

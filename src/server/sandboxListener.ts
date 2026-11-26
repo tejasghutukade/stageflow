@@ -69,12 +69,15 @@ export async function startSandboxListener(options: StartSandboxListenerOptions)
     return idle("remote-bind");
   }
   const choice = sandboxHostname(options.listenHost);
+  const publishedInContainer = remote && pinned !== undefined;
+  const v4Host = publishedInContainer ? "0.0.0.0" : "127.0.0.1";
+  const bindV6 = publishedInContainer ? false : choice.bindV6;
   const script = shellScript(options.consoleOrigins, { allowEval: artifactEvalLibsAllowed(env) });
   const headers = shellDocumentHeaders(options.consoleOrigins);
   const handler = (req: IncomingMessage, res: ServerResponse) => handle(req, res, script, headers);
   const bindSocket = options.bind ?? bind;
   if (pinned !== undefined) {
-    const bound = await bindCandidate(pinned, choice.bindV6, handler, bindSocket);
+    const bound = await bindCandidate(pinned, bindV6, handler, bindSocket, v4Host);
     if (bound.status === "failed") return listenFailed(bound.code);
     if (bound.status === "busy") {
       log.warn("sandbox.pinned_taken", "STAGEFLOW_SANDBOX_PORT is in use; sandbox listener disabled", { port: pinned });
@@ -86,7 +89,7 @@ export async function startSandboxListener(options: StartSandboxListenerOptions)
   for (let offset = 0; offset < SANDBOX_PORT_SCAN; offset += 1) {
     const port = start + offset;
     if (port < SANDBOX_PORT_MIN || port > SANDBOX_PORT_MAX) continue;
-    const bound = await bindCandidate(port, choice.bindV6, handler, bindSocket);
+    const bound = await bindCandidate(port, bindV6, handler, bindSocket, v4Host);
     if (bound.status === "failed") return listenFailed(bound.code);
     if (bound.status === "ready") return listening(bound.servers, choice.hostname, port);
   }
@@ -162,10 +165,11 @@ async function bindCandidate(
   bindV6: boolean,
   handler: (req: IncomingMessage, res: ServerResponse) => void,
   bindSocket: SandboxBind,
+  v4Host = "127.0.0.1",
 ): Promise<BindCandidate> {
   let v4: Server;
   try {
-    v4 = await bindSocket("127.0.0.1", port, false, handler);
+    v4 = await bindSocket(v4Host, port, false, handler);
   } catch (err) {
     if (errorCode(err) === "EADDRINUSE") return { status: "busy" };
     return { status: "failed", code: errorCode(err) ?? "unknown" };

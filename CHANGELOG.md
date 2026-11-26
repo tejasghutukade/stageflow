@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Live HTML in Docker reaches the sandbox listener when `STAGEFLOW_SANDBOX_PORT` is set and the port is published on `127.0.0.1`, without an in-container forwarder.
+
 ## [0.67.0] - 2026-11-25
 
 ### Added
@@ -25,9 +28,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Live artifact refresh and queries match the stored project by wire id; snapshots are dropped when a binding's function changes; a vendored library read error no longer fails the page; record sync ignores stale responses.
 - Scope switches on the Agents and Catalog pages cancel in-flight loads that would overwrite the new view.
-
-### Known issues
-- Live HTML in a Docker container needs an extra forwarder to the sandbox port; see [Docker](docs/docker.md).
 
 ## [0.66.0] - 2026-11-17
 
