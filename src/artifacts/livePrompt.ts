@@ -58,6 +58,18 @@ export function htmlPromptSection(): string {
   ].join("\n");
 }
 
+export function declarativePromptSection(): string {
+  return [
+    `Live program: kind live.declarative. Library ${LIBRARY_NAME} ${LIBRARY_VERSION}. format ${OPENUI_LANG_FORMAT}. A program is valid only against this library version.`,
+    "",
+    vocabularyPrompt(),
+    "",
+    SYNTAX,
+    `Manifest fields: ${MANIFEST_FIELDS}. For a one-off, bindings is [] and the data is written into the program. Every string is plain text.`,
+    'Example: root = Stack([card], "column", "m") then card = Card([CardHeader("Regional sales", "this quarter"), Table([Col("Region", ["North", "South"]), Col("Sales", [120, 95], "number")])]).',
+  ].join("\n");
+}
+
 export function liveArtifactsPromptSection(functions: readonly BindableFunctionInfo[]): string {
   const html = htmlPromptSection();
   if (functions.length === 0) {

@@ -23,6 +23,7 @@ import {
   type UiPartEnvelope,
 } from "../artifacts/uiPart.js";
 import { Type } from "typebox";
+import { declarativePromptSection, htmlPromptSection } from "../artifacts/livePrompt.js";
 
 export const PRESENT_UI_TOOL_NAME = "present_ui";
 
@@ -36,7 +37,10 @@ export function agentHoldsPresentUi(definition: Pick<AgentDefinition, "ui">): bo
 export function agentPresentUiPrompt(definition: Pick<AgentDefinition, "ui">): string | undefined {
   if (!agentHoldsPresentUi(definition)) return undefined;
   const kinds = definition.ui.kinds.join(", ");
-  return ["# Showing artifacts in chat", "", `${AGENT_PRESENT_UI_SENTENCE} Kinds you may present: ${kinds}.`].join("\n");
+  const sections = ["# Showing artifacts in chat", "", `${AGENT_PRESENT_UI_SENTENCE} Kinds you may present: ${kinds}.`];
+  if (definition.ui.kinds.includes("live.declarative")) sections.push("", declarativePromptSection());
+  if (definition.ui.kinds.includes("live.html")) sections.push("", htmlPromptSection());
+  return sections.join("\n");
 }
 
 export function appendAgentPresentUiPrompt(systemPrompt: string, definition: Pick<AgentDefinition, "ui">): string {

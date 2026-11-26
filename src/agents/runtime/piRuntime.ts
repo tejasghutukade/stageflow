@@ -524,18 +524,20 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
       ? createPresentUiTool({
           kinds: definition.ui.kinds,
           projectRoot,
-          present: (args) => {
-            const presentedInMessage = args.program !== undefined ? ++inlinePresented.n : 0;
-            return options.presentUi
-              ? options.presentUi({
-                  ...args,
-                  presentedInMessage,
-                  projectRoot,
-                  sessionId: input.sessionId,
-                  agentId: definition.id,
-                  kinds: definition.ui.kinds,
-                })
-              : Promise.resolve({ ok: false, code: "ui.unavailable", message: "present_ui is not available" });
+          present: async (args) => {
+            const inline = args.program !== undefined;
+            const presentedInMessage = inline ? inlinePresented.n + 1 : 0;
+            if (!options.presentUi) return { ok: false, code: "ui.unavailable", message: "present_ui is not available" };
+            const result = await options.presentUi({
+              ...args,
+              presentedInMessage,
+              projectRoot,
+              sessionId: input.sessionId,
+              agentId: definition.id,
+              kinds: definition.ui.kinds,
+            });
+            if (inline && result.ok) inlinePresented.n += 1;
+            return result;
           },
         })
       : undefined;

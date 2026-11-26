@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentChatController } from "../src/agents/chatTurn.js";
 import { createEvalGate, EvalGateRegistry, type EvalGatePolicy } from "../src/agents/evalGate.js";
-import { messageReplayText, presentArtifact, PRESENT_UI_TOOL_NAME, uiPartsFromToolOutput } from "../src/agents/presentUi.js";
+import { agentPresentUiPrompt, messageReplayText, presentArtifact, PRESENT_UI_TOOL_NAME, uiPartsFromToolOutput } from "../src/agents/presentUi.js";
 import { catalogRootsForArtifacts } from "../src/artifacts/projectScope.js";
 import { publishArtifact } from "../src/artifacts/publish.js";
 import { UI_PART_KIND_ARTIFACT_REF, UI_PART_SCHEMA_VERSION } from "../src/artifacts/uiPart.js";
@@ -33,6 +33,20 @@ const part = {
   title: "Weekly",
   fallback: { text: "Weekly", url: "http://127.0.0.1:3847/#/artifacts/agent%3Ahelper/weekly?project_root=p" },
 };
+
+describe("present_ui prompt", () => {
+  it("teaches the program syntax only for the kinds the agent may present", () => {
+    const declarative = agentPresentUiPrompt({ ui: { present: true, kinds: ["live.declarative"], functions: [] } })!;
+    expect(declarative).toContain("live.declarative");
+    expect(declarative).toContain("Syntax: one statement per line");
+    expect(declarative).toContain("CardHeader");
+    expect(declarative).not.toContain("Live HTML artifacts");
+    const markdown = agentPresentUiPrompt({ ui: { present: true, kinds: ["static.markdown"], functions: [] } })!;
+    expect(markdown).not.toContain("Syntax: one statement per line");
+    const html = agentPresentUiPrompt({ ui: { present: true, kinds: ["live.html"], functions: [] } })!;
+    expect(html).toContain("Live HTML artifacts");
+  });
+});
 
 describe("ui grant", () => {
   it("is off by default and rejects a bad kind", () => {
