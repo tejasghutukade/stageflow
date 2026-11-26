@@ -126,7 +126,7 @@ Mandatory bar: `GET /livez` → 200. Optional stretch flags: `--readyz`, `--chec
 
 ## Pull and run (GHCR) {#pull-and-run-ghcr}
 
-Published image: **`ghcr.io/tejasghutukade/stageflow`**. This is the recommended way to run Stageflow. Tags per release: semver `x.y.z` and major.minor `x.y` (same digest). The current minor tag is `0.66` (`0.66.0` is that exact release).
+Published image: **`ghcr.io/tejasghutukade/stageflow`**. This is the recommended way to run Stageflow. Tags per release: semver `x.y.z` and major.minor `x.y` (same digest). The current minor tag is `0.67` (`0.67.0` is that exact release).
 
 This starts the console on this machine. The `stageflow-data` volume keeps providers and pipelines you save in the console. Pass `sf ui` because the image command is `sf mcp`. This command does not mount the Docker socket, so stage file tools run in the Stageflow container. [Compose from a checkout](#local-try-compose) is what turns the stage sandbox on.
 
@@ -134,13 +134,13 @@ This starts the console on this machine. The `stageflow-data` volume keeps provi
 docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.66 \
+  ghcr.io/tejasghutukade/stageflow:0.67 \
   sf ui
 ```
 
 Open [http://127.0.0.1:3847](http://127.0.0.1:3847). The published port stays on `127.0.0.1`. The process inside the container still binds `0.0.0.0`. The container logs print `Control token: <token>` on first start. Later starts reuse it and print the file path. Copy that into the console prompt. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`.
 
-Live HTML preview needs the sandbox origin. It is not available by default in a container: the process binds `0.0.0.0`, so the shell listener stays off and `sandbox_origin` on `GET /api/health` is null. The console keeps the scriptless preview. To turn the shell on, set `STAGEFLOW_SANDBOX_PORT` to a free port inside the container and publish that port on `127.0.0.1` the same way as `3847` (`-p 127.0.0.1:<host-port>:<STAGEFLOW_SANDBOX_PORT>`). The browser origin of the console has to be one of the origins the shell will frame, which for this published mapping is `http://127.0.0.1:3847` when the console port is published as `3847`. The sandbox port is a second published port. Do not add it to `STAGEFLOW_ALLOWED_HOSTS`. See [Live HTML artifacts: the sandbox origin](artifacts.md#live-html-sandbox).
+Live HTML preview needs the sandbox origin. It is not available by default in a container: the process binds `0.0.0.0`, so the shell listener stays off and `sandbox_origin` on `GET /api/health` is null. The console keeps the scriptless preview. To turn the shell on, set `STAGEFLOW_SANDBOX_PORT` to a free port inside the container and publish that port on `127.0.0.1` the same way as `3847` (`-p 127.0.0.1:<host-port>:<STAGEFLOW_SANDBOX_PORT>`). The browser origin of the console has to be one of the origins the shell will frame, which for this published mapping is `http://127.0.0.1:3847` when the console port is published as `3847`. The sandbox port is a second published port. Do not add it to `STAGEFLOW_ALLOWED_HOSTS`. The listener binds the container's loopback address, so a published port alone does not reach it from the host; in a trial, a small in-container forwarder from a second port to `127.0.0.1:<STAGEFLOW_SANDBOX_PORT>` was needed before the browser could load the shell. Treat live HTML in Docker as not yet supported without such a forwarder. See [Live HTML artifacts: the sandbox origin](artifacts.md#live-html-sandbox).
 
 Prefer a digest pin and a control token when the port is not limited to this machine:
 

@@ -28,7 +28,7 @@ Task files with their last run. **N** creates a task, **E** edits, **S** starts 
 
 ## Catalog (`#/catalog`)
 
-Two tabs: **Stages** (stage files; **E** opens one in the editor, **N** creates one) and **Skills** (installed skills and which stages use them; **I** installs one, **C** copies a name). `#/skills` opens the Skills tab.
+Two tabs: **Stages** (stage files; **E** opens one in the editor, **N** creates one) and **Skills** (installed skills and which stages use them; **I** installs one, **C** copies a name). `#/skills` opens the Skills tab. The Skills tab shows the same note about items in other projects, with a button for each project.
 
 ## Triggers (`#/triggers`)
 

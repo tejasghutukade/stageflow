@@ -33,6 +33,7 @@ More CI-focused examples will follow this pattern (prepare context → run pipel
 | [stage-mcp](stage-mcp/) | Stage MCP via project `.mcp.json` and a local echo fixture | `sf validate`, then `sf run` from git root |
 | [playwright-mcp](playwright-mcp/) | One stage: open a page and save a PNG screenshot (Playwright MCP) | `sf validate`, then `sf run` from git root |
 | [artifacts](artifacts/) | One stage: `artifacts.publish`, `publish_artifact`, Markdown + CSV, CLI and console index | [README](artifacts/README.md), `sf validate`, then `sf run` |
+| [ui-showcase](ui-showcase/) | Every artifact kind: static, `live.declarative`, `live.html`; seed without a model or generate with one | [README](ui-showcase/README.md), `seed.sh` or `sf run` |
 | [browser-session](browser-session/) | Saved browser login: check, human login only when logged out, then work; local fixture site | [README](browser-session/README.md), then `sf run` |
 | [context7-mcp](context7-mcp/) | Three stages: resolve a library, fetch docs, write a brief (Context7 MCP) | `sf validate`, then `sf run` from git root |
 | [feedback-loop](feedback-loop/) | Source-owned review loop (`continue` / `send_back`) | `sf validate`, then `sf run` |

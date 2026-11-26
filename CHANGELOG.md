@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.67.0] - 2026-11-25
+
+### Added
+- Artifacts: the console, `sf artifact`, the MCP `artifacts` toolset and the run page list, publish, version, search and expire artifacts a stage or agent publishes. Static kinds render in the console; `live.declarative` programs render from a manifest and bind read-only functions with viewer arguments, refresh and snapshots; `live.html` runs in a second-origin sandbox with vendored Chart.js, D3, ECharts, Leaflet and Mermaid and a host bridge (`window.stageflow`), with per-origin approval.
+- The run page's Artifacts tab lists the artifacts a stage published, each linking to its Artifacts page entry with its project. `GET /api/runs/<id>`, `sf run --json --include stages` and `sf runs show --json` carry `published_artifacts` per stage.
+- `examples/ui-showcase/`: a catalog with every artifact kind, a seed script that needs no model, and a pipeline that has a model generate five of them.
+- [Working against a running Host](docs/working-against-a-host.md): a checklist for agents that create and run work on a Host that is already up (find it and its `home_id`, write into `workspace`, run through the Host, confirm it is visible), with matching skill references and an `AGENTS.md` section.
+- `sf run`, `sf runs` and `sf artifact` warn on stderr when the running Host uses a different home than the process (opt out with `STAGEFLOW_NO_HOST_HOME_WARNING`).
+- MCP write tools return the project and a console link for what they wrote, and `read_pipeline` stays readable on read-only roots.
+
+### Changed
+- The Artifacts page opens on All projects. The Agents, Functions and Catalog skills pages show how many items sit in other projects and let you switch; a project switch applies to that page only and clears when you leave.
+- MCP write tools default to the `workspace` project instead of requiring a root.
+- Agent `get_artifact` is pinned to the session's project. Artifact project identity is compared in one helper, so the symbolic `workspace` id and an absolute catalog path match.
+
+### Fixed
+- Live artifact refresh and queries match the stored project by wire id; snapshots are dropped when a binding's function changes; a vendored library read error no longer fails the page; record sync ignores stale responses.
+- Scope switches on the Agents and Catalog pages cancel in-flight loads that would overwrite the new view.
+
+### Known issues
+- Live HTML in a Docker container needs an extra forwarder to the sandbox port; see [Docker](docs/docker.md).
+
 ## [0.66.0] - 2026-11-17
 
 ### Added
