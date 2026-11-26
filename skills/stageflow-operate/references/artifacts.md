@@ -23,7 +23,8 @@ Host-down for list/show when the schema is current; publish and delete need a Ho
 
 | Command | Purpose |
 |---|---|
-| `sf artifact list` | Table or `--json` page. Filters: `--project-root`, `--kind`, `--owner`, `--tag`, `--status`, `--live`, `--sort`, `--order`, `--q`, `--limit`, `--cursor`. |
+| `sf artifact list` | Table or `--json` page. Filters: `--project-root`, `--kind`, `--owner`, `--tag`, `--status`, `--live`, `--scope` (`project` or `session`), `--sort`, `--order`, `--q`, `--limit`, `--cursor`. The default omits session artifacts. |
+| `sf artifact promote <key>` | Clears expiry and keeps a session artifact on the default list. MCP: `promote_artifact`. |
 | `sf artifact show <ownerKey>/<id>` | Summary; `--json` for the record. `--project-root` when ambiguous. |
 | `sf artifact publish` | Copy a file into the keep store (`--owner`, `--id`, `--kind`, `--title`, `--file` or `--stdin`). Source recorded as `console`. |
 | `sf artifact delete <ownerKey>/<id>` | Remove every published version (irreversible). Indexed-only rows → `artifact.not_deletable`. |

@@ -6,6 +6,7 @@ import type { EvalGateRegistry } from "./evalGate.js";
 import { EVAL_SESSION_SOURCE, isEvalSession, type EvalSessionOverrides } from "./evalSession.js";
 import { guardedStream } from "./guardrails.js";
 import { fitHistory } from "./historyFit.js";
+import { uiErrorPart, UI_PART_KIND_ARTIFACT_REF, UI_PART_KIND_ERROR } from "../artifacts/uiPart.js";
 import { PRESENT_UI_TOOL_NAME, uiPartsFromToolOutput } from "./presentUi.js";
 import type { OtlpSink } from "./otlpSink.js";
 import { isToolGranted, requiresAskFirst } from "./policy.js";
@@ -35,6 +36,7 @@ export type SendTurnInput = {
   /** Overrides for a new eval session (needs `source: "eval"`). */
   eval?: EvalSessionOverrides;
   onDelta?: (text: string) => void;
+  onUiPreview?: (preview: import("../artifacts/inlinePreview.js").InlinePreview) => void;
   onSessionOpened?: (sessionId: string) => void;
   /** Retry this earlier, interrupted turn: its user message is reused, not asked again. */
   resumeTurnId?: string;
@@ -293,7 +295,22 @@ export class AgentConversation {
         toolStarts.set(call.id, new Date());
       },
       toolFinished: (call, result) => {
-        if (result.ok) uiParts.push(...uiPartsFromToolOutput(call.tool, result.output));
+        if (result.ok) {
+          for (let index = uiParts.length - 1; index >= 0; index -= 1) {
+            if (uiParts[index]?.kind === UI_PART_KIND_ERROR) uiParts.splice(index, 1);
+          }
+          uiParts.push(...uiPartsFromToolOutput(call.tool, result.output));
+        } else if (call.tool === PRESENT_UI_TOOL_NAME) {
+          let message = "That could not be shown.";
+          try {
+            const parsed = JSON.parse(result.output) as { message?: unknown };
+            if (typeof parsed.message === "string" && parsed.message.trim()) message = parsed.message;
+          } catch {
+            message = result.output.trim() || message;
+          }
+          uiParts.push(uiErrorPart(message));
+          input.onUiPreview?.({ phase: "error", message: uiErrorPart(message).message });
+        }
         if (active.session.source === EVAL_SESSION_SOURCE) this.options.evalGates?.get(sessionId)?.observeFinished(call, result);
         const isAgent = call.tool.startsWith("agent:");
         record({
@@ -376,6 +393,7 @@ export class AgentConversation {
         messages: [...fitHistory(transcript.slice(0, -1), definition.limits.long_context), transcript.at(-1)!],
         signal: controller.signal,
         onDelta: (text) => stream.push(text),
+        ...(input.onUiPreview ? { onUiPreview: input.onUiPreview } : {}),
         hooks,
         ...(input.requestedTool ? { requestedTool: input.requestedTool } : {}),
         ...(consumer && safeSubAgents ? { consumerSafeSubAgents: safeSubAgents } : {}),
@@ -442,7 +460,13 @@ export class AgentConversation {
       status: failed ? "failed" : cancelled ? "cancelled" : "succeeded",
       ...(failed ? { errorCode: stopReason!.code } : {}),
       ...(result.text.length > 0 || uiParts.length > 0 ? { assistantText: result.text } : {}),
-      ...(uiParts.length > 0 ? { assistantParts: uiParts } : {}),
+      ...(uiParts.length > 0
+        ? {
+            assistantParts: uiParts.some((part) => part.kind === UI_PART_KIND_ARTIFACT_REF)
+              ? uiParts.filter((part) => part.kind === UI_PART_KIND_ARTIFACT_REF)
+              : uiParts.filter((part) => part.kind === UI_PART_KIND_ERROR).slice(-1),
+          }
+        : {}),
       ...(usage ? { usage, costUsd: usage.costUsd } : {}),
       ...(evalScores.length > 0 ? { evalScores } : {}),
     });

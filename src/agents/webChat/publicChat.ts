@@ -276,6 +276,12 @@ export class PublicWebChat {
         source: SOURCE,
         ...(target.definition.web_chat.access === "authenticated" ? { consumerSessionId: visitor } : {}),
         onDelta: (delta) => write({ type: "delta", text: delta }),
+        onUiPreview: (preview) =>
+          write({
+            type: "ui_preview",
+            phase: preview.phase,
+            ...(preview.phase === "error" ? { message: preview.message } : {}),
+          }),
       });
       finished = true;
       if (target.definition.web_chat.access === "authenticated") await this.validateProtectedSession(target, visitor, session);

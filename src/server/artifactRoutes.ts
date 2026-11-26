@@ -8,6 +8,7 @@ import { artifactStorageKey, stageOwnerKey } from "../artifacts/keys.js";
 import { artifactLiveManifestFields } from "../artifacts/record.js";
 import { ArtifactPublishError, STATIC_CONTENT_MAX_BYTES } from "../artifacts/limits.js";
 import { deletePublishedArtifact, publishArtifact, type PublishRequest } from "../artifacts/publish.js";
+import { promoteSessionArtifact } from "../artifacts/sessionScope.js";
 import {
   ArtifactQueryError,
   listArtifacts,
@@ -17,6 +18,7 @@ import {
   parseArtifactListSort,
   parseArtifactLiveFilter,
   parseArtifactOwnerFilter,
+  parseArtifactScope,
   parseArtifactStatus,
   parseArtifactTagFilter,
   parseArtifactTextQuery,
@@ -415,6 +417,7 @@ function unexpectedFailure(method: string, pathname: string): { error: string; c
   if (method === "DELETE") return { error: "Delete failed", code: "artifact.delete_failed" };
   if (/\/refresh$/.test(pathname)) return { error: "Refresh failed", code: "artifact.refresh_failed" };
   if (/\/query$/.test(pathname)) return { error: "Query failed", code: "artifact.query_failed" };
+  if (/\/promote$/.test(pathname)) return { error: "Promote failed", code: "artifact.promote_failed" };
   if (/\/origins\/(approve|revoke)$/.test(pathname)) return { error: "Origin approval failed", code: "artifact.approve_failed" };
   return { error: "Publish failed", code: "artifact.publish_failed" };
 }
@@ -436,6 +439,7 @@ export async function handleArtifactRoutes(
   const data = /^\/api\/artifacts\/([^/]+)\/([^/]+)\/data$/.exec(pathname);
   const approve = /^\/api\/artifacts\/([^/]+)\/([^/]+)\/origins\/approve$/.exec(pathname);
   const approval = /^\/api\/artifacts\/([^/]+)\/([^/]+)\/origins\/approval$/.exec(pathname);
+  const promote = /^\/api\/artifacts\/([^/]+)\/([^/]+)\/promote$/.exec(pathname);
   const record = /^\/api\/artifacts\/([^/]+)\/([^/]+)$/.exec(pathname);
   if (
     !list &&
@@ -446,6 +450,7 @@ export async function handleArtifactRoutes(
     data === null &&
     approve === null &&
     approval === null &&
+    promote === null &&
     record === null
   ) {
     return false;
@@ -459,6 +464,10 @@ export async function handleArtifactRoutes(
     return true;
   }
   if ((versions || content || data) && method !== "GET") {
+    json(res, 405, { error: "Method not allowed", code: "artifact.invalid_shape" });
+    return true;
+  }
+  if (promote && method !== "POST") {
     json(res, 405, { error: "Method not allowed", code: "artifact.invalid_shape" });
     return true;
   }
@@ -498,13 +507,14 @@ export async function handleArtifactRoutes(
           sort: parseArtifactListSort(url.searchParams.get("sort")),
           order: parseArtifactListOrder(url.searchParams.get("order")),
           q: parseArtifactTextQuery(url.searchParams.get("q")),
+          scope: parseArtifactScope(url.searchParams.get("scope")),
         },
         roots,
       );
       json(res, 200, page);
       return true;
     }
-    const match = versions ?? content ?? refresh ?? query ?? data ?? approve ?? approval ?? record;
+    const match = versions ?? content ?? refresh ?? query ?? data ?? approve ?? approval ?? promote ?? record;
     const ownerKey = decodeURIComponent(match![1]!);
     const id = decodeURIComponent(match![2]!);
     const projectRoot = url.searchParams.get("project_root") ?? undefined;
@@ -525,6 +535,12 @@ export async function handleArtifactRoutes(
       }
       const revoked = revokeOrigins(db, storageKey, hash !== null && hash !== "" ? hash : undefined);
       json(res, 200, revoked);
+      return true;
+    }
+    if (promote) {
+      const artifact = readArtifact(db, ownerKey, id, projectRoot, roots);
+      promoteSessionArtifact(db, storageKeyFor(artifact));
+      json(res, 200, readArtifact(db, ownerKey, id, projectRoot, roots));
       return true;
     }
     if (record && method === "DELETE") {

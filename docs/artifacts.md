@@ -6,6 +6,8 @@ This page covers the artifact index, static publishing, and live artifacts.
 
 An agent with `ui.present` can place an artifact into the conversation with `present_ui`. The message stores the key and version, and the chat renders that artifact. A deleted or expired artifact shows an unavailable card. See [Agent definition](agent-definition.md#ui).
 
+`present_ui` also accepts `program` and `manifest` instead of a key. The Host validates that pair with the same checks as publish and stores a session-scoped artifact: owner `agent:<this agent>`, the session's project, `scope: session`, and `expires_at` 30 days out. The tool result is the same artifact reference. While the tool arguments stream, chat shows a skeleton. A program that does not parse shows a short error card, and the model receives the validation error so it can correct the call. **Promote** (the button on the part, `sf artifact promote`, or MCP `promote_artifact`) clears the expiry and sets `scope` back to `project`. Session artifacts stay off the default Artifacts list and the default `sf artifact list`. The Session filter, `scope=session`, and `sf artifact list --scope session` show them. Eval-session artifacts stay hidden from every list. They are removed when the session is purged. A retention sweep marks one expired (`expired_reason: session_expired`) once `expires_at` has passed. `sf backup` and `sf archive` include them with the other artifact rows and the `artifacts/` directory. Caps: the publish size limit for the kind, 32 available session artifacts per session, 4 inline presents per message, and 12 inline presents per session per minute.
+
 ## What gets indexed
 
 When a stage attempt finishes with a **success** envelope, Stageflow indexes each path in that envelope's `artifacts` list:
@@ -86,6 +88,7 @@ The cursor is base64url-encoded JSON: `{ "sort", "order", "primary", "key" }`. `
 | `sort` | `updated` (default), `title`, or `size`. Default order is `desc` for `updated` and `size`, `asc` for `title`. Title order is ASCII case-insensitive. |
 | `order` | `asc` or `desc` (overrides the default for the chosen `sort`). |
 | `q` | Search text. See [Search](#search). |
+| `scope` | `project` (default) omits session artifacts. `session` returns only those. Eval-session rows are omitted from both. |
 
 Invalid `sort`, `order`, `kind`, `tag`, `live`, `status`, or `q` values return `400` with code `artifact.invalid_filter`. A query that is only punctuation or search operators is `artifact.invalid_filter` ("query has no searchable terms"). Malformed cursors return `artifact.invalid_shape`; a cursor whose sort, order, or search text does not match the request returns `artifact.invalid_filter`.
 
@@ -314,7 +317,8 @@ The Artifacts page shows an agent owner as `agent · <id>` and links to that age
 
 ## CLI
 
-- `sf artifact list` — table or `--json` page of indexed artifacts. Server-side filters match the list query above (`--project-root`, `--limit`, `--kind`, `--owner`, `--tag`, `--status`, `--live`, `--sort`, `--order`, `--q`). `--q` is the same search as `GET /api/artifacts?q=`. The human table includes a `STATUS` column (`expired` or blank) and a short run id. See [CLI reference](cli-reference.md#sf-artifact).
+- `sf artifact list` — table or `--json` page of indexed artifacts. Server-side filters match the list query above (`--project-root`, `--limit`, `--kind`, `--owner`, `--tag`, `--status`, `--live`, `--scope`, `--sort`, `--order`, `--q`). `--scope session` lists session artifacts. The default omits them. `--q` is the same search as `GET /api/artifacts?q=`. The human table includes a `STATUS` column (`expired` or blank) and a short run id. See [CLI reference](cli-reference.md#sf-artifact).
+- `sf artifact promote <ownerKey>/<id>` — clears expiry and makes a session artifact a normal one. `--json` prints the record.
 - `sf artifact show <ownerKey>/<id>` — a readable summary (key, title, kind, status, owner, source, updated, and expires or the expired reason). `--json` prints the record. Use `--project-root` when the key is ambiguous across projects.
 - `sf artifact publish` — copy a file into the keep store. See [Publishing](#publishing) and [CLI reference](cli-reference.md#sf-artifact-publish).
 - `sf artifact refresh <ownerKey>/<id>` — run the live bindings. Repeat `--binding <id>` to refresh some of them. `--if-stale` reuses a snapshot that is still inside the TTL. See [CLI reference](cli-reference.md#sf-artifact).

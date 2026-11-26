@@ -115,6 +115,7 @@ export type ArtifactRecord = {
   created_at: string;
   updated_at: string;
   expires_at: string | null;
+  scope?: "project" | "session";
   project: { id: string; registered: boolean };
   status: "available" | "expired";
   expired_at: string | null;
@@ -138,6 +139,7 @@ export type ArtifactListQueryParams = {
   sort?: ArtifactListSort;
   order?: ArtifactListOrder;
   q?: string;
+  scope?: "project" | "session";
 };
 
 export type ArtifactListPage = {
@@ -163,6 +165,7 @@ export function artifactListSearchParams(
   if (options?.sort) params.set("sort", options.sort);
   if (options?.order) params.set("order", options.order);
   if (options?.q) params.set("q", options.q);
+  if (options?.scope) params.set("scope", options.scope);
   return params;
 }
 
@@ -234,6 +237,16 @@ export function fetchArtifact(
   version?: number,
 ): Promise<ArtifactRecord> {
   return api(artifactRecordPath(ownerKey, id, projectRoot, version));
+}
+
+export function promoteArtifact(ownerKey: string, id: string, projectRoot?: string): Promise<ArtifactRecord> {
+  const params = new URLSearchParams();
+  if (projectRoot) params.set("project_root", projectRoot);
+  const query = params.toString();
+  return api(
+    `/api/artifacts/${encodeURIComponent(ownerKey)}/${encodeURIComponent(id)}/promote${query ? `?${query}` : ""}`,
+    { method: "POST" },
+  );
 }
 
 export type ArtifactContentPayload =

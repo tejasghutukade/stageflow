@@ -5,6 +5,7 @@ import { isLiveKind } from "../artifacts/kinds.js";
 import { artifactStorageKey, stageOwnerKey } from "../artifacts/keys.js";
 import { ArtifactPublishError } from "../artifacts/limits.js";
 import { deletePublishedArtifact, publishArtifact, type PublishRequest } from "../artifacts/publish.js";
+import { promoteSessionArtifact } from "../artifacts/sessionScope.js";
 import { catalogRootsForArtifacts } from "../artifacts/projectScope.js";
 import {
   ArtifactQueryError,
@@ -15,6 +16,7 @@ import {
   parseArtifactListSort,
   parseArtifactLiveFilter,
   parseArtifactOwnerFilter,
+  parseArtifactScope,
   parseArtifactStatus,
   parseArtifactTagFilter,
   readArtifact,
@@ -50,6 +52,12 @@ const getArtifactSchema = z.object({
   project_root: z.string().optional(),
   limit: z.number().int().optional(),
   cursor: z.string().optional(),
+  scope: z.enum(["project", "session"]).optional(),
+});
+
+const promoteArtifactSchema = z.object({
+  key: z.string(),
+  project_root: z.string().optional(),
 });
 
 const saveArtifactSchema = z.object({
@@ -227,7 +235,7 @@ export function registerArtifactTools(server: McpServer, deps: McpToolDeps): voi
   server.registerTool(
     "get_artifact",
     {
-      description: "List (list true) or read (key). view: record, versions, content, data.",
+      description: "List (list true) or read an artifact.",
       inputSchema: getArtifactSchema,
     },
     async (args) => {
@@ -251,6 +259,7 @@ export function registerArtifactTools(server: McpServer, deps: McpToolDeps): voi
             sort: parseArtifactListSort(value.sort ?? null),
             order: parseArtifactListOrder(value.order ?? null),
             ...(needle.length > 0 ? { q: needle } : {}),
+            ...(value.scope !== undefined ? { scope: parseArtifactScope(value.scope) } : {}),
           };
           return textResult(listArtifacts(db, query, roots));
         }
@@ -318,7 +327,7 @@ export function registerArtifactTools(server: McpServer, deps: McpToolDeps): voi
   server.registerTool(
     "save_artifact",
     {
-      description: "Publish an artifact; live.declarative or live.html needs manifest. Same bytes keep the version.",
+      description: "Publish an artifact. Live kinds need manifest. Same bytes keep the version.",
       inputSchema: saveArtifactSchema,
     },
     async (args) => {
@@ -436,6 +445,35 @@ export function registerArtifactTools(server: McpServer, deps: McpToolDeps): voi
           error instanceof ArtifactContentError ||
           error instanceof ArtifactPublishError
         ) {
+          return failureResult(error);
+        }
+        throw error;
+      }
+    },
+  );
+
+  server.registerTool(
+    "promote_artifact",
+    {
+      description: "Keep a session artifact.",
+      inputSchema: promoteArtifactSchema,
+    },
+    async (args) => {
+      const parsed = promoteArtifactSchema.safeParse(args);
+      if (!parsed.success) return schemaError(parsed.error.issues[0]?.message ?? "Invalid arguments");
+      const value = parsed.data;
+      try {
+        const parts = parseArtifactShowKey(value.key);
+        if (parts === undefined) {
+          throw new ArtifactQueryError(400, "artifact.invalid_id", "Artifact key must be <ownerKey>/<id>");
+        }
+        const db = open();
+        const roots = await catalogRootsForArtifacts(deps.store);
+        const artifact = readArtifact(db, parts.ownerKey, parts.id, value.project_root, roots);
+        promoteSessionArtifact(db, storageKeyFor(artifact));
+        return textResult(readArtifact(db, parts.ownerKey, parts.id, value.project_root, roots));
+      } catch (error) {
+        if (error instanceof ArtifactQueryError || error instanceof ArtifactContentError || error instanceof ArtifactPublishError) {
           return failureResult(error);
         }
         throw error;

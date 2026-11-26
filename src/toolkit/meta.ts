@@ -201,6 +201,7 @@ export const TOOL_META: Readonly<Record<string, ToolMeta>> = {
   save_artifact: t("artifacts.write", "write", "artifacts"),
   refresh_artifact: t("artifacts.refresh", "external", "artifacts"),
   delete_artifact: t("artifacts.cleanup", "destructive", "artifacts"),
+  promote_artifact: t("artifacts.write", "write", "artifacts", true),
 };
 
 export type StageflowGrants = { groups: readonly string[]; tools: readonly string[] };

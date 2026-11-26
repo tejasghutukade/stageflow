@@ -59,7 +59,7 @@ Operator-only Stageflow tools (`gates.decide` and `get_started`) cannot be grant
 
 ### `ui`
 
-Off unless `present` is true. This is the grant for `present_ui`, the tool that places an artifact into the conversation. The chat stores a reference (`key`, optional `version`, title, console link), not a copy of the artifact.
+Off unless `present` is true. This is the grant for `present_ui`, the tool that places an artifact into the conversation. The chat stores a reference (`key`, optional `version`, title, console link), not a copy of the artifact. Pass `program` and `manifest` to save a one-off as a session artifact. A validation error comes back on the tool result so the model can correct it. Chat shows a skeleton while the call streams and a short error card when the program does not parse.
 
 ```yaml
 ui:

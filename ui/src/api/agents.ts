@@ -1,4 +1,3 @@
-import type { UiPartArtifactRef } from "../../../src/artifacts/uiPart.ts";
 import { withSurfaceScope } from "./projectScope";
 import { authorizationHeaders, notifyControlTokenRequired } from "./controlToken";
 
@@ -144,7 +143,7 @@ export type AgentMessage = {
   role: "user" | "assistant";
   author: string | null;
   text: string;
-  parts?: UiPartArtifactRef[];
+  parts?: import("../../../src/artifacts/uiPart.ts").UiPart[];
   createdAt: string;
 };
 
@@ -365,7 +364,12 @@ export const agentsApi = {
 export async function streamAgentChat(
   id: string,
   input: { message: string; sessionId?: string },
-  handlers: { onDelta?: (text: string) => void; onSession?: (sessionId: string) => void; signal?: AbortSignal } = {},
+  handlers: {
+    onDelta?: (text: string) => void;
+    onSession?: (sessionId: string) => void;
+    onUiPreview?: (preview: { phase: "skeleton" | "error"; message?: string }) => void;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<AgentSessionDetail> {
   const res = await fetch(withSurfaceScope(agentUrl(id, "/chat"), "agents"), {
     method: "POST",
@@ -398,8 +402,12 @@ export async function streamAgentChat(
         session?: AgentSessionDetail;
         code?: string;
         message?: string;
+        phase?: "skeleton" | "error";
       };
       if (frame.type === "delta" && frame.text) handlers.onDelta?.(frame.text);
+      else if (frame.type === "ui_preview" && (frame.phase === "skeleton" || frame.phase === "error")) {
+        handlers.onUiPreview?.({ phase: frame.phase, ...(frame.message ? { message: frame.message } : {}) });
+      }
       else if (frame.type === "session" && frame.sessionId) handlers.onSession?.(frame.sessionId);
       else if (frame.type === "done" && frame.session) return frame.session;
       else if (frame.type === "error") {

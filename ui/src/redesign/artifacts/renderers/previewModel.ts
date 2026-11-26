@@ -58,6 +58,7 @@ const EXPIRED_REASON_TEXT: Record<string, string> = {
     "The run that produced this file was deleted. The record is kept so you can see it existed.",
   file_missing:
     "The file is no longer in the run workspace. The record is kept so you can see it existed.",
+  session_expired: "This session artifact expired. The record is kept so you can see it existed.",
 };
 
 export function expiredReasonText(reason: string | null | undefined): string {

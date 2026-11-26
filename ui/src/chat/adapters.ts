@@ -2,6 +2,7 @@ import type { ChatModelAdapter, ChatModelRunResult, RemoteThreadListAdapter, Thr
 import { createAssistantStream } from "assistant-stream";
 import { ChatApiError, type ChatApi } from "./api";
 import { friendlyMessage, type ChatErrorInfo } from "./errors";
+import type { InlinePreview } from "../../../src/artifacts/inlinePreview.ts";
 import type { ChatMessageRecord } from "./ndjson";
 
 /** Carried on an incomplete assistant message so the UI can render a friendly notice. */
@@ -80,15 +81,20 @@ export function createChatModelAdapter(api: ChatApi, resolveThreadId: () => Prom
       const text = userText(options);
       if (!text) return;
       let reply = "";
+      let preview: InlinePreview | undefined;
       const content = () => [{ type: "text" as const, text: reply }];
+      const meta = (waiting: boolean) => ({ custom: { waiting, ...(preview ? { uiPreview: preview } : {}) } });
       try {
         const threadId = await resolveThreadId();
         for await (const frame of api.sendMessage(threadId, text, options.abortSignal)) {
           if (frame.type === "delta") {
             reply += frame.text;
-            yield { content: content(), metadata: { custom: { waiting: false } } };
+            yield { content: content(), metadata: meta(false) };
+          } else if (frame.type === "ui_preview") {
+            preview = frame.phase === "error" ? { phase: "error", message: frame.message ?? "That could not be shown." } : { phase: "skeleton" };
+            yield { content: content(), metadata: meta(false) };
           } else if (frame.type === "waiting") {
-            yield { content: content(), metadata: { custom: { waiting: true } } };
+            yield { content: content(), metadata: meta(true) };
           } else if (frame.type === "done") {
             yield {
               content: [{ type: "text", text: frame.message.text }],

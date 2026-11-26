@@ -708,7 +708,7 @@ HTTP: `GET /api/export` (**read** scope) with the same query filters.
 
 ## `sf artifact`
 
-List, show, publish, refresh, query, and delete artifacts in the artifact index, or read a run workspace file as UTF-8 text.
+List, show, publish, promote, refresh, query, and delete artifacts in the artifact index, or read a run workspace file as UTF-8 text.
 
 Like other store verbs, `list` and `show` open `$STAGEFLOW_HOME` SQLite directly. `publish`, `delete`, `origins`, `approve-origins`, and `revoke-origins` do the same. When the database is missing or its schema is behind this binary, they start the Host to apply migrations, then open again (same as `sf runs list` and `sf artifact read`).
 
@@ -716,7 +716,7 @@ Like other store verbs, `list` and `show` open `$STAGEFLOW_HOME` SQLite directly
 
 ```bash
 sf artifact list [--q <text>] [--kind <kind>] [--owner <pipeline:stage|agent:id>] [--tag <tag>]
-  [--status <available|expired>] [--live] [--sort <updated|title|size>] [--order <asc|desc>]
+  [--status <available|expired>] [--live] [--scope <project|session>] [--sort <updated|title|size>] [--order <asc|desc>]
   [--project-root <wire id or path>] [--limit <n>] [--json]
 ```
 
@@ -728,6 +728,7 @@ sf artifact list [--q <text>] [--kind <kind>] [--owner <pipeline:stage|agent:id>
 | `--tag` | Passed to the index (`tag`). |
 | `--status` | Passed to the index: `available` or `expired`. |
 | `--live` | Passed as `live=true`: only artifacts whose kind starts with `live.`. |
+| `--scope` | `project` (default) omits session artifacts. `session` lists only those. |
 | `--sort` | Passed to the index: `updated` (default), `title`, or `size`. |
 | `--order` | Passed to the index: `asc` or `desc`. Default is `desc`, except `title`, which defaults to `asc`. |
 | `--project-root` | Catalog wire id or absolute path; passed through to the index query. |
@@ -749,6 +750,16 @@ sf artifact show <ownerKey>/<id> [--project-root <wire id or path>] [--json]
 **Exit codes:** `0` success; `1` not found (`artifact.not_found`), ambiguous owner/id across projects (`artifact.ambiguous`, project roots listed on stderr), invalid key, or other error.
 
 Human output is one field per line: `key`, `title`, `kind`, `status`, `owner`, `source` (run, stage, attempt), `updated`, and `expires` or `expired` (reason and time). A live artifact also prints `live` (`LIVE` or `LIVE/<status>`), `last refreshed`, `last error`, `bindings` (`id`, function, `read-only`), and `refresh` (the policy, or `-`). With `--json`, stdout is the artifact record object, including `live` when the kind is `live.declarative` or `live.html`, or `{ "error", "code" }` (and `project_roots` when ambiguous) on failure. `--json` is unchanged by the human summary.
+
+### `sf artifact promote <key>`
+
+```bash
+sf artifact promote <ownerKey>/<id> [--project-root <wire id or path>] [--json]
+```
+
+Clears `expires_at` and sets `scope` to `project`. The artifact then appears on the default list. A key that is not a session artifact is `artifact.not_session`. An expired session artifact is `artifact.expired`.
+
+**Exit codes:** `0` success; `1` not found, not a session artifact, expired, or store unavailable.
 
 ### `sf artifact publish` {#sf-artifact-publish}
 

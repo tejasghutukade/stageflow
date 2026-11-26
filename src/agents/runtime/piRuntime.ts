@@ -32,7 +32,8 @@ import { MEMORY_STORE_BASH_DENIED, memoryStorePathInCommand } from "../../memory
 import { compactionUsageCost, type CompactionEndSessionEvent } from "../../agent/compactionEvents.js";
 import { memoryHome } from "../../memory/host.js";
 import { appendAgentArtifactPrompt, bindAgentArtifactDelete, bindAgentArtifactRead, bindAgentArtifactRefresh, createAgentPublishArtifactTool, type AgentPublishTool } from "../artifactTools.js";
-import { appendAgentPresentUiPrompt, createPresentUiTool, messageReplayText, type PresentArtifactResult, type PresentUiTool } from "../presentUi.js";
+import { previewPresentArgs } from "../../artifacts/inlinePreview.js";
+import { PRESENT_UI_TOOL_NAME, appendAgentPresentUiPrompt, createPresentUiTool, messageReplayText, type PresentArtifactResult, type PresentUiTool } from "../presentUi.js";
 import { SessionPublishError, type SessionPublishBody, type SessionPublishSuccess } from "../../artifacts/sessionPublish.js";
 import { forbiddenWriteTarget } from "../policy.js";
 import { prepareExecutionLaunch, type SandboxRunner } from "../sandbox.js";
@@ -56,9 +57,14 @@ export type PiRuntimeOptions = {
   /** Resolves a present_ui call against the session project. Absent when the Host has no artifact store. */
   presentUi?: (input: {
     projectRoot: string;
-    key: string;
+    key?: string;
     version?: number;
     title?: string;
+    program?: string;
+    manifest?: unknown;
+    sessionId: string;
+    agentId: string;
+    presentedInMessage: number;
     kinds: readonly string[];
   }) => Promise<PresentArtifactResult>;
   /**
@@ -404,6 +410,8 @@ type Bound = {
   mcpServers: string[];
   subAgents: string[];
   functionTools: ResolvedFunctionTool[];
+  /** Inline present_ui calls in the current turn. Reset at the start of each turn. */
+  inlinePresented: { n: number };
   /** Armed while no turn runs; releases the session when it fires. */
   idleTimer?: ReturnType<typeof setTimeout> | undefined;
   /** Set while a turn runs: the stall watchdog's pause handle. */
@@ -511,17 +519,27 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
           },
         })
       : undefined;
+    const inlinePresented = { n: 0 };
     const presentUiTool = definition.ui.present
       ? createPresentUiTool({
           kinds: definition.ui.kinds,
           projectRoot,
-          present: (args) =>
-            options.presentUi
-              ? options.presentUi({ ...args, projectRoot, kinds: definition.ui.kinds })
-              : Promise.resolve({ ok: false, code: "ui.unavailable", message: "present_ui is not available" }),
+          present: (args) => {
+            const presentedInMessage = args.program !== undefined ? ++inlinePresented.n : 0;
+            return options.presentUi
+              ? options.presentUi({
+                  ...args,
+                  presentedInMessage,
+                  projectRoot,
+                  sessionId: input.sessionId,
+                  agentId: definition.id,
+                  kinds: definition.ui.kinds,
+                })
+              : Promise.resolve({ ok: false, code: "ui.unavailable", message: "present_ui is not available" });
+          },
         })
       : undefined;
-    const state: Bound = { opened: undefined as never, definitionKey: definition.id, hooks: undefined, mcpServers, subAgents, functionTools };
+    const state: Bound = { opened: undefined as never, definitionKey: definition.id, hooks: undefined, mcpServers, subAgents, functionTools, inlinePresented };
     const context = definition.project_context ? await projectContext(projectRoot) : "";
     let memory: StageMemory | undefined;
     if (definition.memories?.length) {
@@ -590,12 +608,14 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
     async complete(input) {
       const { state, fresh } = await ensure(input);
       disarmIdle(state);
+      state.inlinePresented.n = 0;
       state.hooks = input.hooks;
       const user = input.messages.at(-1);
       if (!user || user.role !== "user") return { text: "", toolOutputs: [] };
       const { session } = state.opened;
       const toolOutputs: string[] = [];
       let text = "";
+      let presentRaw = "";
       const usage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
       let startedAt = new Date();
       let compactionStartedAt: Date | undefined;
@@ -656,6 +676,16 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
         else if (e.type === "message_update" && e.assistantMessageEvent?.type === "text_delta" && typeof e.assistantMessageEvent.delta === "string") {
           text += e.assistantMessageEvent.delta;
           input.onDelta(e.assistantMessageEvent.delta);
+        } else if (e.type === "message_update" && e.assistantMessageEvent?.type === "toolcall_delta") {
+          const update = e.assistantMessageEvent as { delta?: string; contentIndex?: number; partial?: { content?: Array<{ name?: string }> } };
+          const index = update.contentIndex ?? 0;
+          const name = update.partial?.content?.[index]?.name;
+          if (name === PRESENT_UI_TOOL_NAME || (name === undefined && presentRaw.length > 0)) {
+            if (typeof update.delta === "string") presentRaw += update.delta;
+            input.onUiPreview?.(previewPresentArgs(presentRaw));
+          } else if (name && name !== PRESENT_UI_TOOL_NAME) {
+            presentRaw = "";
+          }
         } else if (e.type === "message_end" && e.message?.role === "assistant") {
           const u = e.message.usage;
           const info = { inputTokens: u?.input ?? 0, outputTokens: u?.output ?? 0, costUsd: u?.cost?.total ?? 0 };
@@ -666,6 +696,10 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
           const final = textOf(e.message.content);
           if (final && !text) text = final;
         } else if (e.type === "tool_execution_start" && e.toolCallId && e.toolName) {
+          if (e.toolName === PRESENT_UI_TOOL_NAME) {
+            presentRaw = JSON.stringify(e.args ?? {});
+            input.onUiPreview?.(previewPresentArgs(presentRaw));
+          }
           const functionTool = state.functionTools.find((tool) => tool.name === e.toolName);
           const call = {
             id: e.toolCallId,
@@ -676,6 +710,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
           toolHolds.set(e.toolCallId, state.stall!.hold());
           input.hooks.toolStarted(call);
         } else if (e.type === "tool_execution_end" && e.toolCallId) {
+          presentRaw = "";
           toolHolds.get(e.toolCallId)?.();
           toolHolds.delete(e.toolCallId);
           const call = calls.get(e.toolCallId);

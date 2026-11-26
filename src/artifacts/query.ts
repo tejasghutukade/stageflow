@@ -11,6 +11,7 @@ import {
 import { assertArtifactId, parseOwnerKey, type ParsedOwner } from "./keys.js";
 import { ARTIFACT_TAG_PATTERN } from "./limits.js";
 import { canonicalProjectWireId } from "./projectScope.js";
+import { artifactScopePredicate, EVAL_SESSION_ARTIFACT_EXCLUSION } from "./scopeSql.js";
 import {
   ARTIFACT_SEARCH_BM25,
   artifactFtsReady,
@@ -23,7 +24,7 @@ import {
 const SELECT_COLS = `
   a.key, a.owner_kind, a.owner_pipeline, a.owner_stage, a.owner_agent, a.project_root_id,
   a.id, a.title, a.description, a.tags_json, a.summary, a.kind, a.origin, a.current_version,
-  a.source_run_id, a.source_stage_id, a.source_attempt, a.source_session_id, a.hidden,
+  a.source_run_id, a.source_stage_id, a.source_attempt, a.source_session_id, a.hidden, a.scope,
   a.expires_at, a.status, a.expired_at, a.expired_reason, a.created_at, a.updated_at, a.deleted_at,
   a.live_status, a.last_refreshed_at, a.last_error_code,
   v.content_type, v.size_bytes, v.manifest_json
@@ -52,6 +53,8 @@ export type ArtifactListQuery = {
   sort?: ArtifactListSort;
   order?: ArtifactListOrder;
   q?: string;
+  /** `project` (default) hides session artifacts. `session` lists only those. */
+  scope?: "project" | "session";
 };
 
 export type ArtifactListPage = {
@@ -208,6 +211,12 @@ function parseOwnerFilter(owner: string): OwnerFilter {
   return { mode: "substring", value: owner.toLowerCase() };
 }
 
+export function parseArtifactScope(raw: string | null): "project" | "session" | undefined {
+  if (raw == null || raw.trim() === "") return undefined;
+  if (raw === "project" || raw === "session") return raw;
+  invalidFilter("scope must be project or session");
+}
+
 export function parseArtifactStatus(raw: string | null): ArtifactStatus | undefined {
   if (raw == null || raw.trim() === "") return undefined;
   if (raw === "available" || raw === "expired") return raw;
@@ -233,6 +242,7 @@ type SearchCursor = {
   owner: string | null;
   tag: string | null;
   live: boolean | null;
+  scope: "project" | "session";
 };
 
 function encodeSearchCursor(cursor: SearchCursor): string {
@@ -254,10 +264,11 @@ function decodeSearchCursor(cursor: string): SearchCursor | undefined {
     const owner = obj.owner === null || typeof obj.owner === "string" ? (obj.owner as string | null) : undefined;
     const tag = obj.tag === null || typeof obj.tag === "string" ? (obj.tag as string | null) : undefined;
     const live = obj.live === null || typeof obj.live === "boolean" ? obj.live : undefined;
-    if (project === undefined || status === undefined || kind === undefined || owner === undefined || tag === undefined || live === undefined) {
+    const scope = obj.scope === undefined || obj.scope === "project" || obj.scope === "session" ? (obj.scope === "session" ? "session" : "project") : undefined;
+    if (project === undefined || status === undefined || kind === undefined || owner === undefined || tag === undefined || live === undefined || scope === undefined) {
       return undefined;
     }
-    return { mode: "search", q: obj.q, offset: obj.offset, project, status, kind, owner, tag, live };
+    return { mode: "search", q: obj.q, offset: obj.offset, project, status, kind, owner, tag, live, scope };
   } catch {
     return undefined;
   }
@@ -354,6 +365,7 @@ function listArtifactsBySearch(
     owner: query.owner ?? null,
     tag: query.tag ?? null,
     live,
+    scope: query.scope ?? "project",
   };
   if (
     cursor !== undefined &&
@@ -363,7 +375,8 @@ function listArtifactsBySearch(
       cursor.kind !== fingerprint.kind ||
       cursor.owner !== fingerprint.owner ||
       cursor.tag !== fingerprint.tag ||
-      cursor.live !== fingerprint.live)
+      cursor.live !== fingerprint.live ||
+      cursor.scope !== fingerprint.scope)
   ) {
     invalidFilter("cursor does not match query");
   }
@@ -376,6 +389,8 @@ function listArtifactsBySearch(
     "(@kind_pattern IS NULL OR a.kind LIKE @kind_pattern ESCAPE '\\')",
     "(@live IS NULL OR (@live = 1 AND a.kind LIKE 'live.%') OR (@live = 0 AND a.kind NOT LIKE 'live.%'))",
     "(@tag IS NULL OR EXISTS (SELECT 1 FROM json_each(a.tags_json) je WHERE je.value = @tag))",
+    artifactScopePredicate(query.scope),
+    EVAL_SESSION_ARTIFACT_EXCLUSION,
   ];
   if (ownerFilter?.mode === "stage") {
     whereParts.push(
@@ -544,6 +559,8 @@ export function listArtifacts(
     "(@kind_pattern IS NULL OR a.kind LIKE @kind_pattern ESCAPE '\\')",
     "(@live IS NULL OR (@live = 1 AND a.kind LIKE 'live.%') OR (@live = 0 AND a.kind NOT LIKE 'live.%'))",
     "(@tag IS NULL OR EXISTS (SELECT 1 FROM json_each(a.tags_json) je WHERE je.value = @tag))",
+    artifactScopePredicate(query.scope),
+    EVAL_SESSION_ARTIFACT_EXCLUSION,
     cursorPredicate(sort, order),
   ];
   if (ownerFilter?.mode === "stage") {
@@ -640,6 +657,7 @@ export function readArtifact(
       `SELECT ${SELECT_COLS} ${FROM}
        WHERE a.deleted_at IS NULL AND a.hidden = 0 AND a.id = @id AND ${ownerSql.sql}
          AND (@project IS NULL OR a.project_root_id = @project)
+         AND ${EVAL_SESSION_ARTIFACT_EXCLUSION}
        ORDER BY a.project_root_id ASC`,
     )
     .all({

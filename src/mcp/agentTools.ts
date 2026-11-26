@@ -170,7 +170,7 @@ export function registerAgentTools(server: McpServer, deps: McpToolDeps): void {
   server.registerTool(
     "agent_chat",
     {
-      description: "Send one message to an agent and wait for its reply. Omit sessionId to start a new session.",
+      description: "Send one message and wait for the reply. Omit sessionId to start a session.",
       inputSchema: z.object({ id: agentId, message: z.string().min(1), sessionId: z.string().optional() }),
     },
     ({ id, message, sessionId }) =>

@@ -30,7 +30,7 @@ export function fitHistory(
   if (policy === "truncate" || dropped.length === 0) return kept;
   const digest = dropped
     .map((m) => {
-      const keys = m.parts?.map((part) => part.key).join(", ");
+      const keys = m.parts?.flatMap((part) => (part.kind === "artifact-ref" ? [part.key] : [])).join(", ");
       const ui = keys ? ` [ui ${keys}]` : "";
       return `- ${m.role}: ${m.text.replace(/\s+/g, " ").trim().slice(0, 160)}${ui}`;
     })

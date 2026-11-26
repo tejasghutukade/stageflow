@@ -89,7 +89,8 @@ Published and indexed artifacts share one API. Add MCP toolset `artifacts` (`?to
 
 | Job | MCP (`artifacts` toolset) | CLI |
 |---|---|---|
-| List or search | `get_artifact` with `list: true`, filters, `q`, `cursor` | `sf artifact list` (`--json`, same filters) |
+| List or search | `get_artifact` with `list: true`, filters, `q`, `cursor`, `scope` | `sf artifact list` (`--json`, same filters; `--scope session` for chat artifacts) |
+| Keep a session artifact | `promote_artifact` | `sf artifact promote <key>` |
 | Read record or bytes | `get_artifact` with `key`, `view: record`, `versions`, or `content` | `sf artifact show`, or content via REST/console |
 | Publish static file or live program | `save_artifact` (pick `owner`; `--manifest` on the CLI) | `sf artifact publish` (`--manifest` for `live.declarative` and `live.html`) |
 | Refresh a live artifact | `refresh_artifact` | `sf artifact refresh` |

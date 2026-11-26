@@ -1,10 +1,11 @@
-import { parseUiPart, type UiPartArtifactRef } from "../../../src/artifacts/uiPart.ts";
+import type { InlinePreview } from "../../../src/artifacts/inlinePreview.ts";
+import { parseUiPart, type UiPart } from "../../../src/artifacts/uiPart.ts";
 
-export type ChatMessageRecord = { id: string; role: "user" | "assistant"; text: string; createdAt: string; ui?: UiPartArtifactRef[] };
+export type ChatMessageRecord = { id: string; role: "user" | "assistant"; text: string; createdAt: string; ui?: UiPart[] };
 
-function messageParts(value: unknown): UiPartArtifactRef[] | undefined {
+function messageParts(value: unknown): UiPart[] | undefined {
   if (!Array.isArray(value)) return undefined;
-  const parts: UiPartArtifactRef[] = [];
+  const parts: UiPart[] = [];
   for (const item of value) {
     const parsed = parseUiPart(item);
     if (parsed.ok) parts.push(parsed.part);
@@ -14,6 +15,7 @@ function messageParts(value: unknown): UiPartArtifactRef[] | undefined {
 
 export type ChatFrame =
   | { type: "delta"; text: string }
+  | { type: "ui_preview"; phase: InlinePreview["phase"]; message?: string }
   | { type: "waiting" }
   | { type: "done"; message: ChatMessageRecord }
   | { type: "error"; code: string; message: string; retryAfterSec?: number };
@@ -25,6 +27,13 @@ export function toFrame(value: unknown): ChatFrame | null {
   switch (frame.type) {
     case "delta":
       return typeof frame.text === "string" ? { type: "delta", text: frame.text } : null;
+    case "ui_preview":
+      if (frame.phase !== "skeleton" && frame.phase !== "error") return null;
+      return {
+        type: "ui_preview",
+        phase: frame.phase,
+        ...(typeof frame.message === "string" ? { message: frame.message } : {}),
+      };
     case "waiting":
       return { type: "waiting" };
     case "done": {

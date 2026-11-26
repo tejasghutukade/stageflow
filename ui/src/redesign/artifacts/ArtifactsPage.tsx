@@ -151,7 +151,7 @@ export function ArtifactsPageView({
   onClearFilters?: () => void;
   showLoadMore: boolean;
   onLoadMore?: () => void;
-  tabCounts: { all: number; live: number; static: number };
+  tabCounts: { all: number; live: number; static: number; session: number };
   search?: string;
   onSearch?: (value: string) => void;
   onClearSearch?: () => void;
@@ -162,6 +162,7 @@ export function ArtifactsPageView({
     { id: "all", label: "All", count: tabCounts.all },
     { id: "live", label: "Live", count: tabCounts.live },
     { id: "static", label: "Static", count: tabCounts.static },
+    { id: "session", label: "Session", count: tabCounts.session },
   ];
   const filtersActive = artifactListFiltersActive(filters);
   const sortValue = `${filters.sort}:${filters.order}`;

@@ -31,6 +31,7 @@ import { MIGRATION_028 } from "./028-artifact-attempt-publishes.js";
 import { MIGRATION_029 } from "./029-artifact-snapshots.js";
 import { MIGRATION_030 } from "./030-artifact-origin-approvals.js";
 import { MIGRATION_031 } from "./031-agent-message-parts.js";
+import { MIGRATION_032 } from "./032-artifact-scope.js";
 
 export type SqliteMigration = {
   version: number;
@@ -71,6 +72,7 @@ const DEFAULT_MIGRATIONS: SqliteMigration[] = [
   MIGRATION_029,
   MIGRATION_030,
   MIGRATION_031,
+  MIGRATION_032,
 ];
 
 export const STORE_MIGRATIONS: readonly SqliteMigration[] = DEFAULT_MIGRATIONS;

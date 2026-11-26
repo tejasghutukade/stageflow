@@ -11,7 +11,7 @@ The page lists indexed deliverables. Agent chat, web chat, and Guide can show th
 
 **Load more** requests the next page with `next_cursor` when the list is longer than one page.
 
-**All / Live / Static** tabs set a `live` or `static` kind filter. Tab counts on the loaded page only (there is no separate count endpoint).
+**All / Live / Static / Session** tabs set a `live`, `static`, or `scope=session` filter. All, Live, and Static omit session artifacts. Session lists only those. Tab counts on the loaded page only (there is no separate count endpoint). A session artifact in chat has a **Promote** button that keeps it on the default list.
 
 Filter controls for kind, owner, tag, and status, plus a sort menu (updated, title, size), call the list API with the same query parameters as [Listing artifacts](artifacts.md#listing-artifacts). Title sort is ASCII case-insensitive, with the artifact key breaking ties. Kind filters treat `_` and `%` as literal characters. A tag uses the same `[a-z0-9_-]{1,32}` rule as publish, including tags that start with a digit or `_`. Filter and tab choices are stored in the hash query (`#/artifacts?…`) so reload and back/forward keep them. The project control writes `project_root` into that query when it is not **All projects**. **Load more** sends the list cursor, which is base64url JSON and can carry a title that contains a newline, a quote, `|`, or `:`.
 

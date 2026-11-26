@@ -128,6 +128,10 @@ export type PublishRequest = {
   hidden?: boolean;
   /** Internal. Eval-origin publishes store under `eval:` so they cannot replace a visible artifact. */
   ownerNamespace?: "eval";
+  /** `session` artifacts expire and stay off the default list until promoted. */
+  scope?: "project" | "session";
+  /** Used when `scope` is `session`. Other publishes clear expiry. */
+  expiresAt?: string | null;
   roots: readonly CatalogRoot[];
   now?: string;
 };
@@ -503,6 +507,11 @@ function syncPublishedSearch(
   });
 }
 
+function scopeColumns(input: PublishRequest): { scope: "project" | "session"; expires_at: string | null } {
+  if (input.scope === "session") return { scope: "session", expires_at: input.expiresAt ?? null };
+  return { scope: "project", expires_at: null };
+}
+
 function provenanceOf(input: PublishRequest): {
   source_kind: string;
   source_run_id: string | null;
@@ -608,6 +617,7 @@ export async function publishArtifact(
       : { kind: fields.kind };
   const contentType = contentTypeForKind(fields.kind, fields.fileName);
   const provenance = provenanceOf(input);
+  const scope = scopeColumns(input);
   const flags = agentUnverified ? { agent_unverified: true as const } : {};
 
   return withPublishLock(storageKey, async () => {
@@ -648,7 +658,8 @@ export async function publishArtifact(
                summary = @summary,
                updated_at = @updated_at,
                status = 'available',
-               expires_at = NULL,
+               scope = @scope,
+               expires_at = @expires_at,
                expired_at = NULL,
                expired_reason = NULL,
                deleted_at = NULL
@@ -660,6 +671,8 @@ export async function publishArtifact(
           tags_json: JSON.stringify(fields.tags),
           summary: fields.summary,
           updated_at: now,
+          scope: scope.scope,
+          expires_at: scope.expires_at,
         });
         recordAttemptPublish(db, input, storageKey, current.current_version, true, now);
         syncPublishedSearch(db, storageKey, fields, input, project.id, searchBody);
@@ -772,9 +785,10 @@ export async function publishArtifact(
                    source_attempt = @source_attempt,
                    source_session_id = @source_session_id,
                    hidden = @hidden,
+                   scope = @scope,
                    updated_at = @updated_at,
                    status = 'available',
-                   expires_at = NULL,
+                   expires_at = @expires_at,
                    expired_at = NULL,
                    expired_reason = NULL,
                    deleted_at = NULL
@@ -793,6 +807,8 @@ export async function publishArtifact(
               source_attempt: provenance.source_attempt,
               source_session_id: provenance.source_session_id,
               hidden: provenance.hidden,
+              scope: scope.scope,
+              expires_at: scope.expires_at,
               updated_at: now,
             });
           } else {
@@ -801,13 +817,13 @@ export async function publishArtifact(
               `INSERT INTO artifacts (
                  key, owner_kind, owner_pipeline, owner_stage, owner_agent, project_root_id, id,
                  title, description, tags_json, summary, kind, origin, current_version,
-                 source_run_id, source_stage_id, source_attempt, source_session_id, hidden,
-                 created_at, updated_at, source, status
+                 source_run_id, source_stage_id, source_attempt, source_session_id, hidden, scope,
+                 expires_at, created_at, updated_at, source, status
                ) VALUES (
                  @key, @owner_kind, @owner_pipeline, @owner_stage, @owner_agent, @project_root_id, @id,
                  @title, @description, @tags_json, @summary, @kind, 'published', @version,
-                 @source_run_id, @source_stage_id, @source_attempt, @source_session_id, @hidden,
-                 @created_at, @updated_at, @source, 'available'
+                 @source_run_id, @source_stage_id, @source_attempt, @source_session_id, @hidden, @scope,
+                 @expires_at, @created_at, @updated_at, @source, 'available'
                )`,
             ).run({
               key: storageKey,
@@ -828,6 +844,8 @@ export async function publishArtifact(
               source_attempt: provenance.source_attempt,
               source_session_id: provenance.source_session_id,
               hidden: provenance.hidden,
+              scope: scope.scope,
+              expires_at: scope.expires_at,
               created_at: now,
               updated_at: now,
               source: provenance.source_kind,

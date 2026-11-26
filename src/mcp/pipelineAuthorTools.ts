@@ -139,7 +139,7 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
   server.registerTool(
     "write_pipeline",
     {
-      description: "Create or update a pipeline package on disk. mode create writes a new package; mode update patches with patch.",
+      description: "Create or update a pipeline package on disk.",
       inputSchema: writePipelineFlatSchema,
     },
     guarded(async (args: unknown) => {
@@ -303,7 +303,7 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
   server.registerTool(
     "write_task",
     {
-      description: "Create or update task files on disk, beside a pipeline or as a standalone catalog task.",
+      description: "Create or update task files on disk.",
       inputSchema: writeTaskFlatSchema,
     },
     guarded(async (args: unknown) => {

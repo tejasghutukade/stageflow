@@ -15,6 +15,7 @@ export const ARTIFACT_EXPIRED_REASONS = [
   "run_purged",
   "run_deleted",
   "file_missing",
+  "session_expired",
 ] as const;
 export type ArtifactExpiredReason = (typeof ARTIFACT_EXPIRED_REASONS)[number];
 
@@ -39,6 +40,7 @@ export type ArtifactRecord = {
   created_at: string;
   updated_at: string;
   expires_at: string | null;
+  scope: "project" | "session";
   status: ArtifactStatus;
   expired_at: string | null;
   expired_reason: ArtifactExpiredReason | null;
@@ -90,6 +92,7 @@ export type ArtifactRow = {
   source_attempt: number | null;
   source_session_id: string | null;
   hidden: number;
+  scope?: string | null;
   expires_at: string | null;
   status: string;
   expired_at: string | null;
@@ -142,6 +145,7 @@ export function artifactRecord(row: ArtifactRow, registered: boolean): ArtifactR
     created_at: row.created_at,
     updated_at: row.updated_at,
     expires_at: row.expires_at,
+    scope: row.scope === "session" ? "session" : "project",
     status: row.status === "expired" ? "expired" : "available",
     expired_at: row.expired_at,
     expired_reason: expiredReason(row.expired_reason),
@@ -203,7 +207,8 @@ function expiredReason(value: string | null): ArtifactExpiredReason | null {
     value === "run_slimmed" ||
     value === "run_purged" ||
     value === "run_deleted" ||
-    value === "file_missing"
+    value === "file_missing" ||
+    value === "session_expired"
   ) {
     return value;
   }

@@ -1,4 +1,4 @@
-import type { UiPartArtifactRef } from "../artifacts/uiPart.js";
+import type { UiPart } from "../artifacts/uiPart.js";
 import type { ApprovalBroker, ApprovalOutcome } from "./approvalBroker.js";
 import type { AgentApproval, AgentStore, ApprovalActor, SessionStatus, TurnStatus } from "./store.js";
 
@@ -13,7 +13,7 @@ export type FinishInput = {
   status: TerminalTurnStatus;
   errorCode?: string | null;
   /** The assistant's reply, written with the turn so the transcript and the outcome never disagree. */
-  assistant?: { id: string; author: string; text: string; parts?: UiPartArtifactRef[] };
+  assistant?: { id: string; author: string; text: string; parts?: UiPart[] };
   usage?: { inputTokens?: number; outputTokens?: number };
   costUsd?: number | null;
   evalScores?: Array<{ metric: string; score: number }>;

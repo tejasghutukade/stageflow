@@ -18,6 +18,7 @@ import {
   worktreePathForRun,
 } from "./repositoryMaterialize.js";
 import { deleteRunEverywhere } from "./runDeletion.js";
+import { expireDueSessionArtifacts } from "../artifacts/sessionScope.js";
 import { pruneFunctionInvocations } from "../functions/history.js";
 import { sqliteConnectionFromStore } from "../runstore/createStore.js";
 
@@ -443,7 +444,10 @@ export async function runRetentionSweep(
   if (execute) {
     try {
       const db = sqliteConnectionFromStore(store);
-      if (db) pruneFunctionInvocations(db, now, env);
+      if (db) {
+        pruneFunctionInvocations(db, now, env);
+        expireDueSessionArtifacts(db, now.toISOString());
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`runRetentionSweep: function history prune failed: ${message}`);

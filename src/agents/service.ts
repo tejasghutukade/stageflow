@@ -24,7 +24,8 @@ import { newWebChatSlug } from "./webChat/slug.js";
 import { ApprovalBroker } from "./approvalBroker.js";
 import { deliveryLedger, scheduleLedger, type DeliveryLedger, type ScheduleLedger } from "./ledgers.js";
 import { TurnLifecycle, type FinishInput } from "./turnLifecycle.js";
-import type { UiPartArtifactRef } from "../artifacts/uiPart.js";
+import { purgeSessionArtifacts } from "../artifacts/sessionScope.js";
+import type { UiPart } from "../artifacts/uiPart.js";
 import { AgentError } from "./errors.js";
 import { applyEvalOverrides, EVAL_SESSION_SOURCE, isEvalSession, type EvalSessionOverrides } from "./evalSession.js";
 import { agentMemoryIssues } from "../memory/agentIssues.js";
@@ -514,6 +515,7 @@ export class AgentService {
     const all = new Set<string>(roots.map((session) => session.id));
     for (const root of roots) for (const child of this.store.listChildSessions(root.id)) all.add(child.id);
     const ids = [...all];
+    await purgeSessionArtifacts(this.store.sqlite(), ids);
     this.store.deleteSessions(ids);
     for (const sessionId of ids) this.evalOverrides.delete(sessionId);
     return ids;
@@ -536,6 +538,7 @@ export class AgentService {
       for (const child of this.store.listChildSessions(root.id)) all.add(child.id);
     }
     const ids = [...all];
+    await purgeSessionArtifacts(this.store.sqlite(), ids);
     this.store.deleteSessions(ids);
     for (const sessionId of ids) this.evalOverrides.delete(sessionId);
     return ids.length;
@@ -1322,7 +1325,7 @@ export class AgentService {
     input: {
       status: FinishInput["status"];
       assistantText?: string;
-      assistantParts?: UiPartArtifactRef[];
+      assistantParts?: UiPart[];
       errorCode?: string | null;
       usage?: { inputTokens?: number; outputTokens?: number };
       costUsd?: number | null;

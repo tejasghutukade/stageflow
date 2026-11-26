@@ -8,6 +8,7 @@ import { isLiveKind } from "../artifacts/kinds.js";
 import { approveOrigins, revokeOrigins } from "../artifacts/originApproval.js";
 import { isInsideStageflowSession } from "../artifacts/sessionEnv.js";
 import { deletePublishedArtifact, publishArtifact } from "../artifacts/publish.js";
+import { promoteSessionArtifact } from "../artifacts/sessionScope.js";
 import { queryBinding } from "../artifacts/bindingQuery.js";
 import { refreshArtifact } from "../artifacts/refresh.js";
 import {
@@ -18,6 +19,7 @@ import {
   parseArtifactListOrder,
   parseArtifactListSort,
   parseArtifactOwnerFilter,
+  parseArtifactScope,
   parseArtifactStatus,
   parseArtifactTagFilter,
   readArtifact,
@@ -40,8 +42,9 @@ import {
 import { resolveSafeOutPath } from "./resolveSafeOutPath.js";
 
 export const ARTIFACT_USAGE = `Usage:
-  sf artifact list [--q <text>] [--kind <kind>] [--owner <pipeline:stage|agent:id>] [--tag <tag>] [--status <available|expired>] [--live] [--sort <updated|title|size>] [--order <asc|desc>] [--project-root <wire id or path>] [--limit <n>] [--json]
+  sf artifact list [--q <text>] [--kind <kind>] [--owner <pipeline:stage|agent:id>] [--tag <tag>] [--status <available|expired>] [--live] [--scope <project|session>] [--sort <updated|title|size>] [--order <asc|desc>] [--project-root <wire id or path>] [--limit <n>] [--json]
   sf artifact show <key> [--project-root <wire id or path>] [--json]
+  sf artifact promote <key> [--project-root <wire id or path>] [--json]
   sf artifact refresh <key> [--binding <id>]... [--if-stale] [--project-root <wire id or path>] [--json]
   sf artifact query <key> --binding <id> [--args <json>] [--if-stale|--no-if-stale] [--project-root <wire id or path>] [--json]
   sf artifact publish --owner <pipeline:stage|agent:id> --id <id> --kind <kind> --title <title> [--description <text>] [--tag <tag>]... [--summary <text>] [--manifest <file>] [--project-root <wire id or path>] (--file <path> | --stdin) [--json]
@@ -70,6 +73,7 @@ type ParsedListArgs = {
   tag?: string;
   status?: string;
   live?: boolean;
+  scope?: string;
   sort?: string;
   order?: string;
   projectRoot?: string;
@@ -84,6 +88,8 @@ type ParsedShowArgs = {
   projectRoot?: string;
   json: boolean;
 };
+
+type ParsedPromoteArgs = Omit<ParsedShowArgs, "subcommand"> & { subcommand: "promote" };
 
 type ParsedReadArgs = {
   help: boolean;
@@ -154,6 +160,7 @@ type ParsedArtifactArgs =
   | { help: true; json?: boolean }
   | ParsedListArgs
   | ParsedShowArgs
+  | ParsedPromoteArgs
   | ParsedReadArgs
   | ParsedPublishArgs
   | ParsedRefreshArgs
@@ -186,6 +193,7 @@ function parseListArgs(args: string[]): ParsedListArgs {
   let tag: string | undefined;
   let status: string | undefined;
   let live: boolean | undefined;
+  let scope: string | undefined;
   let sort: string | undefined;
   let order: string | undefined;
   let projectRoot: string | undefined;
@@ -201,6 +209,8 @@ function parseListArgs(args: string[]): ParsedListArgs {
       json = true;
     } else if (arg === "--live") {
       live = true;
+    } else if (arg === "--scope") {
+      scope = requireListValue(args, ++i, "--scope");
     } else if (arg === "--q") {
       const value = args[++i];
       if (value === undefined) throw new Error("Missing value for --q");
@@ -232,7 +242,7 @@ function parseListArgs(args: string[]): ParsedListArgs {
     }
   }
 
-  return { help, subcommand: "list", q, kind, owner, tag, status, live, sort, order, projectRoot, limit, json };
+  return { help, subcommand: "list", q, kind, owner, tag, status, live, scope, sort, order, projectRoot, limit, json };
 }
 
 function ownerListFilter(owner: string): string {
@@ -471,6 +481,11 @@ export function parseArtifactArgs(args: string[]): ParsedArtifactArgs {
   const subcommand = args[0];
   if (subcommand === "list") return parseListArgs(args);
   if (subcommand === "show") return parseShowArgs(args);
+  if (subcommand === "promote") {
+    const shown = parseShowArgs(args);
+    const promoted: ParsedPromoteArgs = { ...shown, subcommand: "promote" };
+    return promoted;
+  }
   if (subcommand === "read") return parseReadArgs(args);
   if (subcommand === "publish") return parsePublishArgs(args);
   if (subcommand === "refresh") return parseRefreshArgs(args);
@@ -514,6 +529,7 @@ function serverListQuery(parsed: ParsedListArgs): Omit<ArtifactListQuery, "limit
     tag: parsed.tag !== undefined ? parseArtifactTagFilter(parsed.tag) : undefined,
     status: parsed.status !== undefined ? parseArtifactStatus(parsed.status) : undefined,
     live: parsed.live === true ? true : undefined,
+    scope: parsed.scope !== undefined ? parseArtifactScope(parsed.scope) : undefined,
     sort: parsed.sort !== undefined ? parseArtifactListSort(parsed.sort) : undefined,
     order: parsed.order !== undefined ? parseArtifactListOrder(parsed.order) : undefined,
     q: parsed.q?.trim() ? parsed.q.trim() : undefined,
@@ -559,6 +575,45 @@ async function runListSubcommand(
     } else {
       out.error(message);
     }
+    return 1;
+  }
+}
+
+async function runPromoteSubcommand(
+  parsed: ParsedPromoteArgs,
+  store: RunStore,
+  out: ArtifactCommandIo,
+): Promise<number> {
+  const parts = parseArtifactShowKey(parsed.key);
+  if (parts === undefined) {
+    const message = "Artifact key must be <ownerKey>/<id>";
+    if (parsed.json) out.log(JSON.stringify({ error: message, code: "artifact.invalid_id" }));
+    else out.error(message);
+    return 1;
+  }
+  const db = sqliteConnectionFromStore(store);
+  if (db === undefined) {
+    return reportQueryError(
+      new ArtifactQueryError(503, "artifact.store_unavailable", "Artifact index is unavailable"),
+      parsed.json,
+      out,
+    );
+  }
+  try {
+    const roots = await catalogRootsForArtifacts(store);
+    const record = readArtifact(db, parts.ownerKey, parts.id, parsed.projectRoot, roots);
+    const ownerKey =
+      record.owner.kind === "agent" ? `agent:${record.owner.agent}` : stageOwnerKey(record.owner.pipeline, record.owner.stage);
+    promoteSessionArtifact(db, artifactStorageKey(record.project.id, ownerKey, record.id));
+    const kept = readArtifact(db, parts.ownerKey, parts.id, parsed.projectRoot, roots);
+    if (parsed.json) out.log(JSON.stringify(kept));
+    else out.log(formatArtifactShow(kept));
+    return 0;
+  } catch (err) {
+    if (err instanceof ArtifactQueryError) return reportQueryError(err, parsed.json, out);
+    const message = err instanceof Error ? err.message : String(err);
+    if (parsed.json) out.log(JSON.stringify({ error: message, code: "artifact.invalid_shape" }));
+    else out.error(message);
     return 1;
   }
 }
@@ -1054,6 +1109,9 @@ export async function runArtifactCommand(
   }
   if (parsed.subcommand === "show") {
     return runShowSubcommand(parsed, store, out);
+  }
+  if (parsed.subcommand === "promote") {
+    return runPromoteSubcommand(parsed, store, out);
   }
   if (parsed.subcommand === "publish") {
     return runPublishSubcommand(parsed, store, cwd, out, options.readStdin ?? readStdinBytes);

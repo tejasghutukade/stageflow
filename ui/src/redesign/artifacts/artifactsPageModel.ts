@@ -19,7 +19,7 @@ export const ARTIFACTS_FILTERED_EMPTY_TITLE = "No matches";
 export const ARTIFACTS_FILTERED_EMPTY_BODY =
   "No artifacts match the current filters. Try changing or clearing them.";
 
-export type ArtifactListTab = "all" | "live" | "static";
+export type ArtifactListTab = "all" | "live" | "static" | "session";
 
 export type ArtifactListFilterState = {
   tab: ArtifactListTab;
@@ -115,6 +115,7 @@ export function artifactKindLabel(kind: string): string {
 
 const EXPIRED_SHORT: Record<string, string> = {
   run_slimmed: "Cleaned up to save space",
+  session_expired: "Session artifact expired",
   run_purged: "Run was purged",
   run_deleted: "Run was deleted",
   file_missing: "File is missing",
@@ -175,9 +176,10 @@ export function artifactListFiltersActive(filters: ArtifactListFilterState): boo
   return false;
 }
 
-export function tabToListQuery(tab: ArtifactListTab): Pick<ArtifactListQueryParams, "live" | "kind"> {
+export function tabToListQuery(tab: ArtifactListTab): Pick<ArtifactListQueryParams, "live" | "kind" | "scope"> {
   if (tab === "live") return { live: true };
   if (tab === "static") return { kind: "static" };
+  if (tab === "session") return { scope: "session" };
   return {};
 }
 
@@ -225,7 +227,7 @@ export function parseArtifactListFiltersFromHash(hash = window.location.hash): {
   const params = new URLSearchParams(stripped.slice(q + 1));
   const tabRaw = params.get("tab");
   const tab: ArtifactListTab =
-    tabRaw === "live" || tabRaw === "static" ? tabRaw : "all";
+    tabRaw === "live" || tabRaw === "static" || tabRaw === "session" ? tabRaw : "all";
   const sortRaw = params.get("sort");
   const sort: ArtifactListSort =
     sortRaw === "title" || sortRaw === "size" ? sortRaw : "updated";
@@ -350,14 +352,16 @@ export function artifactStatusPillClass(variant: ArtifactStatusPillVariant): str
 
 export function artifactTabCountsFromRecords(
   records: readonly ArtifactRecord[],
-): { all: number; live: number; static: number } {
+): { all: number; live: number; static: number; session: number } {
   let live = 0;
   let staticCount = 0;
+  let session = 0;
   for (const row of records) {
+    if (row.scope === "session") session += 1;
     if (row.kind.startsWith("live.")) live += 1;
     else if (row.kind.startsWith("static.")) staticCount += 1;
   }
-  return { all: records.length, live, static: staticCount };
+  return { all: records.length, live, static: staticCount, session };
 }
 
 export function initialArtifactCursorState(): ArtifactCursorState {

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type Database from "better-sqlite3";
-import { parseUiPart, type UiPartArtifactRef } from "../artifacts/uiPart.js";
+import { parseUiPart, type UiPart } from "../artifacts/uiPart.js";
 import { agentDefinitionSchema, type AgentDefinition, type AgentIssue } from "../config/loadAgent.js";
 
 /**
@@ -83,7 +83,7 @@ export type AgentMessage = {
   author: string | null;
   text: string;
   /** Structured ui parts. Absent when the message is only text. */
-  parts?: UiPartArtifactRef[];
+  parts?: UiPart[];
   createdAt: string;
 };
 
@@ -251,7 +251,7 @@ function toSession(row: Row): AgentSession {
   };
 }
 
-function partsFromRow(raw: unknown): UiPartArtifactRef[] | undefined {
+function partsFromRow(raw: unknown): UiPart[] | undefined {
   if (typeof raw !== "string" || raw.length === 0) return undefined;
   let parsed: unknown;
   try {
@@ -260,7 +260,7 @@ function partsFromRow(raw: unknown): UiPartArtifactRef[] | undefined {
     return undefined;
   }
   if (!Array.isArray(parsed)) return undefined;
-  const parts: UiPartArtifactRef[] = [];
+  const parts: UiPart[] = [];
   for (const item of parsed) {
     const part = parseUiPart(item);
     if (part.ok) parts.push(part.part);
@@ -720,6 +720,11 @@ export class AgentStore {
       params.push(filter.createdBefore);
     }
     return (this.db.prepare(`SELECT * FROM agent_sessions WHERE ${clauses.join(" AND ")} ORDER BY created_at, session_id`).all(...params) as Row[]).map(toSession);
+  }
+
+  /** The store connection, for session-scoped artifact rows. */
+  sqlite(): Database.Database {
+    return this.db;
   }
 
   /** Delete eval sessions; messages, turns, spans, scores and approvals go with them. Never touches other sessions. */

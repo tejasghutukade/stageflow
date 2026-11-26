@@ -52,7 +52,7 @@ Use \`--project-root\` when the same owner and id exist in more than one project
 
 ## Expiry and backup
 
-Indexed rows get \`expires_at\` from run retention and may show \`expired_reason\` (\`run_slimmed\`, \`run_purged\`, \`run_deleted\`, \`file_missing\`). Published rows are not expired by run retention. \`sf backup\` and \`sf archive\` include the keep-class \`artifacts/\` directory and artifact tables in \`state.db\`.
+Indexed rows get \`expires_at\` from run retention and may show \`expired_reason\` (\`run_slimmed\`, \`run_purged\`, \`run_deleted\`, \`file_missing\`). Published rows are not expired by run retention. Session artifacts from chat expire after 30 days (\`session_expired\`) or when the session is purged, until someone promotes them. \`sf backup\` and \`sf archive\` include the keep-class \`artifacts/\` directory and artifact tables in \`state.db\`, session artifacts included.
 
 ## Error codes
 

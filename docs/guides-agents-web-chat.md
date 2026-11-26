@@ -2,7 +2,7 @@
 
 Experimental. Web chat works; its shape may still change.
 
-Web chat gives an agent a shareable page at `/chat/<slug>` on the Host: a plain chat window, new conversations, earlier conversations, nothing else. When a reply includes a `present_ui` part, the page shows that artifact inline; a deleted or expired one shows an unavailable card. Public web chat still cannot run tools, so `ui.present` belongs on an agent people reach in the console or on protected web chat. Reference: [Agents — Web chat](agents.md#web-chat-public-page).
+Web chat gives an agent a shareable page at `/chat/<slug>` on the Host: a plain chat window, new conversations, earlier conversations, nothing else. When a reply includes a `present_ui` part, the page shows that artifact inline; a deleted or expired one shows an unavailable card. A one-off program shows a skeleton while the tool call streams, then the saved session artifact. An invalid program shows a short error card. Public web chat still cannot run tools, so `ui.present` belongs on an agent people reach in the console or on protected web chat. Reference: [Agents — Web chat](agents.md#web-chat-public-page).
 
 ## Turn it on
 

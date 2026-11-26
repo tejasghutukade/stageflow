@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { LuTriangleAlert } from "react-icons/lu";
 import type { ChatMessageError } from "./adapters";
 import { registerBuiltinUiParts } from "./parts/builtins";
+import { InlinePreviewCard } from "./parts/artifactRefPart";
 import { renderUiPart, type UiPartRendererContext } from "./parts/registry";
 
 registerBuiltinUiParts();
@@ -80,12 +81,19 @@ export function AssistantMessageBody() {
   const waiting = useAuiState((s) => (s.message.metadata as { custom?: { waiting?: boolean } } | undefined)?.custom?.waiting === true);
   const hasText = useAuiState((s) => s.message.content.some((part) => part.type === "text" && part.text.length > 0));
   const uiParts = useAuiState((s) => uiPartsFromMetadata(s.message.metadata));
+  const preview = useAuiState((s) => {
+    const value = (s.message.metadata as { custom?: { uiPreview?: { phase?: string; message?: string } } } | undefined)?.custom?.uiPreview;
+    if (value?.phase === "error") return { phase: "error" as const, message: value.message };
+    if (value?.phase === "skeleton") return { phase: "skeleton" as const };
+    return null;
+  });
   const running = status?.type === "running";
   const error = status?.type === "incomplete" && status.reason === "error" && isChatError(status.error) ? status.error : null;
 
   return (
     <div className="flex min-w-0 flex-col gap-2 text-[15px] leading-relaxed text-[var(--sf-text-1)]">
       {hasText ? <MessagePrimitive.Parts components={{ Text: TextPart }} /> : null}
+      {preview && uiParts.length === 0 ? <InlinePreviewCard phase={preview.phase} message={preview.message} /> : null}
       <UiMessageParts parts={uiParts} />
       {running && waiting ? (
         <p className="m-0 text-sm text-[var(--sf-needs)]" role="status">

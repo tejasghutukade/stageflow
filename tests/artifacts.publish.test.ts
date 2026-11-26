@@ -574,7 +574,7 @@ describe("publish and version artifacts", () => {
   it("applies migration 026 on a fresh store and on a store that was at version 24", async () => {
     const fresh = await openStore();
     const freshDb = sqliteConnectionFromStore(fresh.store)!;
-    expect(freshDb.pragma("user_version", { simple: true })).toBe(31);
+    expect(freshDb.pragma("user_version", { simple: true })).toBe(32);
     const artifactCols = freshDb.prepare(`PRAGMA table_info(artifacts)`).all() as Array<{ name: string }>;
     const versionCols = freshDb.prepare(`PRAGMA table_info(artifact_versions)`).all() as Array<{ name: string }>;
     expect(artifactCols.map((col) => col.name)).toContain("source");
@@ -601,7 +601,7 @@ describe("publish and version artifacts", () => {
     const migrated = createRunStore({ rootDir: home });
     cleanups.push(() => migrated.close());
     const migratedDb = sqliteConnectionFromStore(migrated)!;
-    expect(migratedDb.pragma("user_version", { simple: true })).toBe(31);
+    expect(migratedDb.pragma("user_version", { simple: true })).toBe(32);
     expect((migratedDb.prepare(`PRAGMA table_info(artifacts)`).all() as Array<{ name: string }>).map((col) => col.name)).toContain(
       "source",
     );

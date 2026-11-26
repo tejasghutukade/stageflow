@@ -13,7 +13,7 @@ import { FIXTURES_ROOT } from "./helpers/fixturePaths.js";
 import { MCP_TOOLSETS_ALL_QUERY, mcpUrl } from "./helpers/mcpCall.js";
 
 /**
- * Measured 2026-11-24 after the live-artifact fix pass: 47,050 bytes for 61 tools.
+ * Measured 2026-11-24 after the live-artifact fix pass: 47,050 bytes for 61 tools. Session promote adds one tool; the cap stays 47,250.
  * Before this pass: 46,993 (cap 47,000, 7 bytes of headroom).
  * Restoring get/save/delete facts and shortening sort_eval_failures prose netted +57 bytes.
  * All-tools cap raised by 250 to 47,250 (headroom 200). Core payload stayed 17,425; core cap 18,200 was not raised.
@@ -87,6 +87,7 @@ const APPENDIX_TOOL_NAMES = [
   "save_artifact",
   "refresh_artifact",
   "delete_artifact",
+  "promote_artifact",
 ] as const;
 
 const TOOLS_WITH_UNION_INPUT = new Set<string>([]);
@@ -170,10 +171,10 @@ describe("MCP tools/list", () => {
     expect(coreTools).toHaveLength(17);
   });
 
-  it("lists exactly the 61 Appendix tools", () => {
+  it("lists exactly the 62 Appendix tools", () => {
     expect(tools.map((tool) => tool.name).sort()).toEqual([...APPENDIX_TOOL_NAMES].sort());
     expect(tools.map((tool) => tool.name).sort()).toEqual(Object.keys(TOOL_META).sort());
-    expect(tools).toHaveLength(61);
+    expect(tools).toHaveLength(62);
   });
 
   it("labels every tool with annotations that match its risk", () => {

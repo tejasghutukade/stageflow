@@ -108,7 +108,7 @@ function stage(project: string, patch: Record<string, unknown> = {}) {
 describe("artifact MCP tools", () => {
   it("registers the artifact tools without route paths in the descriptions", async () => {
     const { tools } = await open();
-    expect(tools.map((tool) => tool.name)).toEqual(["get_artifact", "save_artifact", "refresh_artifact", "delete_artifact"]);
+    expect(tools.map((tool) => tool.name)).toEqual(["get_artifact", "save_artifact", "refresh_artifact", "delete_artifact", "promote_artifact"]);
     for (const tool of tools) {
       expect(tool.description.includes("/api/")).toBe(false);
       expect(TOOL_META[tool.name]).toBeDefined();
@@ -152,7 +152,7 @@ describe("artifact MCP tools", () => {
     expect(toolsInGroup("artifacts.refresh")).toEqual(["refresh_artifact"]);
     expect(resolveToolsets(undefined).tools).not.toContain("get_artifact");
     expect(resolveToolsets("artifacts").tools).toEqual(
-      [...new Set([...resolveToolsets(undefined).tools, "get_artifact", "save_artifact", "refresh_artifact", "delete_artifact"])].sort(),
+      [...new Set([...resolveToolsets(undefined).tools, "get_artifact", "save_artifact", "refresh_artifact", "delete_artifact", "promote_artifact"])].sort(),
     );
   });
 
@@ -571,9 +571,9 @@ stages:
 
     const listed = await rpc("?toolsets=artifacts", "tools/list", {});
     const names = listed.result?.tools?.map((tool) => tool.name) ?? [];
-    expect(names).toEqual(expect.arrayContaining(["get_artifact", "save_artifact", "refresh_artifact", "delete_artifact"]));
+    expect(names).toEqual(expect.arrayContaining(["get_artifact", "save_artifact", "refresh_artifact", "delete_artifact", "promote_artifact"]));
     expect(names).not.toContain("get_eval");
-    for (const name of ["get_artifact", "save_artifact", "refresh_artifact", "delete_artifact"] as const) {
+    for (const name of ["get_artifact", "save_artifact", "refresh_artifact", "delete_artifact", "promote_artifact"] as const) {
       const tool = listed.result?.tools?.find((entry) => entry.name === name);
       expect(tool?.annotations).toEqual(toolAnnotations(name));
       expect(tool?.description?.includes("/api/")).toBe(false);

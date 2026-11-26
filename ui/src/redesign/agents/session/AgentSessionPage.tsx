@@ -16,6 +16,7 @@ import {
 } from "react-icons/lu";
 import { AgentApiError, agentsApi, streamAgentChat, type AgentApproval, type AgentDetail, type AgentSessionDetail } from "../../../api/agents";
 import { UiMessageParts } from "../../../chat/MessageParts";
+import { InlinePreviewCard } from "../../../chat/parts/artifactRefPart";
 import { registerBuiltinUiParts } from "../../../chat/parts/builtins";
 
 registerBuiltinUiParts();
@@ -131,6 +132,7 @@ function MessageBlock({
   time,
   text,
   parts,
+  preview,
   event,
   chat,
   children,
@@ -139,6 +141,7 @@ function MessageBlock({
   time: string;
   text: string;
   parts?: unknown[];
+  preview?: { phase: "skeleton" | "error"; message?: string } | null;
   event?: string;
   chat?: { agentId: string; sessionId: string };
   children?: React.ReactNode;
@@ -151,6 +154,7 @@ function MessageBlock({
       </div>
       <div className="flex flex-col gap-3 rounded-lg border border-[var(--sf-hairline)] bg-[var(--sf-panel)] p-4">
         {text ? <p className="whitespace-pre-wrap break-words text-[13px] leading-[1.7] text-[var(--sf-text-1)]">{text}</p> : null}
+        {preview ? <InlinePreviewCard phase={preview.phase} message={preview.message} /> : null}
         <UiMessageParts
           parts={parts ?? []}
           chat={chat}
@@ -329,7 +333,7 @@ function Timeline({ detail, now }: { detail: AgentSessionDetail; now: number }) 
 function SessionView({ agent, sessionId }: { agent: AgentDetail; sessionId: string | null }) {
   const agentId = agent.agent.id;
   const [input, setInput] = useState("");
-  const [streaming, setStreaming] = useState<{ prompt: string; reply: string } | null>(null);
+  const [streaming, setStreaming] = useState<{ prompt: string; reply: string; preview: { phase: "skeleton" | "error"; message?: string } | null } | null>(null);
   const [busy, setBusy] = useState(false);
   const [deciding, setDeciding] = useState(false);
   // A first message opens its session before the reply ends; an approval can park the turn meanwhile.
@@ -377,7 +381,7 @@ function SessionView({ agent, sessionId }: { agent: AgentDetail; sessionId: stri
     if (!message || busy) return;
     setBusy(true);
     setInput("");
-    setStreaming({ prompt: message, reply: "" });
+    setStreaming({ prompt: message, reply: "", preview: null });
     const controller = new AbortController();
     abort.current = controller;
     let openedId: string | null = null;
@@ -388,6 +392,7 @@ function SessionView({ agent, sessionId }: { agent: AgentDetail; sessionId: stri
         {
           signal: controller.signal,
           onDelta: (text) => setStreaming((prev) => (prev ? { ...prev, reply: prev.reply + text } : prev)),
+          onUiPreview: (preview) => setStreaming((prev) => (prev ? { ...prev, preview } : prev)),
           onSession: (id) => {
             openedId = id;
             setOpenedId(id);
@@ -596,7 +601,7 @@ function SessionView({ agent, sessionId }: { agent: AgentDetail; sessionId: stri
               {streaming ? (
                 <>
                   <MessageBlock author="You" time="now" text={streaming.prompt} />
-                  <MessageBlock author={agent.agent.name} time="…" text={streaming.reply || "…"} />
+                  <MessageBlock author={agent.agent.name} time="…" text={streaming.reply || "…"} preview={streaming.preview} />
                 </>
               ) : null}
               {pending ? <GateCard approval={pending} run={pendingRun} busy={deciding} onDecide={(d) => void decide(d)} onOpen={() => pendingRun && runOf(pendingRun.turn.seq)} /> : null}

@@ -1,9 +1,10 @@
-import type { UiPartArtifactRef } from "../../artifacts/uiPart.js";
+import type { InlinePreview } from "../../artifacts/inlinePreview.js";
+import type { UiPart } from "../../artifacts/uiPart.js";
 import type { AgentDefinition } from "../../config/loadAgent.js";
 import type { ConsumerRuntimeTool } from "../../identity/types.js";
 import { stageflowGrantId, TOOL_META } from "../../toolkit/meta.js";
 
-export type ConversationMessage = { role: "user" | "assistant"; text: string; parts?: UiPartArtifactRef[] };
+export type ConversationMessage = { role: "user" | "assistant"; text: string; parts?: UiPart[] };
 
 /** One tool call by its grant id: a builtin name, `<server>.<tool>`, or `agent:<id>`. */
 export type ToolCall = { id: string; tool: string; input: Record<string, unknown> };
@@ -31,6 +32,7 @@ export type CompleteInput = {
   messages: ConversationMessage[];
   signal: AbortSignal;
   onDelta: (text: string) => void;
+  onUiPreview?: (preview: InlinePreview) => void;
   hooks: TurnHooks;
   /**
    * A chat action asked for this tool. The runtime gates it before anything runs,
