@@ -1,5 +1,5 @@
 import type { ArtifactLiveBinding, ArtifactSnapshot } from "../../../api/artifacts";
-import { queryArtifactBinding, type ArtifactBindingQueryResponse } from "../../../api/artifacts";
+import { queryArtifactBinding } from "../../../api/artifacts";
 import type { LiveQuery } from "../liveData/liveQuery";
 import { cachedLiveQuery, canonicalJson } from "../liveData/queryCache";
 

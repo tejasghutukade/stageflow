@@ -53,7 +53,7 @@ function ApprovalPart({ part, context }: UiPartRendererProps) {
     setError(null);
     try {
       const result = await agentsApi.decide(context.chat.agentId, context.chat.sessionId, decision);
-      const match = result.approval.id === card.approvalId ? result.approval : result.session.approvals.find((row) => row.id === card.approvalId);
+      const match = result.approval.id === approvalId ? result.approval : result.session.approvals.find((row) => row.id === approvalId);
       if (match) setApproval(match);
       setLocalStatus(decision === "approve" ? "approved" : "denied");
     } catch (err) {

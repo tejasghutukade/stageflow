@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState, type ReactNode } from "react";
-import { parseArtifactShowKey } from "../../../../src/cli/artifactListFormat.ts";
+import { parseArtifactShowKey } from "../../../../src/artifacts/showKey.ts";
 import type { ArtifactLiveAction } from "../../api/artifacts";
 import { liveQueryFromChat, postChatAction, type ChatActionTarget } from "../../chat/parts/chatActions";
 import type { ArtifactDetailMeta } from "./artifactDetailModel";

@@ -65,7 +65,7 @@ export function createChatApi({ apiBase, slug, visitorId, fetchImpl }: ChatApiOp
     listThreads: async (): Promise<ChatThreadSummary[]> => (await json<{ threads: ChatThreadSummary[] }>("/threads")).threads,
     createThread: async (): Promise<ChatThreadSummary> => (await json<{ thread: ChatThreadSummary }>("/threads", { method: "POST", body: "{}" })).thread,
     getThread: async (id: string): Promise<ChatThreadDetail> => {
-      const detail = await json<ChatThreadDetail & { messages: (ChatMessageRecord & { parts?: unknown })[] }>(`/threads/${encodeURIComponent(id)}`);
+      const detail = await json<Omit<ChatThreadDetail, "messages"> & { messages: (ChatMessageRecord & { parts?: unknown })[] }>(`/threads/${encodeURIComponent(id)}`);
       return {
         ...detail,
         messages: detail.messages.map(({ parts, ...record }) => {

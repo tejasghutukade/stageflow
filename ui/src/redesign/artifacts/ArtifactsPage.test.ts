@@ -12,7 +12,7 @@ import {
 const defaultViewProps = {
   filters: DEFAULT_ARTIFACT_LIST_FILTERS,
   onFiltersChange: () => {},
-  tabCounts: { all: 0, live: 0, static: 0 },
+  tabCounts: { all: 0, live: 0, static: 0, session: 0 },
 };
 
 function record(patch: Partial<ArtifactRecord> = {}): ArtifactRecord {
@@ -62,7 +62,7 @@ describe("ArtifactsPageView", () => {
     ]);
     const html = renderToStaticMarkup(createElement(ArtifactsPageView, {
       ...defaultViewProps,
-      tabCounts: { all: 1, live: 0, static: 1 },
+      tabCounts: { all: 1, live: 0, static: 1, session: 0 },
       rows,
       error: null,
       loading: false,
@@ -86,7 +86,7 @@ describe("ArtifactsPageView", () => {
     expect(rows[0]?.expiredReason).toBe("Run was purged");
     const html = renderToStaticMarkup(createElement(ArtifactsPageView, {
       ...defaultViewProps,
-      tabCounts: { all: 1, live: 0, static: 1 },
+      tabCounts: { all: 1, live: 0, static: 1, session: 0 },
       rows,
       error: null,
       loading: false,
@@ -111,7 +111,7 @@ describe("ArtifactsPageView", () => {
     expect(rows[0]?.statusPill).toEqual({ label: "Fresh", variant: "ok" });
     const html = renderToStaticMarkup(createElement(ArtifactsPageView, {
       ...defaultViewProps,
-      tabCounts: { all: 1, live: 1, static: 0 },
+      tabCounts: { all: 1, live: 1, static: 0, session: 0 },
       rows,
       error: null,
       loading: false,

@@ -1,4 +1,4 @@
-import type { InlinePreview } from "../../../src/artifacts/inlinePreview.ts";
+import type { InlinePreview } from "../../../src/artifacts/inlinePreviewTypes.ts";
 import { parseUiPart, type UiPart } from "../../../src/artifacts/uiPart.ts";
 
 export type ChatMessageRecord = { id: string; role: "user" | "assistant"; text: string; createdAt: string; ui?: UiPart[] };

@@ -66,6 +66,8 @@ describe("ArtifactViewContent", () => {
         preview: previewFromContent({ record: live, text: "card", binary: false }),
         program: "card",
         livePreview: {
+          format: null,
+          library: null,
           program: "card",
           bindings: [],
           snapshots: [],

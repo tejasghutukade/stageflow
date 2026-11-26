@@ -2,7 +2,7 @@ import type { ChatModelAdapter, ChatModelRunResult, RemoteThreadListAdapter, Thr
 import { createAssistantStream } from "assistant-stream";
 import { ChatApiError, type ChatApi } from "./api";
 import { friendlyMessage, type ChatErrorInfo } from "./errors";
-import type { InlinePreview } from "../../../src/artifacts/inlinePreview.ts";
+import type { InlinePreview } from "../../../src/artifacts/inlinePreviewTypes.ts";
 import type { ChatMessageRecord } from "./ndjson";
 
 /** Carried on an incomplete assistant message so the UI can render a friendly notice. */

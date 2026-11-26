@@ -17,7 +17,7 @@ import {
   LuUserCheck,
 } from "react-icons/lu";
 import { contactLines } from "../model/channelContact";
-import { PRESENTABLE_ARTIFACT_KINDS } from "../../../../../src/artifacts/kinds.ts";
+import { PRESENTABLE_ARTIFACT_KINDS } from "../../../../../src/artifacts/presentableKinds.ts";
 import { agentsApi, type AgentDefinition, type ChannelContact, type AgentIssue, type AgentRevisionMeta, type BuiltinToolGroup, type ChannelListenerState } from "../../../api/agents";
 import { fetchMemories, type MemorySummary } from "../../../api";
 import { MONO, NOWRAP } from "../agentsTokens";

@@ -242,7 +242,7 @@ export function useArtifactViewModel(identity: ArtifactViewIdentity): ArtifactVi
     imageUrl: view.imageUrl,
     contentError,
     program,
-    live: displayRecord.live ?? null,
+    live: displayRecord.live ?? undefined,
     liveData,
     historicalSnapshots: viewing !== null,
     viewing,

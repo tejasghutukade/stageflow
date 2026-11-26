@@ -1,7 +1,9 @@
 import { LIVE_PROGRAM_MAX_BYTES } from "./limits.js";
 import { validateProgram } from "./program.js";
 
-export type InlinePreview = { phase: "skeleton" } | { phase: "error"; message: string };
+import type { InlinePreview } from "./inlinePreviewTypes.js";
+
+export type { InlinePreview };
 
 const ERROR_MESSAGE_MAX = 240;
 

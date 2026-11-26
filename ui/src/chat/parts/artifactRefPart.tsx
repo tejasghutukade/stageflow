@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { parseUiPart, UI_PART_KIND_ARTIFACT_REF, UI_PART_KIND_ERROR } from "../../../../src/artifacts/uiPart.ts";
+import { UI_PART_KIND_ARTIFACT_REF, UI_PART_KIND_ERROR } from "../../../../src/artifacts/uiPart.ts";
 import { fetchArtifact, promoteArtifact } from "../../api/artifacts";
 import { parseUiPartArtifactRef } from "../../../../src/artifacts/uiPartArtifactRef.ts";
 import { ArtifactView } from "../../redesign/artifacts/ArtifactView";
