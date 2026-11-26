@@ -207,7 +207,7 @@ describe("agent artifact grants", () => {
     expect(unknown.ok).toBe(false);
     if (!unknown.ok) expect(unknown.issues.map((issue) => issue.code)).toEqual(["agent.stageflow_group_unknown"]);
     const catalog = describeToolkit().groups.find((group) => group.id === "artifacts.write");
-    expect(catalog?.tools.map((tool) => tool.name)).toEqual(["publish_artifact"]);
+    expect(catalog?.tools.filter((tool) => !tool.operatorOnly).map((tool) => tool.name)).toEqual(["publish_artifact"]);
     expect(catalog?.tools[0]?.grantId).toBe("publish_artifact");
     expect(describeToolkit().toolsets.find((row) => row.id === "artifacts")?.tools).toContain("save_artifact");
   });

@@ -1,5 +1,6 @@
 import type { ArtifactLiveBinding, ArtifactSnapshot } from "../../../api/artifacts";
 import { queryArtifactBinding, type ArtifactBindingQueryResponse } from "../../../api/artifacts";
+import type { LiveQuery } from "../liveData/liveQuery";
 import { cachedLiveQuery, canonicalJson } from "../liveData/queryCache";
 
 export {
@@ -11,10 +12,7 @@ export {
   resetLiveQueryCacheForTests,
 } from "../liveData/queryCache";
 
-export type LiveQuery = (input: {
-  bindingId: string;
-  args: Record<string, unknown>;
-}) => Promise<{ status: number; body: ArtifactBindingQueryResponse | { error?: string; code?: string; retry_after_seconds?: number } | null; networkError?: string }>;
+export type { LiveQuery };
 
 type QueryResult = Awaited<ReturnType<LiveQuery>>;
 

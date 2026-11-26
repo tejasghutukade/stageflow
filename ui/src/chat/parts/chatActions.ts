@@ -1,5 +1,5 @@
 import { AgentApiError, agentsApi } from "../../api/agents";
-import type { LiveQuery } from "../../redesign/artifacts/live/toolProvider";
+import type { LiveQuery } from "../../redesign/artifacts/liveData/liveQuery";
 
 export type ChatActionTarget = {
   agentId: string;

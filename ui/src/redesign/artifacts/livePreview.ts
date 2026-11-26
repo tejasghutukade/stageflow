@@ -1,5 +1,5 @@
 import type { ArtifactLiveBinding, ArtifactSnapshot } from "../../api/artifacts";
-import type { LiveQuery } from "./live/toolProvider";
+import type { LiveQuery } from "./liveData/liveQuery";
 
 export type LivePreviewInput = {
   format: string | null | undefined;
