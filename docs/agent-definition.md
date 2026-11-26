@@ -74,7 +74,7 @@ ui:
 | `ui.kinds` | list of artifact kinds | `[]` | At least one when `present` is true (`agent.ui_kinds_required`). Each must be `static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`, `live.declarative`, or `live.html` (`agent.ui_kind_unknown`). No duplicates (`agent.ui_kind_duplicate`). A call for another kind is refused (`ui.kind_not_granted`). |
 | `ui.functions` | list of function ids | `[]` | Function ids a presented live artifact may call from chat. Each id matches `^[a-z][a-z0-9_-]{0,63}$` (`agent.ui_function_invalid`). No duplicates (`agent.ui_function_duplicate`). A binding query whose function is not listed is `agent.ui_function_not_granted`. |
 
-A key from another project is refused (`ui.cross_project`). A missing key is `artifact.not_found`. After the message is stored, a deleted or expired artifact renders as an unavailable card. Eval sessions stub `present_ui` and do not run it.
+When `live.declarative` or `live.html` is in `ui.kinds`, the agent's prompt also carries that kind's vocabulary, syntax and an example, so it can write a one-off program without reading the docs. Failed attempts do not count toward the four inline presents allowed per message. A key from another project is refused (`ui.cross_project`). A missing key is `artifact.not_found`. After the message is stored, a deleted or expired artifact renders as an unavailable card. Eval sessions stub `present_ui` and do not run it.
 
 ### `approvals`
 

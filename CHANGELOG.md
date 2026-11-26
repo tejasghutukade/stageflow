@@ -7,8 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Chat generative UI: an agent granted `ui.present` can place an artifact in a console chat with `present_ui`, by key or as a one-off program saved as a session artifact that expires after 30 days unless promoted (`sf artifact promote`, MCP `promote_artifact`, or the chat button). The default artifact list leaves session artifacts out; `--scope session` and the Session tab show them.
+- Chat actions: `POST /api/agents/:id/sessions/:sid/ui-events` lets a rendered part re-query a granted read-only binding, send a declared message, or request a tool call that waits on the usual approval. Forms and approval cards are also chat part kinds.
+- Channel capabilities: every channel provider declares how it shows UI parts. Email, Slack, Telegram and iMessage replies carry the part's plain-text summary, never a console URL.
+
 ### Fixed
 - Live HTML in Docker reaches the sandbox listener when `STAGEFLOW_SANDBOX_PORT` is set and the port is published on `127.0.0.1`, without an in-container forwarder.
+- The console build (`npm run ui:build`, the Docker image) no longer type-checks the server: small modules keep node-only code out of the UI type graph.
 
 ## [0.67.0] - 2026-11-25
 
