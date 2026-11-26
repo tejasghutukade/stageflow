@@ -1,8 +1,9 @@
+import type { UiPartArtifactRef } from "../../artifacts/uiPart.js";
 import type { AgentDefinition } from "../../config/loadAgent.js";
 import type { ConsumerRuntimeTool } from "../../identity/types.js";
 import { stageflowGrantId, TOOL_META } from "../../toolkit/meta.js";
 
-export type ConversationMessage = { role: "user" | "assistant"; text: string };
+export type ConversationMessage = { role: "user" | "assistant"; text: string; parts?: UiPartArtifactRef[] };
 
 /** One tool call by its grant id: a builtin name, `<server>.<tool>`, or `agent:<id>`. */
 export type ToolCall = { id: string; tool: string; input: Record<string, unknown> };

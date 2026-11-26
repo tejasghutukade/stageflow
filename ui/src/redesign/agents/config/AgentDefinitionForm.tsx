@@ -17,6 +17,7 @@ import {
   LuUserCheck,
 } from "react-icons/lu";
 import { contactLines } from "../model/channelContact";
+import { PRESENTABLE_ARTIFACT_KINDS } from "../../../../../src/artifacts/kinds.ts";
 import { agentsApi, type AgentDefinition, type ChannelContact, type AgentIssue, type AgentRevisionMeta, type BuiltinToolGroup, type ChannelListenerState } from "../../../api/agents";
 import { fetchMemories, type MemorySummary } from "../../../api";
 import { MONO, NOWRAP } from "../agentsTokens";
@@ -512,6 +513,63 @@ export function AgentDefinitionForm({
             </span>
           ) : null}
           <FieldMessages {...at("tools.stageflow")} />
+        </div>
+
+        <div className="flex flex-col gap-2 rounded-lg border border-[var(--sf-hairline)] px-3.5 py-3" data-testid="present-ui">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-col gap-1">
+              <span className="text-xs font-medium leading-[1.33333] text-[var(--sf-text-2)]">Show artifacts in chat</span>
+              <span className="text-xs leading-[1.33333] text-[var(--sf-text-3)]">
+                {def.ui.present ? "On. The agent can place an allowed artifact into the conversation." : "Off. The agent cannot call present_ui."}
+              </span>
+            </div>
+            <Toggle
+              on={def.ui.present}
+              label="Show artifacts in chat"
+              onChange={
+                update
+                  ? (present) =>
+                      update({
+                        ...def,
+                        ui: {
+                          present,
+                          kinds: present ? (def.ui.kinds.length > 0 ? def.ui.kinds : [...PRESENTABLE_ARTIFACT_KINDS]) : [],
+                          functions: present ? def.ui.functions : [],
+                        },
+                      })
+                  : undefined
+              }
+            />
+          </div>
+          {def.ui.present ? (
+            <>
+              <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                {PRESENTABLE_ARTIFACT_KINDS.map((kind) => (
+                  <label key={kind} className="flex items-center gap-1.5 text-xs text-[var(--sf-text-2)]">
+                    <input
+                      type="checkbox"
+                      checked={def.ui.kinds.includes(kind)}
+                      disabled={!update}
+                      onChange={(event) => {
+                        const kinds = event.target.checked ? [...def.ui.kinds, kind] : def.ui.kinds.filter((item) => item !== kind);
+                        update?.({ ...def, ui: { ...def.ui, kinds } });
+                      }}
+                    />
+                    {kind}
+                  </label>
+                ))}
+              </div>
+              <ChipListField
+                values={def.ui.functions}
+                onChange={update ? (functions) => update({ ...def, ui: { ...def.ui, functions } }) : undefined}
+                placeholder="Function id"
+                ariaLabel="Functions a presented artifact may call"
+              />
+              <FieldMessages {...at("ui.kinds")} />
+              <FieldMessages {...at("ui.present")} />
+              <FieldMessages {...at("ui.functions")} />
+            </>
+          ) : null}
         </div>
 
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">

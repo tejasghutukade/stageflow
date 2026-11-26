@@ -14,6 +14,7 @@ import type { ContactInfo } from "../channels/types.js";
 import type { McpToolDeps } from "../mcp/deps.js";
 import { catalogRootsForArtifacts } from "../artifacts/projectScope.js";
 import { publishSessionArtifact } from "../artifacts/sessionPublish.js";
+import { presentArtifact } from "./presentUi.js";
 import { sqliteConnectionFromStore } from "../runstore/createStore.js";
 import { buildToolkit, type ToolkitTool } from "../toolkit/index.js";
 import { createPiAgentRuntime } from "./runtime/piRuntime.js";
@@ -150,6 +151,21 @@ export function createAgentHostContext(options: {
                 { owner: { kind: "agent", agent: agentId }, projectRoot, source: { sessionId } },
                 body,
               );
+            },
+            presentUi: async ({ projectRoot, key, version, title, kinds }) => {
+              const db = sqliteConnectionFromStore(options.toolkitDeps!.store);
+              if (!db) return { ok: false as const, code: "ui.unavailable", message: "present_ui is not available" };
+              const roots = await catalogRootsForArtifacts(options.toolkitDeps!.store);
+              return presentArtifact({
+                db,
+                roots,
+                projectRoot,
+                key,
+                ...(version !== undefined ? { version } : {}),
+                ...(title !== undefined ? { title } : {}),
+                allowedKinds: kinds,
+                consoleDeps: { ...options.toolkitDeps!, cwd: options.cwd },
+              });
             },
           }
         : {}),

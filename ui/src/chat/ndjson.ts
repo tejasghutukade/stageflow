@@ -1,4 +1,16 @@
-export type ChatMessageRecord = { id: string; role: "user" | "assistant"; text: string; createdAt: string };
+import { parseUiPart, type UiPartArtifactRef } from "../../../src/artifacts/uiPart.ts";
+
+export type ChatMessageRecord = { id: string; role: "user" | "assistant"; text: string; createdAt: string; ui?: UiPartArtifactRef[] };
+
+function messageParts(value: unknown): UiPartArtifactRef[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const parts: UiPartArtifactRef[] = [];
+  for (const item of value) {
+    const parsed = parseUiPart(item);
+    if (parsed.ok) parts.push(parsed.part);
+  }
+  return parts.length > 0 ? parts : undefined;
+}
 
 export type ChatFrame =
   | { type: "delta"; text: string }
@@ -18,6 +30,7 @@ export function toFrame(value: unknown): ChatFrame | null {
     case "done": {
       const message = frame.message as Record<string, unknown> | undefined;
       if (!message || typeof message.id !== "string" || typeof message.text !== "string") return null;
+      const ui = messageParts(message.parts);
       return {
         type: "done",
         message: {
@@ -25,6 +38,7 @@ export function toFrame(value: unknown): ChatFrame | null {
           role: "assistant",
           text: message.text,
           createdAt: typeof message.createdAt === "string" ? message.createdAt : new Date().toISOString(),
+          ...(ui ? { ui } : {}),
         },
       };
     }

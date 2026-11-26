@@ -24,6 +24,7 @@ import { newWebChatSlug } from "./webChat/slug.js";
 import { ApprovalBroker } from "./approvalBroker.js";
 import { deliveryLedger, scheduleLedger, type DeliveryLedger, type ScheduleLedger } from "./ledgers.js";
 import { TurnLifecycle, type FinishInput } from "./turnLifecycle.js";
+import type { UiPartArtifactRef } from "../artifacts/uiPart.js";
 import { AgentError } from "./errors.js";
 import { applyEvalOverrides, EVAL_SESSION_SOURCE, isEvalSession, type EvalSessionOverrides } from "./evalSession.js";
 import { agentMemoryIssues } from "../memory/agentIssues.js";
@@ -1321,6 +1322,7 @@ export class AgentService {
     input: {
       status: FinishInput["status"];
       assistantText?: string;
+      assistantParts?: UiPartArtifactRef[];
       errorCode?: string | null;
       usage?: { inputTokens?: number; outputTokens?: number };
       costUsd?: number | null;
@@ -1335,7 +1337,16 @@ export class AgentService {
       this.lifecycle.finish(turnId, {
         status: input.status,
         errorCode: input.errorCode ?? null,
-        ...(input.assistantText ? { assistant: { id: id("msg"), author: session.agentId, text: input.assistantText } } : {}),
+        ...((input.assistantText && input.assistantText.length > 0) || (input.assistantParts?.length ?? 0) > 0
+          ? {
+              assistant: {
+                id: id("msg"),
+                author: session.agentId,
+                text: input.assistantText ?? "",
+                ...(input.assistantParts && input.assistantParts.length > 0 ? { parts: input.assistantParts } : {}),
+              },
+            }
+          : {}),
         ...(input.usage ? { usage: input.usage } : {}),
         ...(input.costUsd !== undefined ? { costUsd: input.costUsd } : {}),
         ...(input.evalScores ? { evalScores: input.evalScores } : {}),

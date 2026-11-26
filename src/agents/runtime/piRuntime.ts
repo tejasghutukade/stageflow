@@ -32,6 +32,7 @@ import { MEMORY_STORE_BASH_DENIED, memoryStorePathInCommand } from "../../memory
 import { compactionUsageCost, type CompactionEndSessionEvent } from "../../agent/compactionEvents.js";
 import { memoryHome } from "../../memory/host.js";
 import { appendAgentArtifactPrompt, bindAgentArtifactDelete, bindAgentArtifactRead, bindAgentArtifactRefresh, createAgentPublishArtifactTool, type AgentPublishTool } from "../artifactTools.js";
+import { appendAgentPresentUiPrompt, createPresentUiTool, messageReplayText, type PresentArtifactResult, type PresentUiTool } from "../presentUi.js";
 import { SessionPublishError, type SessionPublishBody, type SessionPublishSuccess } from "../../artifacts/sessionPublish.js";
 import { forbiddenWriteTarget } from "../policy.js";
 import { prepareExecutionLaunch, type SandboxRunner } from "../sandbox.js";
@@ -52,6 +53,14 @@ export type PiRuntimeOptions = {
     projectRoot: string;
     body: SessionPublishBody;
   }) => Promise<SessionPublishSuccess>;
+  /** Resolves a present_ui call against the session project. Absent when the Host has no artifact store. */
+  presentUi?: (input: {
+    projectRoot: string;
+    key: string;
+    version?: number;
+    title?: string;
+    kinds: readonly string[];
+  }) => Promise<PresentArtifactResult>;
   /**
    * How long a session may sit unused before its Pi session and isolated MCP processes are released. A later message
    * reopens it from the stored transcript. Default 30 minutes; 0 keeps sessions until released or disposed.
@@ -75,6 +84,8 @@ export type OpenSessionInput = {
   stageflowTools?: ToolkitTool[];
   /** In-session publish tool, present only when the agent holds artifacts.write. */
   agentPublishTool?: AgentPublishTool;
+  /** In-session present_ui tool, present only when the agent holds ui.present. */
+  presentUiTool?: PresentUiTool;
   memory?: StageMemory;
   /** Defaults to true; one-shot judge sessions have no use for it. */
   workingState?: boolean;
@@ -122,11 +133,11 @@ function textOf(content: unknown): string {
     .join("");
 }
 
-function replayPrompt(prior: Array<{ role: string; text: string }>): string {
+function replayPrompt(prior: Array<{ role: string; text: string; parts?: Parameters<typeof messageReplayText>[0]["parts"] }>): string {
   return [
     "Earlier conversation in this session (restored after a restart). Continue from it; do not re-ask answered questions.",
     "",
-    ...prior.map((m) => `${m.role}: ${m.text.trim()}`),
+    ...prior.map((m) => `${m.role}: ${messageReplayText(m)}`),
   ].join("\n");
 }
 
@@ -294,6 +305,21 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
 
     if (input.agentPublishTool) {
       const tool = input.agentPublishTool;
+      customTools.push(
+        defineTool({
+          name: tool.name,
+          label: tool.label,
+          description: tool.description,
+          parameters: tool.parameters,
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+          execute: async (callId: string, args: unknown) => tool.execute(callId, args),
+        }),
+      );
+      if (!toolNames.includes(tool.name)) toolNames.push(tool.name);
+    }
+
+    if (input.presentUiTool) {
+      const tool = input.presentUiTool;
       customTools.push(
         defineTool({
           name: tool.name,
@@ -485,6 +511,16 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
           },
         })
       : undefined;
+    const presentUiTool = definition.ui.present
+      ? createPresentUiTool({
+          kinds: definition.ui.kinds,
+          projectRoot,
+          present: (args) =>
+            options.presentUi
+              ? options.presentUi({ ...args, projectRoot, kinds: definition.ui.kinds })
+              : Promise.resolve({ ok: false, code: "ui.unavailable", message: "present_ui is not available" }),
+        })
+      : undefined;
     const state: Bound = { opened: undefined as never, definitionKey: definition.id, hooks: undefined, mcpServers, subAgents, functionTools };
     const context = definition.project_context ? await projectContext(projectRoot) : "";
     let memory: StageMemory | undefined;
@@ -496,10 +532,13 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
         throw new AgentError("agent.invalid", `Memory could not be opened (${code})`);
       }
     }
-    const systemPrompt = appendAgentArtifactPrompt(
-      `${definition.instructions}${context}${memory ? `\n\n${memorySession(memory).prompt}` : ""}`,
+    const systemPrompt = appendAgentPresentUiPrompt(
+      appendAgentArtifactPrompt(
+        `${definition.instructions}${context}${memory ? `\n\n${memorySession(memory).prompt}` : ""}`,
+        definition,
+        projectRoot,
+      ),
       definition,
-      projectRoot,
     );
     state.opened = await open({
       projectRoot,
@@ -509,6 +548,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
         ...piToolNames(definition),
         ...functionTools.map((tool) => tool.name),
         ...(agentPublishTool ? [agentPublishTool.name] : []),
+        ...(presentUiTool ? [presentUiTool.name] : []),
       ],
       ...(functionTools.length > 0 ? { functionTools } : {}),
       hooks: () => state.hooks,
@@ -516,6 +556,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
       ...(memory ? { memory } : {}),
       ...(stageflowTools.length > 0 ? { stageflowTools } : {}),
       ...(agentPublishTool ? { agentPublishTool } : {}),
+      ...(presentUiTool ? { presentUiTool } : {}),
       ...(subAgents.length > 0 ? { delegateTool: (agentId, message, callId) => state.hooks!.delegate(agentId, message, callId) } : {}),
       gate: async (call) => {
         const hooks = state.hooks;
@@ -648,7 +689,11 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
       const onAbort = () => void session.abort?.();
       input.signal.addEventListener("abort", onAbort, { once: true });
       try {
-        const prior = input.messages.slice(0, -1).map((m) => ({ role: m.role, text: m.text }));
+        const prior = input.messages.slice(0, -1).map((m) => ({
+          role: m.role,
+          text: m.text,
+          ...(m.parts?.length ? { parts: m.parts } : {}),
+        }));
         const prompt = fresh && prior.length > 0 ? `${replayPrompt(prior)}\n\nuser: ${user.text}` : user.text;
         arm();
         await session.prompt(prompt);

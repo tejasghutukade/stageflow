@@ -4,6 +4,23 @@ import { artifactMediaType } from "../runread/readArtifact.js";
 export const LIVE_DECLARATIVE_KIND = "live.declarative";
 export const LIVE_HTML_KIND = "live.html";
 
+/** Artifact kinds an agent may place in chat with `present_ui`. */
+export const PRESENTABLE_ARTIFACT_KINDS = [
+  "static.markdown",
+  "static.image",
+  "static.table",
+  "static.text",
+  "static.html",
+  LIVE_DECLARATIVE_KIND,
+  LIVE_HTML_KIND,
+] as const;
+
+export type PresentableArtifactKind = (typeof PRESENTABLE_ARTIFACT_KINDS)[number];
+
+export function isPresentableArtifactKind(kind: string): kind is PresentableArtifactKind {
+  return (PRESENTABLE_ARTIFACT_KINDS as readonly string[]).includes(kind);
+}
+
 export type StaticArtifactKind =
   | "static.markdown"
   | "static.image"

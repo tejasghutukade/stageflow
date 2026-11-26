@@ -297,7 +297,7 @@ describe("origin approvals", () => {
   it("adds migration 030 on a fresh store and on a store at version 29", async () => {
     const fresh = await openStore();
     const freshDb = sqliteConnectionFromStore(fresh.store)!;
-    expect(freshDb.pragma("user_version", { simple: true })).toBe(30);
+    expect(freshDb.pragma("user_version", { simple: true })).toBe(31);
     expect(freshDb.prepare(`SELECT name FROM sqlite_master WHERE name = 'artifact_origin_approvals'`).get()).toBeTruthy();
 
     const home = await mkdtemp(path.join(tmpdir(), "sf-origin-v29-"));
@@ -313,7 +313,7 @@ describe("origin approvals", () => {
     const migrated = createRunStore({ rootDir: home });
     cleanups.push(() => migrated.close());
     const migratedDb = sqliteConnectionFromStore(migrated)!;
-    expect(migratedDb.pragma("user_version", { simple: true })).toBe(30);
+    expect(migratedDb.pragma("user_version", { simple: true })).toBe(31);
     expect(migratedDb.prepare(`SELECT name FROM sqlite_master WHERE name = 'artifact_origin_approvals'`).get()).toBeTruthy();
   });
 });

@@ -2,7 +2,7 @@ import { lazy, Suspense, useState, type ReactNode } from "react";
 import { parseArtifactShowKey } from "../../../../src/cli/artifactListFormat.ts";
 import type { ArtifactDetailMeta } from "./artifactDetailModel";
 import { LIVE_VERSION_SNAPSHOT_NOTE, viewingVersionBanner } from "./artifactDetailModel";
-import { StaticArtifactBody } from "./renderers/StaticPreview";
+import { ExplanationCard, StaticArtifactBody } from "./renderers/StaticPreview";
 import type { StaticPreview } from "./renderers/previewModel";
 import type { LivePreviewInput } from "./livePreview";
 import type { LiveHtmlFrameProps } from "./liveHtml/LiveHtmlFrame";
@@ -187,6 +187,15 @@ function ArtifactViewLoaded({
     return <p className="text-[13px] text-[var(--sf-text-3)]">Loading artifact…</p>;
   }
   if (model.phase === "error") {
+    if (density === "inline") {
+      return (
+        <ExplanationCard
+          testId="artifact-unavailable"
+          title="This artifact is unavailable"
+          body="It was deleted or it has expired."
+        />
+      );
+    }
     return (
       <p className="text-[13px] text-[var(--sf-fail)]" role="alert">
         {model.message}

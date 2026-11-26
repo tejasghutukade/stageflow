@@ -35,6 +35,7 @@ The gate runs one call at a time per turn.
 | Skills in `tools.skills` | Loaded into the session. A skill that is not installed fails the session with `agent.backend_unavailable`. |
 | Sub-agents in `sub_agents` | One tool per agent, `agent_<id>`, grant id `agent:<id>`. |
 | Stageflow tools in `tools.stageflow` | Named `stageflow_<tool>`, grant id `stageflow.<tool>`. |
+| `ui.present` | `present_ui`. Read-only. Places an artifact reference in the reply. Eval sessions stub it. |
 
 ### MCP servers
 

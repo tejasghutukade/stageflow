@@ -3,6 +3,10 @@ import { lazy, Suspense, useState } from "react";
 import { LuArrowDown, LuArrowUp, LuFile, LuPaperclip, LuSquare, LuTriangleAlert, LuX } from "react-icons/lu";
 import { ModelPicker } from "../../components/ModelPicker";
 import { friendlyMessage } from "../../chat/errors";
+import { UiMessageParts, uiPartsFromMetadata } from "../../chat/MessageParts";
+import { registerBuiltinUiParts } from "../../chat/parts/builtins";
+
+registerBuiltinUiParts();
 import { GUIDE_TOOLS } from "./GuideTools";
 import { useGuideActivity, useGuideModel } from "./runtime";
 
@@ -102,6 +106,7 @@ function AssistantMessage() {
   const hasContent = useAuiState((state) =>
     state.message.content.some((part) => (part.type === "text" && part.text.length > 0) || part.type === "tool-call"),
   );
+  const uiParts = useAuiState((state) => uiPartsFromMetadata(state.message.metadata));
   const awaitingMore = useAuiState((state) => {
     const last = state.message.content.at(-1);
     return !last || (last.type === "text" && last.text.length === 0) || (last.type === "tool-call" && last.result !== undefined);
@@ -114,6 +119,7 @@ function AssistantMessage() {
     <MessagePrimitive.Root className="flex justify-start">
       <div className="flex w-full min-w-0 max-w-[92%] flex-col gap-1.5 break-words text-[15px] leading-relaxed text-[var(--sf-text-1)]">
         {hasContent ? <MessagePrimitive.Parts components={{ Text: TextPart, tools: GUIDE_TOOLS }} /> : null}
+        <UiMessageParts parts={uiParts} />
         {running && awaitingMore ? <Dots /> : null}
         {code ? (
           <div role="alert" className="flex items-start gap-2 rounded-lg border border-[var(--sf-hairline-strong)] bg-[var(--sf-fail-bg)] px-3 py-2 text-[13px] text-[var(--sf-text-1)]">

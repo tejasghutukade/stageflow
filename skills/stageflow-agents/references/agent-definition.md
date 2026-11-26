@@ -41,6 +41,7 @@ Every field of `agents/<id>.agent.yaml`, as the Host validates it. Unknown keys 
 | `execution` | `trusted-local` (default) or `sandbox` | `sandbox` is not installed: warning `agent.sandbox_unavailable`, sessions fail. Do not set it |
 | `model` | object | [model](#model) |
 | `tools` | object | [tools](#tools) |
+| `ui` | object | [ui](#ui) |
 | `approvals` | object | [approvals](#approvals) |
 | `sub_agents` | list of agent ids, `[]` | [sub_agents](#sub_agents-guardrails-evals-observability) |
 | `sub_agent_depth` | integer 1 to 5, `1` | |
@@ -76,6 +77,16 @@ The older `channels: [{ connection_id }]` list still loads as `channel`; more th
 | `stageflow.tools` | list of tool names, `[]` | Single Stageflow tools. Unknown `agent.stageflow_tool_unknown`; `get_started`, `answer_gate`, `decide_feedback_loop`, `decide_agent_action` are operator-only |
 
 Grant ids (used in `approvals.ask_first`): builtin tool name (`write`, `bash`), `<server>.<tool>` for MCP, `stageflow.<tool>` for Stageflow tools, `agent:<id>` for sub-agents. Groups and tool lists: [tools-and-approvals.md](tools-and-approvals.md).
+
+## ui
+
+| Field | Type, default | Notes |
+|---|---|---|
+| `present` | boolean, `false` | Grants `present_ui`. Off until set |
+| `kinds` | list, `[]` | Required when `present` is true. `static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`, `live.declarative`, `live.html`. Unknown `agent.ui_kind_unknown`. Duplicate `agent.ui_kind_duplicate`. Empty while present `agent.ui_kinds_required` |
+| `functions` | list of function ids, `[]` | Ids a presented live artifact may call. Invalid `agent.ui_function_invalid`. Duplicate `agent.ui_function_duplicate` |
+
+Kinds or functions while `present` is false is `agent.ui_present_required`.
 
 ## approvals
 

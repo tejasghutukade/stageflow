@@ -110,6 +110,8 @@ Web chat plus `get_agent_session` (including `list: true`) warns `agent.web_chat
 
 **Artifacts.** `publish_artifact` takes the same fields as a stage publish: `id`, `kind`, `title`, optional `description`, `tags`, `summary`, and one of `path`, `content`, or `content_base64`. Agent `path` is project-relative and passes the path guard (no `..`, symlinks, `agents/*.agent.yaml`, or `$STAGEFLOW_HOME` outside the project). Put secrets only in scrubbed content; never publish raw credentials. Listing and deleting: `stageflow-operate` `references/artifacts.md`.
 
+**present_ui.** Separate from the artifact groups. It is granted by `ui.present`, not by `tools.stageflow`. Call it with the key `publish_artifact` returned when the person should see that artifact in the chat. It is read-only. Eval sessions stub it. A key in another project is refused.
+
 The live list is `GET /api/agents/stageflow-tools`. There is no CLI for that registry.
 
 ## Sub-agents

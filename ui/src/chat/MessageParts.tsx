@@ -2,6 +2,27 @@ import { MessagePrimitive, useAuiState } from "@assistant-ui/react";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { LuTriangleAlert } from "react-icons/lu";
 import type { ChatMessageError } from "./adapters";
+import { registerBuiltinUiParts } from "./parts/builtins";
+import { renderUiPart, type UiPartRendererContext } from "./parts/registry";
+
+registerBuiltinUiParts();
+
+export function uiPartsFromMetadata(metadata: unknown): unknown[] {
+  if (typeof metadata !== "object" || metadata === null) return [];
+  const custom = (metadata as { custom?: { uiParts?: unknown } }).custom;
+  return Array.isArray(custom?.uiParts) ? custom.uiParts : [];
+}
+
+export function UiMessageParts({ parts, onOpenConsole }: { parts: readonly unknown[]; onOpenConsole?: UiPartRendererContext["onOpenConsole"] }) {
+  if (parts.length === 0) return null;
+  return (
+    <div className="flex min-w-0 flex-col gap-3">
+      {parts.map((part, index) => (
+        <div key={index}>{renderUiPart(part, { onOpenConsole })}</div>
+      ))}
+    </div>
+  );
+}
 
 const MarkdownText = lazy(() => import("./MarkdownText"));
 
@@ -50,12 +71,14 @@ export function AssistantMessageBody() {
   const status = useAuiState((s) => s.message.status);
   const waiting = useAuiState((s) => (s.message.metadata as { custom?: { waiting?: boolean } } | undefined)?.custom?.waiting === true);
   const hasText = useAuiState((s) => s.message.content.some((part) => part.type === "text" && part.text.length > 0));
+  const uiParts = useAuiState((s) => uiPartsFromMetadata(s.message.metadata));
   const running = status?.type === "running";
   const error = status?.type === "incomplete" && status.reason === "error" && isChatError(status.error) ? status.error : null;
 
   return (
     <div className="flex min-w-0 flex-col gap-2 text-[15px] leading-relaxed text-[var(--sf-text-1)]">
       {hasText ? <MessagePrimitive.Parts components={{ Text: TextPart }} /> : null}
+      <UiMessageParts parts={uiParts} />
       {running && waiting ? (
         <p className="m-0 text-sm text-[var(--sf-needs)]" role="status">
           Checking with the team…

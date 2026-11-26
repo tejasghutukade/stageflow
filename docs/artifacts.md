@@ -4,6 +4,8 @@ An **artifact** is a published, indexed output with an owner and a stable id. A 
 
 This page covers the artifact index, static publishing, and live artifacts.
 
+An agent with `ui.present` can place an artifact into the conversation with `present_ui`. The message stores the key and version, and the chat renders that artifact. A deleted or expired artifact shows an unavailable card. See [Agent definition](agent-definition.md#ui).
+
 ## What gets indexed
 
 When a stage attempt finishes with a **success** envelope, Stageflow indexes each path in that envelope's `artifacts` list:

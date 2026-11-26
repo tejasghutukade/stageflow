@@ -279,4 +279,24 @@ describe("thread list adapter", () => {
     expect(user).toMatchObject({ id: "a", role: "user", content: [{ type: "text", text: "hi" }] });
     expect(assistant).toMatchObject({ id: "b", role: "assistant", status: { type: "complete" } });
   });
+
+  it("keeps a ui part on reload instead of flattening it into the text", () => {
+    const ui = {
+      v: 1 as const,
+      kind: "artifact-ref" as const,
+      key: "agent:helper/weekly",
+      title: "Weekly",
+      fallback: { text: "Weekly", url: "http://127.0.0.1:3847/#/artifacts/x" },
+    };
+    const frame = toFrame({
+      type: "done",
+      message: { id: "m1", role: "assistant", text: "Shown", createdAt: "2026-10-16T00:00:00.000Z", parts: [ui, { kind: "nope" }] },
+    });
+    expect(frame).toMatchObject({ type: "done", message: { text: "Shown", ui: [ui] } });
+    const [assistant] = toThreadMessages([
+      { id: "b", role: "assistant", text: "Shown", createdAt: "2026-10-16T00:00:01.000Z", ui: [ui] },
+    ]);
+    expect(assistant?.content).toEqual([{ type: "text", text: "Shown" }]);
+    expect(assistant?.metadata).toEqual({ custom: { uiParts: [ui] } });
+  });
 });

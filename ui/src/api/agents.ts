@@ -1,3 +1,4 @@
+import type { UiPartArtifactRef } from "../../../src/artifacts/uiPart.ts";
 import { withSurfaceScope } from "./projectScope";
 import { authorizationHeaders, notifyControlTokenRequired } from "./controlToken";
 
@@ -27,6 +28,7 @@ export type AgentDefinition = {
   execution: "trusted-local" | "sandbox";
   model: { backend: "pi" | "claude"; id?: string; thinking: ThinkingLevel };
   tools: { builtin: BuiltinToolGroup[]; builtin_tools: string[]; mcp: Record<string, string[]>; skills: string[]; browser: boolean; stageflow: { groups: string[]; tools: string[] } };
+  ui: { present: boolean; kinds: string[]; functions: string[] };
   approvals: {
     ask_first: string[];
     approvers: { operators: boolean; channel_ids: string[] };
@@ -142,6 +144,7 @@ export type AgentMessage = {
   role: "user" | "assistant";
   author: string | null;
   text: string;
+  parts?: UiPartArtifactRef[];
   createdAt: string;
 };
 

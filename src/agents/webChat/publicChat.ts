@@ -4,7 +4,7 @@ import { assertConsumerWebChatPublication } from "../consumerSafety.js";
 import type { AgentChatController } from "../chatTurn.js";
 import { isAgentError } from "../errors.js";
 import type { AgentService } from "../service.js";
-import type { AgentSession } from "../store.js";
+import type { AgentMessage, AgentSession } from "../store.js";
 import { BodyError, readJsonBody, writeFrame } from "../ndjson.js";
 import { SlidingWindowLimiter } from "./rateLimit.js";
 import type { ConsumerAuthorization } from "../../identity/authorization.js";
@@ -161,7 +161,7 @@ export class PublicWebChat {
       return this.json(res, 200, {
         thread: this.threadView(detail.session),
         status: detail.session.status === "running" || detail.session.status === "waiting" ? detail.session.status : "open",
-        messages: detail.messages.map((message) => ({ id: message.id, role: message.role, text: message.text, createdAt: message.createdAt })),
+        messages: detail.messages.map((message) => this.messageView(message)),
       });
     } catch (error) {
       const failure = toWebChatError(error);
@@ -198,6 +198,16 @@ export class PublicWebChat {
 
   private threadView(session: AgentSession): { id: string; title: string; updatedAt: string } {
     return { id: session.id, title: session.title ?? "New chat", updatedAt: session.updatedAt };
+  }
+
+  private messageView(message: AgentMessage): { id: string; role: AgentMessage["role"]; text: string; createdAt: string; parts?: AgentMessage["parts"] } {
+    return {
+      id: message.id,
+      role: message.role,
+      text: message.text,
+      createdAt: message.createdAt,
+      ...(message.parts?.length ? { parts: message.parts } : {}),
+    };
   }
 
   private ownedSession(target: Resolved, visitor: string, threadId: string): AgentSession {
@@ -262,7 +272,7 @@ export class PublicWebChat {
       const reply = [...detail.messages].reverse().find((message) => message.role === "assistant");
       write(
         reply
-          ? { type: "done", message: { id: reply.id, role: "assistant", text: reply.text, createdAt: reply.createdAt } }
+          ? { type: "done", message: this.messageView(reply) }
           : { type: "done", message: null },
       );
       await writes;

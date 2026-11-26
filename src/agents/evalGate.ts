@@ -113,6 +113,11 @@ export function createEvalGate(options: {
       ALWAYS_BLOCKED.has(call.tool) ||
       (policy.tools !== "real" && (BLOCKED_UNLESS_REAL.has(call.tool) || kind.class === "sub_agent"));
     if (blocked) return refuse("denied", `${call.tool} cannot run in an evaluation.`);
+    if (call.tool === "present_ui") {
+      const text = STUB_RESULT(call.tool);
+      emit({ ...base, policyOutcome: "stubbed", status: "not_run", result: text });
+      return { allow: false, reason: text };
+    }
 
     if (requiresAskFirst(definition, call.tool, options.projectRoot)) {
       if (policy.approvals === "deny") return refuse("denied", APPROVAL_NOT_GRANTED(call.tool));

@@ -15,6 +15,10 @@ import {
   LuZap,
 } from "react-icons/lu";
 import { AgentApiError, agentsApi, streamAgentChat, type AgentApproval, type AgentDetail, type AgentSessionDetail } from "../../../api/agents";
+import { UiMessageParts } from "../../../chat/MessageParts";
+import { registerBuiltinUiParts } from "../../../chat/parts/builtins";
+
+registerBuiltinUiParts();
 import { agentPath, agentRunPath, agentSessionPath, agentsPath, navigate } from "../../../routes";
 import { showToast } from "../../../toast";
 import { AgentLoadError } from "../AgentLoadState";
@@ -122,15 +126,36 @@ function TraceSummary({ run, onOpen }: { run: RunView; onOpen: () => void }) {
   );
 }
 
-function MessageBlock({ author, time, text, event, children }: { author: string; time: string; text: string; event?: string; children?: React.ReactNode }) {
+function MessageBlock({
+  author,
+  time,
+  text,
+  parts,
+  event,
+  children,
+}: {
+  author: string;
+  time: string;
+  text: string;
+  parts?: unknown[];
+  event?: string;
+  children?: React.ReactNode;
+}) {
   return (
     <div className="flex flex-col gap-2.5">
       <div className="flex items-center justify-between">
         <span className="text-[13px] font-semibold leading-normal text-[var(--sf-text-1)]">{author}</span>
         <span className={`${MONO} text-[11px] leading-normal text-[var(--sf-text-3)]`}>{time}</span>
       </div>
-      <div className="rounded-lg border border-[var(--sf-hairline)] bg-[var(--sf-panel)] p-4">
-        <p className="whitespace-pre-wrap break-words text-[13px] leading-[1.7] text-[var(--sf-text-1)]">{text}</p>
+      <div className="flex flex-col gap-3 rounded-lg border border-[var(--sf-hairline)] bg-[var(--sf-panel)] p-4">
+        {text ? <p className="whitespace-pre-wrap break-words text-[13px] leading-[1.7] text-[var(--sf-text-1)]">{text}</p> : null}
+        <UiMessageParts
+          parts={parts ?? []}
+          onOpenConsole={(href) => {
+            const hash = href.includes("#") ? href.slice(href.indexOf("#") + 1) : href;
+            navigate(hash.startsWith("/") ? hash : `/${hash}`);
+          }}
+        />
       </div>
       {event ? (
         <div className="flex items-center gap-2">
@@ -554,7 +579,7 @@ function SessionView({ agent, sessionId }: { agent: AgentDetail; sessionId: stri
                     />
                   ) : null}
                   {run.reply ? (
-                    <MessageBlock author={agent.agent.name} time={clockTime(run.reply.createdAt)} text={run.reply.text}>
+                    <MessageBlock author={agent.agent.name} time={clockTime(run.reply.createdAt)} text={run.reply.text} parts={run.reply.parts}>
                       <TraceSummary run={run} onOpen={() => runOf(run.turn.seq)} />
                     </MessageBlock>
                   ) : run.turn.status !== "running" && run.turn.status !== "waiting" ? (

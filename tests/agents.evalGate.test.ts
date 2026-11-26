@@ -75,6 +75,7 @@ describe("tool classification", () => {
     expect(classifyTool(definition, "agent:helper")).toEqual({ class: "sub_agent", readOnly: false });
     expect(classifyTool(definition, "browser")).toEqual({ class: "browser", readOnly: false });
     expect(classifyTool(definition, "publish_artifact")).toEqual({ class: "write", readOnly: false });
+    expect(classifyTool(definition, "present_ui")).toEqual({ class: "read", readOnly: true });
     expect(classifyTool(definition, "publish_artifact", ["publish_artifact"]).readOnly).toBe(false);
   });
 

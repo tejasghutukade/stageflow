@@ -59,6 +59,7 @@ export async function assertConsumerWebChatPublication(
   const safeSubAgents = definition.sub_agents.length === 0 ? [] : await loadConsumerSubAgents(definition, options.loadSubAgent);
   if (!safeSubAgents) throw new ConsumerAccessError("identity.setup_required");
   const allowed = new Set(["orders.status", ...safeSubAgents.map((id) => `agent:${id}`)]);
+  if (definition.ui.present) allowed.add("present_ui");
   const tools = [...grantedToolIds(definition)];
   if (tools.some((tool) => !authenticated || !allowed.has(tool)) || (authenticated && !options.hasConsumerAuthorization)) {
     throw new ConsumerAccessError("identity.setup_required");

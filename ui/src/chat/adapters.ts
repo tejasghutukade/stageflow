@@ -60,6 +60,7 @@ export function toThreadMessages(records: readonly ChatMessageRecord[]): ThreadM
     content: [{ type: "text" as const, text: record.text }],
     createdAt: new Date(record.createdAt),
     ...(record.role === "assistant" ? { status: { type: "complete" as const, reason: "stop" as const } } : {}),
+    ...(record.ui?.length ? { metadata: { custom: { uiParts: record.ui } } } : {}),
   }));
 }
 
@@ -89,7 +90,11 @@ export function createChatModelAdapter(api: ChatApi, resolveThreadId: () => Prom
           } else if (frame.type === "waiting") {
             yield { content: content(), metadata: { custom: { waiting: true } } };
           } else if (frame.type === "done") {
-            yield { content: [{ type: "text", text: frame.message.text }], status: { type: "complete", reason: "stop" }, metadata: { custom: { waiting: false } } };
+            yield {
+              content: [{ type: "text", text: frame.message.text }],
+              status: { type: "complete", reason: "stop" },
+              metadata: { custom: { waiting: false, ...(frame.message.ui?.length ? { uiParts: frame.message.ui } : {}) } },
+            };
             return;
           } else {
             yield failure(reply, toChatError(frame.code, frame.message, frame.retryAfterSec));

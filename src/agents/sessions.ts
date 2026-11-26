@@ -6,9 +6,10 @@ import type { EvalGateRegistry } from "./evalGate.js";
 import { EVAL_SESSION_SOURCE, isEvalSession, type EvalSessionOverrides } from "./evalSession.js";
 import { guardedStream } from "./guardrails.js";
 import { fitHistory } from "./historyFit.js";
+import { PRESENT_UI_TOOL_NAME, uiPartsFromToolOutput } from "./presentUi.js";
 import type { OtlpSink } from "./otlpSink.js";
 import { isToolGranted, requiresAskFirst } from "./policy.js";
-import type { ConversationBackend, GateDecision, RuntimeUsage, ToolCall, TurnHooks } from "./runtime/types.js";
+import type { ConversationBackend, ConversationMessage, GateDecision, RuntimeUsage, ToolCall, TurnHooks } from "./runtime/types.js";
 import type { AgentService, AgentSessionDetail } from "./service.js";
 import { scrubSecrets } from "../compaction/scrub.js";
 import { WORKING_STATE_TOOL_NAME } from "../compaction/types.js";
@@ -221,6 +222,10 @@ export class AgentConversation {
       }
       const checkConsumer = async (): Promise<GateDecision> => {
         if (!external) return { allow: true };
+        if (call.tool === PRESENT_UI_TOOL_NAME) {
+          if (!consumer) return { allow: false, reason: "identity.verification_required" };
+          return { allow: true };
+        }
         if (!consumer) return { allow: false, reason: "identity.verification_required" };
         try {
           await assertDelivery();
@@ -275,6 +280,7 @@ export class AgentConversation {
       return { allow: false, reason: `Approval for ${call.tool} timed out and the action was skipped. Continue without it.` };
     };
 
+    const uiParts: NonNullable<ConversationMessage["parts"]> = [];
     const hooks: TurnHooks = {
       gate: (call) => {
         const next = gateChain.then(() => gateOne(call));
@@ -285,6 +291,7 @@ export class AgentConversation {
         toolStarts.set(call.id, new Date());
       },
       toolFinished: (call, result) => {
+        if (result.ok) uiParts.push(...uiPartsFromToolOutput(call.tool, result.output));
         if (active.session.source === EVAL_SESSION_SOURCE) this.options.evalGates?.get(sessionId)?.observeFinished(call, result);
         const isAgent = call.tool.startsWith("agent:");
         record({
@@ -355,7 +362,11 @@ export class AgentConversation {
     try {
       await assertDelivery();
       if (consumer && controller.signal.aborted) throw new ConsumerAccessError("identity.not_available");
-      const transcript = [...active.history, active.userMessage].map((m) => ({ role: m.role, text: m.text }));
+      const transcript = [...active.history, active.userMessage].map((m) => ({
+        role: m.role,
+        text: m.text,
+        ...(m.parts?.length ? { parts: m.parts } : {}),
+      }));
       result = await backend.complete({
         sessionId,
         projectRoot: input.projectRoot,
@@ -427,7 +438,8 @@ export class AgentConversation {
     const detail = await service.completeTurn(input.projectRoot, turn.id, {
       status: failed ? "failed" : cancelled ? "cancelled" : "succeeded",
       ...(failed ? { errorCode: stopReason!.code } : {}),
-      assistantText: result.text,
+      ...(result.text.length > 0 || uiParts.length > 0 ? { assistantText: result.text } : {}),
+      ...(uiParts.length > 0 ? { assistantParts: uiParts } : {}),
       ...(usage ? { usage, costUsd: usage.costUsd } : {}),
       ...(evalScores.length > 0 ? { evalScores } : {}),
     });
