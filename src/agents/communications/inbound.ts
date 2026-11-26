@@ -167,7 +167,7 @@ export class AgentInboundRouter {
         connectionId: message.connectionId,
         provider: message.provider,
         replyTo: message.replyTo,
-        text: assistantMessageTextForChannel(reply, message.provider).slice(0, MAX_REPLY_CHARS),
+        text: assistantMessageTextForChannel(reply, message.provider, { consoleAccess: false }).slice(0, MAX_REPLY_CHARS),
       });
     } catch (error) {
       if (isAgentError(error) && error.code === "agent.limit_reached" && message.replyTo) {

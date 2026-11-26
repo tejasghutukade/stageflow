@@ -2,7 +2,7 @@
 
 Experimental. Web chat works; its shape may still change.
 
-Web chat gives an agent a shareable page at `/chat/<slug>` on the Host: a plain chat window, new conversations, earlier conversations, nothing else. When a reply includes a `present_ui` part, the page shows that artifact inline; a deleted or expired one shows an unavailable card. A one-off program shows a skeleton while the tool call streams, then the saved session artifact. An invalid program shows a short error card. Public web chat still cannot run tools, so `ui.present` belongs on an agent people reach in the console or on protected web chat. Reference: [Agents — Web chat](agents.md#web-chat-public-page).
+Web chat gives an agent a shareable page at `/chat/<slug>` on the Host: a plain chat window, new conversations, earlier conversations, nothing else. When a reply includes a `present_ui` part, the console shows that artifact inline (a deleted or expired one shows an unavailable card, a one-off program shows a skeleton while the tool call streams, an invalid program shows a short error card). The public page has no console access, so a signed-in visitor on protected web chat gets the part's plain-text summary instead of the artifact, with no console link. Public web chat still cannot run tools, so `ui.present` belongs on an agent people reach in the console or on protected web chat. Reference: [Agents — Web chat](agents.md#web-chat-public-page).
 
 ## Turn it on
 
@@ -59,4 +59,4 @@ Behind a reverse proxy every visitor shares the proxy's address, so the per-IP l
 
 ## Generative UI (experimental)
 
-Web chat will render typed **ui** message parts (today: `artifact-ref` pointing at `<ownerKey>/<id>`) through the console part registry, using the same `ArtifactView` component as the Artifacts page. Unsupported kinds show an open-in-console fallback card. See [Chat UI parts](artifacts.md#chat-ui-parts) for the shared schema.
+The console renders typed **ui** message parts (today: `artifact-ref` pointing at `<ownerKey>/<id>`) through the console part registry, using the same `ArtifactView` component as the Artifacts page. Unsupported kinds show an open-in-console fallback card. See [Chat UI parts](artifacts.md#chat-ui-parts) for the shared schema.

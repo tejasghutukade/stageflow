@@ -20,19 +20,26 @@ function ApprovalPart({ part, context }: UiPartRendererProps) {
 
   const card = parsed.ok ? parsed.part : null;
 
+  const approvalId = card?.approvalId;
+  const agentId = context.chat?.agentId;
+  const sessionId = context.chat?.sessionId;
+
   useEffect(() => {
-    if (!card || !context.chat) return;
+    if (!approvalId || !agentId || !sessionId) return;
     let cancelled = false;
-    void agentsApi.session(context.chat.agentId, context.chat.sessionId).then((detail) => {
-      if (cancelled) return;
-      const match = detail.approvals.find((row) => row.id === card.approvalId) ?? null;
-      setApproval(match);
-      if (match?.status && match.status !== "pending") setLocalStatus(match.status);
-    });
+    agentsApi
+      .session(agentId, sessionId)
+      .then((detail) => {
+        if (cancelled) return;
+        const match = detail.approvals.find((row) => row.id === approvalId) ?? null;
+        setApproval(match);
+        if (match?.status && match.status !== "pending") setLocalStatus(match.status);
+      })
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [card, context.chat]);
+  }, [approvalId, agentId, sessionId]);
 
   if (!card) return lookupUiPart("")({ part, context });
 
@@ -59,8 +66,8 @@ function ApprovalPart({ part, context }: UiPartRendererProps) {
   const risk = card.risk ? RISK_LABEL[card.risk] : null;
 
   return (
-    <div className="flex flex-col overflow-clip rounded-lg border border-[#f5b54459] bg-[#f5b5440a]">
-      <div className="flex items-center gap-2 border-b border-b-[#f5b54426] px-4 py-3">
+    <div className="flex flex-col overflow-clip rounded-lg border border-[color-mix(in_srgb,var(--sf-needs)_35%,transparent)] bg-[color-mix(in_srgb,var(--sf-needs)_4%,transparent)]">
+      <div className="flex items-center gap-2 border-b border-b-[color-mix(in_srgb,var(--sf-needs)_15%,transparent)] px-4 py-3">
         <LuUserCheck aria-hidden className="size-3.5 text-[var(--sf-needs)]" />
         <span className="text-xs font-medium text-[var(--sf-needs)]">{approvalPartHeadline(card)}</span>
         {risk ? <span className="text-[11px] text-[var(--sf-text-3)]">{risk}</span> : null}

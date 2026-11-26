@@ -161,6 +161,35 @@ describe("chat ui events", () => {
     ).rejects.toMatchObject({ code: "agent.ui_function_not_granted" });
   });
 
+  it("forgets a failed event so the same id can be retried", async () => {
+    const { fixture, session } = await setup();
+    let attempts = 0;
+    const events = createUiEventHandler({
+      service: fixture.service,
+      chat: new AgentChatController({ service: fixture.service, backend: scriptedBackend() }),
+      loadArtifact: async () => artifact,
+      query: async (_artifact, request) => {
+        attempts += 1;
+        if (attempts === 1) throw new AgentError("agent.session_busy", "busy");
+        return queryResult(Number(request.args?.weeks ?? 12));
+      },
+      validateArgs: async () => undefined,
+    });
+    const input = {
+      projectRoot: fixture.project,
+      agentId: "helper",
+      sessionId: session.id,
+      body: { id: "retry-1", key: "agent:helper/weekly", kind: "query", action: "rows", args: { weeks: 4 } },
+    };
+    await expect(events(input)).rejects.toMatchObject({ code: "agent.session_busy" });
+    const retried = await events(input);
+    expect(retried.body.duplicate).toBe(false);
+    expect(attempts).toBe(2);
+    const again = await events(input);
+    expect(again.body.duplicate).toBe(true);
+    expect(attempts).toBe(2);
+  });
+
   it("sends a declared message once and blocks eval sessions", async () => {
     const { fixture, session } = await setup();
     const backend = scriptedBackend(async (messages) => `echo ${messages.at(-1)!.text}`);

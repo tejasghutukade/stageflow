@@ -83,7 +83,7 @@ describe("agent inbound webhooks", () => {
     await vi.waitFor(() => expect(replies).toHaveLength(1));
     expect(replies[0]!.text).toContain("Shown");
     expect(replies[0]!.text).toContain("Weekly");
-    expect(replies[0]!.text).toContain(uiPart.fallback.url);
+    expect(replies[0]!.text).not.toContain(uiPart.fallback.url);
     expect(replies[0]!.text).not.toContain('"type":"ui"');
   });
 

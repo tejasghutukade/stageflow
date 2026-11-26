@@ -145,6 +145,30 @@ describe("chat api", () => {
     expect((init.headers as Record<string, string>)["x-visitor-id"]).toBe("visitor-visitor-1234");
   });
 
+  it("maps history parts onto ui so a reloaded thread keeps its artifacts", async () => {
+    const part = {
+      v: 1,
+      kind: "artifact-ref",
+      key: "agent:helper/weekly",
+      title: "Weekly",
+      fallback: { text: "Weekly", url: "http://127.0.0.1:3847/#/artifacts/agent%3Ahelper/weekly" },
+    };
+    const fetchImpl = vi.fn(async () =>
+      response(200, {
+        thread: { id: "t1", title: "Hi", updatedAt: "2026-10-16T00:00:00.000Z" },
+        messages: [
+          { id: "m1", role: "user", text: "hi" },
+          { id: "m2", role: "assistant", text: "here", parts: [part, { v: 9, kind: "future" }] },
+        ],
+      }),
+    );
+    const api = createChatApi({ apiBase: "/p", slug: "s", visitorId: "visitor-visitor-1234", fetchImpl: fetchImpl as unknown as typeof fetch });
+    const detail = await api.getThread("t1");
+    expect(detail.messages[0]).not.toHaveProperty("ui");
+    expect(detail.messages[1]).not.toHaveProperty("parts");
+    expect(detail.messages[1]?.ui).toEqual([part]);
+  });
+
   it("turns a JSON error into a ChatApiError with retry-after", async () => {
     const fetchImpl = vi.fn(async () => response(429, { code: "web_chat.rate_limited", message: "x", retryAfterSec: 9 }));
     const api = createChatApi({ apiBase: "/p", slug: "s", visitorId: "visitor-visitor-1234", fetchImpl: fetchImpl as unknown as typeof fetch });

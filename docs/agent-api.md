@@ -99,7 +99,7 @@ Without streaming the call waits for the whole turn and answers `200` with the s
 
 ### Chat actions
 
-`POST /api/agents/:id/sessions/:sid/ui-events` is the only path from a rendered chat part back into the session. It uses the same control token and project as the other agent routes. The body is `{ "id", "key", "version"?, "kind", "action", "args"? }`. `id` is 1–80 characters of letters, digits, `_` and `-`. The same `id` on the same session returns the first result with `duplicate: true` and does not run again. `key` is `<ownerKey>/<id>`. `version`, when set, must be the current version.
+`POST /api/agents/:id/sessions/:sid/ui-events` is the only path from a rendered chat part back into the session. It uses the same control token and project as the other agent routes. The body is `{ "id", "key", "version"?, "kind", "action", "args"? }`. `id` is 1–80 characters of letters, digits, `_` and `-`. The same `id` on the same session returns the first result with `duplicate: true` and does not run again. A failed event is forgotten, so retrying it with the same `id` runs it again. The record of handled ids lives in Host memory, so a restart forgets it. `key` is `<ownerKey>/<id>`. `version`, when set, must be the current version.
 
 `kind` is one of three:
 

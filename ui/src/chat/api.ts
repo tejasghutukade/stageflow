@@ -1,5 +1,5 @@
 import { UNAVAILABLE_CODE } from "./errors";
-import { readFrames, type ChatFrame, type ChatMessageRecord } from "./ndjson";
+import { messageParts, readFrames, type ChatFrame, type ChatMessageRecord } from "./ndjson";
 
 export type ChatThreadSummary = { id: string; title: string; updatedAt: string };
 export type ChatThreadDetail = {
@@ -64,7 +64,16 @@ export function createChatApi({ apiBase, slug, visitorId, fetchImpl }: ChatApiOp
     },
     listThreads: async (): Promise<ChatThreadSummary[]> => (await json<{ threads: ChatThreadSummary[] }>("/threads")).threads,
     createThread: async (): Promise<ChatThreadSummary> => (await json<{ thread: ChatThreadSummary }>("/threads", { method: "POST", body: "{}" })).thread,
-    getThread: (id: string): Promise<ChatThreadDetail> => json<ChatThreadDetail>(`/threads/${encodeURIComponent(id)}`),
+    getThread: async (id: string): Promise<ChatThreadDetail> => {
+      const detail = await json<ChatThreadDetail & { messages: (ChatMessageRecord & { parts?: unknown })[] }>(`/threads/${encodeURIComponent(id)}`);
+      return {
+        ...detail,
+        messages: detail.messages.map(({ parts, ...record }) => {
+          const ui = messageParts(parts);
+          return ui ? { ...record, ui } : record;
+        }),
+      };
+    },
     /** Streams the reply. Errors before streaming throw ChatApiError; errors during it arrive as an `error` frame. */
     async *sendMessage(id: string, text: string, signal?: AbortSignal): AsyncGenerator<ChatFrame, void> {
       const response = await call(`/threads/${encodeURIComponent(id)}/messages`, {

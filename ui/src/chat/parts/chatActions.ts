@@ -23,7 +23,7 @@ export function postChatAction(
   target: ChatActionTarget,
   event: { key: string; version?: number; kind: ChatUiEventKind; action: string; args?: Record<string, unknown> },
 ): Promise<Record<string, unknown>> {
-  const mapKey = `${target.sessionId}\0${event.kind}\0${event.action}\0${JSON.stringify(event.args ?? {})}`;
+  const mapKey = `${target.sessionId}\0${event.key}\0${event.version ?? ""}\0${event.kind}\0${event.action}\0${JSON.stringify(event.args ?? {})}`;
   const current = inflight.get(mapKey);
   if (current) return current.pending;
   const id = eventId();

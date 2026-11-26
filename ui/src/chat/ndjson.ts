@@ -3,7 +3,7 @@ import { parseUiPart, type UiPart } from "../../../src/artifacts/uiPart.ts";
 
 export type ChatMessageRecord = { id: string; role: "user" | "assistant"; text: string; createdAt: string; ui?: UiPart[] };
 
-function messageParts(value: unknown): UiPart[] | undefined {
+export function messageParts(value: unknown): UiPart[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const parts: UiPart[] = [];
   for (const item of value) {

@@ -94,6 +94,13 @@ describe("chat action bridge", () => {
     expect(agentsApi.uiEvent).toHaveBeenCalledTimes(1);
   });
 
+  it("does not merge the same action id on two different artifacts", async () => {
+    const target = { agentId: "helper", sessionId: "ses" };
+    void postChatAction(target, { key: "agent:helper/weekly", kind: "tool", action: "archive" });
+    void postChatAction(target, { key: "agent:helper/monthly", kind: "tool", action: "archive" });
+    expect(agentsApi.uiEvent).toHaveBeenCalledTimes(2);
+  });
+
   it("renders declared actions on the inline artifact", () => {
     const row = record();
     const preview = previewFromContent({ record: row, text: "hello", binary: false });

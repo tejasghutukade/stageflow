@@ -157,6 +157,9 @@ export function createUiEventHandler(deps: {
       return { status: prior.status, body: { ...prior.body, duplicate: true } };
     }
     const promise = remember(cacheKey, runUiEvent(deps, input, id));
+    promise.catch(() => {
+      if (cache.get(cacheKey) === promise) cache.delete(cacheKey);
+    });
     return promise;
   };
 }
