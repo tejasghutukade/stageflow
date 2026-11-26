@@ -120,6 +120,18 @@ Every request other than `GET` needs a same-origin `Origin` header and the `driv
 | `a stage can use one channel for now` | A stage lists two channels, or one plus a pipeline default. Use two stages, or `channels: []` to drop the default. |
 | Stage fails right after start on the Claude backend | `send_message` is only available on the Pi backend. Use a Pi model. |
 
+## Generative ui in agent replies
+
+When an agent is granted [`present_ui`](agent-definition.md) and calls that tool, the reply can carry **ui** parts that reference an artifact. Each provider declares how it can show that part:
+
+| Surface | Capability | What the person sees |
+|---------|------------|----------------------|
+| Operator console and public web chat embed | `interactive` | The artifact is rendered live in the chat surface (see [Agent chat](console-agents.md)). |
+| AgentMail, Slack, Telegram, iMessage and WhatsApp | `link` | Plain text: the artifact title and a link to open it in the operator console. Console access needs the operator control token; there is no public artifact link. |
+| *(reserved)* | `image` | Declared for a future server-side snapshot. **Not produced yet**; falls back to `link` text. |
+
+Channel replies are built with `renderUiPartForChannel` in the Host so the body is readable text, never raw ui JSON. Protected web-chat visitors (identity-verified, no console token) get the fallback summary only, not a console URL.
+
 ## Providers
 
 ### AgentMail
@@ -140,6 +152,7 @@ Sends plain-text mail from one **existing** AgentMail inbox through the REST API
 - **Targets.** `to` is one address or a list of up to 20, optionally with `cc` (up to 20). All recipients get one message. `bcc` is not supported.
 - **Subject.** The agent may pass `subject` to `send_message`. Without one, the subject is `Message from Stageflow`.
 - **Body.** `text` is sent as plain text, up to 64 KiB. There are no attachments or HTML.
+- **Generative ui.** `link`: title plus console URL when the agent uses `present_ui`.
 - **Redirects** are refused so the key never goes to another host.
 - A 5xx response or a connection dropped mid-request is an unknown outcome. A refused connection (nothing sent) and a 429 are retryable failures.
 
@@ -162,6 +175,7 @@ Posts as a Slack bot with `chat.postMessage`. Stageflow does not install the app
 - **Targets.** `to` is one Slack id: a channel (`C...`), private channel (`G...`), DM (`D...`) or user (`U...`). Names like `#general` are not accepted, because they can be renamed. A private channel needs the bot invited first.
 - **Subject.** Slack has no subject. If the agent passes one it is bolded on the first line.
 - **Body.** Sent as Slack text. Links are not unfurled and `@` names are not linked.
+- **Generative ui.** `link`.
 - **Live check.** `auth.test`. A revoked or invalid token fails the run before it starts.
 - Slack reports most failures as HTTP 200 with an error name. Auth errors map to `CHANNEL_AUTH_FAILED`, missing scopes to `CHANNEL_UNAUTHORIZED`, an unknown or archived channel or a bot that is not a member to `CHANNEL_RECIPIENT_REJECTED`, and `ratelimited` to a retryable `CHANNEL_RATE_LIMIT`. Server errors are an unknown outcome.
 
@@ -184,6 +198,7 @@ Sends through the Telegram Bot API with a bot token from @BotFather. A stage can
 - **The recipient must start the bot first.** A bot cannot message a user who has not opened a chat with it; the send fails with `CHANNEL_RECIPIENT_REJECTED`, as it does if the user blocked the bot or the bot is not a member of the group or channel.
 - **Subject.** If the agent passes one it is put on the first line, followed by a blank line.
 - **Body.** Plain text, up to 4096 characters; longer text is rejected before anything is sent. Link previews are off.
+- **Generative ui.** `link`.
 - **Live check.** `getMe`. The token travels in the request path, as the Bot API requires; Stageflow never logs URLs or response bodies.
 
 Provider reference: <https://core.telegram.org/bots/api>.
@@ -211,6 +226,7 @@ connections:
 - **Limits.** Photon documents 5,000 messages per server per day and 50 new conversations per line per day, and warns that unsolicited messages can get a line flagged. Message only people who opted in.
 - **Live check.** Issuing an iMessage token proves the project id and secret work.
 - Each send starts the SDK, sends, and stops it, so nothing stays connected between sends. Telemetry is not enabled.
+- **Generative ui.** `link`.
 - **Verified against a real Free project:** the token and users endpoints answer as `{ succeed, data }`, the SDK starts in about half a second and stops cleanly with nothing left open, and a send succeeds once the user has texted their assigned line. An opt-in smoke test, `tests/channels.imessage.smoke.test.ts`, repeats the checks.
 
 Provider reference: <https://photon.codes/docs/spectrum-ts/providers/imessage>.
@@ -242,6 +258,7 @@ channels:
 - **Templates.** `name` is the approved template name, `languageCode` its language (`en`, `en_US`), `bodyParams` the positional body parameters (`{{1}}`, `{{2}}`, up to 10, 1024 characters each). Only body text parameters are supported; header and button components are not. Put `{{message}}` in a parameter and Stageflow fills it with the agent's message (a subject becomes a prefix `Subject: ...`). Newlines and tabs are replaced with spaces because template parameters cannot hold them. A message that makes a parameter empty or too long is refused before sending.
 - **Targets.** `to` is an E.164 number. Lists and `cc` are rejected.
 - **Live check.** Issuing a WhatsApp token proves the credentials work and that the project has at least one WhatsApp line. It cannot know whether a recipient's window is open.
+- **Generative ui.** `link`.
 - **SDK.** Same optional Spectrum packages as iMessage. Each send starts and stops it.
 - Not supported yet: connecting your own Meta app directly (without Photon), template header and button components, and media.
 - **Not verified against a real project:** how the SDK surfaces Meta error codes. Stageflow reads the code from the error's `code`, a nested `error.code`, or the message text; anything else is an unknown outcome and is never resent.

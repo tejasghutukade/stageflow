@@ -1269,6 +1269,7 @@ export type ChannelProviderMeta = {
   envNames: string[];
   yamlExample: string;
   stageExample: string;
+  ui: "interactive" | "image" | "link";
 };
 
 export type ChannelMeta = {

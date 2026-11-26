@@ -9,6 +9,7 @@ import { BodyError, readJsonBody, writeFrame } from "../ndjson.js";
 import { SlidingWindowLimiter } from "./rateLimit.js";
 import type { ConsumerAuthorization } from "../../identity/authorization.js";
 import { ConsumerAccessError } from "../../identity/types.js";
+import { webChatVisitorAssistantText } from "../../channels/renderUiPart.js";
 
 const SOURCE = "web_public";
 const MAX_THREADS = 50;
@@ -161,7 +162,7 @@ export class PublicWebChat {
       return this.json(res, 200, {
         thread: this.threadView(detail.session),
         status: detail.session.status === "running" || detail.session.status === "waiting" ? detail.session.status : "open",
-        messages: detail.messages.map((message) => this.messageView(message)),
+        messages: detail.messages.map((message) => this.messageView(message, !protectedChat)),
       });
     } catch (error) {
       const failure = toWebChatError(error);
@@ -200,13 +201,22 @@ export class PublicWebChat {
     return { id: session.id, title: session.title ?? "New chat", updatedAt: session.updatedAt };
   }
 
-  private messageView(message: AgentMessage): { id: string; role: AgentMessage["role"]; text: string; createdAt: string; parts?: AgentMessage["parts"] } {
+  private messageView(
+    message: AgentMessage,
+    consoleAccess = true,
+  ): { id: string; role: AgentMessage["role"]; text: string; createdAt: string; parts?: AgentMessage["parts"] } {
+    let text = message.text;
+    let parts = message.parts;
+    if (message.role === "assistant" && message.parts?.length && !consoleAccess) {
+      text = webChatVisitorAssistantText(message);
+      parts = undefined;
+    }
     return {
       id: message.id,
       role: message.role,
-      text: message.text,
+      text,
       createdAt: message.createdAt,
-      ...(message.parts?.length ? { parts: message.parts } : {}),
+      ...(parts?.length ? { parts } : {}),
     };
   }
 
@@ -272,7 +282,7 @@ export class PublicWebChat {
       const reply = [...detail.messages].reverse().find((message) => message.role === "assistant");
       write(
         reply
-          ? { type: "done", message: this.messageView(reply) }
+          ? { type: "done", message: this.messageView(reply, target.definition.web_chat.access !== "authenticated") }
           : { type: "done", message: null },
       );
       await writes;

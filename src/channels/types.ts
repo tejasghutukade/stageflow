@@ -54,6 +54,9 @@ export type SendReceipt = {
 
 export type ProviderSecretSpec = { required: readonly string[]; optional?: readonly string[] };
 
+/** How a channel (or web chat) can show a generative ui part in the message body. */
+export type ChannelUiCapability = "interactive" | "image" | "link";
+
 /** One input in the connect form. The provider says what it needs; the console renders it. */
 export type ProviderField = {
   key: string;
@@ -86,6 +89,8 @@ export type ProviderMeta = {
   yamlExample: string;
   /** The `to:` lines (and template, if any) of a stage `channels:` entry for this provider. */
   stageExample: string;
+  /** What generative ui in an agent reply can show on this channel. */
+  ui: ChannelUiCapability;
 };
 
 /** Where to text or write to reach an agent on a connection. */

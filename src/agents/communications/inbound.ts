@@ -1,3 +1,4 @@
+import { assistantMessageTextForChannel } from "../../channels/renderUiPart.js";
 import type { ContactInfo } from "../../channels/types.js";
 import { isAgentError } from "../errors.js";
 import { ReplyDelivery } from "./delivery.js";
@@ -166,7 +167,7 @@ export class AgentInboundRouter {
         connectionId: message.connectionId,
         provider: message.provider,
         replyTo: message.replyTo,
-        text: reply.text.slice(0, MAX_REPLY_CHARS),
+        text: assistantMessageTextForChannel(reply, message.provider).slice(0, MAX_REPLY_CHARS),
       });
     } catch (error) {
       if (isAgentError(error) && error.code === "agent.limit_reached" && message.replyTo) {

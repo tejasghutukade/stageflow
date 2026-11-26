@@ -5,6 +5,7 @@ import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { CHANNEL_ERROR_INFO, channelErrorReason, channelErrorStatus } from "../src/channels/errorInfo.js";
 import { channelProviders } from "../src/channels/providers.js";
+import { CHANNEL_PROVIDER_UI_CAPABILITY } from "../src/channels/uiCapability.js";
 import { ChannelRegistry } from "../src/channels/registry.js";
 import { channelTarget, parseChannels } from "../src/channels/stageChannels.js";
 import type { StageChannel } from "../src/types/stage.js";
@@ -16,6 +17,10 @@ afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { rec
 describe("provider meta", () => {
   it("covers the five providers", () => {
     expect(builtIns.map(provider => provider.id).sort()).toEqual(["agentmail", "imessage", "slack", "telegram", "whatsapp"]);
+  });
+
+  it.each(builtIns.map(provider => [provider.id, provider] as const))("%s: meta ui matches the capability catalogue", (_id, provider) => {
+    expect(provider.meta.ui).toBe(CHANNEL_PROVIDER_UI_CAPABILITY[provider.id as keyof typeof CHANNEL_PROVIDER_UI_CAPABILITY]);
   });
 
   it.each(builtIns.map(provider => [provider.id, provider] as const))("%s: form fields match what the provider accepts", (_id, provider) => {

@@ -43,6 +43,7 @@ export const IMESSAGE_META: ProviderMeta = {
     credential: photon-main
 `,
   stageExample: '    to: "+14155550123"',
+  ui: "link",
 };
 
 const e164 = /^\+[1-9]\d{6,14}$/;

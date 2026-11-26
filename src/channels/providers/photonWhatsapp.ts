@@ -28,6 +28,7 @@ export const WHATSAPP_META: ProviderMeta = {
       name: order_update
       languageCode: en_US
       bodyParams: ["{{message}}"]`,
+  ui: "link",
 };
 
 export const MESSAGE_PLACEHOLDER = "{{message}}";

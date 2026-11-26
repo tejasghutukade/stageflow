@@ -28,6 +28,7 @@ export const SLACK_META: ProviderMeta = {
       botToken: env:SLACK_BOT_TOKEN
 `,
   stageExample: "    to: C0123ABCD",
+  ui: "link",
 };
 
 const configSchema = z.object({ teamId: z.string().regex(/^T[A-Z0-9]{2,31}$/).optional() }).strict();

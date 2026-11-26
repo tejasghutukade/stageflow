@@ -62,7 +62,8 @@
         "AGENTMAIL_API_KEY"
       ],
       "yamlExample": "connections:\n  - id: support-inbox\n    provider: agentmail\n    config:\n      inbox: support@agentmail.to\n    secrets:\n      apiKey: env:AGENTMAIL_API_KEY\n",
-      "stageExample": "    to: [oncall@acme.com]"
+      "stageExample": "    to: [oncall@acme.com]",
+      "ui": "link"
     },
     {
       "id": "slack",
@@ -108,7 +109,8 @@
         "SLACK_BOT_TOKEN"
       ],
       "yamlExample": "connections:\n  - id: ops-slack\n    provider: slack\n    secrets:\n      botToken: env:SLACK_BOT_TOKEN\n",
-      "stageExample": "    to: C0123ABCD"
+      "stageExample": "    to: C0123ABCD",
+      "ui": "link"
     },
     {
       "id": "telegram",
@@ -154,7 +156,8 @@
         "TELEGRAM_BOT_TOKEN"
       ],
       "yamlExample": "connections:\n  - id: alerts-telegram\n    provider: telegram\n    secrets:\n      botToken: env:TELEGRAM_BOT_TOKEN\n",
-      "stageExample": "    to: \"123456789\""
+      "stageExample": "    to: \"123456789\"",
+      "ui": "link"
     },
     {
       "id": "imessage",
@@ -194,7 +197,8 @@
         "PHOTON_PROJECT_SECRET"
       ],
       "yamlExample": "credentials:\n  - id: photon-main\n    provider: photon\n    secrets:\n      projectId: env:PHOTON_PROJECT_ID\n      projectSecret: env:PHOTON_PROJECT_SECRET\nconnections:\n  - id: alerts-imessage\n    provider: imessage\n    credential: photon-main\n",
-      "stageExample": "    to: \"+14155550123\""
+      "stageExample": "    to: \"+14155550123\"",
+      "ui": "link"
     },
     {
       "id": "whatsapp",
@@ -234,7 +238,8 @@
         "PHOTON_PROJECT_SECRET"
       ],
       "yamlExample": "credentials:\n  - id: photon-main\n    provider: photon\n    secrets:\n      projectId: env:PHOTON_PROJECT_ID\n      projectSecret: env:PHOTON_PROJECT_SECRET\nconnections:\n  - id: orders-whatsapp\n    provider: whatsapp\n    credential: photon-main\n",
-      "stageExample": "    to: \"+14155550123\"\n    template:\n      name: order_update\n      languageCode: en_US\n      bodyParams: [\"{{message}}\"]"
+      "stageExample": "    to: \"+14155550123\"\n    template:\n      name: order_update\n      languageCode: en_US\n      bodyParams: [\"{{message}}\"]",
+      "ui": "link"
     }
   ],
   "errors": {
