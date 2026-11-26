@@ -126,8 +126,8 @@ When an agent is granted [`present_ui`](agent-definition.md) and calls that tool
 
 | Surface | Capability | What the person sees |
 |---------|------------|----------------------|
-| Operator console and public web chat embed | `interactive` | The artifact is rendered live in the chat surface (see [Agent chat](console-agents.md)). |
-| AgentMail, Slack, Telegram, iMessage and WhatsApp | `link` | Plain text: the artifact title and a link to open it in the operator console. Console access needs the operator control token; there is no public artifact link. |
+| Operator console and public web chat embed | `interactive` | The part is rendered live in the chat surface (see [Agent chat](console-agents.md)). |
+| AgentMail, Slack, Telegram, iMessage and WhatsApp | `link` | Plain text summary. Artifact refs include the title and a console URL when the reader has console access. Forms list their fields and fallback text. Approval cards include the summary and say that a decision is needed in the console. |
 | *(reserved)* | `image` | Declared for a future server-side snapshot. **Not produced yet**; falls back to `link` text. |
 
 Channel replies are built with `renderUiPartForChannel` in the Host so the body is readable text, never raw ui JSON. Protected web-chat visitors (identity-verified, no console token) get the fallback summary only, not a console URL.

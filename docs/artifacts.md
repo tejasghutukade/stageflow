@@ -804,7 +804,22 @@ The response is:
 
 ### Chat UI parts
 
-Agent chat can carry typed **ui** parts that reference an artifact instead of inlining its body. The envelope lives in shared runtime code as `src/artifacts/uiPart.ts` (`v: 1`, `kind: artifact-ref`, fields `key`, optional `version`, `title`, and `fallback: { text, url }`). Unknown `v` or `kind` values parse to an unsupported result; fallback text is capped at 2000 characters. The operator console maps each `kind` through `ui/src/chat/parts/registry.ts` and reuses `ArtifactView` for rendering. In an operator session that is not an eval, the inline view sends viewer actions to `POST /api/agents/:id/sessions/:sid/ui-events` ([Chat actions](agent-api.md#chat-actions)). A Select re-queries a declared binding. A manifest action is a button that sends a user message or asks for a tool. Eval sessions do not get the buttons. The Artifacts page does not use this route.
+Agent chat can carry typed **ui** parts instead of inlining large bodies. Shared runtime code under `src/artifacts/` defines each `kind` with `v: 1`, a `title`, and `fallback: { text, url }`. Unknown `v` or `kind` values parse to an unsupported result; fallback text is capped at 2000 characters. The operator console maps each `kind` through `ui/src/chat/parts/registry.ts`.
+
+| `kind` | Schema file | What it shows |
+|--------|-------------|---------------|
+| `artifact-ref` | `uiPartArtifactRef.ts` | A project artifact by `key` and optional `version` (`ArtifactView`) |
+| `form` | `uiPartForm.ts` | Validated fields; submit sends a user message through the action bridge |
+| `approval` | `uiPartApproval.ts` | A tool approval with a plain summary; Approve/Deny use the existing approval API |
+
+In an operator session that is not an eval, artifact refs send viewer actions to `POST /api/agents/:id/sessions/:sid/ui-events` ([Chat actions](agent-api.md#chat-actions)). A Select re-queries a declared binding. A manifest action is a button that sends a user message or asks for a tool. A **form** submit uses the same route with `key` `_ui/form/<form id>`, `kind: message`, `action: submit`, and `args.text` (the filled submit template). An **approval** card calls `POST …/approval/approve` or `…/deny`; it does not create a second permission system. Eval sessions do not get interactive controls. The Artifacts page does not use the ui-events route.
+
+#### Adding a part kind
+
+1. **Schema** — Add `src/artifacts/uiPart<Kind>.ts` with a zod schema, exports `UI_PART_KIND_*`, `parseUiPart<Kind>()`, and any shared helpers (channel fallback text, event keys). Register the parser in `parseUiPart()` in `uiPart.ts`; do not change the registry map itself.
+2. **Renderer** — Add `ui/src/chat/parts/<kind>Part.tsx`, call `registerUiPart()` from `ensure<Kind>PartRegistered()`, and register it in `ui/src/chat/parts/builtins.ts`.
+3. **Channel fallback** — Extend `src/channels/renderUiPart.ts` so `assistantMessageTextForChannel` never emits raw JSON for the new kind.
+4. **Tests** — Schema tests in `tests/artifacts.uiPart<Kind>.test.ts`, channel coverage in `tests/channels.renderUiPart.test.ts`, and a static renderer test beside the component under `ui/src/chat/parts/`.
 
 ### Console
 

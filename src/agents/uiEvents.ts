@@ -1,3 +1,4 @@
+import { UI_PART_FORM_EVENT_KEY_PREFIX, UI_PART_FORM_MAX_SUBMIT_TEXT } from "../artifacts/uiPartForm.js";
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
 import type { AgentDefinition } from "../config/loadAgent.js";
 import { argsFailure } from "../artifacts/bindings.js";
@@ -183,7 +184,31 @@ async function runUiEvent(
     version = input.body.version;
   }
   const args = argsOf(input.body.args);
-  const artifact = await deps.loadArtifact(input.projectRoot, key.trim(), version);
+  const keyTrimmed = key.trim();
+  if (keyTrimmed.startsWith(UI_PART_FORM_EVENT_KEY_PREFIX)) {
+    if (kind !== "message") throw new AgentError("agent.invalid", "kind must be message");
+    if (actionId !== "submit") throw new AgentError("agent.ui_action_unknown", "That action is not declared");
+    const text = args?.text;
+    if (typeof text !== "string" || text.trim().length === 0) {
+      throw new AgentError("agent.ui_args_invalid", "Arguments are not valid", [
+        { path: "args.text", code: "agent.ui_args_invalid", message: "is required" },
+      ]);
+    }
+    if (text.length > UI_PART_FORM_MAX_SUBMIT_TEXT) {
+      throw new AgentError("agent.ui_args_invalid", "Arguments are not valid", [
+        { path: "args.text", code: "agent.ui_args_invalid", message: `must be at most ${UI_PART_FORM_MAX_SUBMIT_TEXT} characters` },
+      ]);
+    }
+    const session = await deps.chat.send({
+      projectRoot: input.projectRoot,
+      agentId: input.agentId,
+      sessionId: input.sessionId,
+      text,
+      source: "console",
+    });
+    return { status: 200, body: eventBody(id, "message", { text, session }) };
+  }
+  const artifact = await deps.loadArtifact(input.projectRoot, keyTrimmed, version);
   if (version !== undefined && artifact.version !== version) {
     throw new AgentError("agent.invalid", "Chat actions use the current artifact version");
   }

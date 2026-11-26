@@ -31,7 +31,7 @@ describe("ui part schema", () => {
   });
 
   it("returns unsupported for an unknown kind", () => {
-    expect(parseUiPart({ ...valid, kind: "form" })).toEqual({ ok: false, kind: "unsupported" });
+    expect(parseUiPart({ ...valid, kind: "widget" })).toEqual({ ok: false, kind: "unsupported" });
   });
 
   it("caps oversized fallback text without failing", () => {

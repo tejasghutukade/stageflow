@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { createElement, type ReactNode } from "react";
 
 export type UiPartRendererContext = {
   onOpenConsole?: (href: string) => void;
@@ -57,5 +57,5 @@ function unknownUiPartRenderer({ part, context }: UiPartRendererProps): ReactNod
 export function renderUiPart(part: unknown, context: UiPartRendererContext = {}): ReactNode {
   const record = typeof part === "object" && part !== null ? (part as Record<string, unknown>) : null;
   const kind = typeof record?.kind === "string" ? record.kind : "";
-  return lookupUiPart(kind)({ part, context });
+  return createElement(lookupUiPart(kind), { part, context });
 }

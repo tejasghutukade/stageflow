@@ -1,4 +1,13 @@
-import { parseUiPart, UI_PART_KIND_ERROR, type UiPart } from "../artifacts/uiPart.js";
+import {
+  parseUiPart,
+  UI_PART_KIND_APPROVAL,
+  UI_PART_KIND_ARTIFACT_REF,
+  UI_PART_KIND_ERROR,
+  UI_PART_KIND_FORM,
+  type UiPart,
+} from "../artifacts/uiPart.js";
+import { approvalChannelFallback } from "../artifacts/uiPartApproval.js";
+import { formChannelFallback } from "../artifacts/uiPartForm.js";
 import type { ChannelUiCapability } from "./types.js";
 import { channelUiCapabilityForProvider } from "./uiCapability.js";
 
@@ -9,17 +18,12 @@ export type RenderUiPartForChannelOptions = {
   snapshotUrl?: string | null;
 };
 
-export function renderUiPartForChannel(
-  part: UiPart,
-  capability: ChannelUiCapability,
-  options: RenderUiPartForChannelOptions = {},
-): string {
-  if (part.kind === UI_PART_KIND_ERROR) return part.fallback.text;
+function artifactRefChannelText(part: Extract<UiPart, { kind: typeof UI_PART_KIND_ARTIFACT_REF }>, capability: ChannelUiCapability, options: RenderUiPartForChannelOptions): string {
   switch (capability) {
     case "interactive":
       return part.fallback.text;
     case "image": {
-      const body = renderUiPartForChannel(part, "link", options);
+      const body = artifactRefChannelText(part, "link", options);
       const snapshot = options.snapshotUrl?.trim();
       return snapshot ? `${body}\n${snapshot}` : body;
     }
@@ -31,6 +35,30 @@ export function renderUiPartForChannel(
       return exhaustive;
     }
   }
+}
+
+function interactiveChannelText(part: UiPart, options: RenderUiPartForChannelOptions): string {
+  const consoleAccess = options.consoleAccess !== false;
+  if (part.kind === UI_PART_KIND_FORM) return formChannelFallback(part, consoleAccess);
+  if (part.kind === UI_PART_KIND_APPROVAL) return approvalChannelFallback(part, consoleAccess);
+  return part.fallback.text;
+}
+
+export function renderUiPartForChannel(
+  part: UiPart,
+  capability: ChannelUiCapability,
+  options: RenderUiPartForChannelOptions = {},
+): string {
+  if (part.kind === UI_PART_KIND_ERROR) return part.fallback.text;
+  if (part.kind === UI_PART_KIND_ARTIFACT_REF) return artifactRefChannelText(part, capability, options);
+  if (capability === "interactive") return interactiveChannelText(part, options);
+  if (capability === "image") {
+    const body = renderUiPartForChannel(part, "link", options);
+    const snapshot = options.snapshotUrl?.trim();
+    return snapshot ? `${body}\n${snapshot}` : body;
+  }
+  if (part.kind === UI_PART_KIND_FORM) return formChannelFallback(part, options.consoleAccess !== false);
+  return approvalChannelFallback(part, options.consoleAccess !== false);
 }
 
 export function renderUnknownUiPartForChannel(

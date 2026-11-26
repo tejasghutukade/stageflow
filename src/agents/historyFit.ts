@@ -1,6 +1,25 @@
+import {
+  UI_PART_KIND_APPROVAL,
+  UI_PART_KIND_ARTIFACT_REF,
+  UI_PART_KIND_FORM,
+  type UiPart,
+} from "../artifacts/uiPart.js";
 import type { AgentDefinition } from "../config/loadAgent.js";
 import { messageReplayText } from "./presentUi.js";
 import type { ConversationMessage } from "./runtime/types.js";
+
+function uiPartLabel(part: UiPart): string {
+  switch (part.kind) {
+    case UI_PART_KIND_ARTIFACT_REF:
+      return part.key;
+    case UI_PART_KIND_FORM:
+      return `form:${part.id}`;
+    case UI_PART_KIND_APPROVAL:
+      return `approval:${part.approvalId}`;
+    default:
+      return "ui";
+  }
+}
 
 /** Characters of replayed history a restarted session is given (about 15k tokens). */
 export const HISTORY_CHAR_BUDGET = 60_000;
@@ -30,7 +49,7 @@ export function fitHistory(
   if (policy === "truncate" || dropped.length === 0) return kept;
   const digest = dropped
     .map((m) => {
-      const keys = m.parts?.flatMap((part) => (part.kind === "artifact-ref" ? [part.key] : [])).join(", ");
+      const keys = m.parts?.map((part) => uiPartLabel(part)).join(", ");
       const ui = keys ? ` [ui ${keys}]` : "";
       return `- ${m.role}: ${m.text.replace(/\s+/g, " ").trim().slice(0, 160)}${ui}`;
     })

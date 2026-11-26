@@ -109,6 +109,8 @@ Without streaming the call waits for the whole turn and answers `200` with the s
 | `message` | an action id | The manifest action's `template`, with `{{name}}` filled from arguments, is stored as a user message and starts a normal turn |
 | `tool` | an action id | The same visible user message, then a turn that calls the action's `tool` with its `input`. The call goes through the tool gate and approvals. Nothing runs before an ask-first approval is granted |
 
+When `key` is `_ui/form/<form id>`, `kind` must be `message`, `action` must be `submit`, and `args.text` is the filled submit template (up to 4000 characters). That path does not load an artifact. Approval cards in chat do not use this route; they call the approval approve/deny endpoints.
+
 Only bindings and `actions` declared on the live manifest are accepted (`agent.ui_action_unknown`). Eval sessions are refused (`agent.session_eval_readonly`). A query answer is the binding query body plus `id`, `duplicate`, and `kind`. A message or tool answer is `{ id, duplicate, kind, text, session }`. The tool request stays open while the turn waits on approval; `GET` the session to see `pendingApproval`.
 
 ### Channel status and delivery

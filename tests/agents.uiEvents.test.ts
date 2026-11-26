@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateLiveManifest } from "../src/artifacts/manifest.js";
 import { AgentChatController } from "../src/agents/chatTurn.js";
 import { AgentError } from "../src/agents/errors.js";
+import { formUiEventKey } from "../src/artifacts/uiPartForm.js";
 import { createUiEventHandler, resetUiEventsForTests, type ChatArtifact } from "../src/agents/uiEvents.js";
 import type { BindingQueryResult } from "../src/artifacts/bindingQuery.js";
 import { agentInput, agentsFixture, scriptedBackend, type AgentsFixture } from "./helpers/agentsHarness.js";
@@ -207,6 +208,43 @@ describe("chat ui events", () => {
       }),
     ).rejects.toMatchObject({ code: "agent.session_eval_readonly" });
     expect(backend.calls).toBe(1);
+  });
+
+  it("accepts a structured form submit as a user message", async () => {
+    const { fixture, session } = await setup();
+    const backend = scriptedBackend(async (messages) => `echo ${messages.at(-1)!.text}`);
+    const events = createUiEventHandler({
+      service: fixture.service,
+      chat: new AgentChatController({ service: fixture.service, backend }),
+      loadArtifact: async () => {
+        throw new Error("artifact loader should not run");
+      },
+      query: async () => queryResult(1),
+    });
+    const result = await events({
+      projectRoot: fixture.project,
+      agentId: "helper",
+      sessionId: session.id,
+      body: {
+        id: "form-1",
+        key: formUiEventKey("weekly_input"),
+        kind: "message",
+        action: "submit",
+        args: { text: "Revenue this week: 4200" },
+      },
+    });
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ kind: "message", text: "Revenue this week: 4200" });
+    const detail = await fixture.service.getSession(fixture.project, session.id);
+    expect(detail.messages.some((message) => message.role === "user" && message.text === "Revenue this week: 4200")).toBe(true);
+    await expect(
+      events({
+        projectRoot: fixture.project,
+        agentId: "helper",
+        sessionId: session.id,
+        body: { id: "form-2", key: formUiEventKey("weekly_input"), kind: "message", action: "submit", args: {} },
+      }),
+    ).rejects.toMatchObject({ code: "agent.ui_args_invalid" });
   });
 
   it("asks for a write through the approval gate and runs nothing before approval", async () => {

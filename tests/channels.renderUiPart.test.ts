@@ -6,7 +6,12 @@ import {
 } from "../src/channels/renderUiPart.js";
 import { CHANNEL_PROVIDER_UI_CAPABILITY, WEB_CHAT_UI_CAPABILITY } from "../src/channels/uiCapability.js";
 import { channelProviders } from "../src/channels/providers.js";
-import { UI_PART_KIND_ARTIFACT_REF, UI_PART_SCHEMA_VERSION } from "../src/artifacts/uiPart.js";
+import {
+  UI_PART_KIND_APPROVAL,
+  UI_PART_KIND_ARTIFACT_REF,
+  UI_PART_KIND_FORM,
+  UI_PART_SCHEMA_VERSION,
+} from "../src/artifacts/uiPart.js";
 
 const part = {
   v: UI_PART_SCHEMA_VERSION,
@@ -42,6 +47,40 @@ describe("renderUiPartForChannel", () => {
     const body = webChatVisitorAssistantText({ text: "Here", parts: [part] });
     expect(body).toBe("Here\n\nWeekly report");
     expect(body).not.toContain("http");
+  });
+});
+
+const formPart = {
+  v: UI_PART_SCHEMA_VERSION,
+  kind: UI_PART_KIND_FORM,
+  id: "contact",
+  title: "Your details",
+  fields: [{ id: "email", label: "Email", type: "string", required: true }],
+  submit: { template: "Email: {{email}}" },
+  fallback: { text: "Reply in the console", url: "http://127.0.0.1:3847/#/agents" },
+};
+
+const approvalPart = {
+  v: UI_PART_SCHEMA_VERSION,
+  kind: UI_PART_KIND_APPROVAL,
+  approvalId: "ap1",
+  title: "Approve fetch",
+  tool: "web.fetch",
+  summary: "Download the weekly CSV.",
+  fallback: { text: "Decide in the console", url: "http://127.0.0.1:3847/#/agents" },
+};
+
+describe("form and approval channel fallbacks", () => {
+  it("summarizes a form for link providers", () => {
+    const body = assistantMessageTextForChannel({ text: "Please fill in", parts: [formPart] }, "slack");
+    expect(body).toContain("Your details");
+    expect(body).toContain("Email");
+    expect(body).not.toContain('"kind":"form"');
+  });
+
+  it("summarizes an approval card for visitors without console access", () => {
+    expect(renderUiPartForChannel(approvalPart, "link", { consoleAccess: false })).toContain("Download the weekly CSV");
+    expect(renderUiPartForChannel(approvalPart, "link", { consoleAccess: false })).not.toContain("http");
   });
 });
 
