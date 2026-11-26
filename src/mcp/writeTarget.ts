@@ -34,6 +34,25 @@ export async function resolveWriteTarget(deps: McpToolDeps, projectRoot: string 
   return { path: wireRoot.path, project_root: wireRoot.project_root };
 }
 
+/**
+ * Where a read-only tool looks. Unlike a write target it does not require a writable or available root, so a
+ * read-only registered catalog stays readable. With no project_root it uses the Host workspace when that exists,
+ * else the Host's own project (the earlier default).
+ */
+export async function resolveReadRoot(deps: McpToolDeps, projectRoot: string | undefined): Promise<string> {
+  const roots = await resolveCatalogRoots({ store: deps.store, bootCwd: deps.cwd });
+  if (projectRoot !== undefined) {
+    const found = findCatalogRoot(roots, projectRoot);
+    if (found !== undefined) return found.path;
+    const resolved = path.resolve(projectRoot);
+    return realpath(resolved).catch(() => resolved);
+  }
+  const workspace = findCatalogRoot(roots, "workspace");
+  if (workspace !== undefined && workspace.available !== false) return workspace.path;
+  const resolved = path.resolve(deps.projectRoot ?? deps.cwd);
+  return realpath(resolved).catch(() => resolved);
+}
+
 export function projectFields(target: WriteTarget): { project_root: string; project_path: string } {
   return { project_root: target.project_root, project_path: target.path };
 }

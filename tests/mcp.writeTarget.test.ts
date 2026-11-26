@@ -88,6 +88,22 @@ describe("MCP write tools target the Host workspace", () => {
     });
   });
 
+  it("read_pipeline without project_root reads the workspace pipeline that write_pipeline created", async () => {
+    await withHost(async (base) => {
+      const created = await mcpCall(base, "write_pipeline", {
+        mode: "create",
+        directory: "pipelines",
+        id: "read-demo",
+        model: "anthropic/claude-sonnet-4-5",
+        allow_invalid: true,
+      });
+      expect(created.isError, JSON.stringify(created.content)).toBe(false);
+      const read = await mcpCall(base, "read_pipeline", { path: "pipelines/read-demo.pipeline.yaml", view: "package" });
+      expect(read.isError, JSON.stringify(read.content)).toBe(false);
+      expect(JSON.stringify(read.payload)).toContain("read-demo");
+    });
+  });
+
   it("an explicit workspace id and an explicit registered path are both honored", async () => {
     await withHost(async (base) => {
       const named = await mcpCall(base, "write_task", {

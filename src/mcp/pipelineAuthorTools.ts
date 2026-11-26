@@ -33,6 +33,7 @@ import {
   catching,
   pipelineConsoleUrl,
   projectFields,
+  resolveReadRoot,
   resolveWriteTarget,
 } from "./writeTarget.js";
 
@@ -121,7 +122,7 @@ export function registerPipelineAuthorTools(server: McpServer, deps: McpToolDeps
       if (view === "dag") {
         return runReadPipelineDag(deps, relPath, project_root);
       }
-      const readRoot = (await resolveWriteTarget(deps, project_root)).path;
+      const readRoot = await resolveReadRoot(deps, project_root);
       const loaded = await loadDraftPackage(readRoot, relPath, task_path ? { taskPath: task_path } : {});
       if (!loaded.ok) return textResult({ error: loaded.error, status: loaded.status }, true);
       const validation = await validateDraftPackage(loaded.draft, { cwd: deps.cwd, projectRoot: readRoot });
