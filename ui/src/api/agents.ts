@@ -266,8 +266,8 @@ export class AgentApiError extends Error {
   }
 }
 
-async function request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
-  const res = await fetch(withSurfaceScope(path, "agents"), {
+async function request<T>(path: string, method = "GET", body?: unknown, scoped = true): Promise<T> {
+  const res = await fetch(scoped ? withSurfaceScope(path, "agents") : path, {
     method,
     headers: { "Content-Type": "application/json", ...authorizationHeaders() },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -337,7 +337,7 @@ export const agentsApi = {
       "POST",
     ),
   pendingApprovals: () =>
-    request<{ approvals: Array<AgentApproval & { agentId: string }> }>("/api/agents/approvals").then(
+    request<{ approvals: Array<AgentApproval & { agentId: string }> }>("/api/agents/approvals", "GET", undefined, false).then(
       (body) => body.approvals,
     ),
   /** Download the session's traces as OTLP/JSON. */

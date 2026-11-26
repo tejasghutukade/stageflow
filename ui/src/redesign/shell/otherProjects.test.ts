@@ -2,7 +2,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CatalogRoot } from "../../api/types";
-import { getSurfaceScope, setSurfaceScope, withSurfaceScope } from "../../api/projectScope";
+import { clearScopesOutside, getSurfaceScope, setSurfaceScope, withSurfaceScope } from "../../api/projectScope";
+import { createLatestGuard } from "./latestOnly";
 import { OtherProjectsNote } from "./OtherProjectsNote";
 import { countHiddenInOtherProjects, hiddenSummary } from "./otherProjects";
 
@@ -84,5 +85,38 @@ describe("surface scope", () => {
     expect(withSurfaceScope("/api/agents/x?limit=2", "agents")).toBe("/api/agents/x?limit=2&project_root=%2Frepo%2Fdemo");
     expect(withSurfaceScope("/api/agents?project_root=other", "agents")).toBe("/api/agents?project_root=other");
     expect(withSurfaceScope("/api/functions", "functions")).toBe("/api/functions");
+  });
+});
+
+describe("surface scope lifecycle", () => {
+  afterEach(() => {
+    setSurfaceScope("agents", undefined);
+    setSurfaceScope("functions", undefined);
+  });
+
+  it("keeps a scope on its own routes and clears it once the hash leaves them", () => {
+    setSurfaceScope("agents", "/repo/demo");
+    setSurfaceScope("functions", "/repo/demo");
+    clearScopesOutside("#/agents/helper");
+    expect(getSurfaceScope("agents")).toBe("/repo/demo");
+    expect(getSurfaceScope("functions")).toBeUndefined();
+    clearScopesOutside("#/overview");
+    expect(getSurfaceScope("agents")).toBeUndefined();
+  });
+
+  it("does not treat a longer route name as the same surface", () => {
+    setSurfaceScope("agents", "/repo/demo");
+    clearScopesOutside("#/agents-extra");
+    expect(getSurfaceScope("agents")).toBeUndefined();
+  });
+});
+
+describe("createLatestGuard", () => {
+  it("lets only the most recent load apply its result", () => {
+    const guard = createLatestGuard();
+    const first = guard();
+    const second = guard();
+    expect(first()).toBe(false);
+    expect(second()).toBe(true);
   });
 });

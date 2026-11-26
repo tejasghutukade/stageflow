@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createLatestGuard } from "../shell/latestOnly";
 import { OtherProjectsNote } from "../shell/OtherProjectsNote";
 import { useHiddenInOtherProjects } from "../shell/useHiddenInOtherProjects";
 import type { ReactNode } from "react";
@@ -704,13 +705,16 @@ export function CatalogSkillsTab({
     scope,
   });
 
+  const loadGuard = useRef(createLatestGuard()).current;
   const load = useCallback(async () => {
+    const isCurrent = loadGuard();
     const [skillsResult, usageResult, pipelinesResult] =
       await Promise.allSettled([
         fetchSkills(scope),
         fetchSkillUsage(scope),
         fetchPipelines(),
       ]);
+    if (!isCurrent()) return;
     if (skillsResult.status === "fulfilled") {
       setSkills(skillsResult.value.skills);
       setDiagnostics(skillsResult.value.diagnostics);
@@ -730,7 +734,7 @@ export function CatalogSkillsTab({
       setPipelines(pipelinesResult.value.pipelines);
     }
     setLoading(false);
-  }, [scope]);
+  }, [scope, loadGuard]);
 
   useEffect(() => {
     setLoading(true);

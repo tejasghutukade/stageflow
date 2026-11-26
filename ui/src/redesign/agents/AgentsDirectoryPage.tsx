@@ -22,6 +22,7 @@ import { clampCursor, isCursorKey, moveCursor, shouldHandleCursorKey } from "./l
 import { MONO, NOWRAP, PAGE_BG } from "./agentsTokens";
 import { PageHeader as ShellPageHeader } from "../shell/PageHeader";
 import { getSurfaceScope, setSurfaceScope } from "../../api/projectScope";
+import { createLatestGuard } from "../shell/latestOnly";
 import { OtherProjectsNote } from "../shell/OtherProjectsNote";
 import { useHiddenInOtherProjects } from "../shell/useHiddenInOtherProjects";
 import { Button, PageFooter } from "./ui";
@@ -331,7 +332,9 @@ export function AgentsDirectoryPage({ onNewAgent }: { onNewAgent: () => void }) 
     setScope(root);
   };
 
+  const loadGuard = useRef(createLatestGuard()).current;
   const load = useCallback(async () => {
+    const isCurrent = loadGuard();
     setLoading(true);
     try {
       const [list, approvals, authorDrafts] = await Promise.all([
@@ -339,16 +342,18 @@ export function AgentsDirectoryPage({ onNewAgent }: { onNewAgent: () => void }) 
         agentsApi.pendingApprovals().catch(() => []),
         listAuthorDrafts().catch(() => ({ drafts: [] })),
       ]);
+      if (!isCurrent()) return;
       setAgents(list);
       setPending(approvals.length);
       setDrafts(authorDrafts.drafts);
       setError(null);
     } catch (err) {
+      if (!isCurrent()) return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, []);
+  }, [loadGuard]);
 
   useEffect(() => {
     void load();
