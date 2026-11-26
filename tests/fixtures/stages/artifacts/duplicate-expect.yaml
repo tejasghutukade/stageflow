@@ -1,0 +1,15 @@
+id: duplicate-expect
+system_prompt: Duplicate expect id.
+model: anthropic/claude-sonnet-4-5
+artifacts:
+  publish: true
+  expect:
+    - weekly-note
+    - weekly-note
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

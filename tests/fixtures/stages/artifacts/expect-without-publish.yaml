@@ -1,0 +1,13 @@
+id: expect-without-publish
+system_prompt: Expect without publish.
+model: anthropic/claude-sonnet-4-5
+artifacts:
+  expect:
+    - weekly-note
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object
