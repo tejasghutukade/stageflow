@@ -1292,24 +1292,30 @@ export class AgentService {
     return sessionSpend >= limits.cost_usd;
   }
 
-  /** The session ran out of turns or time (never true for always-on agents). */
+  /** The session ran out of turns or has been idle too long (never true for always-on agents). */
   private turnOrTimeLimit(definition: AgentDefinition, session: AgentSession): { kind: "turns" | "minutes"; message: string } | null {
     const { limits } = definition;
     if (limits.always_on) return null;
-    if (this.store.listTurns(session.id).length >= limits.max_turns) {
+    const turns = this.store.listTurns(session.id);
+    if (turns.length >= limits.max_turns) {
       return { kind: "turns", message: `This session reached its limit of ${limits.max_turns} turns.` };
     }
-    const ageMinutes = (this.now().getTime() - Date.parse(session.createdAt)) / 60_000;
-    if (ageMinutes >= limits.session_minutes) {
-      return { kind: "minutes", message: `This session reached its limit of ${limits.session_minutes} minutes.` };
+    if (turns.some((turn) => turn.status === "running" || turn.status === "waiting")) return null;
+    const lastActivityAt =
+      turns.length === 0
+        ? session.createdAt
+        : (turns[turns.length - 1]!.endedAt ?? turns[turns.length - 1]!.startedAt);
+    const idleMinutes = (this.now().getTime() - Date.parse(lastActivityAt)) / 60_000;
+    if (idleMinutes >= limits.session_minutes) {
+      return { kind: "minutes", message: `This session closed after ${limits.session_minutes} idle minutes.` };
     }
     return null;
   }
 
   /**
    * Why a new turn on this session would be refused, or null while it is still inside its limits.
-   * Cost is checked first so the sender is told the limit that actually applies. Always-on sessions skip the time
-   * and turn caps. A channel thread rolls onto a new session at its turn or time limit; its cost limit counts the
+   * Cost is checked first so the sender is told the limit that actually applies. Always-on sessions skip the idle
+   * and turn caps. A channel thread rolls onto a new session at its turn or idle limit; its cost limit counts the
    * whole thread's last 24 hours, so a rollover does not reset it.
    */
   private limitBlockReason(definition: AgentDefinition, session: AgentSession): { kind: "turns" | "minutes" | "cost"; message: string } | null {
@@ -1325,7 +1331,7 @@ export class AgentService {
   /** Session limits (`limits` in the pinned revision) are checked before each new turn. */
   private assertWithinLimits(definition: AgentDefinition, session: AgentSession): void {
     const blocked = this.limitBlockReason(definition, session);
-    if (blocked) throw new AgentError("agent.limit_reached", blocked.message);
+    if (blocked) throw new AgentError("agent.limit_reached", blocked.message, [], blocked.kind);
   }
 
   /**
@@ -1612,7 +1618,7 @@ export class AgentService {
       }
       const definition = existing ? await this.effectiveDefinition(projectRoot, existing) : null;
       const stalePinned = Boolean(definition && stageflowStaleIssues(definition).length > 0);
-      // Roll onto a new session at a turn or time limit, unless the thread is over its cost cap for the last 24 hours.
+      // Roll onto a new session at a turn or idle limit, unless the thread is over its cost cap for the last 24 hours.
       const accountRemapped = Boolean(
         existing &&
           identity?.boundAccountId &&

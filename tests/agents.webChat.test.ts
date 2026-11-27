@@ -135,6 +135,17 @@ describe("public web chat", () => {
     expect(await limited.json()).toMatchObject({ code: "web_chat.rate_limited", retryAfterSec: expect.any(Number) });
   });
 
+  it("says which limit ended a conversation so the page can explain it", async () => {
+    const host = await startHost();
+    const { slug } = await liveAgent(host, { limits: { max_turns: 1 } });
+    const { thread } = (await (await host.pub(slug, "/threads", { method: "POST", visitor: VISITOR })).json()) as { thread: { id: string } };
+    await (await host.pub(slug, `/threads/${thread.id}/messages`, { method: "POST", visitor: VISITOR, body: { text: "one" } })).text();
+    const refused = await host.pub(slug, `/threads/${thread.id}/messages`, { method: "POST", visitor: VISITOR, body: { text: "two" } });
+    const last = (await host.frames(refused)).at(-1);
+    expect(last).toMatchObject({ type: "error", code: "web_chat.limit_reached", limit: "turns" });
+    expect(JSON.stringify(last)).not.toContain("max_turns");
+  });
+
   it("requires setup for legacy published tools instead of letting approval bypass consumer authorization", async () => {
     const backend = scriptedBackend(async (_messages, ctx) => {
       const result = await ctx.tool("web.fetch", { url: "https://secret.example/token" });

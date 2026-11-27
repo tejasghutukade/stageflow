@@ -107,7 +107,7 @@ Give a scheduled agent `limits.cost_usd` and a small `max_turns`. If it has ask-
 
 ## Always on
 
-`limits.always_on: true` means the session does not end by `session_minutes` or `max_turns`, and it resumes after a failure. Set it for iMessage. With `always_on`, `cost_usd` is the spend in the last 24 hours, not the life of the session.
+`limits.always_on: true` means the session does not end by idle `session_minutes` or `max_turns`, and it resumes after a failure. Set it for iMessage. With `always_on`, `cost_usd` is the spend in the last 24 hours, not the life of the session.
 
 A Host restart fails in-flight turns with `agent.host_restarted` and expires pending approvals. For an always-on iMessage agent, the Host then resumes the interrupted turn and answers the same sender once. Other providers are not resumed that way.
 

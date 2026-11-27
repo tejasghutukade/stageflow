@@ -58,11 +58,15 @@ const STATUS: Partial<Record<AgentErrorCode, number>> = {
 };
 
 /** Domain failure with a stable code; the HTTP, CLI and MCP layers map it, they don't parse messages. */
+/** Which session limit refused a turn (set on `agent.limit_reached` only). */
+export type AgentLimitKind = "turns" | "minutes" | "cost";
+
 export class AgentError extends Error {
   constructor(
     readonly code: AgentErrorCode,
     message?: string,
     readonly issues: AgentIssue[] = [],
+    readonly limit?: AgentLimitKind,
   ) {
     super(message ?? code);
     this.name = "AgentError";

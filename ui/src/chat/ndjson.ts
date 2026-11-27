@@ -1,5 +1,6 @@
 import type { InlinePreview } from "../../../src/artifacts/inlinePreviewTypes.ts";
 import { parseUiPart, type UiPart } from "../../../src/artifacts/uiPart.ts";
+import { toLimitKind, type ChatLimitKind } from "./errors";
 
 export type ChatMessageRecord = { id: string; role: "user" | "assistant"; text: string; createdAt: string; ui?: UiPart[] };
 
@@ -18,7 +19,7 @@ export type ChatFrame =
   | { type: "ui_preview"; phase: InlinePreview["phase"]; message?: string }
   | { type: "waiting" }
   | { type: "done"; message: ChatMessageRecord }
-  | { type: "error"; code: string; message: string; retryAfterSec?: number };
+  | { type: "error"; code: string; message: string; retryAfterSec?: number; limit?: ChatLimitKind };
 
 /** Validates one decoded line; anything that is not a known frame is dropped. */
 export function toFrame(value: unknown): ChatFrame | null {
@@ -57,6 +58,7 @@ export function toFrame(value: unknown): ChatFrame | null {
         code: typeof frame.code === "string" ? frame.code : "web_chat.failed",
         message: typeof frame.message === "string" ? frame.message : "",
         ...(typeof frame.retryAfterSec === "number" && Number.isFinite(frame.retryAfterSec) ? { retryAfterSec: frame.retryAfterSec } : {}),
+        ...(toLimitKind(frame.limit) ? { limit: toLimitKind(frame.limit) } : {}),
       };
     default:
       return null;

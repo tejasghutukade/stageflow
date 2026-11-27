@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createChatModelAdapter, createThreadListAdapter, titleFrom, toThreadMessages } from "./adapters";
 import { ChatApiError, createChatApi, type ChatApi } from "./api";
-import { DEFAULT_API_BASE, readChatConfig } from "./config";
+import { DEFAULT_API_BASE, readChatConfig, threadIdFromUrl, urlWithThread } from "./config";
 import { friendlyMessage, loadErrorMessage, needsNewConversation } from "./errors";
 import { readFrames, toFrame, type ChatFrame } from "./ndjson";
 import { getVisitorId, newVisitorId, resetVisitorMemoForTests } from "./visitor";
@@ -265,6 +265,28 @@ describe("chat model adapter", () => {
     );
     const [update] = await drain(adapter.run(runOptions("hi")));
     expect(update!.status.error.friendly).toBe("This conversation has reached its limit. Start a new one.");
+  });
+
+  it("says which limit ended the conversation when the Host sends it", async () => {
+    const adapter = createChatModelAdapter(
+      fakeApi(async function* () {
+        throw new ChatApiError("web_chat.limit_reached", 409, "x", undefined, "minutes");
+      }),
+      async () => "t1",
+    );
+    const [update] = await drain(adapter.run(runOptions("hi")));
+    expect(update!.status.error).toMatchObject({ limit: "minutes", friendly: "This conversation closed after being idle. Start a new chat to keep going." });
+    expect(toFrame({ type: "error", code: "web_chat.limit_reached", message: "", limit: "turns" })).toMatchObject({ limit: "turns" });
+    expect(toFrame({ type: "error", code: "web_chat.limit_reached", message: "", limit: "bogus" })).not.toHaveProperty("limit");
+    expect(friendlyMessage("web_chat.limit_reached", undefined, "cost")).toContain("usage limit");
+  });
+
+  it("keeps the open conversation in the address", () => {
+    expect(threadIdFromUrl("http://h/chat/abc?c=ses_1")).toBe("ses_1");
+    expect(threadIdFromUrl("http://h/chat/abc?c=")).toBeUndefined();
+    expect(threadIdFromUrl("http://h/chat/abc")).toBeUndefined();
+    expect(urlWithThread("http://h/chat/abc?x=1#top", "ses_2")).toBe("/chat/abc?x=1&c=ses_2#top");
+    expect(urlWithThread("http://h/chat/abc?c=ses_2", undefined)).toBe("/chat/abc");
   });
 
   it("stays quiet when the visitor stops the reply", async () => {

@@ -149,7 +149,7 @@ Checked when a turn starts; a running turn is not cut short. All refuse with `ag
 
 | Field | Type, default | Refuses a new turn when |
 |---|---|---|
-| `session_minutes` | 1 to 1440, `10` | The session is that old |
+| `session_minutes` | 1 to 1440, `10` | The session has been idle that long (no messages; waiting on an approval is not idle) |
 | `max_turns` | 1 to 1000, `40` | The session has that many turns |
 | `cost_usd` | number > 0 or `null` (default, no cap) | The session's turns cost that much. With `always_on`, the last 24 hours |
 | `long_context` | `summarize` (default) or `truncate` | When a rebuilt session's history exceeds 60,000 characters: one-line digest of dropped messages, or drop them |

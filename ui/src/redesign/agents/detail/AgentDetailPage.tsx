@@ -100,8 +100,8 @@ function SummaryAside({ detail }: { detail: AgentDetail }) {
         <div className="flex flex-col gap-4">
           <KeyValue label="Version" value={`v${agent.revision}`} />
           <KeyValue label="Model" value={<span className={MONO}>{modelLabel(definition?.model ?? null)}</span>} />
-          <KeyValue label="Max turns" value={definition ? String(definition.limits.max_turns) : "—"} />
-          <KeyValue label="Time per session" value={definition ? `${definition.limits.session_minutes} minutes` : "—"} />
+          <KeyValue label="Messages per session" value={definition ? String(definition.limits.max_turns) : "—"} />
+          <KeyValue label="Close after idle" value={definition ? `${definition.limits.session_minutes} minutes idle` : "—"} />
         </div>
       </section>
       <section className="flex flex-col gap-4">

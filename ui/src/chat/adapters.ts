@@ -1,15 +1,21 @@
 import type { ChatModelAdapter, ChatModelRunResult, RemoteThreadListAdapter, ThreadMessageLike } from "@assistant-ui/react";
 import { createAssistantStream } from "assistant-stream";
 import { ChatApiError, type ChatApi } from "./api";
-import { friendlyMessage, type ChatErrorInfo } from "./errors";
+import { friendlyMessage, type ChatErrorInfo, type ChatLimitKind } from "./errors";
 import type { InlinePreview } from "../../../src/artifacts/inlinePreviewTypes.ts";
 import type { ChatMessageRecord } from "./ndjson";
 
 /** Carried on an incomplete assistant message so the UI can render a friendly notice. */
 export type ChatMessageError = ChatErrorInfo & { friendly: string };
 
-export function toChatError(code: string, message: string, retryAfterSec?: number): ChatMessageError {
-  return { code, message, ...(retryAfterSec !== undefined ? { retryAfterSec } : {}), friendly: friendlyMessage(code, retryAfterSec) };
+export function toChatError(code: string, message: string, retryAfterSec?: number, limit?: ChatLimitKind): ChatMessageError {
+  return {
+    code,
+    message,
+    ...(retryAfterSec !== undefined ? { retryAfterSec } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+    friendly: friendlyMessage(code, retryAfterSec, limit),
+  };
 }
 
 /** The visitor's conversations as the thread list wants them. Rename/archive/delete are not offered to visitors. */
@@ -103,7 +109,7 @@ export function createChatModelAdapter(api: ChatApi, resolveThreadId: () => Prom
             };
             return;
           } else {
-            yield failure(reply, toChatError(frame.code, frame.message, frame.retryAfterSec));
+            yield failure(reply, toChatError(frame.code, frame.message, frame.retryAfterSec, frame.limit));
             return;
           }
         }
@@ -112,7 +118,7 @@ export function createChatModelAdapter(api: ChatApi, resolveThreadId: () => Prom
       } catch (error) {
         if (options.abortSignal.aborted) return;
         const info =
-          error instanceof ChatApiError ? toChatError(error.code, error.message, error.retryAfterSec) : toChatError("web_chat.failed", "");
+          error instanceof ChatApiError ? toChatError(error.code, error.message, error.retryAfterSec, error.limit) : toChatError("web_chat.failed", "");
         yield failure(reply, info);
       }
     },

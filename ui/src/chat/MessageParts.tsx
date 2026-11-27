@@ -1,17 +1,21 @@
-import { MessagePrimitive, useAuiState } from "@assistant-ui/react";
+import { MessagePrimitive, ThreadListPrimitive, useAuiState } from "@assistant-ui/react";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { LuTriangleAlert } from "react-icons/lu";
 import type { ChatMessageError } from "./adapters";
+import { needsNewConversation } from "./errors";
 import { registerBuiltinUiParts } from "./parts/builtins";
 import { InlinePreviewCard } from "./parts/artifactRefPart";
 import { renderUiPart, type UiPartRendererContext } from "./parts/registry";
 
 registerBuiltinUiParts();
 
-export function uiPartsFromMetadata(metadata: unknown): unknown[] {
-  if (typeof metadata !== "object" || metadata === null) return [];
+const NO_PARTS: readonly unknown[] = Object.freeze([]);
+
+/** Returns the stored array itself (or one shared empty array) so store selectors stay referentially stable. */
+export function uiPartsFromMetadata(metadata: unknown): readonly unknown[] {
+  if (typeof metadata !== "object" || metadata === null) return NO_PARTS;
   const custom = (metadata as { custom?: { uiParts?: unknown } }).custom;
-  return Array.isArray(custom?.uiParts) ? custom.uiParts : [];
+  return Array.isArray(custom?.uiParts) ? custom.uiParts : NO_PARTS;
 }
 
 export function UiMessageParts({
@@ -76,17 +80,23 @@ function isChatError(value: unknown): value is ChatMessageError {
   return typeof value === "object" && value !== null && typeof (value as { friendly?: unknown }).friendly === "string";
 }
 
+function uiPreviewOf(metadata: unknown): { phase?: string; message?: string } | undefined {
+  return (metadata as { custom?: { uiPreview?: { phase?: string; message?: string } } } | undefined)?.custom?.uiPreview;
+}
+
 export function AssistantMessageBody() {
   const status = useAuiState((s) => s.message.status);
   const waiting = useAuiState((s) => (s.message.metadata as { custom?: { waiting?: boolean } } | undefined)?.custom?.waiting === true);
   const hasText = useAuiState((s) => s.message.content.some((part) => part.type === "text" && part.text.length > 0));
   const uiParts = useAuiState((s) => uiPartsFromMetadata(s.message.metadata));
-  const preview = useAuiState((s) => {
-    const value = (s.message.metadata as { custom?: { uiPreview?: { phase?: string; message?: string } } } | undefined)?.custom?.uiPreview;
-    if (value?.phase === "error") return { phase: "error" as const, message: value.message };
-    if (value?.phase === "skeleton") return { phase: "skeleton" as const };
-    return null;
-  });
+  const previewPhase = useAuiState((s) => uiPreviewOf(s.message.metadata)?.phase);
+  const previewMessage = useAuiState((s) => uiPreviewOf(s.message.metadata)?.message);
+  const preview =
+    previewPhase === "error"
+      ? { phase: "error" as const, message: previewMessage }
+      : previewPhase === "skeleton"
+        ? { phase: "skeleton" as const }
+        : null;
   const running = status?.type === "running";
   const error = status?.type === "incomplete" && status.reason === "error" && isChatError(status.error) ? status.error : null;
 
@@ -111,6 +121,11 @@ export function AssistantMessageBody() {
           <div className="flex flex-col gap-0.5">
             <span>{error.friendly}</span>
             {error.code === "web_chat.rate_limited" && error.retryAfterSec ? <RetryCountdown seconds={error.retryAfterSec} /> : null}
+            {needsNewConversation(error.code) ? (
+              <ThreadListPrimitive.New className="mt-1 self-start rounded-lg border border-[var(--sf-hairline-strong)] bg-[var(--sf-panel)] px-3 py-1 text-sm font-medium text-[var(--sf-text-1)] hover:bg-[var(--sf-active)]">
+                Start a new chat
+              </ThreadListPrimitive.New>
+            ) : null}
           </div>
         </div>
       ) : null}

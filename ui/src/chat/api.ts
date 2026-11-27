@@ -1,4 +1,4 @@
-import { UNAVAILABLE_CODE } from "./errors";
+import { toLimitKind, UNAVAILABLE_CODE, type ChatLimitKind } from "./errors";
 import { messageParts, readFrames, type ChatFrame, type ChatMessageRecord } from "./ndjson";
 
 export type ChatThreadSummary = { id: string; title: string; updatedAt: string };
@@ -15,6 +15,7 @@ export class ChatApiError extends Error {
     readonly status: number,
     message: string,
     readonly retryAfterSec?: number,
+    readonly limit?: ChatLimitKind,
   ) {
     super(message);
     this.name = "ChatApiError";
@@ -31,7 +32,7 @@ export type ChatApiOptions = {
 };
 
 async function errorFrom(response: Response): Promise<ChatApiError> {
-  let body: { code?: unknown; message?: unknown; retryAfterSec?: unknown } = {};
+  let body: { code?: unknown; message?: unknown; retryAfterSec?: unknown; limit?: unknown } = {};
   try {
     body = (await response.json()) as typeof body;
   } catch {
@@ -39,7 +40,7 @@ async function errorFrom(response: Response): Promise<ChatApiError> {
   }
   const code = typeof body.code === "string" ? body.code : response.status === 404 ? UNAVAILABLE_CODE : "web_chat.failed";
   const retry = typeof body.retryAfterSec === "number" ? body.retryAfterSec : Number(response.headers.get("retry-after")) || undefined;
-  return new ChatApiError(code, response.status, typeof body.message === "string" ? body.message : "", retry);
+  return new ChatApiError(code, response.status, typeof body.message === "string" ? body.message : "", retry, toLimitKind(body.limit));
 }
 
 /** The whole public chat API, scoped to one agent slug and one visitor. */

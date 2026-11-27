@@ -1179,24 +1179,24 @@ export function AgentDefinitionForm({
         <Section id="limits">
           <SectionHeading>Limits</SectionHeading>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <Field label="Time per session" changed={changed(def.limits.session_minutes, saved?.limits.session_minutes)} hint="Agent work time. Waiting on people doesn't count.">
+            <Field label="Close after idle" changed={changed(def.limits.session_minutes, saved?.limits.session_minutes)} hint="Minutes with no messages before the conversation closes. Waiting for an approval doesn't count.">
               <NumberField
                 value={def.limits.session_minutes}
                 min={1}
                 max={1440}
                 suffix="min"
-                ariaLabel="Time per session"
+                ariaLabel="Close after idle"
                 changed={changed(def.limits.session_minutes, saved?.limits.session_minutes)}
                 onChange={update ? (value) => update({ ...def, limits: { ...def.limits, session_minutes: value ?? 0 } }) : undefined}
               />
               <FieldMessages {...at("limits.session_minutes")} />
             </Field>
-            <Field label="Model turns per session" changed={changed(def.limits.max_turns, saved?.limits.max_turns)}>
+            <Field label="Messages per session" changed={changed(def.limits.max_turns, saved?.limits.max_turns)} hint="Each message and the agent's reply count as one.">
               <NumberField
                 value={def.limits.max_turns}
                 min={1}
                 max={1000}
-                ariaLabel="Model turns per session"
+                ariaLabel="Messages per session"
                 changed={changed(def.limits.max_turns, saved?.limits.max_turns)}
                 onChange={update ? (value) => update({ ...def, limits: { ...def.limits, max_turns: value ?? 0 } }) : undefined}
               />

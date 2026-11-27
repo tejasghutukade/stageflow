@@ -203,7 +203,7 @@ See [Schedules](agents.md#schedules) for when it fires.
 
 | Field | Type | Default | Rules |
 |-------|------|---------|-------|
-| `limits.session_minutes` | integer | `10` | 1–1,440. A session older than this refuses a new turn. |
+| `limits.session_minutes` | integer | `10` | 1–1,440. Refuses a new turn after this many minutes with no messages. Waiting on an approval does not count as idle. |
 | `limits.max_turns` | integer | `40` | 1–1,000. |
 | `limits.cost_usd` | number or `null` | `null` | Above 0. A session that has spent this much refuses a new turn. |
 | `limits.long_context` | `summarize` \| `truncate` | `summarize` | How a replayed transcript is cut down. |

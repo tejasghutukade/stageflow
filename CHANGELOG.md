@@ -37,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The console build (`npm run ui:build`, the Docker image) no longer type-checks the server: small modules keep node-only code out of the UI type graph.
 - Live artifact refresh and queries match the stored project by wire id; snapshots are dropped when a binding's function changes; a vendored library read error no longer fails the page; record sync ignores stale responses.
 - Scope switches on the Agents and Catalog pages cancel in-flight loads that would overwrite the new view.
+- The public chat page no longer goes blank as soon as a reply starts streaming (React "maximum update depth"): message selectors return stable values.
+- A conversation that hits a limit says which one (`limit`: `turns`, `minutes`, `cost` on `web_chat.limit_reached`) and offers **Start a new chat**. `limits.session_minutes` now counts idle minutes since the last message (it used to count from the session's start, which cut off active conversations); the form calls it "Close after idle", and "Messages per session" replaces "Model turns per session".
+- The public chat page keeps the open conversation in the address (`?c=<id>`), so a refresh or the back button returns to it instead of a new chat.
 
 ## [0.67.0] - 2026-11-16
 

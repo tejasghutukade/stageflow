@@ -91,7 +91,7 @@ const SECTIONS: Array<{ label: string; keys: Array<keyof AgentDefinition>; descr
     label: "Limits",
     keys: ["limits"],
     describe: (d) =>
-      `${d.limits.always_on ? "always on" : `${d.limits.session_minutes} min · ${d.limits.max_turns} turns`} · ${d.limits.cost_usd === null ? "no cost cap" : `$${d.limits.cost_usd}${d.limits.always_on ? " per day" : ""}`}`,
+      `${d.limits.always_on ? "always on" : `closes after ${d.limits.session_minutes} min idle · ${d.limits.max_turns} turns`} · ${d.limits.cost_usd === null ? "no cost cap" : `$${d.limits.cost_usd}${d.limits.always_on ? " per day" : ""}`}`,
   },
 ];
 

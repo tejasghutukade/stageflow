@@ -29,3 +29,23 @@ function safeDecode(value: string): string {
     return value;
   }
 }
+
+/** The query parameter that holds the open conversation, so a refresh or a shared link reopens it. */
+export const THREAD_PARAM = "c";
+
+export function threadIdFromUrl(href: string): string | undefined {
+  try {
+    const value = new URL(href).searchParams.get(THREAD_PARAM)?.trim();
+    return value ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The same address with the conversation set, or removed when `threadId` is undefined. */
+export function urlWithThread(href: string, threadId: string | undefined): string {
+  const url = new URL(href);
+  if (threadId) url.searchParams.set(THREAD_PARAM, threadId);
+  else url.searchParams.delete(THREAD_PARAM);
+  return `${url.pathname}${url.search}${url.hash}`;
+}

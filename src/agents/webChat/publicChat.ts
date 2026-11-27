@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentDefinition } from "../../config/loadAgent.js";
 import { assertConsumerWebChatPublication } from "../consumerSafety.js";
 import type { AgentChatController } from "../chatTurn.js";
-import { isAgentError } from "../errors.js";
+import { isAgentError, type AgentLimitKind } from "../errors.js";
 import type { AgentService } from "../service.js";
 import type { AgentMessage, AgentSession } from "../store.js";
 import { BodyError, readJsonBody, writeFrame } from "../ndjson.js";
@@ -51,6 +51,7 @@ class WebChatError extends Error {
     readonly code: string,
     readonly retryAfterSec?: number,
     message?: string,
+    readonly limit?: AgentLimitKind,
   ) {
     super(message ?? FRIENDLY[code]?.message ?? code);
   }
@@ -62,6 +63,7 @@ function errorFrame(error: WebChatError): Record<string, unknown> {
     code: error.code,
     message: error.message,
     ...(error.retryAfterSec !== undefined ? { retryAfterSec: error.retryAfterSec } : {}),
+    ...(error.limit !== undefined ? { limit: error.limit } : {}),
   };
 }
 
@@ -69,7 +71,7 @@ function toWebChatError(error: unknown): WebChatError {
   if (error instanceof ConsumerAccessError) return new WebChatError(error.code);
   if (error instanceof WebChatError) return error;
   if (isAgentError(error)) {
-    if (error.code === "agent.limit_reached") return new WebChatError("web_chat.limit_reached");
+    if (error.code === "agent.limit_reached") return new WebChatError("web_chat.limit_reached", undefined, undefined, error.limit);
     if (error.code === "agent.session_busy") return new WebChatError("web_chat.busy");
     if (error.code === "agent.disabled" || error.code === "agent.not_found" || error.code === "agent.archived") {
       return new WebChatError("web_chat.unavailable");

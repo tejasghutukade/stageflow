@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { LuMenu, LuX } from "react-icons/lu";
 import { createChatApi, ChatApiError, type ChatAgentInfo } from "./api";
 import { ChatRuntimeProvider } from "./ChatRuntime";
-import { readChatConfig } from "./config";
+import { readChatConfig, threadIdFromUrl, urlWithThread } from "./config";
 import { loadErrorMessage, UNAVAILABLE_CODE } from "./errors";
 import { Thread } from "./Thread";
 import { ThreadSidebar } from "./ThreadSidebar";
@@ -31,12 +31,24 @@ export function ChatApp() {
   );
   const [load, setLoad] = useState<Load>(api ? { state: "loading" } : { state: "unavailable" });
   const [drawer, setDrawer] = useState(false);
+  const [threadId, setThreadId] = useState<string | undefined>(() => threadIdFromUrl(window.location.href));
 
   useEffect(() => {
     if (!api) return;
     let live = true;
-    api.info().then(
-      (agent) => live && setLoad({ state: "ready", agent }),
+    const linked = threadIdFromUrl(window.location.href);
+    // A conversation in the address must be this visitor's; a stale or foreign one opens a new chat instead.
+    const checkLinked = linked
+      ? api.getThread(linked).then(
+          () => undefined,
+          () => {
+            window.history.replaceState(window.history.state, "", urlWithThread(window.location.href, undefined));
+            setThreadId(undefined);
+          },
+        )
+      : Promise.resolve();
+    Promise.all([api.info(), checkLinked]).then(
+      ([agent]) => live && setLoad({ state: "ready", agent }),
       (error: unknown) =>
         live &&
         setLoad(
@@ -49,6 +61,22 @@ export function ChatApp() {
       live = false;
     };
   }, [api]);
+
+  useEffect(() => {
+    const onPop = () => setThreadId(threadIdFromUrl(window.location.href));
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  /** Keeps the address on the open conversation: a new chat getting its id replaces the entry, switching adds one. */
+  const onThreadIdChange = useCallback((next: string | undefined) => {
+    const current = threadIdFromUrl(window.location.href);
+    if (next === current) return;
+    const url = urlWithThread(window.location.href, next);
+    if (current === undefined) window.history.replaceState(window.history.state, "", url);
+    else window.history.pushState(window.history.state, "", url);
+    setThreadId(next);
+  }, []);
 
   useEffect(() => {
     document.title = load.state === "ready" ? load.agent.name : "Chat";
@@ -70,7 +98,7 @@ export function ChatApp() {
 
   const { agent } = load;
   return (
-    <ChatRuntimeProvider api={api}>
+    <ChatRuntimeProvider api={api} threadId={threadId} onThreadIdChange={onThreadIdChange}>
       <div className="flex h-full bg-[var(--sf-ground)] text-[var(--sf-text-1)]">
         {drawer ? <div className="fixed inset-0 z-20 bg-black/50 md:hidden" onClick={() => setDrawer(false)} aria-hidden /> : null}
         <aside

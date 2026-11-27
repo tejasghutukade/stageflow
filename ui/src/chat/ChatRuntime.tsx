@@ -28,11 +28,24 @@ function useConversationRuntime(api: ChatApi) {
   return useLocalRuntime(adapters.model, { adapters: { history: adapters.history } });
 }
 
-export function ChatRuntimeProvider({ api, children }: { api: ChatApi; children: ReactNode }) {
+export function ChatRuntimeProvider({
+  api,
+  threadId,
+  onThreadIdChange,
+  children,
+}: {
+  api: ChatApi;
+  /** The open conversation; undefined starts a new one. */
+  threadId?: string;
+  onThreadIdChange?: (threadId: string | undefined) => void;
+  children: ReactNode;
+}) {
   const threadListAdapter = useMemo(() => createThreadListAdapter(api), [api]);
   const runtime = useRemoteThreadListRuntime({
     runtimeHook: () => useConversationRuntime(api),
     adapter: threadListAdapter,
+    threadId,
+    onThreadIdChange,
   });
   return <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>;
 }

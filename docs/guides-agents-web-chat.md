@@ -28,6 +28,10 @@ Anyone with the link can talk to the agent, and spend its cost limits. To revoke
 | Message length | `max_message_chars` (1–20000, default 4000) |
 | Conversations per visitor | 50 |
 
+The agent's own `limits` apply to each conversation too: `max_turns` counts messages, `session_minutes` closes the conversation after that many minutes with no messages (waiting on an approval does not count as idle), and `cost_usd` counts what it spent. The default `session_minutes` is 10, which suits a live chat; raise it (up to 1,440) when people may come back later after a break. When a limit is hit, the page says which one ended it and offers **Start a new chat**.
+
+The open conversation is kept in the address as `?c=<id>`, so a refresh reopens it. The id only opens for the browser that started the conversation; anyone else, or an id that is gone, gets a new chat.
+
 Behind a reverse proxy every visitor shares the proxy's address, so the per-IP limit then applies to everyone together: raise `rate_limit_per_minute` or put the limit at the proxy.
 
 ## Behind a reverse proxy
@@ -52,7 +56,7 @@ Behind a reverse proxy every visitor shares the proxy's address, so the per-IP l
 | `web_chat.rate_limited` (429) | Over the visitor or address limit; wait `retryAfterSec` |
 | `web_chat.message_too_long` (413) | Over `max_message_chars` |
 | `web_chat.busy` (409) | A turn is already running on that conversation |
-| `web_chat.limit_reached` (409) | The agent hit `max_turns`, `session_minutes` or `cost_usd`; start a new conversation |
+| `web_chat.limit_reached` (409, or an `error` frame) | The conversation hit `max_turns`, `session_minutes` or `cost_usd`; `limit` says which (`turns`, `minutes`, `cost`). Start a new conversation |
 | Browser CORS error from another site | Origin not in `STAGEFLOW_PUBLIC_CHAT_ORIGINS` |
 | Reply appears all at once | The agent has `guardrails.block_patterns`, so streamed text is held until the check passes; or a proxy is buffering |
 

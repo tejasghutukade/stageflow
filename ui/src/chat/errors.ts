@@ -1,9 +1,22 @@
 export const UNAVAILABLE_CODE = "web_chat.unavailable";
 
-export type ChatErrorInfo = { code: string; message: string; retryAfterSec?: number };
+/** Which session limit ended a conversation, sent with `web_chat.limit_reached`. */
+export type ChatLimitKind = "turns" | "minutes" | "cost";
 
-/** What a visitor reads for each error code. Server messages are never shown: only the code decides. */
-export function friendlyMessage(code: string, retryAfterSec?: number): string {
+export type ChatErrorInfo = { code: string; message: string; retryAfterSec?: number; limit?: ChatLimitKind };
+
+export function toLimitKind(value: unknown): ChatLimitKind | undefined {
+  return value === "turns" || value === "minutes" || value === "cost" ? value : undefined;
+}
+
+const LIMIT_MESSAGES: Record<ChatLimitKind, string> = {
+  minutes: "This conversation closed after being idle. Start a new chat to keep going.",
+  turns: "This conversation has reached its message limit. Start a new chat to keep going.",
+  cost: "This conversation has reached its usage limit. Start a new chat to keep going.",
+};
+
+/** What a visitor reads for each error code. Server messages are never shown: only the code (and limit kind) decides. */
+export function friendlyMessage(code: string, retryAfterSec?: number, limit?: ChatLimitKind): string {
   switch (code) {
     case "web_chat.rate_limited":
       return retryAfterSec && retryAfterSec > 0
@@ -14,7 +27,7 @@ export function friendlyMessage(code: string, retryAfterSec?: number): string {
     case "web_chat.busy":
       return "The assistant is still replying. Please wait for it to finish.";
     case "web_chat.limit_reached":
-      return "This conversation has reached its limit. Start a new one.";
+      return limit ? LIMIT_MESSAGES[limit] : "This conversation has reached its limit. Start a new one.";
     case "guide.message_too_long":
       return "That message is too long. Please shorten it and try again.";
     case "guide.busy":
