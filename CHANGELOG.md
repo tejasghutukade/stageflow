@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Agents **save_card**: an agent with `ui.present`, `ui.persistence: conversation` and `artifacts.write` (`save_artifact`) gets the same `save_card` the Guide uses. It saves a card already drawn in the session (latest, by title, or by id) as an artifact owned by the agent, returns the same artifact when the same card is saved again, and shows the saved artifact in the reply. The program is the card as the session stored it (agent sessions do not redact card programs). Anonymous visitors on a public link get it only with `web_chat.public_tools`, and their saves are session artifacts of that conversation. Eval sessions stub it. Not-found is `ui.card_not_found` (the Guide keeps `guide.card_not_found`).
+
 ### Changed
 - The catalog default model with OpenRouter connected is `openrouter/anthropic/claude-sonnet-5.5` (was `openrouter/nvidia/nemotron-3.5-lightning:free`). `sf init` with only OpenRouter configured uses the same id.
 - A new `$STAGEFLOW_HOME/workspace` manifest no longer lists a `catalog.triggers` root (triggers start empty). Shipped `docker-compose.yml` no longer auto-registers the in-image `triggers-readiness` catalog.

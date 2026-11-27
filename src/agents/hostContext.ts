@@ -20,6 +20,7 @@ import { createUiEventHandler, loadChatArtifact, validateChatBindingArgs, type U
 import { sqliteConnectionFromStore } from "../runstore/createStore.js";
 import { buildToolkit, type ToolkitTool } from "../toolkit/index.js";
 import { createPiAgentRuntime } from "./runtime/piRuntime.js";
+import { agentSessionCards } from "./sessionCards.js";
 import { AgentService, type AgentEnvironment } from "./service.js";
 import type { ConversationBackend } from "./sessions.js";
 import { getModelCatalog } from "../models/catalog.js";
@@ -167,6 +168,8 @@ export function createAgentHostContext(options: {
                 body,
               );
             },
+            sessionCards: ({ sessionId, projectRoot }) =>
+              agentSessionCards(async () => (await service.getSession(projectRoot, sessionId)).messages),
             artifactStore: async () => {
               const db = sqliteConnectionFromStore(options.toolkitDeps!.store);
               if (!db) return undefined;

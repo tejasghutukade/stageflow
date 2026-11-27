@@ -18,7 +18,7 @@ import { createPiSettingsManager } from "../../agent/piSettings.js";
 import { createSessionContextWiring } from "../../compaction/sessionWiring.js";
 import { bindCursorApiKey, isCursorModelRef } from "../../agent/cursorProvider.js";
 import { findProviderSupport } from "../../agent/providerSupport.js";
-import { grantedBuiltinTools, type AgentDefinition } from "../../config/loadAgent.js";
+import { agentHoldsSaveCard, grantedBuiltinTools, type AgentDefinition } from "../../config/loadAgent.js";
 import { stripIdentityToolsFromDefinition } from "../consumerSafety.js";
 import { bindStageMemory, type StageMemory } from "../../memory/access.js";
 import { MemoryError, memoryHostFor } from "../../memory/host.js";
@@ -40,7 +40,8 @@ import { PUBLISH_KINDS } from "../../genui/kindsList.js";
 import { genUiPresentPrompt } from "../../genui/prompt.js";
 import { messageReplayText } from "../../genui/replay.js";
 import { htmlSignal, surfaceKey, uiPolicy, type ArtifactStoreAccess, type Surface } from "../../genui/surface.js";
-import { PRESENT_UI_TOOL_NAME, presentUiSpec, publishArtifactSpec } from "../../genui/tools.js";
+import type { CardSource } from "../../genui/cards.js";
+import { PRESENT_UI_TOOL_NAME, presentUiSpec, publishArtifactSpec, saveCardSpec } from "../../genui/tools.js";
 import { SessionPublishError, type SessionPublishBody, type SessionPublishSuccess } from "../../artifacts/sessionPublish.js";
 import { forbiddenWriteTarget } from "../policy.js";
 import { prepareExecutionLaunch, type SandboxRunner } from "../sandbox.js";
@@ -65,6 +66,8 @@ export type PiRuntimeOptions = {
   }) => Promise<SessionPublishSuccess>;
   /** The artifact store present_ui uses to show saved artifacts and save one-off programs. Absent when the Host has none. */
   artifactStore?: () => Promise<ArtifactStoreAccess | undefined>;
+  /** The cards a session has shown, read from its stored messages, for save_card. Absent: save_card is not offered. */
+  sessionCards?: (input: { sessionId: string; projectRoot: string }) => CardSource;
   /**
    * How long a session may sit unused before its Pi session and isolated MCP processes are released. A later message
    * reopens it from the stored transcript. Default 30 minutes; 0 keeps sessions until released or disposed.
@@ -90,6 +93,8 @@ export type OpenSessionInput = {
   agentPublishTool?: AgentPublishTool;
   /** In-session present_ui tool, present only when the agent holds ui.present. */
   presentUiTool?: GenUiPiTool;
+  /** In-session save_card tool: ui.present with cards kept in the conversation, plus artifacts.write. */
+  saveCardTool?: GenUiPiTool;
   memory?: StageMemory;
   /** Defaults to true; one-shot judge sessions have no use for it. */
   workingState?: boolean;
@@ -322,8 +327,8 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
       if (!toolNames.includes(tool.name)) toolNames.push(tool.name);
     }
 
-    if (input.presentUiTool) {
-      const tool = input.presentUiTool;
+    for (const tool of [input.presentUiTool, input.saveCardTool]) {
+      if (!tool) continue;
       customTools.push(
         defineTool({
           name: tool.name,
@@ -516,11 +521,13 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
       projectRoot,
       policy: {
         ...uiPolicy(definition.ui, htmlSignal(options.htmlCardsAvailable)),
-        canSave: false,
+        canSave: agentHoldsSaveCard(definition) && options.sessionCards !== undefined && options.artifactStore !== undefined,
         canPublish: grantedSf.has("save_artifact") ? { kinds: PUBLISH_KINDS } : false,
+        ...(input.anonymousPublicTools ? { visitorSession: true } : {}),
       },
       budget,
       ...(options.artifactStore ? { artifacts: options.artifactStore } : {}),
+      ...(options.sessionCards ? { cards: options.sessionCards({ sessionId: input.sessionId, projectRoot }) } : {}),
       publish: {
         readPath: (rawPath) => readAgentPublishPath(projectRoot, globalStageflowHome(), rawPath),
         publish: (body) => {
@@ -533,6 +540,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
     };
     const agentPublishTool: AgentPublishTool | undefined = surface.policy.canPublish ? toPiTool(publishArtifactSpec("agent"), surface) : undefined;
     const presentUiTool = surface.policy.canPresent ? toPiTool(presentUiSpec(surface.policy), surface) : undefined;
+    const saveCardTool = surface.policy.canSave ? toPiTool(saveCardSpec("agent"), surface) : undefined;
     const state: Bound = { opened: undefined as never, definitionKey: definition.id, hooks: undefined, mcpServers, subAgents, functionTools, budget };
     const context = definition.project_context ? await projectContext(projectRoot) : "";
     let memory: StageMemory | undefined;
@@ -560,6 +568,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
         ...functionTools.map((tool) => tool.name),
         ...(agentPublishTool ? [agentPublishTool.name] : []),
         ...(presentUiTool ? [presentUiTool.name] : []),
+        ...(saveCardTool ? [saveCardTool.name] : []),
       ],
       ...(functionTools.length > 0 ? { functionTools } : {}),
       hooks: () => state.hooks,
@@ -568,6 +577,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
       ...(stageflowTools.length > 0 ? { stageflowTools } : {}),
       ...(agentPublishTool ? { agentPublishTool } : {}),
       ...(presentUiTool ? { presentUiTool } : {}),
+      ...(saveCardTool ? { saveCardTool } : {}),
       ...(subAgents.length > 0 ? { delegateTool: (agentId, message, callId) => state.hooks!.delegate(agentId, message, callId) } : {}),
       gate: async (call) => {
         const hooks = state.hooks;

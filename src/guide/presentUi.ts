@@ -4,6 +4,7 @@ import {
   htmlSignal,
   PRESENT_UI_TOOL_NAME,
   presentUiSpec,
+  SAVE_CARD_SENTENCE,
   surfaceKey,
   toOperatorTool,
   TurnBudgets,
@@ -38,11 +39,11 @@ const GUIDE_CARD_RULES = `## Generative cards in this chat
 - For run counts over time or by pipeline, call run_stats, then draw from its numbers. Never count a get_run list yourself.
 - show_ui stays for plans, choices, links, resources and eval reports. Do not use present_ui for those.
 - One card per answer unless the person asks for more. When they ask to change a card, draw the whole updated card again with present_ui.
-- When the person asks to keep or save a card, call save_card. Leave card_id out for the latest card, or pass the card's title to pick an earlier one. Do not draw the card again to save it. A card stays only in this chat until they ask to save it.
+- ${SAVE_CARD_SENTENCE} A card stays only in this chat until they ask to save it.
 - confirm_action and show_ui rules in this playbook still apply. A reply that must end on show_ui or confirm_action alone does not also call present_ui.`;
 
 export function guidePresentUiPlaybookSection(htmlCardsReachable?: GuideHtmlCardsSignal): string {
-  return `${genUiPresentPrompt(guideSurfacePolicy(htmlCardsReachable))}\n\n${GUIDE_CARD_RULES}`;
+  return `${genUiPresentPrompt(guideSurfacePolicy(htmlCardsReachable), { saveRuleInPlaybook: true })}\n\n${GUIDE_CARD_RULES}`;
 }
 
 export function createGuidePresentUiTool(

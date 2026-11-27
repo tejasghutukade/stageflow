@@ -1,7 +1,7 @@
 import { AGENT_ID_PATTERN, isReservedAgentId, RESERVED_AGENT_IDS } from "../agents/agentId.js";
 import { defaultPresentKinds, isConversationCardKind, isPresentableArtifactKind, UI_PERSISTENCE_VALUES } from "../genui/kindsList.js";
 import { normalizeEntry, SENDER_ENTRY } from "../agents/communications/allowlist.js";
-import { PRESENT_UI_TOOL_NAME } from "../genui/tools.js";
+import { PRESENT_UI_TOOL_NAME, SAVE_CARD_TOOL_NAME } from "../genui/names.js";
 import { grantedStageflowTools, isOperatorOnlyGroup, isOperatorOnlyTool, isToolGroupId, stageflowGrantId, TOOL_META } from "../toolkit/meta.js";
 import { stageflowDefinitionValidation } from "../toolkit/stageflowToolNames.js";
 import { Cron } from "croner";
@@ -497,10 +497,20 @@ export function grantedBuiltinTools(definition: Pick<AgentDefinition, "tools">):
   return BUILTIN_TOOL_IDS.filter((tool) => granted.has(tool));
 }
 
+/** save_card: the agent draws cards kept in the conversation (`ui.present`, `persistence: conversation`) and holds artifacts.write. */
+export function agentHoldsSaveCard(definition: Pick<AgentDefinition, "tools"> & { ui?: AgentDefinition["ui"] }): boolean {
+  return (
+    definition.ui?.present === true &&
+    (definition.ui.persistence ?? "conversation") === "conversation" &&
+    grantedStageflowTools(definition.tools.stageflow).includes("save_artifact")
+  );
+}
+
 /** Every tool id the definition grants: builtin tool names, `<server>.<tool>`, and `agent:<id>`. */
 export function grantedToolIds(definition: Pick<AgentDefinition, "tools" | "sub_agents"> & { ui?: AgentDefinition["ui"] }): Set<string> {
   const ids = new Set<string>();
   if (definition.ui?.present) ids.add(PRESENT_UI_TOOL_NAME);
+  if (agentHoldsSaveCard(definition)) ids.add(SAVE_CARD_TOOL_NAME);
   for (const tool of grantedBuiltinTools(definition)) ids.add(tool);
   for (const [server, tools] of Object.entries(definition.tools.mcp)) {
     for (const tool of tools) ids.add(`${server}.${tool}`);

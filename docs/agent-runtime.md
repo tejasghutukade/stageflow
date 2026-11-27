@@ -36,6 +36,7 @@ The gate runs one call at a time per turn.
 | Sub-agents in `sub_agents` | One tool per agent, `agent_<id>`, grant id `agent:<id>`. |
 | Stageflow tools in `tools.stageflow` | Named `stageflow_<tool>`, grant id `stageflow.<tool>`. |
 | `ui.present` | `present_ui`. Read-only. Places an artifact reference in the reply, or saves `program` and `manifest` as a session artifact. Eval sessions stub it. |
+| `ui.present` with `persistence: conversation`, plus `save_artifact` | `save_card`. Saves a card already drawn in the session as an artifact owned by the agent and puts its reference in the reply. Eval sessions stub it. |
 
 ### MCP servers
 

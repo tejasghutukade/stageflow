@@ -102,7 +102,7 @@ function readScoped(
   }
 }
 
-function sessionIsEval(db: Database.Database, sessionId: string): boolean {
+export function sessionIsEval(db: Database.Database, sessionId: string): boolean {
   try {
     const row = db.prepare(`SELECT source FROM agent_sessions WHERE session_id = ?`).get(sessionId) as
       | { source: string }

@@ -12,6 +12,8 @@ import { publishSessionArtifact } from "../src/artifacts/sessionPublish.js";
 import { resetSessionArtifactLimiterForTests } from "../src/artifacts/sessionScope.js";
 import { CARD_PROGRAM_MAX_BYTES, UI_PART_KIND_ARTIFACT_REF, UI_PART_KIND_CARD, UI_PART_SCHEMA_VERSION } from "../src/artifacts/uiPart.js";
 import type { AgentDefinition } from "../src/config/loadAgent.js";
+import { agentSessionCards } from "../src/agents/sessionCards.js";
+import type { AgentMessage } from "../src/agents/store.js";
 import type { CatalogRoot } from "../src/config/resolveCatalogRoots.js";
 import { createGuidePresentUiTool } from "../src/guide/presentUi.js";
 import { createGuideSaveCardTool } from "../src/guide/saveCard.js";
@@ -131,6 +133,7 @@ async function agentSurface(agentId: "conv" | "arts", htmlCards: boolean): Promi
     idleReleaseMs: 0,
     htmlCardsAvailable: htmlCards,
     artifactStore: hostArtifactStore,
+    sessionCards: () => agentSessionCards(async () => []),
     openSession: async (input) => {
       opened = input;
       return {
@@ -502,11 +505,77 @@ describe("generative UI conformance: save_card", () => {
     expect(await save({ card_id: "nope" })).toEqual({ ok: false, code: "guide.card_not_found" });
   });
 
-  // AD7: agents with ui.present, persistence conversation and the artifact write grant get save_card in Step 4. Flip to it().
-  it.fails("agent (conversation mode, write grant) offers save_card (unsupported today; AD7 adds it)", async () => {
+  /** The conv agent through createPiAgentRuntime; its session's stored messages hold the same two cards as the Guide thread. */
+  async function agentSaveSetup() {
+    const definition = await definitionOf("conv");
+    const sessionId = `ses_conformance_save_${seq++}`;
+    const now = new Date().toISOString();
+    const card = (title: string, program: string) => ({ v: UI_PART_SCHEMA_VERSION, kind: UI_PART_KIND_CARD, title, format: "static.markdown" as const, program, fallback: { text: program, url: "" } });
+    const message = (id: string, seqNo: number, title: string, program: string): AgentMessage => ({
+      id, sessionId, seq: seqNo, turnId: null, role: "assistant", author: "conv", text: "Here.", parts: [card(title, program)], createdAt: now,
+    });
+    const messages = [message("msg_older", 1, "Older notes", "# Older"), message("msg_latest", 2, "Latest notes", "# Latest")];
+    let opened: OpenSessionInput | undefined;
+    const runtime = createPiAgentRuntime({
+      cwd: fx.project,
+      agentDir: fx.home,
+      idleReleaseMs: 0,
+      artifactStore: hostArtifactStore,
+      sessionCards: () => agentSessionCards(async () => messages),
+      openSession: async (input) => {
+        opened = input;
+        return {
+          toolNames: input.toolNames,
+          shutdown: async () => undefined,
+          session: { subscribe: () => () => undefined, prompt: async () => undefined, dispose: () => undefined, abort: async () => undefined },
+        } as never;
+      },
+    });
+    await runtime.complete({
+      sessionId,
+      projectRoot: fx.project,
+      definition,
+      messages: [{ role: "user", text: "hi" }],
+      signal: new AbortController().signal,
+      onDelta: () => undefined,
+      hooks: hooks(),
+    });
+    const save = async (args: Record<string, unknown>) => {
+      const tool = opened?.saveCardTool;
+      if (!tool) return { ok: false as const, code: "not_offered" };
+      const result = await tool.execute(`call_${seq++}`, args);
+      if (result.isError) return { ok: false as const, code: String(result.details.code) };
+      return { ok: true as const, ui: (result.details as { ui: { key: string; title: string; kind: string } }).ui };
+    };
+    return { save, toolNames: () => opened?.toolNames ?? [] };
+  }
+
+  it("agent (conversation mode, write grant) offers save_card", async () => {
     const target = await surface("agent.conversation");
     await target.reply([]);
     expect(target.toolNames()).toContain("save_card");
+  });
+
+  it("agent: latest, by title, by id and the same card twice give one artifact", async () => {
+    const { save } = await agentSaveSetup();
+    const latest = await save({});
+    const byTitle = await save({ card_id: "LATEST NOTES" });
+    const byId = await save({ card_id: "msg_latest:0" });
+    const again = await save({});
+    const keys = [latest, byTitle, byId, again].map((result) => (result.ok ? result.ui.key : result.code));
+    expect(new Set(keys).size, JSON.stringify(keys)).toBe(1);
+    expect(keys[0]).toMatch(/^agent:conv\/card_[0-9a-f]{16}$/);
+    expect(latest.ok && latest.ui).toMatchObject({ kind: UI_PART_KIND_ARTIFACT_REF, title: "Latest notes" });
+    const older = await save({ card_id: "older notes" });
+    expect(older.ok && older.ui.key).not.toBe(keys[0]);
+    // Only the not-found code differs: it names the surface (AD7 keeps the Guide's public code).
+    expect(await save({ card_id: "nope" })).toEqual({ ok: false, code: "ui.card_not_found" });
+  });
+
+  it("agent in artifacts mode is not offered save_card", async () => {
+    const target = await surface("agent.artifacts");
+    await target.reply([]);
+    expect(target.toolNames()).not.toContain("save_card");
   });
 });
 

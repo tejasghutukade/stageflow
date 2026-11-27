@@ -20,6 +20,10 @@ export const AGENT_PRESENT_UI_SENTENCE =
 export const AGENT_PRESENT_CARD_SENTENCE =
   "You can draw a card in this conversation with present_ui: pass program, manifest (with kind) and a short title. The card shows only what you write into the program, so put the numbers and text in it; it cannot load live data or run actions. Cards belong to this conversation and are not saved anywhere else. To change a card, call present_ui again with the complete updated program and a title that matches it; the person sees the new card below the old one. The chat shows the card; do not paste its program into the reply. If present_ui returns a validation error, fix the program and call it again.";
 
+/** How to save a card, shared by the Guide playbook and agents that get save_card. */
+export const SAVE_CARD_SENTENCE =
+  "When the person asks to keep or save a card, call save_card. Leave card_id out for the latest card, or pass the card's title to pick an earlier one. Do not draw the card again to save it.";
+
 export function agentHoldsPresentUi(definition: Pick<AgentDefinition, "ui">): boolean {
   return definition.ui?.present === true;
 }
@@ -29,10 +33,13 @@ export function agentKeepsCardsInConversation(definition: Pick<AgentDefinition, 
   return (definition.ui?.persistence ?? "conversation") === "conversation";
 }
 
-type PresentPromptPolicy = Pick<SurfacePolicy, "canPresent" | "kinds" | "htmlCardsReachable" | "cardsInConversation">;
+type PresentPromptPolicy = Pick<SurfacePolicy, "canPresent" | "kinds" | "htmlCardsReachable" | "cardsInConversation"> & Partial<Pick<SurfacePolicy, "canSave">>;
 
-/** The present_ui section: drawing cards (conversation) or showing artifacts (artifacts mode). Cards list only the kinds a card may use now. */
-export function genUiPresentPrompt(policy: PresentPromptPolicy): string | undefined {
+/**
+ * The present_ui section: drawing cards (conversation) or showing artifacts (artifacts mode). Cards list only the kinds a
+ * card may use now. A surface that saves cards gets the save line, unless its playbook states it (`saveRuleInPlaybook`).
+ */
+export function genUiPresentPrompt(policy: PresentPromptPolicy, options: { saveRuleInPlaybook?: boolean } = {}): string | undefined {
   if (!policy.canPresent) return undefined;
   const conversation = policy.cardsInConversation;
   const listed = conversation ? inlineKinds(policy) : policy.kinds;
@@ -41,6 +48,9 @@ export function genUiPresentPrompt(policy: PresentPromptPolicy): string | undefi
   const sections = conversation
     ? ["# Drawing cards in chat", "", `${AGENT_PRESENT_CARD_SENTENCE} Kinds you may draw: ${kinds}.`]
     : ["# Showing artifacts in chat", "", `${AGENT_PRESENT_UI_SENTENCE} Kinds you may present: ${kinds}.`];
+  if (conversation && policy.canSave === true && options.saveRuleInPlaybook !== true) {
+    sections.push("", `${SAVE_CARD_SENTENCE} A card can be saved once it has been shown, in a later message.`);
+  }
   if (listed.includes("live.declarative")) {
     sections.push("", genUiKind("live.declarative")!.promptSection!(mode));
     if (conversation)

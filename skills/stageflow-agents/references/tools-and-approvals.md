@@ -112,6 +112,8 @@ Web chat plus `get_agent_session` (including `list: true`) warns `agent.web_chat
 
 **present_ui.** Separate from the artifact groups. It is granted by `ui.present`, not by `tools.stageflow`, and it is read-only. With `ui.persistence: conversation` (default) it draws a display-only card from `program` and `manifest`; the card lives in the message, so the agent keeps its public chat link. With `ui.persistence: artifacts` it also takes the key `publish_artifact` returned, saves one-offs as session artifacts, and a button in that card can run a declared manifest action: a read-only binding whose function is in `ui.functions`, a user message, or a tool call with the usual ask-first approval. A validation error comes back so the program can be corrected. Eval sessions stub it and block all actions.
 
+**save_card.** An agent with `ui.present`, `ui.persistence: conversation` and `save_artifact` also gets `save_card`: it saves a card it already drew (latest, or by title) as an artifact it owns, and saving the same card again returns that artifact. A card is saved from a later message than the one that drew it. Listable in `ask_first`; eval sessions stub it; for anonymous visitors it follows `web_chat.public_tools` and saves into the visitor's session only.
+
 The live list is `GET /api/agents/stageflow-tools`. There is no CLI for that registry.
 
 ## Sub-agents

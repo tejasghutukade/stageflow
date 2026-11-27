@@ -2,13 +2,14 @@ import { Type, type TSchema } from "typebox";
 import { scrubSecrets } from "../compaction/scrub.js";
 import { ArtifactPublishError, STATIC_CONTENT_MAX_BYTES, type ArtifactIssue } from "../artifacts/limits.js";
 import { SessionPublishError, type SessionPublishSuccess } from "../artifacts/sessionPublish.js";
-import { PRESENT_UI_TOOL_NAME, PUBLISH_ARTIFACT_TOOL_NAME } from "./names.js";
+import { PRESENT_UI_TOOL_NAME, PUBLISH_ARTIFACT_TOOL_NAME, SAVE_CARD_TOOL_NAME } from "./names.js";
 import { presentArtifact, presentCard, presentInline, type PresentArtifactResult } from "./present.js";
 import { publishArtifactParameterSchema, publishBodyFromToolParams } from "./publishParams.js";
+import { saveCard } from "./save.js";
 import { PUBLISH_KINDS } from "./kindsList.js";
 import { inlineKinds, type Surface, type SurfacePolicy } from "./surface.js";
 
-export { PRESENT_UI_TOOL_NAME, PUBLISH_ARTIFACT_TOOL_NAME } from "./names.js";
+export { PRESENT_UI_TOOL_NAME, PUBLISH_ARTIFACT_TOOL_NAME, SAVE_CARD_TOOL_NAME } from "./names.js";
 
 export function presentUiParameterSchema() {
   return Type.Object({
@@ -215,4 +216,44 @@ export function publishArtifactSpec(publisher: "stage" | "agent") {
     parameters: publishArtifactParameterSchema(),
     handler: handlePublish,
   } satisfies GenUiToolSpec<ReturnType<typeof publishArtifactParameterSchema>>;
+}
+
+/** Who saves: the Guide keeps a card as a guide artifact; an agent keeps it as an artifact it owns. */
+export type CardSaver = "guide" | "agent";
+
+const SAVE_TEXT = {
+  guide: {
+    description:
+      "Save a card already drawn in this chat as a project artifact. Leave card_id out to save the latest card, or pass the card's title (or the present_ui call id) to pick an earlier one. Optional title. Saving the same card again returns the artifact it already made; it never overwrites another artifact and needs no confirmation. The saved program is the card as stored in this chat, where secrets are redacted. Returns an artifact reference.",
+    cardId: "The present_ui call id, or the card's title. Leave it out to save the latest card in this chat.",
+  },
+  agent: {
+    description:
+      "Save a card already drawn in this conversation as an artifact owned by this agent. Leave card_id out to save the latest card, or pass the card's title to pick an earlier one. A card can be saved once it has been shown, in a later message. Optional title. Saving the same card again returns the artifact it already made; it never overwrites another artifact. The saved program is the card exactly as this conversation shows it. Returns an artifact reference.",
+    cardId: "The card's title. Leave it out to save the latest card in this conversation.",
+  },
+} as const;
+
+export function saveCardParameterSchema(saver: CardSaver) {
+  return Type.Object(
+    {
+      card_id: Type.Optional(Type.String({ description: SAVE_TEXT[saver].cardId })),
+      title: Type.Optional(Type.String({ minLength: 1 })),
+    },
+    { additionalProperties: false },
+  );
+}
+
+/** save_card: keep a card this conversation already showed as an artifact, found through the surface's card source. */
+export function saveCardSpec(saver: CardSaver) {
+  return {
+    name: SAVE_CARD_TOOL_NAME,
+    label: "Save card",
+    description: SAVE_TEXT[saver].description,
+    parameters: saveCardParameterSchema(saver),
+    handler: async (args: unknown, surface: Surface) => {
+      const { card_id: ref, title } = argsRecord(args);
+      return saveCard(surface, { ...(typeof ref === "string" ? { ref } : {}), title });
+    },
+  } satisfies GenUiToolSpec<ReturnType<typeof saveCardParameterSchema>>;
 }

@@ -113,7 +113,8 @@ export function createEvalGate(options: {
       ALWAYS_BLOCKED.has(call.tool) ||
       (policy.tools !== "real" && (BLOCKED_UNLESS_REAL.has(call.tool) || kind.class === "sub_agent"));
     if (blocked) return refuse("denied", `${call.tool} cannot run in an evaluation.`);
-    if (call.tool === "present_ui") {
+    // present_ui only draws; save_card would publish an artifact. Neither runs in an evaluation.
+    if (call.tool === "present_ui" || call.tool === "save_card") {
       const text = STUB_RESULT(call.tool);
       emit({ ...base, policyOutcome: "stubbed", status: "not_run", result: text });
       return { allow: false, reason: text };

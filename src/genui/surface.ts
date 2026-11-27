@@ -3,6 +3,7 @@ import type { SessionPublishBody, SessionPublishSuccess } from "../artifacts/ses
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
 import type { AgentDefinition } from "../config/loadAgent.js";
 import type { TurnBudget } from "./budget.js";
+import type { CardSource } from "./cards.js";
 
 /** What a caller lets the model do with generative UI. Every difference between callers is a value here. */
 export type SurfacePolicy = {
@@ -15,7 +16,10 @@ export type SurfacePolicy = {
   cardsInConversation: boolean;
   /** present_ui may show a saved artifact by key. */
   canShowSaved: boolean;
+  /** save_card is offered (the surface also needs `cards` and `artifacts`). */
   canSave: boolean;
+  /** An anonymous visitor's session on a public chat link: a saved card stays in that conversation (session scope). */
+  visitorSession?: boolean;
   canPublish: false | { kinds: readonly string[] };
   /** False when the kinds are only known per session (the Guide): the tool description stays neutral and the prompt lists them. */
   describeKinds: boolean;
@@ -50,6 +54,8 @@ export type Surface = {
   /** The artifact store, for showing saved artifacts and saving one-off programs. Absent or undefined when the Host has none. */
   artifacts?: () => Promise<ArtifactStoreAccess | undefined>;
   publish?: PublishPort;
+  /** The cards this conversation has shown, for save_card. */
+  cards?: CardSource;
 };
 
 /** The one place a surface's rate-limit key is built. */
