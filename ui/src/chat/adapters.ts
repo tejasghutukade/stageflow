@@ -19,7 +19,7 @@ export function toChatError(code: string, message: string, retryAfterSec?: numbe
 }
 
 /** The visitor's conversations as the thread list wants them. Rename/archive/delete are not offered to visitors. */
-export function createThreadListAdapter(api: ChatApi): RemoteThreadListAdapter {
+export function createThreadListAdapter(api: Omit<ChatApi, "artifact">): RemoteThreadListAdapter {
   return {
     async list() {
       const threads = await api.listThreads();

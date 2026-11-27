@@ -138,7 +138,8 @@ Base `/api/public/chat/<slug>`. A visitor id (client-generated, kept in the brow
 | `GET /threads` | `{ "threads": [{ "id", "title", "updatedAt" }] }`, newest first |
 | `POST /threads` | `201 { "thread": { "id", "title", "updatedAt" } }` (empty conversation) |
 | `GET /threads/<id>` | `{ "thread", "status": "open"\|"running"\|"waiting", "messages": [{ "id", "role": "user"\|"assistant", "text", "createdAt" }] }` |
-| `POST /threads/<id>/messages` body `{ "text" }` | NDJSON stream, one JSON object per line: `{"type":"delta","text"}` (text increment), `{"type":"waiting"}` (an operator must approve a tool; stream stays open), `{"type":"done","message":{ "id","role":"assistant","text","createdAt" }}`, or `{"type":"error","code","message","retryAfterSec"?}` |
+| `POST /threads/<id>/messages` body `{ "text" }` | NDJSON stream, one JSON object per line: `{"type":"delta","text"}` (text increment), `{"type":"waiting"}` (an operator must approve a tool; stream stays open), `{"type":"done","message":{ "id","role":"assistant","text","createdAt","parts"? }}`, or `{"type":"error","code","message","retryAfterSec"?}` |
+| `GET /threads/<id>/artifacts/<id or key>?version=` | The artifact the agent published in this conversation: `{ kind, title, version, text, … }`. No path, project, or owner. `404` `web_chat.unavailable` for anything else. Anonymous visitors need `web_chat.public_tools` |
 
 Error codes (always friendly `message`, never internals): `web_chat.rate_limited` (429, `retryAfterSec`), `web_chat.message_too_long` (413), `web_chat.busy` (409, a turn is already running for this thread), `web_chat.limit_reached` (409, agent max_turns / session_minutes / cost cap; `limit` is `turns`, `minutes` or `cost`), `web_chat.unavailable` (404), `web_chat.failed` (500). Before streaming starts these are plain JSON with the HTTP status; once streaming they arrive as an `error` frame.
 

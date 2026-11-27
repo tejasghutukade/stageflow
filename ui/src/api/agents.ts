@@ -11,6 +11,7 @@ export type CaptureMode = "off" | "metadata" | "full";
 export type WebChatConfig = {
   access: "public" | "authenticated";
   enabled: boolean;
+  public_tools?: boolean;
   slug?: string;
   rate_limit_per_minute: number;
   max_message_chars: number;
@@ -26,7 +27,7 @@ export type AgentDefinition = {
   project_context: boolean;
   execution: "trusted-local" | "sandbox";
   model: { backend: "pi" | "claude"; id?: string; thinking: ThinkingLevel };
-  tools: { builtin: BuiltinToolGroup[]; builtin_tools: string[]; mcp: Record<string, string[]>; skills: string[]; browser: boolean; stageflow: { groups: string[]; tools: string[] } };
+  tools: { builtin: BuiltinToolGroup[]; builtin_tools: string[]; mcp: Record<string, string[]>; skills: string[]; browser: boolean; stageflow: { groups: string[]; tools: string[] }; functions?: Array<{ id: string; grants?: unknown[] }> };
   ui: { present: boolean; persistence?: "conversation" | "artifacts"; kinds: string[]; functions: string[] };
   approvals: {
     ask_first: string[];
@@ -85,8 +86,8 @@ export type AgentSummary = {
   updatedAt: string;
   /** Path form `/chat/<slug>` once web chat has a slug; the console prefixes the address it is opened from. */
   webChatUrl?: string | null;
-  /** Why the public chat link does not open, or null. */
-  webChatBlocked?: string | null;
+  /** What anonymous visitors can do on the public link, or null. */
+  webChatNote?: string | null;
 };
 
 export type AgentDetail = {

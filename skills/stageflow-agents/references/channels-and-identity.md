@@ -17,9 +17,9 @@ How people reach an agent outside the console: a connection, `allow_from`, webho
 
 A new agent created through MCP `save_agent` with `mode: create`, REST `POST /api/agents`, or the console, with `web_chat` left out, is saved as `{ enabled: true }` and given a public link. The link is `/chat/<slug>`.
 
-Public chat is refused for any agent that has tools. The page answers `identity.setup_required` (HTTP 503, "This chat requires administrator setup"). The same refusal covers `project_context`, memories, skills, the browser, Stageflow tools, a non-`pi` backend, and any MCP grant other than exactly `orders: [status]`. Sub-agents are refused on a public agent. Validation does not warn about this. `sf agents validate` can return no issues for a public agent that will not chat.
+A public link always opens. Visitors get the agent without its tools unless `web_chat.public_tools: true`; then they get the tools the agent has, except identity-only ones: builtin `read`, `grep`, `find`, `ls`, `write`, `edit`, `bash` and `browser` (they act on your machine and saved logins), and Stageflow tools that run code (writing pipelines, stages and tasks, `import_task`, functions, evals, `probe_project_mcp`), change the Host's setup (agents, connections, triggers, eval writes, deleting or cancelling runs) or reach other agents and conversations (`agent_chat`, `stop_agent_session`, `get_agent_session`). Those, and any sub-agent that has one, are withheld from visitors; the agent warns `agent.public_tools_identity_only` with the names. MCP servers use the owner's credentials. Turning it on in the console fills `limits.cost_usd: 1` when no cap is set.
 
-Write `web_chat: { enabled: false }` unless the agent is a tool-less public helper (see `assets/examples/public_faq.agent.yaml`). For signed-in customers, set `access: authenticated` and finish [identity](#protected-chat-and-identity) before anyone uses the link.
+Only propose `public_tools: true` when the owner wants anyone with the link to use those tools; suggest `approvals.ask_first` for tools that change things and a `limits.cost_usd`. For signed-in customers, set `access: authenticated` and finish [identity](#protected-chat-and-identity) before anyone uses the link.
 
 A hand-written file does not get this default: omitted `web_chat` stays off, and `enabled: true` without a slug warns `agent.web_chat_slug_missing` and has no link. The Host mints the slug on a save through MCP, REST, or the console. `slug: ""` on that save rotates the link. Do not invent a slug. The link is the credential.
 
@@ -119,7 +119,7 @@ For an iMessage agent set `limits.always_on: true`. A turn the Host restart cut 
 
 ## Public web chat
 
-Tool-less agent, `web_chat.enabled: true`, `access` left as `public`. No `tools`, no `project_context`, no `memories`, no `tools.skills`, no `sub_agents`, `model.backend` left as `pi`. Set `limits.cost_usd`, `max_turns`, and `session_minutes`. Set `greeting` (shown on the page, up to 500 characters).
+`web_chat.enabled: true`, `access` left as `public`. Without `public_tools: true` visitors only chat and see conversation cards; with it they get the agent's tools except identity-only ones (see above). Set `limits.cost_usd`, `max_turns`, and `session_minutes`, and suggest `approvals.ask_first` for tools that change things. Set `greeting` (shown on the page, up to 500 characters).
 
 `rate_limit_per_minute` defaults to 10 (1–120): that many messages per visitor per minute. New conversations get twice that. Each IP address gets three times the visitor budget. `max_message_chars` defaults to 4000 (1–20000).
 

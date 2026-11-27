@@ -44,6 +44,10 @@ export type CompleteInput = {
   senderFact?: string;
   /** Sub-agents already checked as consumer-safe. Ambient sub-agents stay off the consumer turn. */
   consumerSafeSubAgents?: readonly string[];
+  /** Anonymous public chat with public_tools: use the full agent surface minus identity-only tools. */
+  anonymousPublicTools?: boolean;
+  /** Sub-agents allowed on an anonymous public turn (no identity-only tools in the tree). */
+  anonymousPublicSafeSubAgents?: readonly string[];
 };
 
 export type CompleteResult = { text: string; usage?: RuntimeUsage; toolOutputs: string[] };

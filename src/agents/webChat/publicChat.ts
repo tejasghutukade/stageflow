@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentDefinition } from "../../config/loadAgent.js";
 import { assertConsumerWebChatPublication } from "../consumerSafety.js";
+import { grantedStageflowTools } from "../../toolkit/meta.js";
 import type { AgentChatController } from "../chatTurn.js";
 import { isAgentError, type AgentLimitKind } from "../errors.js";
 import type { AgentService } from "../service.js";
@@ -11,6 +12,9 @@ import type { ConsumerAuthorization } from "../../identity/authorization.js";
 import { ConsumerAccessError } from "../../identity/types.js";
 import { webChatVisitorAssistantText, webChatVisitorParts } from "../../channels/renderUiPart.js";
 import type { StepUpOutcome } from "../../identity/stepUp.js";
+import type { UiPartArtifactRef } from "../../artifacts/uiPart.js";
+import { UI_PART_KIND_ARTIFACT_REF } from "../../artifacts/uiPart.js";
+import { readVisitorArtifact, sessionArtifactVisible, type VisitorArtifactView } from "./visitorArtifacts.js";
 
 const SOURCE = "web_public";
 const MAX_THREADS = 50;
@@ -26,8 +30,12 @@ export type PublicChatOptions = {
   projectRoot: string;
   /** Extra origins allowed to call the API from a browser (a page hosted elsewhere). Same-origin always works. */
   allowedOrigins?: string[];
-  /** Advertised sandbox origins when the listener is up (for HTML cards). */
+  /** Advertised sandbox origins when the listener is up (for HTML cards and live HTML artifacts). */
   sandboxOrigins?: () => readonly string[];
+  /** Session-artifact lookup. Absent means visitors see no artifact refs and the read route answers 404. */
+  artifacts?: {
+    db: import("better-sqlite3").Database;
+  };
   now?: () => number;
   logError?: (message: string) => void;
 };
@@ -159,8 +167,11 @@ export class PublicWebChat {
         res.setHeader("Set-Cookie", oidcCookie(slug, "", 0));
         return this.json(res, 201, { token: admitted.token, tokenType: "Bearer", expiresIn: Math.max(0, Math.floor((admitted.expiresAt - this.now()) / 1000)) });
       }
+      const artifactRoute = threads === "threads" && parts.length >= 5 && parts[3] === "artifacts";
       const shapeOk =
-        parts.length === 1 || (threads === "threads" && (parts.length === 2 || parts.length === 3 || (parts.length === 4 && messages === "messages")));
+        parts.length === 1 ||
+        artifactRoute ||
+        (threads === "threads" && (parts.length === 2 || parts.length === 3 || (parts.length === 4 && messages === "messages")));
       if (!shapeOk) throw new WebChatError("web_chat.unavailable");
       const target = await this.resolve(slug);
 
@@ -181,6 +192,16 @@ export class PublicWebChat {
       if (parts.length === 2) return await this.collection(req, res, method, target, visitor);
       const session = this.ownedSession(target, visitor, decodeURIComponent(threadId!));
       if (protectedChat) await this.validateProtectedSession(target, visitor, session);
+      if (artifactRoute) {
+        if (method !== "GET") throw new WebChatError("web_chat.invalid");
+        let ref = "";
+        try {
+          ref = decodeURIComponent(parts.slice(4).join("/"));
+        } catch {
+          throw new WebChatError("web_chat.unavailable");
+        }
+        return await this.artifact(req, res, target, session, ref);
+      }
       if (parts.length === 4) {
         if (method !== "POST") throw new WebChatError("web_chat.invalid");
         return await this.send(req, res, target, visitor, session);
@@ -191,7 +212,7 @@ export class PublicWebChat {
       return this.json(res, 200, {
         thread: this.threadView(detail.session),
         status: detail.session.status === "running" || detail.session.status === "waiting" ? detail.session.status : "open",
-        messages: detail.messages.map((message) => this.messageView(message, !protectedChat)),
+        messages: detail.messages.map((message) => this.messageView(message, session, target)),
       });
     } catch (error) {
       const failure = toWebChatError(error);
@@ -287,13 +308,18 @@ export class PublicWebChat {
 
   private messageView(
     message: AgentMessage,
-    consoleAccess = true,
+    session: AgentSession,
+    target: Resolved,
   ): { id: string; role: AgentMessage["role"]; text: string; createdAt: string; parts?: AgentMessage["parts"] } {
     let text = message.text;
     let parts = message.parts;
-    if (message.role === "assistant" && message.parts?.length && !consoleAccess) {
-      text = webChatVisitorAssistantText(message);
-      parts = webChatVisitorParts(message.parts);
+    if (message.role === "assistant" && message.parts?.length) {
+      const summarized = message.parts.filter((part) => part.kind !== UI_PART_KIND_ARTIFACT_REF);
+      text = webChatVisitorAssistantText({ ...message, parts: summarized });
+      const allow = this.visitorSeesArtifacts(target);
+      parts = webChatVisitorParts(message.parts, {
+        keepArtifact: (part) => allow && this.artifactVisible(session.id, part),
+      });
     }
     return {
       id: message.id,
@@ -302,6 +328,38 @@ export class PublicWebChat {
       createdAt: message.createdAt,
       ...(parts?.length ? { parts } : {}),
     };
+  }
+
+  private visitorSeesArtifacts(target: Resolved): boolean {
+    if (target.definition.web_chat.access === "authenticated") return true;
+    return target.definition.web_chat.public_tools === true;
+  }
+
+  private artifactVisible(sessionId: string, part: UiPartArtifactRef): boolean {
+    const db = this.options.artifacts?.db;
+    if (!db) return false;
+    return sessionArtifactVisible(db, sessionId, part, new Date(this.now()).toISOString());
+  }
+
+  private async artifact(req: IncomingMessage, res: ServerResponse, target: Resolved, session: AgentSession, ref: string): Promise<boolean> {
+    if (!this.visitorSeesArtifacts(target)) throw new WebChatError("web_chat.unavailable");
+    const db = this.options.artifacts?.db;
+    if (!db) throw new WebChatError("web_chat.unavailable");
+    const versionParam = new URL(req.url ?? "/", "http://local").searchParams.get("version");
+    let version: number | undefined;
+    if (versionParam !== null) {
+      if (!/^[1-9]\d*$/.test(versionParam)) throw new WebChatError("web_chat.unavailable");
+      version = Number(versionParam);
+      if (!Number.isSafeInteger(version)) throw new WebChatError("web_chat.unavailable");
+    }
+    let view: VisitorArtifactView | null;
+    try {
+      view = await readVisitorArtifact(db, session.id, ref, version, new Date(this.now()).toISOString());
+    } catch {
+      view = null;
+    }
+    if (!view) throw new WebChatError("web_chat.unavailable");
+    return this.json(res, 200, view);
   }
 
   private ownedSession(target: Resolved, visitor: string, threadId: string): AgentSession {
@@ -372,7 +430,7 @@ export class PublicWebChat {
       const reply = [...detail.messages].reverse().find((message) => message.role === "assistant");
       write(
         reply
-          ? { type: "done", message: this.messageView(reply, target.definition.web_chat.access !== "authenticated") }
+          ? { type: "done", message: this.messageView(reply, session, target) }
           : { type: "done", message: null },
       );
       await writes;
@@ -446,9 +504,14 @@ export class PublicWebChat {
     });
   }
 
-  /** Sandbox origins for an agent that may draw HTML cards. Loopback ones only help a visitor on this machine. */
+  /** Sandbox origins for an agent that may draw HTML. Loopback ones only help a visitor on this machine. */
   private sandboxOriginsForAgent(definition: AgentDefinition, req: IncomingMessage): string[] | undefined {
-    if (!definition.ui.present || definition.ui.persistence === "artifacts" || !definition.ui.kinds.includes("live.html")) return undefined;
+    const drawsHtml = definition.ui.present && definition.ui.kinds.includes("live.html");
+    const visitorsGetTools = definition.web_chat.public_tools || definition.web_chat.access === "authenticated";
+    const visitorsSeeHtml = definition.ui.persistence !== "artifacts" || visitorsGetTools;
+    // An agent that publishes artifacts with save_artifact may publish live HTML even without ui.present.
+    const publishesArtifacts = visitorsGetTools && grantedStageflowTools(definition.tools.stageflow).includes("save_artifact");
+    if (!((drawsHtml && visitorsSeeHtml) || publishesArtifacts)) return undefined;
     const localVisitor = isLoopbackName(hostOf(`http://${req.headers.host ?? ""}`));
     const origins = (this.options.sandboxOrigins?.() ?? []).filter((origin) => localVisitor || !isLoopbackName(hostOf(origin)));
     return origins.length > 0 ? origins : undefined;

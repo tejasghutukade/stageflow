@@ -4,6 +4,7 @@ import { fetchArtifact, promoteArtifact } from "../../api/artifacts";
 import { parseUiPartArtifactRef } from "../../../../src/artifacts/uiPartArtifactRef.ts";
 import { ArtifactView } from "../../redesign/artifacts/ArtifactView";
 import { lookupUiPart, registerUiPart, type UiPartRendererProps } from "./registry";
+import { VisitorArtifact } from "./visitorArtifact";
 
 function projectFromFallback(url: string): string | undefined {
   try {
@@ -86,6 +87,9 @@ function ArtifactRefPart({ part, context }: UiPartRendererProps) {
   const parsed = parseUiPartArtifactRef(part);
   if (!parsed.ok) return lookupUiPart("")({ part, context });
   const { key, version, title, fallback } = parsed.part;
+  if (context.loadVisitorArtifact) {
+    return <VisitorArtifact artifactKey={key} version={version} title={title} load={context.loadVisitorArtifact} />;
+  }
   return (
     <div className="min-w-0">
       <div className="mb-1 text-[13px] font-medium text-[var(--sf-text-1)]">{title}</div>

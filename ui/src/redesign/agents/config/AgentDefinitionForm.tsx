@@ -28,7 +28,7 @@ const UI_PERSISTENCE_CHOICES: Array<{ value: UiPersistence; label: string; note:
   {
     value: "artifacts",
     label: "Save cards as artifacts",
-    note: "Each card is also saved as an artifact (kept 30 days unless you promote it). The agent can show existing artifacts and cards can load live data or run buttons. The public chat page does not open for this agent.",
+    note: "Each card is also saved as an artifact (kept 30 days unless you promote it). The agent can show existing artifacts and cards can load live data or run buttons. Visitors on the public link do not see console artifacts until you turn on \"Visitors can use tools\".",
   },
 ];
 import { agentsApi, type AgentDefinition, type ChannelContact, type AgentIssue, type AgentRevisionMeta, type BuiltinToolGroup, type ChannelListenerState } from "../../../api/agents";
@@ -65,6 +65,8 @@ import { PermissionTree } from "./PermissionTree";
 import { BUILTIN_PERMISSION_GROUPS, grantedToolIds, operatorOnlyToolNames, stageflowPermissionGroups } from "../model/permissions";
 import { AgentFunctionTools } from "../../functions/AgentFunctionTools";
 import { readAgentFunctions, type FunctionAttachmentDraft } from "../../functions/functionAttachments";
+import { ConfirmDialog } from "../editor/Dialogs";
+import { applyAskFirst, identityOnlyToolLabels, sideEffectingGrantIds, visitorToolLines, wildcardMcpServers } from "../model/publicTools";
 
 const STREAMED_PROVIDERS = ["agentmail", "imessage"];
 
@@ -281,8 +283,22 @@ export function AgentDefinitionForm({
   const rotating = Boolean(savedSlug) && !webChat.slug;
   const setTools = (tools: AgentDefinition["tools"]) => update?.({ ...def, tools });
   const [openGroups, setOpenGroups] = useState<string[]>([]);
-  const stageflow = def.tools.stageflow ?? { groups: [], tools: [] };
+  const [confirmPublicTools, setConfirmPublicTools] = useState(false);
   const catalog = options.stageflow;
+  const visitorLines = visitorToolLines(def);
+  const identityLines = identityOnlyToolLabels(def, catalog);
+  const wildcardServers = wildcardMcpServers(def);
+  const sideEffecting = sideEffectingGrantIds(def, catalog);
+  const willSetCostCap = def.limits.cost_usd === null;
+  const enablePublicTools = (askFirst?: string[]) => {
+    if (!update) return;
+    const nextWeb = { ...webChat, public_tools: true };
+    const withAsk = askFirst?.length ? applyAskFirst({ ...def, web_chat: nextWeb }, askFirst) : { ...def, web_chat: nextWeb };
+    const limits = willSetCostCap ? { ...withAsk.limits, cost_usd: 1 } : withAsk.limits;
+    update({ ...withAsk, limits });
+    setConfirmPublicTools(false);
+  };
+  const stageflow = def.tools.stageflow ?? { groups: [], tools: [] };
   const setStageflow = (next: { groups: string[]; tools: string[] }, askAdd: string[] = []) => {
     const ask = [...new Set([...def.approvals.ask_first, ...askAdd])];
     update?.({ ...def, tools: { ...def.tools, stageflow: next }, approvals: { ...def.approvals, ask_first: ask } });
@@ -971,7 +987,7 @@ export function AgentDefinitionForm({
                   {changed(webChat.enabled, saved?.web_chat?.enabled ?? false) ? <ChangedDot /> : null}
                 </span>
                 <span className="text-xs leading-[1.33333] text-[var(--sf-text-3)]">
-                  Anyone with the link can chat with this agent and see its cards, without signing in. The link only opens for an agent with no tools, skills, memories, project context or sub-agents.
+                  Anyone with the link can chat and see conversation cards without signing in. By default visitors cannot use tools; turn that on below when you are ready. The link works only while this agent is enabled and reachable from outside (by default the Host listens on 127.0.0.1).
                 </span>
               </div>
             </div>
@@ -1011,9 +1027,78 @@ export function AgentDefinitionForm({
               )}
               {webChatUrl && !rotating && update ? <Note>Rotating replaces the link when you save; the old one stops working.</Note> : null}
               <Note>The page only opens while the agent is enabled.</Note>
+              {webChat.access === "public" ? (
+                <div className="flex items-center justify-between gap-4 border-t border-[var(--sf-hairline)] pt-3" data-testid="web-chat-public-tools">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[13px] font-medium leading-normal text-[var(--sf-text-1)]">Visitors can use this agent&apos;s tools</span>
+                    <span className="text-xs leading-[1.33333] text-[var(--sf-text-3)]">
+                      Off: chat and conversation cards only. On: visitors get the tools you granted, except file, shell and browser tools.
+                    </span>
+                  </div>
+                  <Toggle
+                    on={Boolean(webChat.public_tools)}
+                    label="Visitors can use this agent's tools"
+                    onChange={
+                      update
+                        ? (on) => {
+                            if (!on) setWebChat({ public_tools: false });
+                            else setConfirmPublicTools(true);
+                          }
+                        : undefined
+                    }
+                  />
+                </div>
+              ) : null}
             </div>
           ) : null}
         </ListGroup>
+        {confirmPublicTools ? (
+          <ConfirmDialog
+            title="Let visitors use this agent's tools?"
+            confirmLabel="Turn on for visitors"
+            onClose={() => setConfirmPublicTools(false)}
+            onConfirm={() => enablePublicTools()}
+          >
+            {visitorLines.length > 0 ? (
+              <div>
+                <p className="font-medium text-[var(--sf-text-1)]">Visitors will be able to use:</p>
+                <ul className="mt-1 list-disc pl-4">
+                  {visitorLines.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <p>No extra tools are granted; visitors can still chat and use conversation cards.</p>
+            )}
+            {identityLines.length > 0 ? (
+              <p className="mt-2">
+                Visitors won&apos;t get these, because they act on your computer or the Host, or reach other conversations:{" "}
+                {identityLines.join(", ")}. They keep working in the console and on a signed-in link.
+              </p>
+            ) : null}
+            {willSetCostCap ? <p className="mt-2">A cost cap of $1 per conversation will be set. You can change or clear it under Limits.</p> : null}
+            <p className="mt-2">The link is only reachable from outside your network if the Host is (by default it listens on 127.0.0.1).</p>
+            {sideEffecting.length > 0 ? (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <span>Tools that change or delete things:</span>
+                <span className={MONO}>{sideEffecting.join(", ")}</span>
+                <button
+                  type="button"
+                  className="text-[var(--sf-running)] underline"
+                  onClick={() => enablePublicTools(sideEffecting)}
+                >
+                  Add to Ask first
+                </button>
+              </div>
+            ) : null}
+            {wildcardServers.length > 0 ? (
+              <p className="mt-2">
+                {wildcardServers.join(", ")} {wildcardServers.length === 1 ? "is" : "are"} granted every tool. To ask first for one of them, list it by name under Approvals.
+              </p>
+            ) : null}
+          </ConfirmDialog>
+        ) : null}
         {webChat.enabled ? (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <Field

@@ -1,8 +1,14 @@
-import { grantedToolIds, type AgentDefinition } from "../config/loadAgent.js";
-import type { AgentIssue } from "../config/loadAgent.js";
+import {
+  grantedBuiltinTools,
+  grantedToolIds,
+  type AgentDefinition,
+  type AgentIssue,
+} from "../config/loadAgent.js";
 import { consumerResourceToolIds } from "../identity/resourceContract.js";
 import { ConsumerStepUpRequired } from "../identity/stepUp.js";
 import { ConsumerAccessError } from "../identity/types.js";
+import { grantedStageflowTools, isOperatorOnlyTool, stageflowGrantId } from "../toolkit/meta.js";
+import { PUBLIC_IDENTITY_ONLY_STAGEFLOW_TOOLS } from "./publicIdentityOnly.js";
 
 export const CHANNEL_CONSUMER_SOURCES = new Set(["imessage", "telegram", "agentmail", "email", "slack"]);
 
@@ -106,37 +112,140 @@ async function childIsSafe(id: string, load: (id: string) => Promise<AgentDefini
   return true;
 }
 
-/**
- * What stops an agent from answering anyone with its public chat link. Visitors there are anonymous, so the agent
- * may only talk and draw cards kept in the conversation. Empty when the link can open.
- */
-export function publicChatBlockers(definition: AgentDefinition): string[] {
-  const tools = definition.tools;
-  const found: string[] = [];
-  if (tools.builtin.length > 0 || tools.builtin_tools.length > 0 || Object.keys(tools.mcp).length > 0 || tools.stageflow.groups.length > 0
-    || tools.stageflow.tools.length > 0 || (tools.functions?.length ?? 0) > 0 || tools.browser) found.push("tools");
-  if (tools.skills.length > 0) found.push("skills");
-  if ((definition.memories?.length ?? 0) > 0) found.push("memories");
-  if (definition.project_context) found.push("project context");
-  if (definition.sub_agents.length > 0) found.push("sub-agents");
-  if (definition.ui.present && definition.ui.persistence === "artifacts") found.push("cards saved as artifacts");
-  if (definition.model.backend !== "pi") found.push(`the ${definition.model.backend} backend`);
-  return found;
+const BROWSER_GRANT = "browser";
+
+/** Stageflow tools withheld from anonymous visitors (operator-only ones, and PUBLIC_IDENTITY_ONLY_STAGEFLOW_TOOLS). */
+function isIdentityOnlyStageflowTool(tool: string): boolean {
+  return isOperatorOnlyTool(tool) || PUBLIC_IDENTITY_ONLY_STAGEFLOW_TOOLS.has(tool);
 }
 
-export const PUBLIC_CHAT_BLOCKED = "agent.web_chat_needs_setup";
+/**
+ * Tools never given to an anonymous visitor on a public link: builtin file and shell tools and the browser (they act on
+ * the owner's machine and logins) and the Stageflow tools that run code, change the Host's setup or reach other
+ * agents' conversations.
+ */
+export function identityOnlyGrantIds(definition: Pick<AgentDefinition, "tools">): string[] {
+  const found = new Set<string>(grantedBuiltinTools(definition));
+  if (definition.tools.browser) found.add(BROWSER_GRANT);
+  for (const tool of grantedStageflowTools(definition.tools.stageflow)) {
+    if (isIdentityOnlyStageflowTool(tool)) found.add(stageflowGrantId(tool));
+  }
+  return [...found].sort();
+}
 
-/** Explains, on the agent, why its public chat link does not open. */
-export function publicChatIssues(definition: AgentDefinition): AgentIssue[] {
-  if (!definition.web_chat.enabled || definition.web_chat.access === "authenticated") return [];
-  const blockers = publicChatBlockers(definition);
-  if (blockers.length === 0) return [];
-  const list = blockers.join(", ");
-  return [{
-    path: "web_chat",
-    code: PUBLIC_CHAT_BLOCKED,
-    message: `The public chat link will not open: anyone with it could use this agent's ${list}. Remove the ${list} to let anyone chat, or keep it to the console. Cards kept in the conversation are allowed.`,
-  }];
+export function agentHasIdentityOnlyTools(definition: Pick<AgentDefinition, "tools">): boolean {
+  return identityOnlyGrantIds(definition).length > 0;
+}
+
+export function isIdentityOnlyGrantId(definition: Pick<AgentDefinition, "tools">, grantId: string): boolean {
+  return identityOnlyGrantIds(definition).includes(grantId);
+}
+
+function hasNonPresentTools(definition: AgentDefinition): boolean {
+  const tools = definition.tools;
+  if (tools.builtin.length > 0 || tools.builtin_tools.length > 0 || Object.keys(tools.mcp).length > 0 || tools.stageflow.groups.length > 0
+    || tools.stageflow.tools.length > 0 || (tools.functions?.length ?? 0) > 0 || tools.browser) return true;
+  if (tools.skills.length > 0) return true;
+  if ((definition.memories?.length ?? 0) > 0) return true;
+  if (definition.project_context) return true;
+  if (definition.sub_agents.length > 0) return true;
+  if (definition.ui.present && definition.ui.persistence === "artifacts") return true;
+  return false;
+}
+
+/** Non-blocking note on the agent summary: what anonymous visitors can do today. */
+export function publicChatVisitorNote(definition: AgentDefinition): string | null {
+  if (!definition.web_chat.enabled || definition.web_chat.access === "authenticated") return null;
+  if (definition.web_chat.public_tools) return null;
+  if (!hasNonPresentTools(definition)) return null;
+  return "Visitors can chat but can't use this agent's tools. Turn on \"Visitors can use tools\" to allow them.";
+}
+
+export const PUBLIC_TOOLS_IDENTITY_ONLY = "agent.public_tools_identity_only";
+
+function identityToolsIssue(tools: string[], extra?: { subAgentId?: string }): AgentIssue {
+  const list = tools.join(", ");
+  const message = extra?.subAgentId
+    ? `Visitors on the public link won't get sub-agent ${extra.subAgentId}: it has ${list}, which act on your computer or the Host, or reach other conversations. It keeps working in the console and on a signed-in link (web_chat.access: authenticated).`
+    : `Visitors on the public link won't get ${list}: these act on your computer or the Host, or reach other conversations. They keep working in the console and on a signed-in link (web_chat.access: authenticated).`;
+  return { path: "web_chat.public_tools", code: PUBLIC_TOOLS_IDENTITY_ONLY, message };
+}
+
+export function publicToolsIdentityIssue(definition: AgentDefinition): AgentIssue | null {
+  if (!definition.web_chat.enabled || definition.web_chat.access !== "public" || !definition.web_chat.public_tools) return null;
+  const identity = identityOnlyGrantIds(definition);
+  if (identity.length === 0) return null;
+  return identityToolsIssue(identity);
+}
+
+export async function publicToolsIdentityIssues(
+  definition: AgentDefinition,
+  loadSubAgent: (id: string) => Promise<AgentDefinition | null>,
+): Promise<AgentIssue[]> {
+  if (!definition.web_chat.enabled || definition.web_chat.access !== "public" || !definition.web_chat.public_tools) return [];
+  const issues: AgentIssue[] = [];
+  const direct = publicToolsIdentityIssue(definition);
+  if (direct) issues.push(direct);
+  for (const childId of definition.sub_agents) {
+    const issue = await publicToolsIdentityInTree(childId, loadSubAgent, new Set<string>([definition.id]));
+    if (issue) issues.push(issue);
+  }
+  return issues;
+}
+
+async function publicToolsIdentityInTree(
+  id: string,
+  load: (id: string) => Promise<AgentDefinition | null>,
+  seen: Set<string>,
+): Promise<AgentIssue | null> {
+  if (seen.has(id)) return null;
+  seen.add(id);
+  let child: AgentDefinition | null;
+  try {
+    child = await load(id);
+  } catch {
+    return null;
+  }
+  if (!child) return null;
+  if (agentHasIdentityOnlyTools(child)) return identityToolsIssue(identityOnlyGrantIds(child), { subAgentId: id });
+  for (const nested of child.sub_agents) {
+    const nestedIssue = await publicToolsIdentityInTree(nested, load, seen);
+    if (nestedIssue) return nestedIssue;
+  }
+  return null;
+}
+
+/** Sub-agents an anonymous visitor may call when public_tools is on (no identity-only tools in the tree). */
+export async function loadAnonymousPublicSubAgents(
+  definition: AgentDefinition,
+  load: (id: string) => Promise<AgentDefinition | null>,
+): Promise<string[]> {
+  const safe: string[] = [];
+  for (const childId of definition.sub_agents) {
+    // Each child gets its own walk, so one shared grandchild does not hide a sibling.
+    if (await childAllowsAnonymousPublic(childId, load, new Set<string>([definition.id]))) safe.push(childId);
+  }
+  return safe;
+}
+
+async function childAllowsAnonymousPublic(
+  id: string,
+  load: (id: string) => Promise<AgentDefinition | null>,
+  seen: Set<string>,
+): Promise<boolean> {
+  if (seen.has(id)) return false;
+  seen.add(id);
+  let child: AgentDefinition | null;
+  try {
+    child = await load(id);
+  } catch {
+    return false;
+  }
+  if (!child || agentHasIdentityOnlyTools(child)) return false;
+  for (const nested of child.sub_agents) {
+    if (!(await childAllowsAnonymousPublic(nested, load, seen))) return false;
+  }
+  return true;
 }
 
 async function assertConsumerPublication(
@@ -144,10 +253,7 @@ async function assertConsumerPublication(
   authenticated: boolean,
   options: { hasConsumerAuthorization: boolean; loadSubAgent: (id: string) => Promise<AgentDefinition | null> },
 ): Promise<void> {
-  if (!authenticated) {
-    if (publicChatBlockers(definition).length > 0) throw new ConsumerAccessError("identity.setup_required");
-    return;
-  }
+  if (!authenticated) return;
   if (!isConsumerSafeAgent(definition) || (definition.sub_agents.length > 0 && !authenticated)) throw new ConsumerAccessError("identity.setup_required");
   const safeSubAgents = definition.sub_agents.length === 0 ? [] : await loadConsumerSubAgents(definition, options.loadSubAgent);
   if (!safeSubAgents) throw new ConsumerAccessError("identity.setup_required");
@@ -202,4 +308,19 @@ export async function consumerChannelIssues(
 export function allowConsumerToolCall(tool: string, subAgentIds: string[]): boolean {
   if (tool.startsWith("agent:")) return subAgentIds.includes(tool.slice("agent:".length));
   return consumerResourceToolIds().has(tool);
+}
+
+/** Strips identity-only builtins and browser from a copy used to build an anonymous public tool surface. */
+export function stripIdentityToolsFromDefinition(definition: AgentDefinition): AgentDefinition {
+  const stageflow = grantedStageflowTools(definition.tools.stageflow).filter((tool) => !isIdentityOnlyStageflowTool(tool));
+  return {
+    ...definition,
+    tools: {
+      ...definition.tools,
+      builtin: [],
+      builtin_tools: [],
+      browser: false,
+      stageflow: { groups: [], tools: stageflow },
+    },
+  };
 }

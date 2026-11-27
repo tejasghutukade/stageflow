@@ -792,7 +792,8 @@ describe("live.html publish", () => {
     const selected = [{ name: "mermaid", version: "12.3.0" }, { name: "leaflet", version: "1.9.4" }];
     const options = { ...libraryCspSources(origin, selected), needsEval: true };
     expect(liveLibraryCspSources(origin, selected)).toEqual(libraryCspSources(origin, selected));
-    expect(liveHtmlDocumentCsp({ resourceDomains: ["https://cdn.example.com"] }, options)).toBe(
+    // The page always passes the shell origin it frames; library directories on any other origin are dropped.
+    expect(liveHtmlDocumentCsp({ resourceDomains: ["https://cdn.example.com"] }, { ...options, shellOrigin: origin })).toBe(
       buildHtmlCsp({ resourceDomains: ["https://cdn.example.com"] }, options),
     );
     const chartLibs = libraryCspSources(origin, [{ name: "chartjs", version: "4.6.2" }]);

@@ -163,7 +163,7 @@ A stream that ends with neither `done` nor `error` was cut off (the CLI reports 
 
 ## Public web chat API
 
-The anonymous chat page (`/chat/<slug>`, served from the Host) uses these routes for tool-less public agents without shared private context. The link slug is the public-access credential; there is no control token. They are only live while the agent is enabled and `web_chat.enabled` is true. Each visitor sends a stable id the page keeps in the browser as the `X-Visitor-Id` header (16–64 characters of `A–Z a–z 0–9 _ -`); conversations are scoped to it. Authenticated agents instead require verified admission and a bearer on every thread request. Their embedded API, unsupported paths and migration limits are documented in [Consumer identity](consumer-identity.md); the built-in chat page has no sign-in flow.
+The anonymous chat page (`/chat/<slug>`, served from the Host) uses these routes for public agents (visitors get tools only with `web_chat.public_tools`). The link slug is the public-access credential; there is no control token. They are only live while the agent is enabled and `web_chat.enabled` is true. Each visitor sends a stable id the page keeps in the browser as the `X-Visitor-Id` header (16–64 characters of `A–Z a–z 0–9 _ -`); conversations are scoped to it. Authenticated agents instead require verified admission and a bearer on every thread request. Their embedded API, unsupported paths and migration limits are documented in [Consumer identity](consumer-identity.md); the built-in chat page has no sign-in flow.
 
 | Method and path | Response |
 |-----------------|----------|
@@ -172,6 +172,7 @@ The anonymous chat page (`/chat/<slug>`, served from the Host) uses these routes
 | `POST /api/public/chat/:slug/threads` | `201 { thread }`. At most 50 threads per visitor |
 | `GET /api/public/chat/:slug/threads/:tid` | `{ thread, status, messages: [{ id, role, text, createdAt }] }`. `status` is `open`, `running` or `waiting` |
 | `POST /api/public/chat/:slug/threads/:tid/messages` | Body `{ text }`. NDJSON reply stream |
+| `GET /api/public/chat/:slug/threads/:tid/artifacts/:ref` | Optional `version`. Artifact published in this thread: `{ kind, title, version, text }` plus libraries or stored snapshots when the artifact has them. `404` `web_chat.unavailable` otherwise. Anonymous visitors need `public_tools` |
 
 Message stream frames: `{ "type": "delta", "text" }`, `{ "type": "waiting" }` (an operator has to approve something; it never says what), `{ "type": "done", "message": { id, role, text, createdAt } | null }` and `{ "type": "error", "code", "message", "retryAfterSec"? }`. Nothing here returns tool payloads, traces or another visitor's data.
 

@@ -1313,7 +1313,7 @@ An agent is a project-owned definition. The file name is the agent id: `agents/<
 | `observability` | no | `{ capture: off\|metadata\|full, otlp: bool }` |
 | `channel` | no | `{ connection_id, allow_from: [email \| +phone \| @domain \| *] }` — the one connection the agent answers on; an empty `allow_from` lets nobody in. The old `channels: [{ connection_id }]` list still loads as one `channel` |
 | `memories` | no | Ids of [memories](#memories) every session of this agent can use (cover and cards). A missing id is `agent.memory_unavailable` and blocks save and enable. Sub-agents do not inherit the list |
-| `web_chat` | no | `{ enabled, slug?, rate_limit_per_minute (1-120, default 10), max_message_chars (1-20000, default 4000) }` — the public chat page at `/chat/<slug>`; see [Agents](agents.md#web-chat-public-page). Agents created through the console, API, CLI or MCP start with it on and a generated `slug` (the link is the credential); a save that omits the block keeps the current one |
+| `web_chat` | no | `{ enabled, access (public\|authenticated), public_tools (default false), slug?, rate_limit_per_minute (1-120, default 10), max_message_chars (1-20000, default 4000) }` — the public chat page at `/chat/<slug>`; see [Agents](agents.md#web-chat-public-page). The link opens while the agent is enabled. `public_tools` lets anonymous visitors use granted tools except identity-only builtins and browser |
 | `schedule` | no | `{ cron, timezone?, message? }` |
 | `limits` | no | `{ session_minutes, max_turns, cost_usd: number\|null, long_context: summarize\|truncate, always_on: bool }` — `session_minutes` is idle time since the last message; `always_on` ends no session by idle time or turns and counts `cost_usd` per day |
 

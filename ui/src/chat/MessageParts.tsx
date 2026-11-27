@@ -6,6 +6,7 @@ import { needsNewConversation } from "./errors";
 import { registerBuiltinUiParts } from "./parts/builtins";
 import { InlinePreviewCard } from "./parts/artifactRefPart";
 import { renderUiPart, type UiPartRendererContext } from "./parts/registry";
+import { useVisitorArtifactLoader } from "./visitorArtifactContext";
 
 registerBuiltinUiParts();
 
@@ -22,16 +23,18 @@ export function UiMessageParts({
   parts,
   onOpenConsole,
   chat,
+  loadVisitorArtifact,
 }: {
   parts: readonly unknown[];
   onOpenConsole?: UiPartRendererContext["onOpenConsole"];
   chat?: UiPartRendererContext["chat"];
+  loadVisitorArtifact?: UiPartRendererContext["loadVisitorArtifact"];
 }) {
   if (parts.length === 0) return null;
   return (
     <div className="flex min-w-0 flex-col gap-3">
       {parts.map((part, index) => (
-        <div key={index}>{renderUiPart(part, { onOpenConsole, chat })}</div>
+        <div key={index}>{renderUiPart(part, { onOpenConsole, chat, loadVisitorArtifact })}</div>
       ))}
     </div>
   );
@@ -91,6 +94,7 @@ export function AssistantMessageBody() {
   const uiParts = useAuiState((s) => uiPartsFromMetadata(s.message.metadata));
   const previewPhase = useAuiState((s) => uiPreviewOf(s.message.metadata)?.phase);
   const previewMessage = useAuiState((s) => uiPreviewOf(s.message.metadata)?.message);
+  const loadVisitorArtifact = useVisitorArtifactLoader() ?? undefined;
   const preview =
     previewPhase === "error"
       ? { phase: "error" as const, message: previewMessage }
@@ -104,7 +108,7 @@ export function AssistantMessageBody() {
     <div className="flex min-w-0 flex-col gap-2 text-[15px] leading-relaxed text-[var(--sf-text-1)]">
       {hasText ? <MessagePrimitive.Parts components={{ Text: TextPart }} /> : null}
       {preview && uiParts.length === 0 ? <InlinePreviewCard phase={preview.phase} message={preview.message} /> : null}
-      <UiMessageParts parts={uiParts} />
+      <UiMessageParts parts={uiParts} loadVisitorArtifact={loadVisitorArtifact} />
       {running && waiting ? (
         <p className="m-0 text-sm text-[var(--sf-needs)]" role="status">
           Checking with the team…

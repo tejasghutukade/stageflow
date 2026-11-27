@@ -16,7 +16,15 @@ import type { AgentService, AgentSessionDetail } from "./service.js";
 import { scrubSecrets } from "../compaction/scrub.js";
 import { WORKING_STATE_TOOL_NAME } from "../compaction/types.js";
 import { prepareSpan, type SpanKind } from "./trace.js";
-import { allowConsumerToolCall, isAuthenticatedChannelSource, isChannelConsumerTurn, loadConsumerSubAgents, requireChannelConsumerTurn } from "./consumerSafety.js";
+import {
+  allowConsumerToolCall,
+  isAuthenticatedChannelSource,
+  isChannelConsumerTurn,
+  isIdentityOnlyGrantId,
+  loadAnonymousPublicSubAgents,
+  loadConsumerSubAgents,
+  requireChannelConsumerTurn,
+} from "./consumerSafety.js";
 import { channelSenderFact } from "./communications/senderFact.js";
 import type { ConsumerAuthorization } from "../identity/authorization.js";
 import { ConsumerStepUpRequired } from "../identity/stepUp.js";
@@ -212,6 +220,8 @@ export class AgentConversation {
     const channelConsumer = isChannelConsumerTurn(active.session.source, definition, input.consumerSessionId);
     const consumer = active.session.source === "web_consumer" || scheduleService || channelConsumer;
     const external = consumer || active.session.source === "web" || active.session.source === "web_public";
+    const anonymousPublic = active.session.source === "web_public" && !consumer && definition.web_chat.access === "public";
+    const visitorTools = anonymousPublic && definition.web_chat.public_tools;
     if (definition.web_chat.access === "authenticated" && !consumer && !["console", "cli", "mcp"].includes(active.session.source)) {
       throw new ConsumerAccessError("identity.verification_required");
     }
@@ -219,10 +229,25 @@ export class AgentConversation {
       && (!input.consumerSessionId || input.consumerSessionId.length === 0)) {
       throw new ConsumerAccessError("identity.verification_required");
     }
-    const safeSubAgents = external ? await loadConsumerSubAgents(definition, async (id) => {
+    const loadSub = async (id: string) => {
       try { return (await service.get(input.projectRoot, id)).definition; } catch { return null; }
-    }) : null;
-    if (external && (!safeSubAgents || (!consumer && definition.sub_agents.length > 0))) throw new ConsumerAccessError("identity.setup_required");
+    };
+    const safeSubAgents = consumer
+      ? await loadConsumerSubAgents(definition, loadSub)
+      : visitorTools
+        ? await loadAnonymousPublicSubAgents(definition, loadSub)
+        : external && !anonymousPublic
+          ? await loadConsumerSubAgents(definition, loadSub)
+          : null;
+    if (consumer && external && safeSubAgents === null) {
+      throw new ConsumerAccessError("identity.setup_required");
+    }
+    if (visitorTools && definition.sub_agents.length > 0 && safeSubAgents === null) {
+      throw new ConsumerAccessError("identity.setup_required");
+    }
+    if (external && !consumer && !anonymousPublic && definition.sub_agents.length > 0) {
+      throw new ConsumerAccessError("identity.setup_required");
+    }
     const consumerAuth = this.options.consumerAuthorization;
     const assertDelivery = async () => {
       if (consumer) {
@@ -280,7 +305,23 @@ export class AgentConversation {
         if (!external) return { allow: true };
         if (call.tool === PRESENT_UI_TOOL_NAME) {
           // A card kept in the conversation only shows what the agent wrote, so anyone the agent talks to may see one.
-          if (!consumer && !agentKeepsCardsInConversation(definition)) return { allow: false, reason: "identity.verification_required" };
+          // Artifact persistence publishes into the visitor's own session; anonymous visitors get that only with public tools.
+          if (agentKeepsCardsInConversation(definition) || consumer || (anonymousPublic && visitorTools)) return { allow: true };
+          return { allow: false, reason: "identity.verification_required" };
+        }
+        if (anonymousPublic) {
+          if (!visitorTools) {
+            return { allow: false, reason: "This agent's tools are not available on the public chat page." };
+          }
+          if (isIdentityOnlyGrantId(definition, call.tool) || call.tool === "browser") {
+            return { allow: false, reason: `${call.tool} is not available to visitors on a public link.` };
+          }
+          if (call.tool.startsWith("agent:")) {
+            if (!safeSubAgents?.includes(call.tool.slice("agent:".length))) {
+              return { allow: false, reason: "This sub-agent is not available to visitors on a public link." };
+            }
+            return { allow: true };
+          }
           return { allow: true };
         }
         if (!consumer) return { allow: false, reason: "identity.verification_required" };
@@ -407,7 +448,8 @@ export class AgentConversation {
         });
       },
       delegate: async (agentId, message, callId) => {
-        if (external && !consumer) throw new ConsumerAccessError("identity.not_available");
+        if (external && !consumer && !visitorTools) throw new ConsumerAccessError("identity.not_available");
+        if (visitorTools && !safeSubAgents?.includes(agentId)) throw new ConsumerAccessError("identity.not_available");
         if (consumer) return this.delegateConsumer(input, sessionId, definition, active.session.agentId, controller, agentId, message, callId, childSessions);
         assertDelegateAllowed(definition, agentId, this.depth);
         const child = new AgentConversation(this.options, this.depth + 1, controller.signal);
@@ -458,6 +500,8 @@ export class AgentConversation {
         ...(input.requestedTool ? { requestedTool: input.requestedTool } : {}),
         ...(senderFact ? { senderFact } : {}),
         ...(consumer && safeSubAgents ? { consumerSafeSubAgents: safeSubAgents } : {}),
+        ...(visitorTools && safeSubAgents ? { anonymousPublicSafeSubAgents: safeSubAgents } : {}),
+        ...(visitorTools ? { anonymousPublicTools: true } : {}),
         ...(evalConsumer
           ? {
               consumerTools: evalConsumer.auth.tools(sessionId, evalConsumer.consumerSessionId, input.agentId)
@@ -467,23 +511,23 @@ export class AgentConversation {
                   execute: async (args: Record<string, unknown>, signal: AbortSignal) => tool.execute(args, signal),
                 })),
             }
-          : external
+          : consumer
             ? {
-                consumerTools: consumer
-                  ? consumerAuth!.tools(sessionId, input.consumerSessionId!, input.agentId)
-                      .filter((tool) => isToolGranted(definition, tool.grantId))
-                      .map((tool) => ({
-                        ...tool,
-                        execute: async (args: Record<string, unknown>, signal: AbortSignal) => {
-                          await assertDelivery();
-                          const output = await tool.execute(args, signal);
-                          await assertDelivery();
-                          return output;
-                        },
-                      }))
-                  : [],
+                consumerTools: consumerAuth!.tools(sessionId, input.consumerSessionId!, input.agentId)
+                  .filter((tool) => isToolGranted(definition, tool.grantId))
+                  .map((tool) => ({
+                    ...tool,
+                    execute: async (args: Record<string, unknown>, signal: AbortSignal) => {
+                      await assertDelivery();
+                      const output = await tool.execute(args, signal);
+                      await assertDelivery();
+                      return output;
+                    },
+                  })),
               }
-            : {}),
+            : external && !visitorTools
+              ? { consumerTools: [] as const }
+              : {}),
       });
       await assertDelivery();
     } catch (error) {

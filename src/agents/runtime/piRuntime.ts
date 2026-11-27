@@ -19,6 +19,7 @@ import { createSessionContextWiring } from "../../compaction/sessionWiring.js";
 import { bindCursorApiKey, isCursorModelRef } from "../../agent/cursorProvider.js";
 import { findProviderSupport } from "../../agent/providerSupport.js";
 import { grantedBuiltinTools, type AgentDefinition } from "../../config/loadAgent.js";
+import { stripIdentityToolsFromDefinition } from "../consumerSafety.js";
 import { bindStageMemory, type StageMemory } from "../../memory/access.js";
 import { MemoryError, memoryHostFor } from "../../memory/host.js";
 import { memorySession } from "../../tools/memoryTools.js";
@@ -461,16 +462,25 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
     const existing = bound.get(input.sessionId);
     if (existing) return { state: existing, fresh: false };
     const { projectRoot } = input;
-    const allowedSubAgents = new Set(input.consumerSafeSubAgents ?? []);
-    const definition = input.consumerTools === undefined ? input.definition : {
-      ...input.definition,
-      project_context: false,
-      memories: [],
-      tools: { ...input.definition.tools, builtin: [], builtin_tools: [], mcp: {}, skills: [], browser: false,
-        functions: [],
-        stageflow: { groups: [], tools: [] } },
-      sub_agents: input.definition.sub_agents.filter((id) => allowedSubAgents.has(id)),
-    };
+    const allowedSubAgents = new Set(
+      input.anonymousPublicTools ? (input.anonymousPublicSafeSubAgents ?? []) : (input.consumerSafeSubAgents ?? []),
+    );
+    const definition = input.anonymousPublicTools
+      ? {
+          ...stripIdentityToolsFromDefinition(input.definition),
+          sub_agents: input.definition.sub_agents.filter((id) => allowedSubAgents.has(id)),
+        }
+      : input.consumerTools === undefined
+        ? input.definition
+        : {
+            ...input.definition,
+            project_context: false,
+            memories: [],
+            tools: { ...input.definition.tools, builtin: [], builtin_tools: [], mcp: {}, skills: [], browser: false,
+              functions: [],
+              stageflow: { groups: [], tools: [] } },
+            sub_agents: input.definition.sub_agents.filter((id) => allowedSubAgents.has(id)),
+          };
     if (definition.model.backend !== "pi") {
       throw new AgentError("agent.backend_unavailable", `The ${definition.model.backend} backend is not available for agents yet.`);
     }
@@ -500,7 +510,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
       .map((tool) => {
         if (tool.name === "delete_artifact") return bindAgentArtifactDelete(tool, definition.id, projectRoot);
         if (tool.name === "refresh_artifact") return bindAgentArtifactRefresh(tool, definition.id, projectRoot);
-        if (tool.name === "get_artifact") return bindAgentArtifactRead(tool, projectRoot);
+        if (tool.name === "get_artifact") return bindAgentArtifactRead(tool, projectRoot, input.anonymousPublicTools ? input.sessionId : undefined);
         return tool;
       });
     const agentPublishTool = grantedSf.has("save_artifact")

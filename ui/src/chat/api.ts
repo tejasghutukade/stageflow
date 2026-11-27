@@ -9,6 +9,20 @@ export type ChatThreadDetail = {
 };
 export type ChatAgentInfo = { name: string; greeting: string | null; sandboxOrigins?: string[] };
 
+/** Body of the chat-scoped artifact read. Enough to draw the artifact; no paths or owner ids. */
+export type VisitorArtifactPayload = {
+  kind: string;
+  title: string;
+  version: number;
+  text: string | null;
+  contentType?: string;
+  format?: string;
+  library?: { name: string; version: string };
+  libraries?: Array<{ name: string; version: string }>;
+  bindings?: Array<{ id: string; function: string; args: Record<string, unknown> }>;
+  snapshots?: Array<{ binding_id: string; value: unknown; fetched_at: string; status: string }>;
+};
+
 export class ChatApiError extends Error {
   constructor(
     readonly code: string,
@@ -66,6 +80,10 @@ export function createChatApi({ apiBase, slug, visitorId, fetchImpl }: ChatApiOp
     },
     listThreads: async (): Promise<ChatThreadSummary[]> => (await json<{ threads: ChatThreadSummary[] }>("/threads")).threads,
     createThread: async (): Promise<ChatThreadSummary> => (await json<{ thread: ChatThreadSummary }>("/threads", { method: "POST", body: "{}" })).thread,
+    artifact: async (threadId: string, ref: string, version?: number): Promise<VisitorArtifactPayload> => {
+      const query = version !== undefined ? `?version=${encodeURIComponent(String(version))}` : "";
+      return json<VisitorArtifactPayload>(`/threads/${encodeURIComponent(threadId)}/artifacts/${encodeURIComponent(ref)}${query}`);
+    },
     getThread: async (id: string): Promise<ChatThreadDetail> => {
       const detail = await json<Omit<ChatThreadDetail, "messages"> & { messages: (ChatMessageRecord & { parts?: unknown })[] }>(`/threads/${encodeURIComponent(id)}`);
       return {

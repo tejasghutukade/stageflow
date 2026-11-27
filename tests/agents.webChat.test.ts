@@ -146,18 +146,13 @@ describe("public web chat", () => {
     expect(JSON.stringify(last)).not.toContain("max_turns");
   });
 
-  it("requires setup for legacy published tools instead of letting approval bypass consumer authorization", async () => {
-    const backend = scriptedBackend(async (_messages, ctx) => {
-      const result = await ctx.tool("web.fetch", { url: "https://secret.example/token" });
-      return result.ran ? "all done" : "skipped";
-    });
-    const host = await startHost(backend);
-    const { slug } = await liveAgent(host, { tools: { mcp: { web: ["fetch"] } }, approvals: { ask_first: ["web.fetch"] } });
+  it("opens for an agent with tools and shows a note when visitors cannot use them", async () => {
+    const host = await startHost();
+    const { slug, detail } = await liveAgent(host, { tools: { mcp: { web: ["fetch"] } }, approvals: { ask_first: ["web.fetch"] } });
+    expect((await host.pub(slug, "")).status).toBe(200);
+    expect(detail.agent.webChatNote).toContain("Visitors can chat but can't use this agent's tools");
     const response = await host.pub(slug, "/threads", { method: "POST", visitor: VISITOR });
-    expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({ code: "identity.setup_required" });
-    expect(backend.calls).toBe(0);
-    expect((await host.admin("GET", "/api/agents/approvals")).body.approvals).toEqual([]);
+    expect(response.status).toBe(201);
   });
 
   it("opens for an agent that only draws cards kept in the conversation and sends the card to the visitor", async () => {
@@ -178,8 +173,7 @@ describe("public web chat", () => {
     });
     const host = await startHost(backend);
     const { slug, detail } = await liveAgent(host, { ui: { present: true } });
-    expect(detail.agent.webChatBlocked).toBeNull();
-    expect(detail.warnings.map((warning: { code: string }) => warning.code)).not.toContain("agent.web_chat_needs_setup");
+    expect(detail.agent.webChatNote).toBeNull();
     expect((await host.pub(slug, "")).status).toBe(200);
     const { thread } = (await (await host.pub(slug, "/threads", { method: "POST", visitor: VISITOR })).json()) as { thread: { id: string } };
     const stream = await host.frames(await host.pub(slug, `/threads/${thread.id}/messages`, { method: "POST", visitor: VISITOR, body: { text: "show sales" } }));
@@ -216,19 +210,18 @@ describe("public web chat", () => {
     expect(stream.at(-1)).toMatchObject({ type: "done", message: { parts: [card] } });
   });
 
-  it("explains on the agent why the link stays closed when cards are saved as artifacts or the agent has tools", async () => {
+  it("still opens when cards are saved as artifacts and notes when visitors cannot use tools", async () => {
     const host = await startHost();
     const { slug, detail } = await liveAgent(host, { ui: { present: true, persistence: "artifacts" } });
-    expect((await host.pub(slug, "")).status).toBe(503);
-    expect(detail.agent.webChatBlocked).toContain("cards saved as artifacts");
-    expect(detail.warnings).toEqual(expect.arrayContaining([expect.objectContaining({ path: "web_chat", code: "agent.web_chat_needs_setup" })]));
+    expect((await host.pub(slug, "")).status).toBe(200);
+    expect(detail.agent.webChatNote).toContain("Visitors can chat but can't use this agent's tools");
     const tools = await host.admin("POST", "/api/agents/helper/save", {
       baseRevision: detail.agent.revision,
       definition: { ...detail.definition, ui: { present: false }, tools: { ...detail.definition.tools, stageflow: { groups: ["artifacts.write"], tools: [] } } },
     });
     expect(tools.status).toBe(200);
     const after = (await host.admin("GET", "/api/agents/helper")).body;
-    expect(after.agent.webChatBlocked).toMatch(/^The public chat link will not open: anyone with it could use this agent's tools\./);
+    expect(after.agent.webChatNote).toContain("Visitors can chat but can't use this agent's tools");
   });
 
   it("rotates the link: the old one stops working", async () => {

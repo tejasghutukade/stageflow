@@ -83,7 +83,7 @@ Grant ids (used in `approvals.ask_first`): builtin tool name (`write`, `bash`), 
 | Field | Type, default | Notes |
 |---|---|---|
 | `present` | boolean, `false` | Grants `present_ui`. Off until set |
-| `persistence` | `conversation` or `artifacts`, `conversation` | `conversation`: display-only cards stored in the chat message (public chat link still opens). `artifacts`: cards saved as session artifacts, plus keys, live data and buttons (public link closes) |
+| `persistence` | `conversation` or `artifacts`, `conversation` | `conversation`: display-only cards stored in the chat message (visitors on a public link always get them). `artifacts`: cards saved as session artifacts, plus keys, live data and buttons (public visitors get them only with `web_chat.public_tools`) |
 | `kinds` | list, filled per mode | Empty while present gets `live.declarative`, `static.markdown`, and `live.html` (`conversation`) or every kind below (`artifacts`). `static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`, `live.declarative`, `live.html`. Unknown `agent.ui_kind_unknown`. Duplicate `agent.ui_kind_duplicate`. Other than the two card kinds with `conversation`: `agent.ui_kind_needs_artifacts` |
 | `functions` | list of function ids, `[]` | Only with `artifacts` (`agent.ui_functions_need_artifacts`). Ids a card may call for live data. Invalid `agent.ui_function_invalid`. Duplicate `agent.ui_function_duplicate`. A binding query for any other id is `agent.ui_function_not_granted` |
 
@@ -128,7 +128,7 @@ List of memory ids (`^[a-z][a-z0-9_-]{0,63}$`, no duplicates). Each must already
 | Field | Type, default | Notes |
 |---|---|---|
 | `enabled` | boolean, `false` in a file | A create through MCP, REST or the console that leaves out `web_chat` gets `{ enabled: true }` and a public link. Always write the block |
-| `access` | `public` (default) or `authenticated` | `public` requires a tool-less agent; `authenticated` requires consumer identity. See [channels-and-identity.md](channels-and-identity.md) |
+| `access` | `public` (default) or `authenticated` | `public`: anyone with the link chats; tools only with `public_tools: true`, never identity-only ones. `authenticated` requires consumer identity. See [channels-and-identity.md](channels-and-identity.md) |
 | `slug` | 16 to 32 `[a-z0-9]` | The link `/chat/<slug>`; it is the credential. Minted by the Host on a save through MCP, REST or the console when web chat is on and no slug is set. A hand-written file without one warns `agent.web_chat_slug_missing` and has no link. `slug: ""` in a save rotates the link. A save that leaves `web_chat` out keeps the current block |
 | `rate_limit_per_minute` | 1 to 120, `10` | Per visitor; new conversations get twice that; per IP address three times |
 | `max_message_chars` | 1 to 20000, `4000` | |

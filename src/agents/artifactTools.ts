@@ -270,8 +270,12 @@ export function bindAgentArtifactRefresh(tool: ToolkitTool, agentId: string, pro
   return bindAgentOwnedArtifact(tool, agentId, projectRoot);
 }
 
-/** get_artifact for an agent session: reads and lists stay in the agent's project; any owner in it is readable. */
-export function bindAgentArtifactRead(tool: ToolkitTool, projectRoot: string): ToolkitTool {
+/**
+ * get_artifact for an agent session: reads and lists stay in the agent's project; any owner in it is readable.
+ * For an anonymous public visitor (`visitorSessionId`), session artifacts from other conversations are not found and
+ * lists stay on project artifacts, so one visitor cannot read what the agent made for another.
+ */
+export function bindAgentArtifactRead(tool: ToolkitTool, projectRoot: string, visitorSessionId?: string): ToolkitTool {
   return {
     ...tool,
     async run(args, ctx) {
@@ -279,7 +283,26 @@ export function bindAgentArtifactRead(tool: ToolkitTool, projectRoot: string): T
       if (typeof supplied === "string" && supplied.trim().length > 0 && !storedProjectMatches(supplied, { path: projectRoot })) {
         return artifactNotFound();
       }
-      return tool.run({ ...args, project_root: projectRoot }, ctx);
+      const bound = { ...args, project_root: projectRoot };
+      if (visitorSessionId === undefined) return tool.run(bound, ctx);
+      if (args.list === true) return tool.run({ ...bound, scope: "project" }, ctx);
+      if (typeof args.key !== "string") return tool.run(bound, ctx);
+      const record = await tool.run({ key: args.key, project_root: projectRoot, view: "record" }, ctx);
+      if (!record.ok) return record;
+      if (!visibleToVisitor(record.text, visitorSessionId)) return artifactNotFound();
+      return tool.run(bound, ctx);
     },
   };
+}
+
+/** A visitor may read project artifacts and session artifacts from their own conversation; anything unreadable fails closed. */
+function visibleToVisitor(recordText: string, sessionId: string): boolean {
+  let record: { scope?: unknown; source?: { session_id?: unknown } };
+  try {
+    record = JSON.parse(recordText) as typeof record;
+  } catch {
+    return false;
+  }
+  if (record.scope === "project") return true;
+  return record.scope === "session" && record.source?.session_id === sessionId;
 }

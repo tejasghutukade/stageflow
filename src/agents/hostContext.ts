@@ -234,6 +234,7 @@ export function createAgentHostContext(options: {
     chat,
     projectRoot: defaultAgentProjectRoot(options.cwd),
     sandboxOrigins: () => options.sandboxAdvertised?.origins ?? [],
+    artifacts: { db: options.connection },
     allowedOrigins: (process.env.STAGEFLOW_PUBLIC_CHAT_ORIGINS ?? "")
       .split(",")
       .map((origin) => origin.trim())

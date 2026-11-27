@@ -1,8 +1,9 @@
 import { AssistantRuntimeProvider, useAui, useLocalRuntime, useRemoteThreadListRuntime, type ThreadHistoryAdapter } from "@assistant-ui/react";
 import { ExportedMessageRepository } from "@assistant-ui/react";
-import { useMemo, type ReactNode } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 import { createChatModelAdapter, createThreadListAdapter, toThreadMessages } from "./adapters";
 import type { ChatApi } from "./api";
+import { VisitorArtifactProvider } from "./visitorArtifactContext";
 
 /** One conversation's runtime: sends through the public API and loads its stored history. */
 function useConversationRuntime(api: ChatApi) {
@@ -28,6 +29,19 @@ function useConversationRuntime(api: ChatApi) {
   return useLocalRuntime(adapters.model, { adapters: { history: adapters.history } });
 }
 
+function VisitorArtifactScope({ api, children }: { api: ChatApi; children: ReactNode }) {
+  const aui = useAui();
+  const load = useCallback(
+    (key: string, version?: number) => {
+      const id = aui.threadListItem.getState().remoteId;
+      if (!id) return Promise.reject(new Error("unavailable"));
+      return api.artifact(id, key, version);
+    },
+    [api, aui],
+  );
+  return <VisitorArtifactProvider value={load}>{children}</VisitorArtifactProvider>;
+}
+
 export function ChatRuntimeProvider({
   api,
   threadId,
@@ -47,5 +61,9 @@ export function ChatRuntimeProvider({
     threadId,
     onThreadIdChange,
   });
-  return <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>;
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <VisitorArtifactScope api={api}>{children}</VisitorArtifactScope>
+    </AssistantRuntimeProvider>
+  );
 }

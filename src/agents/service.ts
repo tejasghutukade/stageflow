@@ -29,7 +29,7 @@ import { purgeSessionArtifacts } from "../artifacts/sessionScope.js";
 import type { UiPart } from "../artifacts/uiPart.js";
 import { AgentError } from "./errors.js";
 import { applyEvalOverrides, EVAL_SESSION_SOURCE, isEvalSession, type EvalSessionOverrides } from "./evalSession.js";
-import { consumerChannelIssues, publicChatIssues } from "./consumerSafety.js";
+import { consumerChannelIssues, publicChatVisitorNote, publicToolsIdentityIssues } from "./consumerSafety.js";
 import { agentMemoryIssues } from "../memory/agentIssues.js";
 import { diffLines, type DiffLine } from "./lineDiff.js";
 import { exportTurnsToOtlp } from "./otlpExport.js";
@@ -97,8 +97,8 @@ export type AgentSummary = {
   capture: AgentDefinition["observability"]["capture"] | null;
   /** Path of the public chat page (`/chat/<slug>`) while web chat is switched on and has a link. */
   webChatUrl: string | null;
-  /** Why the public chat link does not open, or null when it does (or web chat is off). */
-  webChatBlocked: string | null;
+  /** What anonymous visitors can do on the public link, or null when web chat is off or visitors already have tools. */
+  webChatNote: string | null;
   stats: SessionStats;
   pendingApprovals: number;
   updatedAt: string;
@@ -433,7 +433,7 @@ export class AgentService {
       subAgents: definition?.sub_agents ?? [],
       capture: definition?.observability.capture ?? null,
       webChatUrl: definition?.web_chat.enabled && definition.web_chat.slug ? `/chat/${definition.web_chat.slug}` : null,
-      webChatBlocked: definition ? (publicChatIssues(definition)[0]?.message ?? null) : null,
+      webChatNote: definition ? publicChatVisitorNote(definition) : null,
       stats: this.store.sessionStats(projectKey, row.agentId, since),
       pendingApprovals: pending.get(row.agentId) ?? 0,
       updatedAt: row.updatedAt,
@@ -565,8 +565,7 @@ export class AgentService {
   /* ---------- validation ---------- */
 
   private async warningsFor(projectRoot: string, definition: AgentDefinition): Promise<AgentIssue[]> {
-    const warnings: AgentIssue[] = [...stageflowDefinitionValidation(definition).warnings];
-    warnings.push(...publicChatIssues(definition));
+    const warnings: AgentIssue[] = [...stageflowDefinitionValidation(definition).warnings, ...(await this.publicWebChatIssues(projectRoot, definition))];
     if (definition.web_chat.enabled && !definition.web_chat.slug) {
       warnings.push({ path: "web_chat.slug", code: "agent.web_chat_slug_missing", message: "Web chat has no link yet; save the agent in the console to generate one" });
     }
@@ -742,6 +741,15 @@ export class AgentService {
       code: item.code,
       message: item.message,
     }));
+  }
+
+  private async publicWebChatIssues(projectRoot: string, definition: AgentDefinition): Promise<AgentIssue[]> {
+    const projectKey = agentProjectKey(projectRoot);
+    return publicToolsIdentityIssues(definition, async (id) => {
+      const row = this.store.getDefinition(projectKey, id);
+      if (!row || row.currentRevision === 0) return null;
+      return this.store.getRevision(projectKey, id, row.currentRevision)?.definition ?? null;
+    });
   }
 
   private async channelConsumerPublicationIssues(projectRoot: string, definition: AgentDefinition): Promise<AgentIssue[]> {

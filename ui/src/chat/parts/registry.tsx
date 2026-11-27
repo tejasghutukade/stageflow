@@ -4,6 +4,8 @@ export type UiPartRendererContext = {
   onOpenConsole?: (href: string) => void;
   /** Operator chat session. Absent on the artifacts page and in eval sessions. */
   chat?: { agentId: string; sessionId: string };
+  /** Public chat page. Loads an artifact through the chat route instead of the console. */
+  loadVisitorArtifact?: (key: string, version?: number) => Promise<import("../api").VisitorArtifactPayload>;
 };
 
 export type UiPartRendererProps = {

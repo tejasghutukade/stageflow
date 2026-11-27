@@ -16,7 +16,7 @@ This skill does what the console's Agent Author does (interview, draft, validate
 2. **New agents start sealed.** Grant read-only tools (or none) until the job needs `write` or `shell`. Grant only what the job uses.
 3. **Anything that sends, posts, writes, merges, deletes, pays or changes the outside world goes in `approvals.ask_first`.** `bash` always asks anyway.
 4. **Leave `model.id` unset** (the project default model) unless the user names a model, and tell them you did.
-5. **Decide web chat explicitly.** Write `web_chat: { enabled: false }` unless the agent is a tool-less public helper. Public web chat on an agent with any tool, project context, memory, skill or sub-agent is refused at chat time with `identity.setup_required`. Validation does not warn about this.
+5. **Decide web chat explicitly.** Write `web_chat: { enabled: false }` unless the agent should be reachable at `/chat/<slug>`. By default visitors only chat; set `public_tools: true` only when you want anonymous visitors to run the agent's tools (not identity-only builtins or browser). Saving `public_tools: true` with those tools is `agent.public_tools_identity_only`.
 6. **Never invent names.** Connection ids, MCP server names, skill names, memory ids and sub-agent ids must come from the system (step 1 below). If what the user wants does not exist, say so and say how to create it.
 7. **Do not set** `tools.browser`, `execution: sandbox`, `model.backend: claude` (none of them work), or `approvals.approvers.operators: false` (then nobody can approve).
 8. **Secrets never go in YAML, a file, a log or chat.** The user enters them in the console, or exports them as environment variables that a reference names. See [references/mcp-servers.md](references/mcp-servers.md) and [references/channels-and-identity.md](references/channels-and-identity.md).
@@ -28,7 +28,7 @@ This skill does what the console's Agent Author does (interview, draft, validate
 `ui: { present: true }` lets the agent draw cards in its replies with `present_ui`. One setting decides what a card is:
 
 - `ui.persistence: conversation` (default): the card's program (`live.declarative` or `static.markdown`) is stored in the chat message and deleted with the conversation. It shows only what the agent writes into it, so no bindings, actions or artifact keys. The public chat link still opens, and visitors see the cards. To change a card, call `present_ui` again with the whole updated program.
-- `ui.persistence: artifacts`: each card is saved as a session artifact (30 days unless promoted), and the agent may also present existing artifacts by key, bind live data from `ui.functions` and use manifest `actions` (a user message, or a tool call that still goes through approvals). The public chat link does not open.
+- `ui.persistence: artifacts`: each card is saved as a session artifact (30 days unless promoted), and the agent may also present existing artifacts by key, bind live data from `ui.functions` and use manifest `actions` (a user message, or a tool call that still goes through approvals). On a public chat link visitors only get these when `web_chat.public_tools` is on.
 
 Kinds default to what the mode allows; list `ui.kinds` only to narrow them. Do not paste a card's program into the reply. If the program is invalid, the tool result is the validation error: fix it and call `present_ui` again. With `artifacts`, publish with `publish_artifact` first and pass its key, omit `version` so refresh works, and expect a key from another project to be refused. Eval sessions stub `present_ui`.
 
@@ -200,7 +200,7 @@ Archive (only on the user's explicit request): delete the file, or MCP `archive_
 | Reach | What to set | Read |
 |---|---|---|
 | Console only | nothing; `web_chat: { enabled: false }` | |
-| Public web link `/chat/<slug>` | tool-less agent, `web_chat.enabled: true`; the Host mints the slug on a save through MCP, REST or the console | [channels-and-identity.md](references/channels-and-identity.md) |
+| Public web link `/chat/<slug>` | `web_chat.enabled: true` (visitors get tools only with `public_tools: true`); the Host mints the slug on a save through MCP, REST or the console | [channels-and-identity.md](references/channels-and-identity.md) |
 | Signed-in customers (protected chat) | `web_chat.access: authenticated` or `channel.access: authenticated`, identity turned on in the console, only declared customer resource tools (`tools.mcp.orders: [status, list]`, `tools.mcp.account: [profile]`) | [channels-and-identity.md](references/channels-and-identity.md) |
 | Email, Slack, Telegram, iMessage | a connection on the Host, then `channel: { connection_id, allow_from }` | [channels-and-identity.md](references/channels-and-identity.md) |
 | On a timetable | `schedule: { cron, timezone, message }` | [memories-and-schedules.md](references/memories-and-schedules.md) |

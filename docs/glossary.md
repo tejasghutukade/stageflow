@@ -35,7 +35,7 @@ Terms that are easy to mix up.
 | **Check** | A probe that starts a Project MCP server in isolation and lists its tools | A connection **Check now** (a live provider check) |
 | **Console secret** | A write-only value saved in Settings → Project MCP that fills `${NAME}` in MCP servers | A stage `secrets:` entry from the Host environment |
 | **Consumer** | A person using a business's agent (its customer or employee), verified by a handoff or OIDC sign-in. Separate from the Workspace owner and operators who use the console. See [Consumer identity](consumer-identity.md) | An operator, a visitor of an anonymous public chat |
-| **Protected agent** | An agent with `web_chat.access: authenticated`. It only talks to verified consumers and may read order status | A public web chat, which is anonymous and tool-less |
+| **Protected agent** | An agent with `web_chat.access: authenticated`. It only talks to verified consumers and may read order status | A public web chat, which is anonymous; visitors get tools only with `web_chat.public_tools` |
 | **Handoff** | A signed one-time token your own server issues for a person who is already signed in to your product. Stageflow verifies it and opens a chat session | An OIDC sign-in, an API login token |
 | **Access level** | How much a consumer may see: their own records, assigned records, specific records, or everything in the Workspace. Set per person on **People & access** | A tool grant, a Workspace role |
 | **Order API** | The endpoints on your own system that Stageflow asks who owns an order and what its status is. See [Order API contract](order-api-contract.md) | An MCP server |

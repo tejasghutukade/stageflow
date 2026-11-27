@@ -102,7 +102,7 @@ export type GuideThreadDetail = Omit<ChatThreadDetail, "messages" | "status"> & 
   model: string | null;
 };
 
-export type GuideApi = Omit<ChatApi, "getThread" | "listThreads"> & {
+export type GuideApi = Omit<ChatApi, "getThread" | "listThreads" | "artifact"> & {
   getThread: (id: string) => Promise<GuideThreadDetail>;
   listThreads: () => Promise<GuideThreadSummary[]>;
   stopTurn: (id: string) => Promise<{ ok: true; stopped: boolean }>;

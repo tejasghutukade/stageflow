@@ -3,7 +3,7 @@ import { parseUiPartCard, UI_PART_KIND_CARD, type UiPartCard } from "../../../..
 import { useChatSandboxOrigins } from "../sandboxContext";
 import { ARTIFACT_VIEW_INLINE_COLLAPSED_MAX_PX } from "../../redesign/artifacts/ArtifactView";
 import type { LiveQuery } from "../../redesign/artifacts/liveData/liveQuery";
-import { StaticArtifactBody } from "../../redesign/artifacts/renderers/StaticPreview";
+import { ChatStaticBody } from "../designStyles";
 import { lookupUiPart, registerUiPart, type UiPartRendererProps } from "./registry";
 
 /** Loaded on demand so the live HTML code stays out of the chat page's main bundle. */
@@ -26,7 +26,7 @@ function CardBody({ part }: { part: UiPartCard }) {
   const identity = useMemo(() => cardIdentity(part), [part]);
   const { sandboxOrigins } = useChatSandboxOrigins();
   if (part.format === "static.markdown") {
-    return <StaticArtifactBody preview={{ mode: "markdown", text: part.program }} imageAlt={part.title} />;
+    return <ChatStaticBody preview={{ mode: "markdown", text: part.program }} imageAlt={part.title} />;
   }
   if (part.format === "live.html") {
     return (

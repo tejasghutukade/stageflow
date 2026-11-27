@@ -6,6 +6,7 @@ import {
   UI_PART_KIND_ERROR,
   UI_PART_KIND_FORM,
   type UiPart,
+  type UiPartArtifactRef,
 } from "../artifacts/uiPart.js";
 import { approvalChannelFallback } from "../artifacts/uiPartApproval.js";
 import { formChannelFallback } from "../artifacts/uiPartForm.js";
@@ -90,7 +91,20 @@ export function webChatVisitorAssistantText(message: { text: string; parts?: rea
   return assistantMessageTextForChannel({ ...message, parts }, "slack", { consoleAccess: false });
 }
 
-/** Parts a web-chat visitor without console access can see: cards, which carry their whole program. */
-export function webChatVisitorParts(parts: readonly UiPart[] | undefined): UiPart[] {
-  return (parts ?? []).filter((part) => part.kind === UI_PART_KIND_CARD);
+/** Parts a web-chat visitor can see. Cards carry their program. An artifact ref is kept only when `keepArtifact` says it belongs to this conversation, and its console URL is cleared. */
+export function webChatVisitorParts(
+  parts: readonly UiPart[] | undefined,
+  options?: { keepArtifact?: (part: UiPartArtifactRef) => boolean },
+): UiPart[] {
+  const kept: UiPart[] = [];
+  for (const part of parts ?? []) {
+    if (part.kind === UI_PART_KIND_CARD) {
+      kept.push(part);
+      continue;
+    }
+    if (part.kind === UI_PART_KIND_ARTIFACT_REF && options?.keepArtifact?.(part)) {
+      kept.push({ ...part, fallback: { text: part.fallback.text, url: "" } });
+    }
+  }
+  return kept;
 }

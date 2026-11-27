@@ -111,6 +111,14 @@ export function isPresentedUiPart(part: UiPart): part is UiPartArtifactRef | UiP
   return part.kind === UI_PART_KIND_ARTIFACT_REF || part.kind === UI_PART_KIND_CARD;
 }
 
+/** The title shown with a presented artifact: the one given, else the manifest's, else a markdown program's first heading, else "Chat". */
+function presentedTitle(given: unknown, manifest: Record<string, unknown>, program: string): string {
+  if (typeof given === "string" && given.trim().length > 0) return given.trim();
+  if (typeof manifest.title === "string" && manifest.title.trim().length > 0) return manifest.title.trim();
+  const heading = /^#{1,3}\s+(.+?)\s*#*\s*$/m.exec(program)?.[1]?.trim();
+  return heading && heading.length > 0 ? heading : "Chat";
+}
+
 /** Characters of an HTML card kept when a session is replayed; most cards fit, so the agent can still edit them. */
 export const REPLAY_PROGRAM_MAX = 12_000;
 
@@ -207,8 +215,11 @@ export async function presentInline(input: PresentArtifactInput): Promise<Presen
   if (program.trim().length === 0) return toolFailure("artifact.invalid_shape", "program is required");
   if (!manifest) return toolFailure("artifact.invalid_shape", "manifest is required");
   const kind = typeof manifest.kind === "string" ? manifest.kind : "";
-  if (!kind || !input.allowedKinds.includes(kind) || !isPresentableArtifactKind(kind)) {
-    return toolFailure("ui.kind_not_granted", `This agent cannot present ${kind || "that"} artifacts`);
+  if (!kind) {
+    return toolFailure("artifact.invalid_shape", `manifest.kind is required: one of ${input.allowedKinds.join(", ")}`);
+  }
+  if (!input.allowedKinds.includes(kind) || !isPresentableArtifactKind(kind)) {
+    return toolFailure("ui.kind_not_granted", `This agent cannot present ${kind} artifacts: use one of ${input.allowedKinds.join(", ")}`);
   }
   const sessionId = input.sessionId?.trim() ?? "";
   const agentId = input.agentId?.trim() ?? "";
@@ -217,7 +228,7 @@ export async function presentInline(input: PresentArtifactInput): Promise<Presen
   try {
     assertSessionArtifactCaps(input.db, sessionId, input.presentedInMessage ?? 1, nowMs);
     const evalSession = sessionIsEval(input.db, sessionId);
-    const titleSource = typeof input.title === "string" && input.title.trim().length > 0 ? input.title.trim() : "Chat";
+    const titleSource = presentedTitle(input.title, manifest, program);
     const title = titleSource.slice(0, ARTIFACT_TITLE_MAX_CHARS);
     const live = isLiveKind(kind);
     const published = await publishArtifact(input.db, {

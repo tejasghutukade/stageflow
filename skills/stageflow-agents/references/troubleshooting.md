@@ -109,7 +109,7 @@ Channel send failures use `CHANNEL_*` codes from `GET /api/connections/meta`. Th
 
 ## Web chat and channels
 
-Public chat returns `identity.setup_required` when the agent has any tool, project context, a memory, a skill, a sub-agent, or a backend other than `pi`. Validation stays green. Set `web_chat.enabled: false`, or remove every tool and keep the agent tool-less.
+Public chat links open while the agent is enabled. Visitors only chat until `web_chat.public_tools: true`. With `public_tools`, identity-only tools (builtin file and shell tools, `browser`, and Stageflow tools that run code, change the Host's setup or reach other conversations) and sub-agents that have them are withheld from visitors; the agent warns `agent.public_tools_identity_only` with the names.
 
 A hand-written public agent with no slug warns `agent.web_chat_slug_missing` and the path `/chat/…` does not exist until a Host save mints the slug.
 

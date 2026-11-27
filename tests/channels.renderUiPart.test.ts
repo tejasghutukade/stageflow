@@ -109,5 +109,10 @@ describe("provider ui capabilities", () => {
     expect(assistantMessageTextForChannel({ text: "Here", parts: [card] }, "telegram")).toBe("Here\n\n# Notes");
     expect(webChatVisitorAssistantText({ text: "Here", parts: [card, part] })).toBe("Here\n\nWeekly report");
     expect(webChatVisitorParts([card, part])).toEqual([card]);
+    expect(webChatVisitorParts([card, part], { keepArtifact: () => true })).toEqual([
+      card,
+      { ...part, fallback: { text: part.fallback.text, url: "" } },
+    ]);
+    expect(webChatVisitorParts([card, part], { keepArtifact: () => false })).toEqual([card]);
   });
 });

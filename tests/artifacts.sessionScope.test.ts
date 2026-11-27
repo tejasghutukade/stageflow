@@ -97,6 +97,45 @@ describe("session artifacts", () => {
     expect(after.artifacts[0]?.expires_at).toBeNull();
   });
 
+  it("titles an untitled markdown artifact from its first heading", async () => {
+    const { db, roots, project } = await openStore();
+    const program = "# Visitor checklist\n\n- one\n- two";
+    const shown = await presentInline({
+      db,
+      roots,
+      projectRoot: project,
+      program,
+      manifest: { kind: "static.markdown" },
+      sessionId: "sess-1",
+      agentId: "helper",
+      presentedInMessage: 1,
+      allowedKinds: ["static.markdown"],
+      consoleDeps: { cwd: project } as McpToolDeps,
+    });
+    expect(shown.ok).toBe(true);
+    if (!shown.ok) return;
+    expect(shown.envelope.ui.title).toBe("Visitor checklist");
+  });
+
+  it("tells the agent which kinds it may use when manifest.kind is missing", async () => {
+    const { db, roots, project } = await openStore();
+    const shown = await presentInline({
+      db,
+      roots,
+      projectRoot: project,
+      program: "# Plan",
+      manifest: {},
+      sessionId: "sess-1",
+      agentId: "helper",
+      presentedInMessage: 1,
+      allowedKinds: ["static.markdown", "live.html"],
+      consoleDeps: { cwd: project } as McpToolDeps,
+    });
+    expect(shown).toMatchObject({ ok: false, code: "artifact.invalid_shape" });
+    if (shown.ok) return;
+    expect(shown.message).toContain("static.markdown, live.html");
+  });
+
   it("returns the validation error and does not store an invalid program", async () => {
     const { db, roots, project } = await openStore();
     const shown = await presentInline({
