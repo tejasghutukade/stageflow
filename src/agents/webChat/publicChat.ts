@@ -26,6 +26,8 @@ export type PublicChatOptions = {
   projectRoot: string;
   /** Extra origins allowed to call the API from a browser (a page hosted elsewhere). Same-origin always works. */
   allowedOrigins?: string[];
+  /** Advertised sandbox origins when the listener is up (for HTML cards). */
+  sandboxOrigins?: () => readonly string[];
   now?: () => number;
   logError?: (message: string) => void;
 };
@@ -45,6 +47,18 @@ const FRIENDLY: Record<string, { status: number; message: string }> = {
   "web_chat.forbidden_origin": { status: 403, message: "This chat can't be used from this site." },
   "web_chat.failed": { status: 500, message: "Something went wrong. Please try again." },
 };
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function isLoopbackName(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "[::1]" || hostname === "::1" || /^127(\.\d{1,3}){3}$/.test(hostname);
+}
 
 class WebChatError extends Error {
   constructor(
@@ -152,7 +166,14 @@ export class PublicWebChat {
 
       if (parts.length === 1) {
         if (method !== "GET") throw new WebChatError("web_chat.invalid");
-        return this.json(res, 200, { agent: { name: target.definition.name, greeting: target.definition.greeting ?? null } });
+        const sandboxOrigins = this.sandboxOriginsForAgent(target.definition, req);
+        return this.json(res, 200, {
+          agent: {
+            name: target.definition.name,
+            greeting: target.definition.greeting ?? null,
+            ...(sandboxOrigins ? { sandboxOrigins } : {}),
+          },
+        });
       }
       if (method === "POST") this.assertOrigin(req);
       const protectedChat = target.definition.web_chat.access === "authenticated";
@@ -423,6 +444,14 @@ export class PublicWebChat {
         try { return (await this.options.service.get(this.options.projectRoot, id)).definition; } catch { return null; }
       },
     });
+  }
+
+  /** Sandbox origins for an agent that may draw HTML cards. Loopback ones only help a visitor on this machine. */
+  private sandboxOriginsForAgent(definition: AgentDefinition, req: IncomingMessage): string[] | undefined {
+    if (!definition.ui.present || definition.ui.persistence === "artifacts" || !definition.ui.kinds.includes("live.html")) return undefined;
+    const localVisitor = isLoopbackName(hostOf(`http://${req.headers.host ?? ""}`));
+    const origins = (this.options.sandboxOrigins?.() ?? []).filter((origin) => localVisitor || !isLoopbackName(hostOf(origin)));
+    return origins.length > 0 ? origins : undefined;
   }
 
   private visitorOf(req: IncomingMessage): string {

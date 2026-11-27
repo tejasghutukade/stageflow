@@ -45,6 +45,8 @@ export type PiRuntimeOptions = {
   cwd: string;
   agentDir: string;
   sandbox?: SandboxRunner;
+  /** When true, conversation-mode prompts may teach HTML cards (sandbox listener is up). */
+  htmlCardsAvailable?: boolean | (() => boolean);
   /** Stageflow's own tools, built lazily because they need Host services that start after the runtime. */
   toolkit?: () => ToolkitTool[];
   /** Publishes as this agent. The owner and session source are applied here, not from the model. */
@@ -573,6 +575,12 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
         projectRoot,
       ),
       definition,
+      {
+        htmlCardsAvailable:
+          typeof options.htmlCardsAvailable === "function"
+            ? options.htmlCardsAvailable()
+            : options.htmlCardsAvailable === true,
+      },
     );
     state.opened = await open({
       projectRoot,

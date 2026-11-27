@@ -180,6 +180,82 @@ export const BarChart = defineComponent({
   component: () => null,
 });
 
+export const HorizontalBarChart = defineComponent({
+  name: "HorizontalBarChart",
+  description: "Horizontal bar chart. labels, series, variant grouped|stacked, xLabel, yLabel, height.",
+  props: z.object({
+    labels: z.array(z.string()),
+    series: z.array(Series.ref),
+    variant: optEnum(["grouped", "stacked"]),
+    xLabel: optString,
+    yLabel: optString,
+    height: optNumber,
+  }),
+  component: () => null,
+});
+
+export const PieChart = defineComponent({
+  name: "PieChart",
+  description: "Pie chart. labels, series (one slice series), variant pie|donut, height.",
+  props: z.object({
+    labels: z.array(z.string()),
+    series: z.array(Series.ref),
+    variant: optEnum(["pie", "donut"]),
+    height: optNumber,
+  }),
+  component: () => null,
+});
+
+export const AreaChart = defineComponent({
+  name: "AreaChart",
+  description: "Area chart. labels, series, variant linear|natural|step, stacked, xLabel, yLabel, height.",
+  props: z.object({
+    labels: z.array(z.string()),
+    series: z.array(Series.ref),
+    variant: optEnum(["linear", "natural", "step"]),
+    stacked: z.boolean().nullable().optional(),
+    xLabel: optString,
+    yLabel: optString,
+    height: optNumber,
+  }),
+  component: () => null,
+});
+
+export const ScatterSeries = defineComponent({
+  name: "ScatterSeries",
+  description: "One scatter series: name, parallel x and y value arrays.",
+  props: z.object({
+    name: z.string(),
+    x: z.array(z.number()),
+    y: z.array(z.number()),
+  }),
+  component: () => null,
+});
+
+export const ScatterChart = defineComponent({
+  name: "ScatterChart",
+  description: "Scatter plot. series (ScatterSeries refs), xLabel, yLabel, height.",
+  props: z.object({
+    series: z.array(ScatterSeries.ref),
+    xLabel: optString,
+    yLabel: optString,
+    height: optNumber,
+  }),
+  component: () => null,
+});
+
+export const RadarChart = defineComponent({
+  name: "RadarChart",
+  description: "Radar chart. labels, series, variant line|area, height.",
+  props: z.object({
+    labels: z.array(z.string()),
+    series: z.array(Series.ref),
+    variant: optEnum(["line", "area"]),
+    height: optNumber,
+  }),
+  component: () => null,
+});
+
 export const SelectItem = defineComponent({
   name: "SelectItem",
   description: "Option for Select. value, then label.",
@@ -244,7 +320,13 @@ export const libraryComponents = [
   SectionCard,
   LineChart,
   BarChart,
+  HorizontalBarChart,
+  PieChart,
+  AreaChart,
+  ScatterChart,
+  RadarChart,
   Series,
+  ScatterSeries,
   Select,
   SelectItem,
   Input,

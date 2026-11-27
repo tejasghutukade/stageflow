@@ -26,9 +26,10 @@ describe("chooseSandboxOrigin", () => {
     expect(chooseSandboxOrigin("http://localhost:4400", both, "localhost")).toBe("http://127.0.0.1:4400");
     expect(chooseSandboxOrigin("http://127.0.0.1:4400", both, "127.0.0.1")).toBe("http://localhost:4400");
     expect(chooseSandboxOrigin("http://127.0.0.1:4400", both, "LOCALHOST")).toBe("http://127.0.0.1:4400");
-    expect(chooseSandboxOrigin("http://localhost:4400", ["http://127.0.0.1:4400", "http://localhost:4400"], "example.com")).toBe(
-      "http://127.0.0.1:4400",
-    );
+    expect(chooseSandboxOrigin("http://localhost:4400", ["http://127.0.0.1:4400", "http://localhost:4400"], "example.com")).toBeNull();
+    expect(
+      chooseSandboxOrigin(null, ["https://sandbox.example.com", "http://127.0.0.1:4400"], "chat.example.com"),
+    ).toBe("https://sandbox.example.com");
   });
 
   it("falls back when the list is empty or every valid entry matches the page", () => {

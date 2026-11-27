@@ -7,7 +7,7 @@ export type ChatThreadDetail = {
   status: "open" | "running" | "waiting";
   messages: ChatMessageRecord[];
 };
-export type ChatAgentInfo = { name: string; greeting: string | null };
+export type ChatAgentInfo = { name: string; greeting: string | null; sandboxOrigins?: string[] };
 
 export class ChatApiError extends Error {
   constructor(
@@ -61,7 +61,8 @@ export function createChatApi({ apiBase, slug, visitorId, fetchImpl }: ChatApiOp
   return {
     info: async (): Promise<ChatAgentInfo> => {
       const body = await json<{ agent: ChatAgentInfo }>("");
-      return { name: body.agent.name, greeting: body.agent.greeting ?? null };
+      const origins = Array.isArray(body.agent.sandboxOrigins) ? body.agent.sandboxOrigins.filter((origin): origin is string => typeof origin === "string") : [];
+      return { name: body.agent.name, greeting: body.agent.greeting ?? null, ...(origins.length > 0 ? { sandboxOrigins: origins } : {}) };
     },
     listThreads: async (): Promise<ChatThreadSummary[]> => (await json<{ threads: ChatThreadSummary[] }>("/threads")).threads,
     createThread: async (): Promise<ChatThreadSummary> => (await json<{ thread: ChatThreadSummary }>("/threads", { method: "POST", body: "{}" })).thread,

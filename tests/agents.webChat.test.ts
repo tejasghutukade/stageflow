@@ -188,6 +188,34 @@ describe("public web chat", () => {
     expect(history.messages.at(-1)).toMatchObject({ role: "assistant", parts: [card] });
   });
 
+  it("advertises sandbox origins and returns an HTML card to visitors", async () => {
+    const card = {
+      v: 1,
+      kind: "card",
+      title: "Pie chart",
+      format: "live.html",
+      program: "<p>North 120</p>",
+      fallback: { text: "Pie chart", url: "" },
+    };
+    const backend = scriptedBackend(async (_messages, ctx) => {
+      const result = await ctx.tool(
+        PRESENT_UI_TOOL_NAME,
+        { title: card.title, program: card.program, manifest: { kind: "live.html", format: "html" } },
+        () => JSON.stringify({ type: "ui", ui: card }),
+      );
+      return result.ran ? "Chart." : "skipped";
+    });
+    const host = await startHost(backend);
+    const { slug } = await liveAgent(host, { ui: { present: true, kinds: ["live.html"] } });
+    const info = (await (await host.pub(slug, "")).json()) as { agent: { sandboxOrigins?: string[] } };
+    expect(info.agent.sandboxOrigins?.some((origin) => /^http:\/\/(127\.0\.0\.1|localhost):/.test(origin))).toBe(true);
+    const { thread } = (await (await host.pub(slug, "/threads", { method: "POST", visitor: VISITOR })).json()) as { thread: { id: string } };
+    const stream = await host.frames(
+      await host.pub(slug, `/threads/${thread.id}/messages`, { method: "POST", visitor: VISITOR, body: { text: "pie" } }),
+    );
+    expect(stream.at(-1)).toMatchObject({ type: "done", message: { parts: [card] } });
+  });
+
   it("explains on the agent why the link stays closed when cards are saved as artifacts or the agent has tools", async () => {
     const host = await startHost();
     const { slug, detail } = await liveAgent(host, { ui: { present: true, persistence: "artifacts" } });

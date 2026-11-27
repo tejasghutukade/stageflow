@@ -4,7 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentChatController } from "../src/agents/chatTurn.js";
 import { createEvalGate, EvalGateRegistry, type EvalGatePolicy } from "../src/agents/evalGate.js";
-import { agentPresentUiPrompt, createPresentUiTool, messageReplayText, presentArtifact, presentCard, PRESENT_UI_TOOL_NAME, uiPartsFromToolOutput } from "../src/agents/presentUi.js";
+import { parseUiPartCard } from "../src/artifacts/uiPartCard.js";
+import { agentPresentUiPrompt, createPresentUiTool, messageReplayText, presentArtifact, REPLAY_PROGRAM_MAX, presentCard, PRESENT_UI_TOOL_NAME, uiPartsFromToolOutput } from "../src/agents/presentUi.js";
 import { catalogRootsForArtifacts } from "../src/artifacts/projectScope.js";
 import { publishArtifact } from "../src/artifacts/publish.js";
 import { UI_PART_KIND_ARTIFACT_REF, UI_PART_KIND_CARD, UI_PART_SCHEMA_VERSION } from "../src/artifacts/uiPart.js";
@@ -47,12 +48,23 @@ describe("present_ui prompt", () => {
     expect(html).toContain("Live HTML artifacts");
   });
 
+  it("includes HTML card guidance only when a sandbox is available", () => {
+    const without = agentPresentUiPrompt({ ui: { present: true, persistence: "conversation", kinds: ["live.html"], functions: [] } })!;
+    expect(without).not.toContain("### HTML cards");
+    const withSandbox = agentPresentUiPrompt({ ui: { present: true, persistence: "conversation", kinds: ["live.html"], functions: [] } }, { htmlCardsAvailable: true })!;
+    expect(withSandbox).toContain("### HTML cards");
+    expect(withSandbox).toContain("no network access");
+  });
+
   it("teaches cards kept in the conversation: display only, redraw to change", () => {
     const prompt = agentPresentUiPrompt({ ui: { present: true, persistence: "conversation", kinds: ["live.declarative"], functions: [] } })!;
     expect(prompt).toContain("# Drawing cards in chat");
     expect(prompt).toContain("To change a card, call present_ui again with the complete updated program");
     expect(prompt).toContain("bindings must be []");
     expect(prompt).not.toContain("Pass its key");
+    expect(prompt).toContain("PieChart");
+    expect(prompt).toContain("closest chart");
+    expect(prompt).toContain("do not reply that a component is unavailable");
   });
 });
 
@@ -80,15 +92,27 @@ describe("ui persistence", () => {
 
   it("fills the kinds each mode allows when present is on and kinds are left out", () => {
     const conversation = parse({ present: true });
-    expect(conversation.ok && conversation.value.ui).toEqual({ present: true, persistence: "conversation", kinds: ["live.declarative", "static.markdown"], functions: [] });
+    expect(conversation.ok && conversation.value.ui).toEqual({
+      present: true,
+      persistence: "conversation",
+      kinds: ["live.declarative", "static.markdown", "live.html"],
+      functions: [],
+    });
     const artifacts = parse({ present: true, persistence: "artifacts" });
     expect(artifacts.ok && artifacts.value.ui.kinds).toContain("live.html");
   });
 
-  it("asks for persistence artifacts before live HTML or functions", () => {
-    const html = parse({ present: true, kinds: ["live.html"] });
-    expect(html.ok).toBe(false);
-    if (!html.ok) expect(html.issues.map((issue) => issue.code)).toContain("agent.ui_kind_needs_artifacts");
+  it("gives agents saved with the old default card pair HTML cards too, but keeps a narrower choice", () => {
+    const legacy = parse({ present: true, kinds: ["static.markdown", "live.declarative"] });
+    expect(legacy.ok && legacy.value.ui.kinds).toEqual(["live.declarative", "static.markdown", "live.html"]);
+    const narrow = parse({ present: true, kinds: ["static.markdown"] });
+    expect(narrow.ok && narrow.value.ui.kinds).toEqual(["static.markdown"]);
+    const artifacts = parse({ present: true, persistence: "artifacts", kinds: ["live.declarative", "static.markdown"] });
+    expect(artifacts.ok && artifacts.value.ui.kinds).toEqual(["live.declarative", "static.markdown"]);
+  });
+
+  it("allows live HTML as a conversation card and still needs artifacts for functions", () => {
+    expect(parse({ present: true, kinds: ["live.html"] }).ok).toBe(true);
     const functions = parse({ present: true, functions: ["revenue_by_week"] });
     expect(functions.ok).toBe(false);
     if (!functions.ok) expect(functions.issues.map((issue) => issue.code)).toContain("agent.ui_functions_need_artifacts");
@@ -99,7 +123,7 @@ describe("ui persistence", () => {
 describe("conversation cards", () => {
   const program = 'root = Card([CardHeader("Regional sales", "This week"), TextContent("North leads.")])';
   const manifest = { kind: "live.declarative", format: "openui-lang", library: { name: "stageflow", version: "1.0.0" }, bindings: [] };
-  const base = { projectRoot: tmpdir(), program, manifest, presentedInMessage: 1, allowedKinds: ["live.declarative", "static.markdown"] };
+  const base = { projectRoot: tmpdir(), program, manifest, presentedInMessage: 1, allowedKinds: ["live.declarative", "static.markdown", "live.html"] };
   let n = 0;
   const session = () => `ses_card_${n++}`;
 
@@ -133,9 +157,54 @@ describe("conversation cards", () => {
     expect(await codes({ manifest: { ...manifest, bindings: [{ id: "rows", function: "weekly", args: {} }] } })).toBe("ui.card_display_only");
     expect(await codes({ manifest: { ...manifest, actions: [{ id: "go", type: "message", label: "Go", template: "go" }] } })).toBe("ui.card_display_only");
     expect(await codes({ program: "root = Card([" })).toBe("artifact.program_invalid");
-    expect(await codes({ manifest: { kind: "live.html" } })).toBe("ui.kind_not_granted");
     expect(await codes({ allowedKinds: ["static.markdown"] })).toBe("ui.kind_not_granted");
     expect(await codes({ presentedInMessage: 5 })).toBe("ui.message_cap");
+  });
+
+  it("accepts an HTML card with a vendored library and refuses display-only violations", async () => {
+    const htmlProgram = "<p>North 120, South 95</p>";
+    const chartVersion = "4.6.2";
+    const accepted = await presentCard({
+      ...base,
+      sessionId: session(),
+      title: "Regional chart",
+      program: htmlProgram,
+      manifest: { kind: "live.html", format: "html", libraries: [{ name: "chartjs", version: chartVersion }] },
+    });
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) return;
+    expect(accepted.envelope.ui).toMatchObject({
+      format: "live.html",
+      libraries: [{ name: "chartjs", version: chartVersion }],
+    });
+    const codes = async (overrides: Partial<Parameters<typeof presentCard>[0]>) => {
+      const result = await presentCard({ ...base, sessionId: session(), ...overrides });
+      return result.ok ? "ok" : result.code;
+    };
+    expect(
+      await codes({
+        program: htmlProgram,
+        manifest: { kind: "live.html", format: "html", libraries: [{ name: "chartjs", version: "0.0.1" }] },
+      }),
+    ).toBe("ui.unknown_library");
+    expect(
+      await codes({
+        program: '<script src="https://cdn.example/app.js"></script>',
+        manifest: { kind: "live.html", format: "html" },
+      }),
+    ).toBe("artifact.html_csp_violation");
+    expect(
+      await codes({
+        program: htmlProgram,
+        manifest: { kind: "live.html", format: "html", csp: { connectDomains: ["https://api.example.com"] } },
+      }),
+    ).toBe("ui.card_display_only");
+    expect(
+      await codes({
+        program: htmlProgram,
+        manifest: { kind: "live.html", format: "html", bindings: [{ id: "rows", function: "weekly", args: {} }] },
+      }),
+    ).toBe("ui.card_display_only");
   });
 
   it("refuses a saved artifact key when cards stay in the conversation", async () => {
@@ -191,6 +260,19 @@ describe("present_ui transcript", () => {
     expect(seen.at(-1)?.some((message) => message.parts?.[0] && (message.parts[0] as { key: string }).key === part.key)).toBe(true);
     expect(messageReplayText({ text: "Shown", parts: [part] })).toContain(JSON.stringify({ type: "ui", ui: part }));
     expect(uiPartsFromToolOutput(PRESENT_UI_TOOL_NAME, JSON.stringify(envelope))).toEqual([part]);
+  });
+
+  it("keeps an HTML card whole on replay, and marks a very long one as incomplete", () => {
+    const base = { v: 1 as const, kind: "card" as const, title: "Map", format: "live.html" as const, fallback: { text: "Map", url: "" } };
+    const short = { ...base, program: "<p>é</p>".repeat(100) };
+    expect(messageReplayText({ text: "Here", parts: [short] })).toContain(JSON.stringify(short.program));
+    const long = { ...base, program: `<p>${"é".repeat(REPLAY_PROGRAM_MAX + 50)}</p>` };
+    const replay = messageReplayText({ text: "Here", parts: [long] });
+    expect(replay).toContain(`first ${REPLAY_PROGRAM_MAX} of ${long.program.length} characters`);
+    expect(replay).toContain("write the whole card again");
+    expect(replay).not.toContain("é".repeat(REPLAY_PROGRAM_MAX + 1));
+    expect(parseUiPartCard({ ...base, program: "<p>x</p>", libraries: [{ name: "chartjs", version: "4.6.2" }] }).ok).toBe(true);
+    expect(parseUiPartCard({ ...base, program: "<p>x</p>" }).ok).toBe(true);
   });
 
   it("stubs the tool in an eval session", async () => {

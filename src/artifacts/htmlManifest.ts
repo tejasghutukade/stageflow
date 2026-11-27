@@ -380,7 +380,8 @@ export type LibraryDirectorySource = {
   assets: boolean;
 };
 
-export function parseLibraryDirectorySource(token: string): LibraryDirectorySource | null {
+/** A vendored library directory on a loopback sandbox, or on `ownOrigin` (the shell's own origin, which may be a public https sandbox). */
+export function parseLibraryDirectorySource(token: string, ownOrigin?: string): LibraryDirectorySource | null {
   if (token.includes("?") || token.includes("#") || token.includes("\\") || !token.endsWith("/")) return null;
   let url: URL;
   try {
@@ -390,7 +391,7 @@ export function parseLibraryDirectorySource(token: string): LibraryDirectorySour
   }
   if (url.search || url.hash || url.username || url.password) return null;
   const origin = `${url.protocol}//${url.host}`;
-  if (!isLoopbackLibraryOrigin(origin)) return null;
+  if (!isLoopbackLibraryOrigin(origin) && origin !== ownOrigin) return null;
   if (!url.pathname.startsWith("/libs/") || !url.pathname.endsWith("/")) return null;
   const id = url.pathname.slice("/libs/".length, -1);
   if (!id || id.includes("/")) return null;

@@ -9,6 +9,8 @@ export const UI_PART_KIND_CARD = "card" as const;
 
 export const CARD_PROGRAM_MAX_BYTES = 64 * 1024;
 
+const htmlLibraryRef = z.object({ name: z.string(), version: z.string() });
+
 const cardSchema = z.object({
   v: z.literal(UI_PART_SCHEMA_VERSION),
   kind: z.literal(UI_PART_KIND_CARD),
@@ -16,6 +18,7 @@ const cardSchema = z.object({
   format: z.enum(CONVERSATION_CARD_KINDS),
   program: z.string().max(CARD_PROGRAM_MAX_BYTES),
   library: z.object({ name: z.string(), version: z.string() }).optional(),
+  libraries: z.array(htmlLibraryRef).max(6).optional(),
   fallback: z.object({ text: z.string(), url: z.string() }),
 });
 

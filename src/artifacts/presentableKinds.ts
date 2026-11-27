@@ -16,7 +16,7 @@ export function isPresentableArtifactKind(kind: string): kind is PresentableArti
 }
 
 /** Kinds a card kept in the conversation can hold (`ui.persistence: conversation`). Both render from the message alone. */
-export const CONVERSATION_CARD_KINDS = ["live.declarative", "static.markdown"] as const;
+export const CONVERSATION_CARD_KINDS = ["live.declarative", "static.markdown", "live.html"] as const;
 
 export type ConversationCardKind = (typeof CONVERSATION_CARD_KINDS)[number];
 

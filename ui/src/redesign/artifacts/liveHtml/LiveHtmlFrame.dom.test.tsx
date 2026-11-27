@@ -12,7 +12,7 @@ import { artifactDetailMeta } from "../artifactDetailModel";
 import { libraryCspSources, liveHtmlDocumentCsp } from "./cspPolicy";
 import { LiveHtmlFrame, type LiveHtmlFrameProps } from "./LiveHtmlFrame";
 import type { ArtifactOriginView } from "../../../api/artifacts";
-import { setSandboxOriginForTests, useSandboxOrigin } from "./sandboxOrigin";
+import { setSandboxOriginForTests, useSandboxOrigin } from "../sandboxOrigin";
 import { resetLiveQueryCacheForTests } from "../liveData/queryCache";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -589,10 +589,11 @@ describe("sandbox origin hook", () => {
       approved_at: null,
     };
     const sources = libraryCspSources(ORIGIN, [{ name: "chartjs", version: "4.6.2" }]);
-    const empty = liveHtmlDocumentCsp({}, sources);
+    const cspOptions = { ...sources, shellOrigin: ORIGIN };
+    const empty = liveHtmlDocumentCsp({}, cspOptions);
     const full = liveHtmlDocumentCsp(
       { connectDomains: ["https://api.example.com"], resourceDomains: ["https://cdn.example.com"], baseUriDomains: ["https://base.example.com"] },
-      sources,
+      cspOptions,
     );
     const page = record({
       live: {
@@ -769,7 +770,7 @@ describe("sandbox origin hook", () => {
     emit(box.win, ready());
     const load = box.post.mock.calls.find((call) => (call[0] as { method?: string }).method === "sf/sandbox-load");
     expect((load?.[0] as { params: { csp: string } }).params.csp).toBe(
-      liveHtmlDocumentCsp({ connectDomains: ["https://api.example.com"] }),
+      liveHtmlDocumentCsp({ connectDomains: ["https://api.example.com"] }, { shellOrigin: ORIGIN }),
     );
 
     await act(async () => {
@@ -800,7 +801,7 @@ describe("sandbox origin hook", () => {
     emit(box.win, ready());
     const load = box.post.mock.calls.find((call) => (call[0] as { method?: string }).method === "sf/sandbox-load");
     const sent = (load?.[0] as { params: { csp: string } }).params.csp;
-    expect(sent).toBe(liveHtmlDocumentCsp({}));
+    expect(sent).toBe(liveHtmlDocumentCsp({}, { shellOrigin: ORIGIN }));
     expect(sent).not.toContain("https://api.example.com");
     const keep = [...(banner?.querySelectorAll("button") ?? [])].find((button) => button.textContent === "Keep blocked");
     await act(async () => {

@@ -1,7 +1,7 @@
 import { useContext, useSyncExternalStore } from "react";
-import { RunCatalogContext } from "../../../catalog/useRunCatalog";
-import { chooseSandboxOrigin } from "../../../hostInfo";
-import type { CatalogState } from "../../../catalog/runCatalog";
+import { RunCatalogContext } from "../../catalog/useRunCatalog";
+import { chooseSandboxOrigin } from "../../hostInfo";
+import type { CatalogState } from "../../catalog/runCatalog";
 
 export type SandboxOriginState = {
   origin: string | null;

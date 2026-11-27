@@ -187,6 +187,14 @@ describe("chat api", () => {
     await expect(api.getThread("t1")).rejects.toMatchObject({ code: "web_chat.rate_limited", status: 429, retryAfterSec: 9 });
   });
 
+  it("keeps the sandbox origins the Host sends for HTML cards", async () => {
+    const body = { agent: { name: "Demo", greeting: null, sandboxOrigins: ["http://localhost:3848", 7, "http://127.0.0.1:3848"] } };
+    const api = createChatApi({ apiBase: "/p", slug: "s", visitorId: "visitor-visitor-1234", fetchImpl: (async () => response(200, body)) as unknown as typeof fetch });
+    expect(await api.info()).toEqual({ name: "Demo", greeting: null, sandboxOrigins: ["http://localhost:3848", "http://127.0.0.1:3848"] });
+    const plain = createChatApi({ apiBase: "/p", slug: "s", visitorId: "visitor-visitor-1234", fetchImpl: (async () => response(200, { agent: { name: "Demo" } })) as unknown as typeof fetch });
+    expect(await plain.info()).toEqual({ name: "Demo", greeting: null });
+  });
+
   it("treats a bare 404 as unavailable", async () => {
     const fetchImpl = vi.fn(async () => new Response("nope", { status: 404 }));
     const api = createChatApi({ apiBase: "/p", slug: "s", visitorId: "visitor-visitor-1234", fetchImpl: fetchImpl as unknown as typeof fetch });

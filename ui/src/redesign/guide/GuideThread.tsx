@@ -4,6 +4,7 @@ import { LuArrowDown, LuArrowUp, LuFile, LuPaperclip, LuSquare, LuTriangleAlert,
 import { ModelPicker } from "../../components/ModelPicker";
 import { friendlyMessage } from "../../chat/errors";
 import { UiMessageParts, uiPartsFromMetadata } from "../../chat/MessageParts";
+import { ConsoleSandboxProvider } from "../artifacts/ConsoleSandboxProvider";
 import { registerBuiltinUiParts } from "../../chat/parts/builtins";
 
 registerBuiltinUiParts();
@@ -214,37 +215,40 @@ function Composer() {
 export function GuideThread({ agentName, greeting }: { agentName: string; greeting: string }) {
   const { isResuming } = useGuideActivity();
   return (
-    <ThreadPrimitive.Root className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--sf-ground)]">
-      <ThreadPrimitive.Viewport className="flex min-h-0 flex-1 flex-col overflow-y-auto scroll-smooth px-4 pt-6">
-        <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-5">
-          <ThreadPrimitive.Empty>
-            <div className="flex flex-1 flex-col items-center justify-center gap-4 pb-16">
-              <div className="flex flex-col items-center gap-2 text-center">
-                <h2 className="m-0 text-xl font-semibold tracking-[-0.4px] text-[var(--sf-text-1)]">{agentName}</h2>
-                <p className="m-0 max-w-md text-balance text-[15px] leading-relaxed text-[var(--sf-text-2)]">{greeting}</p>
+    <ConsoleSandboxProvider>
+      <ThreadPrimitive.Root className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--sf-ground)]">
+        <ThreadPrimitive.Viewport className="flex min-h-0 flex-1 flex-col overflow-y-auto scroll-smooth px-4 pt-6">
+          <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-5">
+            <ThreadPrimitive.Empty>
+              <div className="flex flex-1 flex-col items-center justify-center gap-4 pb-16">
+                <div className="flex flex-col items-center gap-2 text-center">
+                  <h2 className="m-0 text-xl font-semibold tracking-[-0.4px] text-[var(--sf-text-1)]">{agentName}</h2>
+                  <p className="m-0 max-w-md text-balance text-[15px] leading-relaxed text-[var(--sf-text-2)]">{greeting}</p>
+                </div>
+                <div className="flex w-full max-w-md flex-col gap-2">
+                  {STARTERS.map((starter) => (
+                    <Starter key={starter} text={starter} />
+                  ))}
+                </div>
               </div>
-              <div className="flex w-full max-w-md flex-col gap-2">
-                {STARTERS.map((starter) => (
-                  <Starter key={starter} text={starter} />
-                ))}
-              </div>
-            </div>
-          </ThreadPrimitive.Empty>
-          <ThreadPrimitive.Messages>
-            {({ message }) => (message.role === "user" ? <UserMessage /> : <AssistantMessage />)}
-          </ThreadPrimitive.Messages>
-          {isResuming ? <Dots /> : null}
-        </div>
-        <ThreadPrimitive.ViewportFooter className="sticky bottom-0 mx-auto flex w-full max-w-3xl flex-col gap-2 bg-[var(--sf-ground)] pb-4 pt-3">
-          <ThreadPrimitive.ScrollToBottom
-            aria-label="Scroll to latest message"
-            className="absolute -top-10 left-1/2 flex size-8 -translate-x-1/2 items-center justify-center rounded-full border border-[var(--sf-hairline-strong)] bg-[var(--sf-panel)] text-[var(--sf-text-2)] disabled:hidden"
-          >
-            <LuArrowDown aria-hidden className="size-4" />
-          </ThreadPrimitive.ScrollToBottom>
-          <Composer />
-        </ThreadPrimitive.ViewportFooter>
-      </ThreadPrimitive.Viewport>
-    </ThreadPrimitive.Root>
+            </ThreadPrimitive.Empty>
+            <ThreadPrimitive.Messages>
+              {({ message }) => (message.role === "user" ? <UserMessage /> : <AssistantMessage />)}
+            </ThreadPrimitive.Messages>
+            {isResuming ? <Dots /> : null}
+          </div>
+          <ThreadPrimitive.ViewportFooter className="sticky bottom-0 mx-auto flex w-full max-w-3xl flex-col gap-2 bg-[var(--sf-ground)] pb-4 pt-3">
+            <ThreadPrimitive.ScrollToBottom
+              aria-label="Scroll to latest message"
+              className="absolute -top-10 left-1/2 flex size-8 -translate-x-1/2 items-center justify-center rounded-full border border-[var(--sf-hairline-strong)] bg-[var(--sf-panel)] text-[var(--sf-text-2)] disabled:hidden"
+            >
+              <LuArrowDown aria-hidden className="size-4" />
+            </ThreadPrimitive.ScrollToBottom>
+            <Composer />
+          </ThreadPrimitive.ViewportFooter>
+        </ThreadPrimitive.Viewport>
+      </ThreadPrimitive.Root>
+    
+    </ConsoleSandboxProvider>
   );
 }

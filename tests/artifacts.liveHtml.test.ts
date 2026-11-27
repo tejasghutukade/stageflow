@@ -795,8 +795,9 @@ describe("live.html publish", () => {
     expect(liveHtmlDocumentCsp({ resourceDomains: ["https://cdn.example.com"] }, options)).toBe(
       buildHtmlCsp({ resourceDomains: ["https://cdn.example.com"] }, options),
     );
-    expect(liveHtmlDocumentCsp({}, libraryCspSources(origin, [{ name: "chartjs", version: "4.6.2" }]))).toBe(
-      buildHtmlCsp({}, libraryCspSources(origin, [{ name: "chartjs", version: "4.6.2" }])),
+    const chartLibs = libraryCspSources(origin, [{ name: "chartjs", version: "4.6.2" }]);
+    expect(liveHtmlDocumentCsp({}, { ...chartLibs, shellOrigin: origin })).toBe(
+      buildHtmlCsp({}, chartLibs),
     );
   });
 });

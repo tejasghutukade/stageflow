@@ -90,6 +90,7 @@ export function vocabularyPrompt(): string {
       'Query(tool, args, default, refreshSeconds) reads a bound function. tool is exactly one double-quoted string literal, the function id, with no concatenation, operators, ternary, single quotes, or backslash escapes. args may use $variables. refreshSeconds is optional.',
       "Do not call Mutation. Do not use @ToAssistant or @OpenUrl. @Run may name a Query only.",
       "No component loads a URL. Text props are plain text.",
+      "If the ideal visualization is missing, draw the closest component (PieChart or donut for shares, HorizontalBarChart for ranked rows, BarChart or LineChart for trends, a row of Stat for a few percentages) instead of saying you cannot.",
     ],
   } satisfies PromptOptions);
   promptCache = dropLines(replaceSection(generated, "Action — Button Behavior", ACTION_REPLACEMENT));

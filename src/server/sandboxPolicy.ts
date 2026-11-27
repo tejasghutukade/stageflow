@@ -91,11 +91,74 @@ export function parseSandboxOrigin(value: unknown): string | null {
   return `http://${host}:${url.port}`;
 }
 
+/** A public https origin for the sandbox listener behind a reverse proxy (`STAGEFLOW_SANDBOX_PUBLIC_ORIGIN`). */
+/** A public sandbox origin: https only (the chat page and console ignore anything else), no path, query or userinfo. */
+export function parseSandboxPublicOrigin(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0 || value.length > 200) return null;
+  const origin = normalizeOrigin(value.trim());
+  return origin && origin.startsWith("https://") ? origin : null;
+}
+
+/** Why `STAGEFLOW_SANDBOX_PUBLIC_ORIGIN` is ignored, or null when it is unset or usable. */
+export function sandboxPublicOriginProblem(env: NodeJS.ProcessEnv = process.env): string | null {
+  const raw = env.STAGEFLOW_SANDBOX_PUBLIC_ORIGIN?.trim();
+  if (!raw) return null;
+  const origin = parseSandboxPublicOrigin(raw);
+  if (!origin) return "STAGEFLOW_SANDBOX_PUBLIC_ORIGIN must be an https origin with no path, query or userinfo";
+  return sandboxPublicOriginMisconfigured(env, origin, env.STAGEFLOW_PUBLIC_URL?.trim() || null, env.STAGEFLOW_PUBLIC_CHAT_URL?.trim() || null);
+}
+
+/** The usable public sandbox origin; a misconfigured value is dropped (the listener logs why). */
+export function readSandboxPublicOrigin(env: NodeJS.ProcessEnv = process.env): string | null {
+  if (sandboxPublicOriginProblem(env)) return null;
+  return parseSandboxPublicOrigin(env.STAGEFLOW_SANDBOX_PUBLIC_ORIGIN);
+}
+
+export function advertisedSandboxOrigins(listenerOrigins: readonly string[], env: NodeJS.ProcessEnv = process.env): string[] {
+  const out: string[] = [];
+  const push = (value: string | null) => {
+    if (value && !out.includes(value)) out.push(value);
+  };
+  for (const origin of listenerOrigins) push(parseSandboxOrigin(origin) ?? parseSandboxPublicOrigin(origin));
+  push(readSandboxPublicOrigin(env));
+  return out;
+}
+
+export function sandboxPublicOriginMisconfigured(env: NodeJS.ProcessEnv, publicSandbox: string | null, publicUrl: string | null, publicChatUrl: string | null): string | null {
+  if (!publicSandbox) return null;
+  const consoleHost = publicUrl ? originHost(publicUrl) : null;
+  const chatHost = publicChatUrl ? originHost(publicChatUrl) : consoleHost;
+  const sandboxHost = originHost(publicSandbox);
+  if (consoleHost && sandboxHost === consoleHost) {
+    return "STAGEFLOW_SANDBOX_PUBLIC_ORIGIN must use a different host than STAGEFLOW_PUBLIC_URL";
+  }
+  if (chatHost && sandboxHost === chatHost) {
+    return "STAGEFLOW_SANDBOX_PUBLIC_ORIGIN must use a different host than STAGEFLOW_PUBLIC_CHAT_URL";
+  }
+  return null;
+}
+
+/**
+ * Whether people who open the chat can reach an advertised sandbox, so agents may be offered HTML cards.
+ * A public (https) sandbox origin always counts. The loopback pair counts only while the Host is not published
+ * on another host: a visitor's browser would look for a loopback sandbox on their own machine.
+ */
+export function htmlCardsReachable(origins: readonly string[], publicUrl: string | null | undefined, publicChatUrl: string | null | undefined): boolean {
+  if (origins.some((origin) => parseSandboxPublicOrigin(origin) !== null)) return true;
+  if (origins.length === 0) return false;
+  return [publicUrl, publicChatUrl].every((url) => {
+    if (!url) return true;
+    const host = originHost(url);
+    return host !== null && isLoopbackHostname(host);
+  });
+}
+
 export function consoleOriginsFor(input: {
   listenHost: string;
   port: number;
   allowedHosts: AllowedHosts;
   publicUrl?: string | null;
+  publicChatUrl?: string | null;
 }): string[] {
   const origins: string[] = [];
   const push = (value: string | null) => {
@@ -107,6 +170,7 @@ export function consoleOriginsFor(input: {
     push(originFromHost("localhost", input.port));
   }
   if (input.publicUrl) push(normalizeOrigin(input.publicUrl));
+  if (input.publicChatUrl) push(normalizeOrigin(input.publicChatUrl));
   for (const entry of input.allowedHosts.entries) {
     if (isLoopbackHostname(entry.hostname)) continue;
     const scheme = input.publicUrl && originHost(input.publicUrl) === entry.hostname ? "https" : "http";
@@ -175,11 +239,11 @@ function isIpv6Origin(value: string): boolean {
   }
 }
 
+/** The hostname of a URL or origin (public URLs may carry a path, e.g. a chat URL). */
 function originHost(value: string): string | null {
-  const origin = normalizeOrigin(value);
-  if (!origin) return null;
   try {
-    return new URL(origin).hostname.toLowerCase();
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.hostname.toLowerCase() : null;
   } catch {
     return null;
   }

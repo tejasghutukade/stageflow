@@ -116,8 +116,10 @@ function splitLibrarySources(
   let previous = "";
   while (index < tokens.length) {
     const candidate = tokens[index];
-    if (candidate === undefined || !candidate.startsWith("http://")) break;
-    const parsed = parseLibraryDirectorySource(candidate);
+    if (candidate === undefined) break;
+    const ownDir = ownOrigin !== undefined && candidate.startsWith(`${ownOrigin}/libs/`);
+    if (!ownDir && !candidate.startsWith("http://")) break;
+    const parsed = parseLibraryDirectorySource(candidate, ownOrigin);
     if (!parsed || ownOrigin === undefined || !candidate.startsWith(`${ownOrigin}/libs/`)) return null;
     if (candidate <= previous) return null;
     previous = candidate;
@@ -999,7 +1001,8 @@ function splitLib(tokens, head, ownOrigin, allowEval, permitEval) {
   var prev = "";
   while (index < tokens.length) {
     var candidate = tokens[index];
-    if (candidate.indexOf("http://") !== 0) break;
+    var ownDir = !!ownOrigin && candidate.indexOf(ownOrigin + "/libs/") === 0;
+    if (!ownDir && candidate.indexOf("http://") !== 0) break;
     var lib = libraryDir(candidate, ownOrigin);
     if (!lib || candidate <= prev) return null;
     prev = candidate;

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { LuMenu, LuX } from "react-icons/lu";
 import { createChatApi, ChatApiError, type ChatAgentInfo } from "./api";
 import { ChatRuntimeProvider } from "./ChatRuntime";
+import { ChatSandboxProvider } from "./sandboxContext";
 import { readChatConfig, threadIdFromUrl, urlWithThread } from "./config";
 import { loadErrorMessage, UNAVAILABLE_CODE } from "./errors";
 import { Thread } from "./Thread";
@@ -98,6 +99,7 @@ export function ChatApp() {
 
   const { agent } = load;
   return (
+    <ChatSandboxProvider origins={agent.sandboxOrigins ?? []}>
     <ChatRuntimeProvider api={api} threadId={threadId} onThreadIdChange={onThreadIdChange}>
       <div className="flex h-full bg-[var(--sf-ground)] text-[var(--sf-text-1)]">
         {drawer ? <div className="fixed inset-0 z-20 bg-black/50 md:hidden" onClick={() => setDrawer(false)} aria-hidden /> : null}
@@ -136,5 +138,6 @@ export function ChatApp() {
         </div>
       </div>
     </ChatRuntimeProvider>
+    </ChatSandboxProvider>
   );
 }

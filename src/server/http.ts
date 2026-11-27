@@ -218,7 +218,7 @@ import { isListableExtension, listCatalogFiles } from "../config/listCatalogFile
 import { handleA2aRoutes } from "./a2aRoutes.js";
 import { createArchiveSlot, handleArchiveRoutes, type ArchiveSlot } from "./archiveRoutes.js";
 import { resolveHostInfo } from "./hostInfo.js";
-import { consoleOriginsFor } from "./sandboxPolicy.js";
+import { consoleOriginsFor, htmlCardsReachable } from "./sandboxPolicy.js";
 import { attachSandboxShutdown, startSandboxListener } from "./sandboxListener.js";
 import { handleChannelRoutes } from "./channelRoutes.js";
 import { handleBrowserProfileRoutes } from "./browserProfileRoutes.js";
@@ -4028,12 +4028,17 @@ export async function startUiServer(
       port: envelope.port,
       allowedHosts,
       publicUrl: resolveHostInfo().publicUrl,
+      publicChatUrl: resolveHostInfo().publicChatUrl,
     }),
     hostPort: envelope.port,
     listenHost: host,
   });
   boot.sandboxOrigin = sandbox.origin;
   boot.sandboxOrigins = sandbox.origins;
+  if (boot.sandboxAdvertised) {
+    boot.sandboxAdvertised.origins = [...sandbox.origins];
+    boot.sandboxAdvertised.cardsReachable = htmlCardsReachable(sandbox.origins, resolveHostInfo().publicUrl, resolveHostInfo().publicChatUrl);
+  }
   attachSandboxShutdown(envelope.server, sandbox);
   const closeServer = envelope.server.close.bind(envelope.server);
   envelope.server.close = ((callback?: (error?: Error) => void) => closeServer(error => {

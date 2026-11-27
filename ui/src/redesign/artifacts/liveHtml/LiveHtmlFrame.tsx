@@ -16,7 +16,7 @@ import { HTML_LIBRARY_FLAGS } from "../../../../../src/artifacts/library/htmlLib
 import { libraryCspSources, liveHtmlDocumentCsp } from "./cspPolicy";
 import { COLLAPSED_SHELL_HEIGHT_PX, createHostBridge, createNonce, type HostBridge } from "./hostBridge";
 import { readLiveHtmlHostContext } from "./hostContext";
-import { useSandboxOrigin } from "./sandboxOrigin";
+import { useSandboxOrigin } from "../sandboxOrigin";
 
 const LINK_NOTE_MS = 5_000;
 
@@ -192,6 +192,7 @@ function LiveHtmlMount(props: LiveHtmlFrameProps & { html: string; origin: strin
   const sources = libraryCspSources(props.origin, declared);
   const csp = liveHtmlDocumentCsp(blocked ? {} : (props.record.live?.csp ?? {}), {
     ...sources,
+    shellOrigin: props.origin,
     needsEval: selected.some((library) => library.needsEval),
   });
   async function approve() {

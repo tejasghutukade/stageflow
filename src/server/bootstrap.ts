@@ -186,6 +186,8 @@ export type StageflowHostBootstrap = {
   storeFilesystem?: StoreFilesystemClassification;
   sandboxOrigin?: string | null;
   sandboxOrigins?: string[];
+  /** Filled after the sandbox listener starts; read at request time for HTML cards and public chat. */
+  sandboxAdvertised?: { origins: string[]; cardsReachable: boolean };
   /**
    * When set, Host must not serve API/MCP (restore.failed or failed boot apply).
    * /livez still answers; /readyz fails.
@@ -659,9 +661,11 @@ export async function bootstrapStageflowHost(
   const functionService = functionStore ? new FunctionService({ store: functionStore }) : undefined;
   const functionInvoker = sqliteConnection !== undefined ? createFunctionInvoker({ db: sqliteConnection }) : undefined;
   if (functionInvoker) registerHostFunctionInvoker(functionInvoker);
+  const sandboxAdvertised = { origins: [] as string[], cardsReachable: false };
   const agentHost =
     sqliteConnection !== undefined
       ? createAgentHostContext({
+          sandboxAdvertised,
           ...(options.consumerAuthorization ? { consumerAuthorization: options.consumerAuthorization } : {}),
           ...(consumerIdentity ? { consumerAuthorizationSource: () => consumerIdentity.current() } : {}),
           cwd,
@@ -776,6 +780,7 @@ export async function bootstrapStageflowHost(
     ...(functionService ? { functionService } : {}),
     ...(functionInvoker ? { functionInvoker } : {}),
     ...(consumerIdentity ? { consumerIdentity } : {}),
+    sandboxAdvertised,
     operatorHostSlot,
     ...(boundPort !== undefined ? { boundPort } : {}),
   };

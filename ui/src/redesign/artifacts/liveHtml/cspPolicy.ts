@@ -11,14 +11,18 @@ export type LiveHtmlCspOptions = {
   libraryDirs?: string[];
   assetDirs?: string[];
   needsEval?: boolean;
+  shellOrigin?: string;
 };
 
-const LOOPBACK_HTTP_ORIGIN = /^http:\/\/(?:127\.0\.0\.1|localhost):([1-9]\d{0,4})$/;
-
-function isLoopbackLibraryOrigin(origin: string): boolean {
-  const match = LOOPBACK_HTTP_ORIGIN.exec(origin);
-  if (!match) return false;
-  return Number(match[1]) <= 65535;
+function normalizeShellOrigin(origin: string): string | null {
+  try {
+    const url = new URL(origin);
+    if (url.username || url.password || url.search || url.hash) return null;
+    if (url.pathname !== "/" && url.pathname !== "") return null;
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return null;
+  }
 }
 
 function policyList(values: readonly string[] | undefined, empty: string): string {
@@ -27,7 +31,7 @@ function policyList(values: readonly string[] | undefined, empty: string): strin
   return items.join(" ");
 }
 
-function knownDirectory(token: string, assetsOnly: boolean): boolean {
+function knownDirectory(token: string, shellOrigin: string, assetsOnly: boolean): boolean {
   if (token.includes("?") || token.includes("#") || token.includes("\\") || !token.endsWith("/")) return false;
   let url: URL;
   try {
@@ -37,7 +41,8 @@ function knownDirectory(token: string, assetsOnly: boolean): boolean {
   }
   if (url.search || url.hash || url.username || url.password) return false;
   const origin = `${url.protocol}//${url.host}`;
-  if (!isLoopbackLibraryOrigin(origin)) return false;
+  const shell = normalizeShellOrigin(shellOrigin);
+  if (!shell || origin !== shell) return false;
   if (!url.pathname.startsWith("/libs/") || !url.pathname.endsWith("/")) return false;
   const id = url.pathname.slice("/libs/".length, -1);
   if (!id || id.includes("/")) return false;
@@ -52,10 +57,10 @@ function knownDirectory(token: string, assetsOnly: boolean): boolean {
   return true;
 }
 
-function acceptedDirs(values: readonly string[] | undefined, assetsOnly: boolean): string[] {
+function acceptedDirs(values: readonly string[] | undefined, shellOrigin: string, assetsOnly: boolean): string[] {
   const dirs: string[] = [];
   for (const token of values ?? []) {
-    if (!knownDirectory(token, assetsOnly)) continue;
+    if (!knownDirectory(token, shellOrigin, assetsOnly)) continue;
     if (!dirs.includes(token)) dirs.push(token);
   }
   dirs.sort();
@@ -70,7 +75,7 @@ export function libraryCspSources(
   shellOrigin: string,
   libraries: readonly { name: string; version: string }[],
 ): { libraryDirs: string[]; assetDirs: string[] } {
-  if (!isLoopbackLibraryOrigin(shellOrigin)) return { libraryDirs: [], assetDirs: [] };
+  if (!normalizeShellOrigin(shellOrigin)) return { libraryDirs: [], assetDirs: [] };
   const libraryDirs: string[] = [];
   const assetDirs: string[] = [];
   for (const ref of libraries) {
@@ -88,8 +93,9 @@ export function libraryCspSources(
 /** Same policy string as `buildHtmlCsp` / `artifactDocumentCsp`. Those modules import Node. */
 export function liveHtmlDocumentCsp(csp: LiveHtmlCsp, options: LiveHtmlCspOptions = {}): string {
   const resource = policyList(csp.resourceDomains, "");
-  const libraryDirs = acceptedDirs(options.libraryDirs, false);
-  const assetDirs = acceptedDirs(options.assetDirs, true);
+  const shellOrigin = options.shellOrigin ?? "";
+  const libraryDirs = acceptedDirs(options.libraryDirs, shellOrigin, false);
+  const assetDirs = acceptedDirs(options.assetDirs, shellOrigin, true);
   const scriptHead = options.needsEval && libraryDirs.length > 0 ? "'unsafe-inline' 'unsafe-eval'" : "'unsafe-inline'";
   return [
     "default-src 'none'",

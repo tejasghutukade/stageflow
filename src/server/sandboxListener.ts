@@ -10,6 +10,8 @@ import {
   SHELL_PERMISSIONS_POLICY,
   consoleHostIsIpv6,
   loopbackListen,
+  advertisedSandboxOrigins,
+  sandboxPublicOriginProblem,
   parseSandboxOrigin,
   readSandboxPort,
   sandboxDisabledByEnv,
@@ -83,7 +85,7 @@ export async function startSandboxListener(options: StartSandboxListenerOptions)
       log.warn("sandbox.pinned_taken", "STAGEFLOW_SANDBOX_PORT is in use; sandbox listener disabled", { port: pinned });
       return idle("pinned-taken");
     }
-    return listening(bound.servers, choice.hostname, pinned);
+    return listening(bound.servers, choice.hostname, pinned, env);
   }
   const start = options.hostPort + 1;
   for (let offset = 0; offset < SANDBOX_PORT_SCAN; offset += 1) {
@@ -91,7 +93,7 @@ export async function startSandboxListener(options: StartSandboxListenerOptions)
     if (port < SANDBOX_PORT_MIN || port > SANDBOX_PORT_MAX) continue;
     const bound = await bindCandidate(port, bindV6, handler, bindSocket, v4Host);
     if (bound.status === "failed") return listenFailed(bound.code);
-    if (bound.status === "ready") return listening(bound.servers, choice.hostname, port);
+    if (bound.status === "ready") return listening(bound.servers, choice.hostname, port, env);
   }
   log.warn("sandbox.no_port", "no free loopback port for the sandbox listener; live HTML falls back to the scriptless preview", {
     from: start,
@@ -102,13 +104,15 @@ export async function startSandboxListener(options: StartSandboxListenerOptions)
 
 type BindCandidate = { status: "ready"; servers: Server[] } | { status: "busy" } | { status: "failed"; code: string };
 
-function listening(servers: Server[], hostname: string, port: number): SandboxListener {
+function listening(servers: Server[], hostname: string, port: number, env: NodeJS.ProcessEnv): SandboxListener {
   const addresses = servers.map((server) => {
     const address = server.address();
     return address && typeof address !== "string" ? address.address : "";
   });
   const origin = parseSandboxOrigin(`http://${hostname}:${port}`);
-  const origins = sandboxOriginPair(port).map((value) => parseSandboxOrigin(value)).filter((value): value is string => value !== null);
+  const origins = advertisedSandboxOrigins(sandboxOriginPair(port), env);
+  const publicProblem = sandboxPublicOriginProblem(env);
+  if (publicProblem) log.warn("sandbox.public_origin_ignored", `${publicProblem}; HTML cards and live HTML use the loopback sandbox only`, {});
   log.info("sandbox.listening", "sandbox listener started", { origin, port, addresses });
   let acceptStopped = false;
   let closed: Promise<void> | undefined;

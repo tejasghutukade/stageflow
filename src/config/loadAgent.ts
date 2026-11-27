@@ -121,7 +121,15 @@ const uiSchema = z
     functions: z.array(z.string().trim().min(1)).default([]),
   })
   .prefault({})
-  .transform((ui) => (ui.present && ui.kinds.length === 0 ? { ...ui, kinds: defaultPresentKinds(ui.persistence) } : ui));
+  .transform((ui) => (ui.present && usesDefaultKinds(ui) ? { ...ui, kinds: defaultPresentKinds(ui.persistence) } : ui));
+
+/** Before HTML cards, saving filled conversation kinds with the then-default pair; treat that pair as "the default" so those agents get HTML cards too. */
+const LEGACY_CONVERSATION_DEFAULT = ["live.declarative", "static.markdown"];
+
+function usesDefaultKinds(ui: { persistence: string; kinds: readonly string[] }): boolean {
+  if (ui.kinds.length === 0) return true;
+  return ui.persistence === "conversation" && ui.kinds.length === LEGACY_CONVERSATION_DEFAULT.length && LEGACY_CONVERSATION_DEFAULT.every((kind) => ui.kinds.includes(kind));
+}
 
 const approvalsSchema = z
   .strictObject({
@@ -337,7 +345,7 @@ function semanticIssues(definition: AgentDefinition): AgentIssue[] {
       issues.push({
         path: `ui.kinds.${index}`,
         code: "agent.ui_kind_needs_artifacts",
-        message: `Cards kept in the conversation can be live.declarative or static.markdown. Set ui.persistence to artifacts to show ${kind}`,
+        message: `Cards kept in the conversation can be live.declarative, static.markdown, or live.html. Set ui.persistence to artifacts to show ${kind}`,
       });
     } else if (seenKinds.has(kind)) {
       issues.push({ path: `ui.kinds.${index}`, code: "agent.ui_kind_duplicate", message: `${kind} is listed twice` });

@@ -165,6 +165,12 @@ On Host shutdown the sandbox listener stops accepting new connections at the sta
 
 `sf mcp` does not start this listener. `sandbox_origin` on its health response is null and `sandbox_origins` is `[]`.
 
+#### HTML cards in chat
+
+With `ui.persistence: conversation`, a `live.html` **card** is the same HTML document shape as a saved `live.html` artifact, but display-only: empty `csp`, no bindings or refresh, optional `libraries` from the vendored list, and a 64 KiB program cap. The chat page frames it like live HTML but without origin approval or binding calls: the nested policy uses `connect-src 'none'` and only the sandbox library directories.
+
+On loopback, public web chat on the console origin uses the loopback `sandbox_origins` pair. When the chat page is on another host (`STAGEFLOW_PUBLIC_CHAT_URL`), set **`STAGEFLOW_SANDBOX_PUBLIC_ORIGIN`** to an `https` origin (no path, query or userinfo) where your proxy reaches the sandbox listener. It must use a different host than `STAGEFLOW_PUBLIC_URL` and `STAGEFLOW_PUBLIC_CHAT_URL`. Otherwise the Host ignores it, logs `sandbox.public_origin_ignored` at startup, and keeps the loopback sandbox only. The Host adds that origin to `sandbox_origins` on health and, for agents that may draw HTML cards, on `GET /api/public/chat/<slug>`. The shell's `parent` allowlist and `frame-ancestors` include `STAGEFLOW_PUBLIC_URL` and `STAGEFLOW_PUBLIC_CHAT_URL` when set.
+
 ### What the shell guarantees
 
 Response headers on `GET /shell.html`:
@@ -638,7 +644,13 @@ Publish accepts only library `stageflow` version `1.0.0` (`LIBRARY_NAME` / `LIBR
 | `SectionCard` | title, body |
 | `LineChart` | labels, series, variant, xLabel, yLabel, height |
 | `BarChart` | labels, series, variant, xLabel, yLabel, height |
+| `HorizontalBarChart` | labels, series, variant, xLabel, yLabel, height |
+| `PieChart` | labels, series, variant, height |
+| `AreaChart` | labels, series, variant, stacked, xLabel, yLabel, height |
+| `ScatterChart` | series, xLabel, yLabel, height |
+| `RadarChart` | labels, series, variant, height |
 | `Series` | category, values |
+| `ScatterSeries` | name, x, y |
 | `Select` | name, items, placeholder, rules, value, size |
 | `SelectItem` | value, label |
 | `Input` | name, placeholder, type, rules, value |

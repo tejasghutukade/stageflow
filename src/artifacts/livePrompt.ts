@@ -34,6 +34,23 @@ function renderIo(input: string, output: string, cap: number): string {
   return rendered.length <= cap ? rendered : clip(rendered, cap);
 }
 
+export function htmlCardPromptSection(): string {
+  const rows = HTML_LIBRARIES.map((library) => `- ${library.name}@${library.version} global ${library.globalName}: ${library.hint}`);
+  return [
+    "### HTML cards",
+    "",
+    `kind live.html. format html. One self-contained HTML document, at most ${LIVE_HTML_MAX_BYTES} bytes in artifacts and at most 64 KiB as a conversation card. libraries is an optional list of {name, version} from the Host list below (at most 6, no URLs).`,
+    "The page has no network access, no fetch, and no external URLs: leave csp empty and put data in the page.",
+    "Use inline CSS and JS. Respect light and dark mode with the Host's --sf-* theme variables.",
+    "Prefer a live.declarative card when the built-in components fit; use HTML for a pie chart with custom labels, a map, a diagram, or a small interactive widget.",
+    "",
+    "Vendored libraries:",
+    ...rows,
+    "",
+    'Example: libraries [{name:"chartjs", version:"' + HTML_LIBRARIES[0]!.version + '"}]; a <canvas> and an inline <script> that builds the chart from literals in the page.',
+  ].join("\n");
+}
+
 export function htmlPromptSection(): string {
   const rows = HTML_LIBRARIES.map((library) => `- ${library.name}@${library.version} global ${library.globalName}: ${library.hint}`);
   return [

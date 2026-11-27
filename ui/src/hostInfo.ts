@@ -17,7 +17,7 @@ export function parseSandboxOrigin(value: unknown): string | null {
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1"]);
 
-function strictSandboxOrigin(value: string): string | null {
+function strictLoopbackSandboxOrigin(value: string): string | null {
   if (value.length === 0 || value.length > 200 || /\s/.test(value)) return null;
   let url: URL;
   try {
@@ -37,6 +37,28 @@ function strictSandboxOrigin(value: string): string | null {
   return `http://${hostname}:${port}`;
 }
 
+function publicSandboxOrigin(value: string): string | null {
+  if (value.length === 0 || value.length > 200 || /\s/.test(value)) return null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:") return null;
+  if (url.username !== "" || url.password !== "") return null;
+  if (url.pathname !== "/" && url.pathname !== "") return null;
+  if (url.search !== "" || url.hash !== "") return null;
+  const hostname = url.hostname.toLowerCase();
+  if (LOOPBACK_HOSTS.has(hostname)) return null;
+  const port = url.port;
+  return port === "" || port === "443" ? `https://${hostname}` : `https://${hostname}:${port}`;
+}
+
+function advertisedSandboxOrigin(value: string): string | null {
+  return strictLoopbackSandboxOrigin(value) ?? publicSandboxOrigin(value);
+}
+
 function isIpv6Hostname(hostname: string): boolean {
   const bare = hostname.trim().toLowerCase().replace(/^\[|\]$/g, "");
   return bare.includes(":");
@@ -51,14 +73,18 @@ function isIpv6Hostname(hostname: string): boolean {
 export function chooseSandboxOrigin(sandboxOrigin: unknown, sandboxOrigins: unknown, locationHostname: string): string | null {
   if (isIpv6Hostname(locationHostname)) return null;
   const pageHost = locationHostname.trim().toLowerCase().replace(/\.$/, "");
+  const pageIsLoopback = LOOPBACK_HOSTS.has(pageHost);
   const list = Array.isArray(sandboxOrigins) ? sandboxOrigins : [];
   for (const entry of list) {
     if (typeof entry !== "string") continue;
-    const origin = strictSandboxOrigin(entry);
+    const origin = advertisedSandboxOrigin(entry);
     if (!origin) continue;
-    if (new URL(origin).hostname !== pageHost) return origin;
+    const host = new URL(origin).hostname.toLowerCase();
+    if (!pageIsLoopback && LOOPBACK_HOSTS.has(host)) continue;
+    if (host !== pageHost) return origin;
   }
-  return typeof sandboxOrigin === "string" ? strictSandboxOrigin(sandboxOrigin) : null;
+  if (!pageIsLoopback) return null;
+  return typeof sandboxOrigin === "string" ? strictLoopbackSandboxOrigin(sandboxOrigin) : null;
 }
 
 const EMPTY: HostInfo = { hosted: false, managed: false, publicUrl: null, publicChatUrl: null };

@@ -3,6 +3,14 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UI_PART_KIND_CARD, UI_PART_SCHEMA_VERSION } from "../../../../src/artifacts/uiPart.ts";
+import {
+  SHELL_ERROR_METHOD,
+  SHELL_LOAD_METHOD,
+  SHELL_PROTOCOL_VERSION,
+  SHELL_READY_METHOD,
+  SHELL_RELAY_METHOD,
+} from "../../redesign/artifacts/liveHtml/hostBridge";
+import { ChatSandboxProvider } from "../sandboxContext";
 import { registerBuiltinUiParts } from "./builtins";
 import { renderUiPart } from "./registry";
 
@@ -18,13 +26,49 @@ afterEach(() => {
   host = null;
 });
 
-function mount(part: unknown): HTMLDivElement {
+function mount(part: unknown, sandboxOrigins: string[] = []): HTMLDivElement {
   registerBuiltinUiParts();
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
-  act(() => root!.render(<div>{renderUiPart(part)}</div>));
+  act(() =>
+    root!.render(
+      <ChatSandboxProvider origins={sandboxOrigins}>
+        <div>{renderUiPart(part)}</div>
+      </ChatSandboxProvider>,
+    ),
+  );
   return host;
+}
+
+const SANDBOX = "http://127.0.0.1:43999";
+
+/** HTML cards load their frame lazily; wait until it (or the no-sandbox note) is on the page. */
+async function mountHtml(part: unknown, sandboxOrigins: string[] = []): Promise<HTMLDivElement> {
+  await import("./htmlCardFrame");
+  const el = mount(part, sandboxOrigins);
+  await vi.waitFor(async () => {
+    await act(async () => {});
+    expect(el.querySelector('[data-testid="html-card-shell"], [data-testid="html-card-no-sandbox"]')).not.toBeNull();
+  });
+  return el;
+}
+
+/** happy-dom loads no iframe page, so stand in for the shell's window (as LiveHtmlFrame.dom.test does). */
+function fakeShell(el: HTMLElement) {
+  const frame = el.querySelector('[data-testid="html-card-shell"]') as HTMLIFrameElement;
+  const posted: unknown[] = [];
+  const win = { postMessage: (message: unknown) => posted.push(message) } as unknown as Window;
+  Object.defineProperty(frame, "contentWindow", { configurable: true, value: win });
+  return { frame, win, posted };
+}
+
+async function emitFrom(win: Window, data: unknown) {
+  const event = new MessageEvent("message", { data, origin: SANDBOX });
+  Object.defineProperty(event, "source", { value: win });
+  await act(async () => {
+    window.dispatchEvent(event);
+  });
 }
 
 const card = (overrides: Record<string, unknown>) => ({
@@ -65,9 +109,43 @@ describe("card part", () => {
     fetchSpy.mockRestore();
   }, 20_000);
 
-  it("falls back to the generic card for a malformed part", () => {
-    const el = mount(card({ format: "live.html", program: "<p>x</p>" }));
-    expect(el.querySelector('[data-testid="ui-card"]')).toBeNull();
-    expect(el.textContent).toContain("Regional sales");
+  it("shows a sandbox note for an HTML card when no sandbox origin is set", async () => {
+    const el = await mountHtml(card({ format: "live.html", program: "<p>x</p>" }));
+    expect(el.querySelector('[data-testid="ui-card"]')).not.toBeNull();
+    expect(el.querySelector('[data-testid="html-card-no-sandbox"]')?.textContent).toContain("sandbox");
+    expect(el.querySelector("iframe[srcdoc]")).toBeNull();
+  });
+
+  it("frames an HTML card through the sandbox shell with a tight CSP", async () => {
+    const el = await mountHtml(card({ format: "live.html", program: "<p>Chart</p>" }), [SANDBOX]);
+    const frame = el.querySelector('[data-testid="html-card-shell"]') as HTMLIFrameElement;
+    expect(frame.sandbox.toString()).toContain("allow-scripts");
+    expect(frame.src).toContain(`${SANDBOX}/shell.html?parent=`);
+    expect(el.querySelector('[data-testid="html-card-frame"]')?.getAttribute("data-csp")).toContain("connect-src 'none'");
+    expect(frame.getAttribute("srcdoc")).toBeNull();
+  });
+
+  it("shows the card once the shell is ready and keeps honouring its height messages", async () => {
+    const el = await mountHtml(card({ format: "live.html", program: "<p>Chart</p>" }), [SANDBOX]);
+    const { frame, win, posted } = fakeShell(el);
+    const fromShell = (data: unknown) => emitFrom(win, data);
+    await fromShell({ jsonrpc: "2.0", method: SHELL_READY_METHOD, params: { version: SHELL_PROTOCOL_VERSION } });
+    expect(frame.className).not.toContain("invisible");
+    const load = posted.find((message) => (message as { method?: string }).method === SHELL_LOAD_METHOD) as { params: { nonce: string; html: string } };
+    expect(load.params.html).toBe("<p>Chart</p>");
+    await fromShell({
+      jsonrpc: "2.0",
+      method: SHELL_RELAY_METHOD,
+      params: { nonce: load.params.nonce, message: { jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: 333 } } },
+    });
+    expect(frame.style.height).toBe("333px");
+    expect(frame.className).not.toContain("invisible");
+  });
+
+  it("says so when the sandbox refuses the card instead of staying blank", async () => {
+    const el = await mountHtml(card({ format: "live.html", program: "<p>Chart</p>" }), [SANDBOX]);
+    const { win } = fakeShell(el);
+    await emitFrom(win, { jsonrpc: "2.0", method: SHELL_ERROR_METHOD, params: { reason: "csp" } });
+    expect(el.querySelector('[data-testid="html-card-stopped"]')?.textContent).toContain("could not be shown");
   });
 });

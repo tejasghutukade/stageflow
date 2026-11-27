@@ -12,7 +12,14 @@ import { HTML_LIBRARIES } from "../src/artifacts/library/htmlLibraries.js";
 import { ShutdownController } from "../src/server/shutdown.js";
 import {
   consoleHostIsIpv6,
+  advertisedSandboxOrigins,
+  consoleOriginsFor,
+  parseSandboxPublicOrigin,
   parseSandboxOrigin,
+  sandboxPublicOriginMisconfigured,
+  sandboxPublicOriginProblem,
+  readSandboxPublicOrigin,
+  htmlCardsReachable,
   shellContentSecurityPolicy,
   shellDocumentHeaders,
 } from "../src/server/sandboxPolicy.js";
@@ -606,6 +613,14 @@ describe("sandbox shell", () => {
     expect(acceptArtifactCsp(withLib, origin)).toBe(true);
     expect(context.__sfAcceptCsp(withLib, origin)).toBe(true);
     expect(acceptArtifactCsp(withLib, "http://localhost:4311")).toBe(false);
+    const publicOrigin = "https://sandbox.example.com";
+    // The chat page builds this policy (ui cspPolicy) with the public sandbox origin in the library directory.
+    const publicChart = buildHtmlCsp({}, chart).split(origin).join(publicOrigin);
+    expect(publicChart).toContain(`${publicOrigin}/libs/chartjs@4.6.2/`);
+    expect(acceptArtifactCsp(publicChart, publicOrigin)).toBe(true);
+    expect(context.__sfAcceptCsp(publicChart, publicOrigin)).toBe(true);
+    expect(acceptArtifactCsp(publicChart, "https://other.example.com")).toBe(false);
+    expect(context.__sfAcceptCsp(publicChart, "https://other.example.com")).toBe(false);
     expect(acceptArtifactCsp(withLib, "http://127.0.0.1:9")).toBe(false);
     expect(acceptArtifactCsp(withAssets, origin)).toBe(true);
     expect(acceptArtifactCsp(withEval, origin, false)).toBe(false);
@@ -922,6 +937,42 @@ describe("sandbox host fixes", () => {
     expect(parseSandboxOrigin("https://localhost:41234")).toBeNull();
     expect(parseSandboxOrigin("http://[::1]:41234")).toBeNull();
     expect(parseSandboxOrigin("http://example.com:41234")).toBeNull();
+    expect(parseSandboxPublicOrigin("https://sandbox.example.com")).toBe("https://sandbox.example.com");
+    expect(parseSandboxPublicOrigin("https://sandbox.example.com/path")).toBeNull();
+    expect(parseSandboxPublicOrigin("http://sandbox.example.com")).toBeNull();
+    const env = (values: Record<string, string>) => ({ ...values }) as NodeJS.ProcessEnv;
+    expect(readSandboxPublicOrigin(env({ STAGEFLOW_SANDBOX_PUBLIC_ORIGIN: "https://sandbox.example.com", STAGEFLOW_PUBLIC_URL: "https://console.example.com" }))).toBe("https://sandbox.example.com");
+    expect(readSandboxPublicOrigin(env({ STAGEFLOW_SANDBOX_PUBLIC_ORIGIN: "https://console.example.com", STAGEFLOW_PUBLIC_URL: "https://console.example.com/" }))).toBeNull();
+    expect(sandboxPublicOriginProblem(env({ STAGEFLOW_SANDBOX_PUBLIC_ORIGIN: "https://chat.example.com", STAGEFLOW_PUBLIC_CHAT_URL: "https://chat.example.com/chat" }))).toContain("STAGEFLOW_PUBLIC_CHAT_URL");
+    expect(sandboxPublicOriginProblem(env({ STAGEFLOW_SANDBOX_PUBLIC_ORIGIN: "http://sandbox.example.com" }))).toContain("https");
+    expect(sandboxPublicOriginProblem(env({}))).toBeNull();
+    const loopback = ["http://localhost:3848", "http://127.0.0.1:3848"];
+    expect(htmlCardsReachable(loopback, null, null)).toBe(true);
+    expect(htmlCardsReachable(loopback, "http://127.0.0.1:3847", null)).toBe(true);
+    expect(htmlCardsReachable(loopback, "https://console.example.com", null)).toBe(false);
+    expect(htmlCardsReachable(loopback, null, "https://chat.example.com/chat")).toBe(false);
+    expect(htmlCardsReachable([...loopback, "https://sandbox.example.com"], "https://console.example.com", null)).toBe(true);
+    expect(htmlCardsReachable([], null, null)).toBe(false);
+    expect(advertisedSandboxOrigins([`http://127.0.0.1:${listener.port}`], { STAGEFLOW_SANDBOX_PUBLIC_ORIGIN: "https://sandbox.example.com" })).toEqual(
+      expect.arrayContaining([`http://127.0.0.1:${listener.port}`, "https://sandbox.example.com"]),
+    );
+    const ancestors = shellContentSecurityPolicy(
+      consoleOriginsFor({
+        listenHost: "127.0.0.1",
+        port: 3847,
+        allowedHosts: { entries: [] },
+        publicUrl: "https://console.example.com",
+        publicChatUrl: "https://chat.example.com",
+      }),
+    );
+    expect(ancestors).toContain("https://console.example.com");
+    expect(ancestors).toContain("https://chat.example.com");
+    expect(
+      sandboxPublicOriginMisconfigured(process.env, "https://sandbox.example.com", "https://console.example.com", "https://chat.example.com"),
+    ).toBeNull();
+    expect(
+      sandboxPublicOriginMisconfigured(process.env, "https://console.example.com", "https://console.example.com", null),
+    ).toContain("different host");
   });
 
   it("returns a null origin when bind fails for a reason other than EADDRINUSE", async () => {

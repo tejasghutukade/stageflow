@@ -73,7 +73,7 @@ ui:
   present: true
 ```
 
-That draws `live.declarative` and `static.markdown` cards kept in the conversation. To change a card, ask the agent: it calls `present_ui` again with the whole updated program, and the new card appears in its reply. Earlier cards stay as they were. A program that does not parse comes back on the tool result so the model can fix it; chat shows a skeleton while the call streams and a short error card if it gives up.
+That draws `live.declarative`, `static.markdown`, and (when the Host runs the sandbox listener) `live.html` cards kept in the conversation. To change a card, ask the agent: it calls `present_ui` again with the whole updated program, and the new card appears in its reply. Earlier cards stay as they were. A program that does not parse comes back on the tool result so the model can fix it; chat shows a skeleton while the call streams and a short error card if it gives up.
 
 For live data and buttons:
 
@@ -89,7 +89,7 @@ ui:
 |-------|------|---------|-------|
 | `ui.present` | boolean | `false` | The model can call `present_ui` only when this is true. Kinds or functions with it off is `agent.ui_present_required`. |
 | `ui.persistence` | `conversation` or `artifacts` | `conversation` | See the table above. |
-| `ui.kinds` | list of artifact kinds | both card kinds, or every presentable kind with `artifacts` | Filled in when `present` is true and the list is empty. Each must be `static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`, `live.declarative`, or `live.html` (`agent.ui_kind_unknown`). With `conversation`, only `live.declarative` and `static.markdown` (`agent.ui_kind_needs_artifacts`). No duplicates (`agent.ui_kind_duplicate`). A call for another kind is refused (`ui.kind_not_granted`). |
+| `ui.kinds` | list of artifact kinds | conversation card kinds, or every presentable kind with `artifacts` | Filled in when `present` is true and the list is empty. Each must be `static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`, `live.declarative`, or `live.html` (`agent.ui_kind_unknown`). With `conversation`, only `live.declarative`, `static.markdown`, and `live.html` (`agent.ui_kind_needs_artifacts` for other kinds). No duplicates (`agent.ui_kind_duplicate`). A call for another kind is refused (`ui.kind_not_granted`). |
 | `ui.functions` | list of function ids | `[]` | Only with `persistence: artifacts` (`agent.ui_functions_need_artifacts`). Function ids a card may call for live data. Each id matches `^[a-z][a-z0-9_-]{0,63}$` (`agent.ui_function_invalid`). No duplicates (`agent.ui_function_duplicate`). A binding query whose function is not listed is `agent.ui_function_not_granted`. |
 
 When `live.declarative` or `live.html` is in `ui.kinds`, the agent's prompt carries that kind's vocabulary, syntax and an example, so it can write a program without reading the docs. A reply holds at most four cards; failed attempts do not count. A card kept in the conversation is at most 64 KB and refuses bindings and actions (`ui.card_display_only`) and artifact keys (`ui.key_needs_artifacts`). With `artifacts`, a key from another project is refused (`ui.cross_project`), a missing key is `artifact.not_found`, and a deleted or expired artifact renders as an unavailable card. Email, Telegram, iMessage and Slack get a card's plain-text fallback (a markdown card sends its text). Eval sessions stub `present_ui` and do not run it.

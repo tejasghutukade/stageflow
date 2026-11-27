@@ -62,7 +62,7 @@ Behind a reverse proxy every visitor shares the proxy's address, so the per-IP l
 
 ## Cards in public chat
 
-An agent with `ui: { present: true }` draws cards (layouts, tables, numbers, markdown) in its replies, and visitors see them on the public page. The cards are kept in the conversation: the program travels in the message, nothing is saved to the Artifacts page, and the card is deleted with the conversation. Ask the agent to change a card and it draws an updated one. See [Agent definition: ui](agent-definition.md#ui).
+An agent with `ui: { present: true }` draws cards (layouts, tables, numbers, markdown, and HTML when the sandbox is available) in its replies, and visitors see them on the public page. `GET /api/public/chat/<slug>` may include `sandboxOrigins` so the page can frame HTML cards. The cards are kept in the conversation: the program travels in the message, nothing is saved to the Artifacts page, and the card is deleted with the conversation. Ask the agent to change a card and it draws an updated one. See [Agent definition: ui](agent-definition.md#ui).
 
 ## Why a link does not open
 

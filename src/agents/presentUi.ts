@@ -36,7 +36,9 @@ import {
   SESSION_ARTIFACTS_PER_MESSAGE,
 } from "../artifacts/sessionScope.js";
 import { Type } from "typebox";
-import { declarativePromptSection, htmlPromptSection } from "../artifacts/livePrompt.js";
+import { assertHtmlDocumentAtPublish } from "../artifacts/htmlScan.js";
+import { validateHtmlManifest, type HtmlCsp } from "../artifacts/htmlManifest.js";
+import { declarativePromptSection, htmlCardPromptSection, htmlPromptSection } from "../artifacts/livePrompt.js";
 
 export const PRESENT_UI_TOOL_NAME = "present_ui";
 
@@ -55,7 +57,10 @@ export function agentKeepsCardsInConversation(definition: Pick<AgentDefinition, 
   return (definition.ui?.persistence ?? "conversation") === "conversation";
 }
 
-export function agentPresentUiPrompt(definition: Pick<AgentDefinition, "ui">): string | undefined {
+export function agentPresentUiPrompt(
+  definition: Pick<AgentDefinition, "ui">,
+  options: { htmlCardsAvailable?: boolean } = {},
+): string | undefined {
   if (!agentHoldsPresentUi(definition)) return undefined;
   const kinds = definition.ui.kinds.join(", ");
   const conversation = agentKeepsCardsInConversation(definition);
@@ -64,14 +69,26 @@ export function agentPresentUiPrompt(definition: Pick<AgentDefinition, "ui">): s
     : ["# Showing artifacts in chat", "", `${AGENT_PRESENT_UI_SENTENCE} Kinds you may present: ${kinds}.`];
   if (definition.ui.kinds.includes("live.declarative")) {
     sections.push("", declarativePromptSection());
-    if (conversation) sections.push("", "In a card, bindings must be [] and there are no actions: write the data into the program as literals.");
+    if (conversation)
+      sections.push(
+        "",
+        "In a card, bindings must be [] and there are no actions: write the data into the program as literals.",
+        "When a chart type is not quite right, still draw the closest chart or a row of Stat values; do not reply that a component is unavailable.",
+      );
   }
-  if (!conversation && definition.ui.kinds.includes("live.html")) sections.push("", htmlPromptSection());
+  if (definition.ui.kinds.includes("live.html")) {
+    if (conversation && options.htmlCardsAvailable === true) sections.push("", htmlCardPromptSection());
+    else if (!conversation) sections.push("", htmlPromptSection());
+  }
   return sections.join("\n");
 }
 
-export function appendAgentPresentUiPrompt(systemPrompt: string, definition: Pick<AgentDefinition, "ui">): string {
-  const section = agentPresentUiPrompt(definition);
+export function appendAgentPresentUiPrompt(
+  systemPrompt: string,
+  definition: Pick<AgentDefinition, "ui">,
+  options: { htmlCardsAvailable?: boolean } = {},
+): string {
+  const section = agentPresentUiPrompt(definition, options);
   if (section === undefined) return systemPrompt;
   return `${systemPrompt}\n\n${section}`;
 }
@@ -94,15 +111,36 @@ export function isPresentedUiPart(part: UiPart): part is UiPartArtifactRef | UiP
   return part.kind === UI_PART_KIND_ARTIFACT_REF || part.kind === UI_PART_KIND_CARD;
 }
 
+/** Characters of an HTML card kept when a session is replayed; most cards fit, so the agent can still edit them. */
+export const REPLAY_PROGRAM_MAX = 12_000;
+
+function replayUiPart(part: UiPartArtifactRef | UiPartCard): unknown {
+  if (part.kind !== UI_PART_KIND_CARD || part.format !== "live.html" || part.program.length <= REPLAY_PROGRAM_MAX) return { type: "ui", ui: part };
+  const note = `<!-- Replay kept the first ${REPLAY_PROGRAM_MAX} of ${part.program.length} characters. This card is incomplete here: to change it, write the whole card again. -->`;
+  return { type: "ui", ui: { ...part, program: `${part.program.slice(0, REPLAY_PROGRAM_MAX)}\n${note}` } };
+}
+
 /** Replay text keeps the structured ui envelope beside the reply, so a restored session is not only the fallback sentence. A card keeps its program, so the agent can change it later. */
 export function messageReplayText(message: { text: string; parts?: readonly UiPart[] }): string {
   const text = message.text.trim();
   const ui = (message.parts ?? [])
     .filter(isPresentedUiPart)
-    .map((part) => JSON.stringify({ type: "ui", ui: part }))
+    .map((part) => JSON.stringify(replayUiPart(part)))
     .join("\n");
   if (!ui) return text;
   return text ? `${text}\n${ui}` : ui;
+}
+
+function htmlCardManifestDeclaresNetwork(csp: HtmlCsp): boolean {
+  return (csp.connectDomains?.length ?? 0) > 0 || (csp.resourceDomains?.length ?? 0) > 0
+    || (csp.baseUriDomains?.length ?? 0) > 0 || (csp.frameDomains?.length ?? 0) > 0;
+}
+
+function publishErrorCode(error: ArtifactPublishError): string {
+  if (error.code === "artifact.invalid_shape" && error.issues?.some((issue) => issue.message.includes("unknown library"))) {
+    return "ui.unknown_library";
+  }
+  return error.code;
 }
 
 export type PresentArtifactInput = {
@@ -258,6 +296,7 @@ export async function presentCard(input: PresentCardInput): Promise<PresentArtif
   const titleSource = typeof input.title === "string" && input.title.trim().length > 0 ? input.title.trim() : "Card";
   const title = titleSource.slice(0, ARTIFACT_TITLE_MAX_CHARS);
   let library: UiPartCard["library"];
+  let libraries: UiPartCard["libraries"];
   if (kind === "live.declarative") {
     const bindings = manifest.bindings;
     const actions = manifest.actions;
@@ -278,6 +317,39 @@ export async function presentCard(input: PresentCardInput): Promise<PresentArtif
       }
       throw error;
     }
+  } else if (kind === "live.html") {
+    const bindings = manifest.bindings;
+    const actions = manifest.actions;
+    const refresh = manifest.refresh;
+    if ((Array.isArray(bindings) && bindings.length > 0) || (Array.isArray(actions) && actions.length > 0)
+      || (refresh !== undefined && refresh !== null)) {
+      return toolFailure(
+        "ui.card_display_only",
+        "An HTML card is display-only: leave out bindings, actions, refresh, and external csp origins; put data in the HTML and use vendored libraries only",
+      );
+    }
+    if (typeof manifest.key === "string" && manifest.key.trim().length > 0) {
+      return toolFailure("ui.card_display_only", "An HTML card cannot reference a saved artifact; write the HTML into program");
+    }
+    const { kind: _kind, ...rest } = manifest;
+    try {
+      const html = validateHtmlManifest({ ...rest, format: "html", bindings: [] }, { enforceEval: true });
+      if (htmlCardManifestDeclaresNetwork(html.csp)) {
+        return toolFailure(
+          "ui.card_display_only",
+          "An HTML card cannot declare network or external origins: omit csp or leave every list empty",
+        );
+      }
+      await assertHtmlDocumentAtPublish(program, html.csp);
+      libraries = html.libraries?.map((entry) => ({ name: entry.name, version: entry.version }));
+    } catch (error) {
+      if (error instanceof ArtifactPublishError) {
+        const detail = error.issues?.map((issue) => issue.message).filter(Boolean).slice(0, 5).join("; ");
+        const code = publishErrorCode(error);
+        return toolFailure(code, detail && detail !== error.message ? `${error.message}: ${detail}` : error.message);
+      }
+      throw error;
+    }
   }
   const part: UiPartCard = {
     v: UI_PART_SCHEMA_VERSION,
@@ -286,6 +358,7 @@ export async function presentCard(input: PresentCardInput): Promise<PresentArtif
     format: kind,
     program,
     ...(library ? { library } : {}),
+    ...(libraries && libraries.length > 0 ? { libraries } : {}),
     fallback: {
       text: kind === "static.markdown" ? program.slice(0, UI_PART_FALLBACK_TEXT_MAX_CHARS) : title,
       url: "",
@@ -384,8 +457,10 @@ function presentUiParameterSchema() {
 function presentCardParameterSchema() {
   return Type.Object({
     title: Type.Optional(Type.String({ description: "Short title shown above the card." })),
-    program: Type.String({ description: "The card's program (live.declarative) or markdown text (static.markdown)." }),
-    manifest: Type.Record(Type.String(), Type.Unknown(), { description: "Manifest with kind. For live.declarative also format, library and bindings: []." }),
+    program: Type.String({ description: "The card program: live.declarative, markdown text (static.markdown), or a full HTML document (live.html)." }),
+    manifest: Type.Record(Type.String(), Type.Unknown(), {
+      description: "Manifest with kind. live.declarative: format, library, bindings: []. live.html: format html, optional libraries ({name, version}), empty csp. static.markdown: kind only.",
+    }),
   });
 }
 

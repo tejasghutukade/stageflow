@@ -153,6 +153,25 @@ describe("live program vocabulary", () => {
 });
 
 describe("live program validation", () => {
+  it("accepts each chart component and rejects an unknown chart", () => {
+    const charts = [
+      's = Series("share", [40, 35, 25])\nroot = PieChart(["A", "B", "C"], [s], "donut", 200)',
+      's = Series("n", [1, 2, 3])\nroot = AreaChart(["a", "b", "c"], [s], "linear", true, "x", "y", 200)',
+      's = Series("n", [1, 2, 3])\nroot = BarChart(["a", "b", "c"], [s])',
+      's = Series("n", [1, 2, 3])\nroot = HorizontalBarChart(["a", "b", "c"], [s])',
+      's = Series("n", [3, 4, 5])\nroot = RadarChart(["a", "b", "c"], [s], "area", 220)',
+      'g = ScatterSeries("g1", [1, 2], [3, 4])\nroot = ScatterChart([g], "x", "y", 200)',
+    ];
+    for (const program of charts) {
+      expect(validateProgram(program)).toMatchObject({ ok: true });
+    }
+    expect(validateProgram('root = FunnelChart(["a"], [Series("n", [1])])').errors.map((issue) => issue.code)).toContain(
+      "unknown-component",
+    );
+    expect(vocabularyPrompt()).toContain("HorizontalBarChart");
+    expect(vocabularyPrompt()).toContain("closest component");
+  });
+
   it("maps parser errors and tolerates a no-root fallback", () => {
     const unknown = validateProgram('root = NotAThing("x")');
     expect(unknown.ok).toBe(false);

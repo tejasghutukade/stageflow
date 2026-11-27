@@ -84,7 +84,7 @@ Grant ids (used in `approvals.ask_first`): builtin tool name (`write`, `bash`), 
 |---|---|---|
 | `present` | boolean, `false` | Grants `present_ui`. Off until set |
 | `persistence` | `conversation` or `artifacts`, `conversation` | `conversation`: display-only cards stored in the chat message (public chat link still opens). `artifacts`: cards saved as session artifacts, plus keys, live data and buttons (public link closes) |
-| `kinds` | list, filled per mode | Empty while present gets `live.declarative` and `static.markdown` (`conversation`) or every kind below (`artifacts`). `static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`, `live.declarative`, `live.html`. Unknown `agent.ui_kind_unknown`. Duplicate `agent.ui_kind_duplicate`. Other than the two card kinds with `conversation`: `agent.ui_kind_needs_artifacts` |
+| `kinds` | list, filled per mode | Empty while present gets `live.declarative`, `static.markdown`, and `live.html` (`conversation`) or every kind below (`artifacts`). `static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`, `live.declarative`, `live.html`. Unknown `agent.ui_kind_unknown`. Duplicate `agent.ui_kind_duplicate`. Other than the two card kinds with `conversation`: `agent.ui_kind_needs_artifacts` |
 | `functions` | list of function ids, `[]` | Only with `artifacts` (`agent.ui_functions_need_artifacts`). Ids a card may call for live data. Invalid `agent.ui_function_invalid`. Duplicate `agent.ui_function_duplicate`. A binding query for any other id is `agent.ui_function_not_granted` |
 
 Kinds or functions while `present` is false is `agent.ui_present_required`.

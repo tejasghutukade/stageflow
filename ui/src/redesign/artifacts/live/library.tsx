@@ -4,7 +4,17 @@ import { CardHeader } from "@sf-openui/CardHeader/index.js";
 import { Input } from "@sf-openui/Input/index.js";
 import { Select, SelectItem } from "@sf-openui/Select/index.js";
 import { z } from "zod/v4";
-import { BarChart, LineChart, Series } from "./charts";
+import {
+  AreaChart,
+  BarChart,
+  HorizontalBarChart,
+  LineChart,
+  PieChart,
+  RadarChart,
+  ScatterChart,
+  ScatterSeries,
+  Series,
+} from "./charts";
 import { Card, Stack } from "./layout";
 import { Callout, SectionCard, Stat, StatusPill, Tag, TextContent } from "./plain";
 import { Col, Table } from "./table";
@@ -25,7 +35,13 @@ export const liveRenderComponents = [
   SectionCard,
   LineChart,
   BarChart,
+  HorizontalBarChart,
+  PieChart,
+  AreaChart,
+  ScatterChart,
+  RadarChart,
   Series,
+  ScatterSeries,
   Select,
   SelectItem,
   Input,

@@ -106,6 +106,8 @@ export function createAgentHostContext(options: {
   /** Host services the Stageflow tools need; agent services are added here. Without it agents get no Stageflow tools. */
   /** Hold streams open to AgentMail and iMessage for agents linked to them. Only a running Host does this. */
   listenOnChannels?: boolean;
+  /** Filled once the sandbox listener starts; `cardsReachable` says whether visitors can reach it (see htmlCardsReachable). */
+  sandboxAdvertised?: { origins: string[]; cardsReachable: boolean };
   toolkitDeps?: Pick<
     McpToolDeps,
     | "manager"
@@ -145,6 +147,7 @@ export function createAgentHostContext(options: {
     createPiAgentRuntime({
       cwd: options.cwd,
       agentDir: options.agentDir,
+      htmlCardsAvailable: () => options.sandboxAdvertised?.cardsReachable === true,
       ...(options.toolkitDeps
         ? {
             toolkit: () =>
@@ -230,6 +233,7 @@ export function createAgentHostContext(options: {
     service,
     chat,
     projectRoot: defaultAgentProjectRoot(options.cwd),
+    sandboxOrigins: () => options.sandboxAdvertised?.origins ?? [],
     allowedOrigins: (process.env.STAGEFLOW_PUBLIC_CHAT_ORIGINS ?? "")
       .split(",")
       .map((origin) => origin.trim())

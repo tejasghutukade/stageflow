@@ -16,6 +16,7 @@ import {
 } from "react-icons/lu";
 import { AgentApiError, agentsApi, streamAgentChat, type AgentApproval, type AgentDetail, type AgentSessionDetail } from "../../../api/agents";
 import { UiMessageParts } from "../../../chat/MessageParts";
+import { ConsoleSandboxProvider } from "../../artifacts/ConsoleSandboxProvider";
 import { InlinePreviewCard } from "../../../chat/parts/artifactRefPart";
 import { registerBuiltinUiParts } from "../../../chat/parts/builtins";
 
@@ -713,5 +714,9 @@ function SessionView({ agent, sessionId }: { agent: AgentDetail; sessionId: stri
 export function AgentSessionPage({ agentId, sessionId }: { agentId: string; sessionId: string }) {
   const { detail, loading, error, missing } = useAgentDetail(agentId);
   if (!detail) return <AgentLoadError loading={loading} error={error} missing={missing} />;
-  return <SessionView key={sessionId} agent={detail} sessionId={sessionId === "new" ? null : sessionId} />;
+  return (
+    <ConsoleSandboxProvider>
+      <SessionView key={sessionId} agent={detail} sessionId={sessionId === "new" ? null : sessionId} />
+    </ConsoleSandboxProvider>
+  );
 }
