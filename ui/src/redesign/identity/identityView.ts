@@ -15,7 +15,7 @@ export const IDENTITY_SCOPES: readonly IdentityScope[] = ["own", "assigned", "se
 export const SIGNING_ALGORITHMS: readonly SigningAlgorithm[] = ["RS256", "ES256", "EdDSA"];
 
 export type Tone = "ok" | "needs" | "fail" | "muted";
-export type ConnectionKind = "handoff" | "oidc" | "service";
+export type ConnectionKind = "handoff" | "oidc" | "service" | "channel";
 
 export const SCOPE_INFO: Record<IdentityScope, { label: string; summary: string; example: string; broad?: boolean }> = {
   own: {
@@ -60,10 +60,17 @@ export const KIND_INFO: Record<ConnectionKind, { label: string; title: string; b
     blurb: "A fixed, explicitly scoped identity for agents that run on a schedule with nobody signed in.",
     bestFor: "Unattended runs such as nightly order reports.",
   },
+  channel: {
+    label: "Channel",
+    title: "Channel sender",
+    blurb: "The provider's phone number, Telegram id or email address is matched to an account. An unmatched sender gets a fixed reply and no answer from the agent.",
+    bestFor: "A customer texting, messaging or emailing an agent.",
+  },
 };
 
 export function connectionKind(kind: string): ConnectionKind {
-  return kind === "oidc" || kind === "service" ? kind : "handoff";
+  if (kind === "oidc" || kind === "service" || kind === "channel") return kind;
+  return "handoff";
 }
 
 export function oidcActivateReady(recordedTest: boolean): boolean {

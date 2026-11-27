@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentChatController } from "../src/agents/chatTurn.js";
 import { EvalGateRegistry } from "../src/agents/evalGate.js";
+import { EvalConsumerRegistry } from "../src/evals/consumer/evalConsumerRegistry.js";
 import { RunTokenRegistry } from "../src/evals/engine/promptfoo/runTokens.js";
 import { buildEvalPlan } from "../src/evals/plan.js";
 import { createAgentCaseRunner } from "../src/evals/runner/agentCaseRunner.js";
@@ -49,7 +50,8 @@ describe("POST /api/evals/internal/run-case with an agent plan", () => {
       { text: "It ships Tuesday." },
     ]);
     const evalGates = new EvalGateRegistry();
-    const chat = new AgentChatController({ service: fx.service, backend, evalGates });
+    const evalConsumers = new EvalConsumerRegistry();
+    const chat = new AgentChatController({ service: fx.service, backend, evalGates, evalConsumers });
     const stage: StageCaseRunner = {
       async runCase() {
         return { ok: false, code: "EVAL_STAGE_FAILED", message: "not a stage plan" };
@@ -60,7 +62,7 @@ describe("POST /api/evals/internal/run-case with an agent plan", () => {
     };
     const runner = createEvalCaseRunner({
       stage,
-      agent: createAgentCaseRunner({ host: () => ({ service: fx.service, chat, evalGates, backend }) }),
+      agent: createAgentCaseRunner({ host: () => ({ service: fx.service, chat, evalGates, evalConsumers, backend }) }),
     });
     const tokens = new RunTokenRegistry();
     const token = tokens.issue("run-1", { plan: built.plan });

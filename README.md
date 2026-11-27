@@ -43,20 +43,20 @@ The same pipeline runs three ways without rewriting anything:
 - **Envelope handoffs** — typed stage payloads and artifacts via `write_stage_artifact` / `emit_stage_envelope`
 - **Verified stage execution** — after-phase `verify` checks with durable evidence, plus `on_verify_fail` repair or manual operator recovery ([guide](docs/verified-stage-execution.md))
 - **HITL gates** — operator questions in the console; CI exits `2` when a run is waiting
-- **Agents (experimental)** — project-owned, revisioned agents (`agents/*.agent.yaml`) with granted tools, ask-first approvals, traces, channels, schedules and a public web chat page ([guide](docs/agents.md))
+- **Agents** — project-owned, revisioned agents (`agents/*.agent.yaml`) with granted tools, ask-first approvals, traces, channels, schedules and a public web chat page ([guide](docs/agents.md))
 - **Functions** — sandboxed JavaScript a stage or agent can call: verification checks, routing choices and tools, each limited to the files, environment variables and network origins it declares. Revisioned, testable in the console, and pinned per run ([guide](docs/functions.md))
 - **Evals** — check a stage or an agent against a dataset: graders, repeats, honest statistics, compare two runs, and sort failures into what to fix ([guide](docs/evals.md))
 - **Operator console** — an Inbox for gates and agent approvals, pipeline runs, agents and their sessions, connections, MCP servers and settings at `http://127.0.0.1:3847` ([guide](docs/operator-console.md))
 - **MCP endpoint** — Streamable HTTP at `/mcp` when `sf ui` or `sf mcp` is running; clients send `Authorization: Bearer <token>` (token in `~/.stageflow/control-token`, see [MCP access control](docs/mcp.md#access-control))
 - **MCP servers for agents and stages** — add servers, secrets and OAuth sign-in from Settings → Project MCP, or in the project `.mcp.json` ([guide](docs/mcp-servers.md))
-- **Connections (experimental)** — Slack, Telegram, iMessage, WhatsApp and AgentMail channels, and email accounts, managed from one page ([guide](docs/channels.md))
+- **Connections** — Slack, Telegram, iMessage and AgentMail channels, WhatsApp (experimental) and email accounts, managed from one page ([guide](docs/channels.md))
 - **Standalone stage execution** — run a single stage directly with `start_run` with `stage` (MCP tool, `sf run-stage` CLI, or the A2A `start_run` with `stage` operation), no pipeline file required; chain calls with `envelope_ref` (one or many prior results) instead of a pipeline DAG
 - **CI / headless** — `sf validate --strict --json`, `sf run --json` with exit codes `0` / `1` / `2`
 - **Parallel stages** — pipeline DAG with fan-out, join, and Clone Chains (one Clone Instance per Clone Array element; see [YAML catalog](docs/yaml-catalog.md#clone-chain))
 - **Definition-time graph view** — `sf graph --pipeline <path>` prints how a pipeline is wired before any run (terminal diagram or `--json`)
 - **SQLite run store** — global `~/.stageflow/` state (`state.db` plus per-run workspaces), shared across every project since Stageflow became a single auto-starting service
 
-**Experimental.** These work today, but their shape may still change between releases: agents and their public web chat, connections (channels and email accounts, including email rules), A2A, identity, browser attach, container browser hosts and live view, the Claude and Cursor stage backends, and automatic failure sorting in evals (Jev). The console marks Agents, Agent sessions, Connections, Identity and A2A with **Exp**. Pipelines, stages, HITL gates, the CLI, MCP, the run store and evals themselves are the stable core.
+**Experimental.** These work today, but their shape may still change between releases: A2A, WhatsApp, email rules, browser attach, container browser hosts and live view, the Claude and Cursor backends, and automatic failure sorting in evals (Jev). The console marks A2A with **Exp**. Pipelines, stages, HITL gates, agents with their web chat and channels, connections, the CLI, MCP, the run store and evals themselves are the stable core. On a self-hosted Host, a customer agent on iMessage, Telegram or AgentMail with `channel.access: authenticated` and identity on answers only that customer's orders and account ([who should talk to a channel agent](docs/agents.md#who-should-talk-to-a-channel-agent), [consumer identity](docs/consumer-identity.md)).
 
 ## Architecture at a glance
 
@@ -70,14 +70,12 @@ See [Architecture](docs/architecture.md) for component boundaries, execution flo
 
 ### Docker (recommended)
 
-Run Stageflow from the published image. It is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.66` is the current minor tag (`0.66.0` is that exact release).
-
+Run Stageflow from the published image. It is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.67` is the current minor tag (`0.67.0` is that exact release).
 ```bash
 docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.66 \
-  sf ui
+  ghcr.io/tejasghutukade/stageflow:0.67 \  sf ui
 ```
 
 Open [http://127.0.0.1:3847](http://127.0.0.1:3847). Connect a provider under **Settings → Providers**, then **New pipeline** on the Pipelines page. The `stageflow-data` volume keeps that state across runs.
@@ -92,8 +90,7 @@ docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
   -v "$PWD":/project \
-  ghcr.io/tejasghutukade/stageflow:0.66 \
-  sf ui
+  ghcr.io/tejasghutukade/stageflow:0.67 \  sf ui
 ```
 
 Building from this checkout, instead of pulling, is [Docker — Local try](docs/docker.md#local-try-compose).
@@ -183,9 +180,9 @@ Start the console with `sf ui` (default `http://127.0.0.1:3847`).
 - **Pipeline runs** — active and recent runs, capacity, and status at a glance
 - **Run detail** — Timeline, Graph or List of the stages; select a stage for its transcript, events, envelope and artifacts. Created runs show **not started** with a **Start run** action until history exists
 - **Pipelines, Tasks, Catalog, Triggers** — browse and edit the YAML, start runs; **New pipeline** drafts one in the Workshop
-- **Agents** and **Agent sessions** (experimental) — a directory with each agent's reach (web chat link, channel, schedule), cost and status; create and edit with version history; sessions, approvals and a run inspector
+- **Agents** and **Agent sessions** — a directory with each agent's reach (web chat link, channel, schedule), cost and status; create and edit with version history; sessions, approvals and a run inspector
 - **Functions** — a directory of functions; create and edit with an Access section that follows the code, a test panel and run history; attach to a stage or agent with one **Allow** ([guide](docs/console-functions.md))
-- **Connections** (experimental) — channels, email accounts and tool servers
+- **Connections** — channels, email accounts and tool servers
 - **Settings** — Providers (`sf_owned` credential storage), Concurrency, MCP server, Project MCP (servers, secrets, sign-in) and Notifications
 - **Command palette** — `⌘K` from any page. Page-by-page guide: [docs/operator-console.md](docs/operator-console.md)
 

@@ -218,6 +218,7 @@ describe("AgentService definitions", () => {
       ["sub_agents.0", "agent.sub_agent_unknown"],
       ["channel.connection_id", "agent.connection_unknown"],
       ["channel.allow_from", "agent.channel_open_to_anyone"],
+      ["channel.allow_from", "agent.channel_open_with_tools"],
     ]);
     expect(result.yaml).toContain("sub_agents:");
   });

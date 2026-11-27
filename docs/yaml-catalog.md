@@ -1263,7 +1263,7 @@ Runnable demo: [`examples/hello-world/`](../examples/hello-world/) — task `inp
 
 ## Agents (`agents/*.agent.yaml`) {#agents-agent-yaml}
 
-An agent is a project-owned definition. The file name is the agent id: `agents/<id>.agent.yaml`. This is not the stage `agent:` field, which still selects the Pi or Claude backend. Agents, and the Claude and Cursor backends, are experimental.
+An agent is a project-owned definition. The file name is the agent id: `agents/<id>.agent.yaml`. This is not the stage `agent:` field, which still selects the Pi or Claude backend. Agents are stable. The Claude and Cursor backends are experimental.
 
 | Field | Required | Description |
 |-------|----------|-------------|
@@ -1573,9 +1573,10 @@ Unknown keys at any level are an error (`eval.unknown_key`).
 | `code` | `code`: body of a JavaScript function (required) | Receives `(output, testCase, context)`; returns a boolean, a number 0 to 1, or `{ pass, score?, reason? }`. 5 second limit. Runs on the author's machine with the author's permissions. On an agent target `output` is the conversation |
 | `tool_calls` | `must_call`, `must_not_call`, `must_ask_first`: string arrays; `max_calls`: 0 to 200; `args`: up to 20 of `{ tool, path, op, value? }` | Agent targets only. Reads the recorded tool calls. A call counts whatever its outcome. `must_call` and `must_not_call` default to the case's `expected.tools` and `expected.forbidden_tools`; `[]` opts out |
 | `conversation_check` | `max_turns` (1 to 100), `max_agent_questions_per_turn` (0 to 10), `final_reply`: up to 10 of `{ op, value? }` | Agent targets only. At least one key. Deterministic |
+| `consumer_scope` | _(none)_ | Agent targets only. Each case needs `metadata.principal` from the eval fixture catalog. Deterministic cross-customer leakage check |
 | `goal_reached` | `judge` (optional), `judge_settings` (optional), `guidance` (up to 2,000 characters) | Agent targets only. A judge reads the conversation and the case's `input.goal` (else `expected.outcome`). Pass or fail |
 
-`command` and `groundedness` graders are not available. `schema` applies to stage targets only; `tool_calls`, `conversation_check` and `goal_reached` apply to agent targets only (`eval.grader_not_applicable` otherwise). The grader types, scoring and statistics are explained in [Evals](evals.md#writing-an-eval).
+`command` and `groundedness` graders are not available. `schema` applies to stage targets only; `tool_calls`, `conversation_check`, `consumer_scope` and `goal_reached` apply to agent targets only (`eval.grader_not_applicable` otherwise). The grader types, scoring and statistics are explained in [Evals](evals.md#writing-an-eval).
 
 ### Agent evals
 
@@ -1630,7 +1631,7 @@ On an agent target, `field` and `reference` paths start at the conversation (for
 | `eval.cases_skipped` | warning | Some cases fail the stage's `io.input.schema`; they are skipped when a run starts |
 | `eval.no_valid_cases` | error | No case remains after skipping |
 | `eval.grader_duplicate_id` | error | A repeated grader id |
-| `eval.grader_type_unsupported` | error | A type other than `schema`, `field`, `reference`, `rubric`, `code`, `tool_calls`, `conversation_check`, `goal_reached` (`command` has its own message) |
+| `eval.grader_type_unsupported` | error | A type other than `schema`, `field`, `reference`, `rubric`, `code`, `tool_calls`, `conversation_check`, `consumer_scope`, `goal_reached` (`command` has its own message) |
 | `eval.grader_invalid` | error | A type-specific rule is broken |
 | `eval.schema_grader_without_output_schema` | error | A `schema` grader on a stage with no `io.output.schema` |
 | `eval.judge_missing` | error | A rubric needs a judge and none is set |
@@ -1665,6 +1666,8 @@ On an agent target, `field` and `reference` paths start at the conversation (for
 | `eval.simulator_unknown_model` | warning | `user_model` is not in the model catalog |
 | `eval.simulator_same_as_agent` | warning | The simulator model is the agent's own model |
 | `eval.cases_missing_goal` | warning | A `goal_reached` grader and some scenarios have neither `input.goal` nor `expected.outcome` |
+| `eval.cases_missing_principal` | error | A `consumer_scope` grader and some cases lack `metadata.principal` |
+| `dataset.principal_unknown` | error | `metadata.principal` is not in the eval fixture catalog |
 
 ## Datasets (`*.dataset.jsonl`) {#datasets-dataset-jsonl}
 
@@ -1678,7 +1681,7 @@ A dataset is a file of cases. The loader checks only the case shape; matching `i
 | `expected` | any JSON | no | Reference data for `reference` graders and rubric judges |
 | `tags` | string[] | no | Up to 10, each `^[a-z0-9][a-z0-9-]{0,31}$` |
 | `goal` | string | no | Replaces the eval's `task.goal` for this case |
-| `metadata` | object | no | Free-form, never read by Stageflow |
+| `metadata` | object | no | Free-form. `principal` names a fixture customer for `consumer_scope` agent evals (`dataset.principal_unknown` when unknown) |
 
 Formats: JSONL (one object per line, blank lines ignored), JSON (an array or `{ "cases": [...] }`) and CSV (header `id`, `title`, `goal`, `tags` split on `;`, `input.<name>`, `expected.<name>`, any header ending `:json` parsed as JSON). Limits: 5,000 cases, 1 MB per case, 50 MB per uploaded file. Dataset findings use `category: "dataset"`: `dataset.load_error`, `dataset.empty`, `dataset.not_object`, `dataset.invalid_shape`, `dataset.unknown_key`, `dataset.case_missing_id`, `dataset.case_invalid_id`, `dataset.duplicate_id`, `dataset.case_missing_input`, `dataset.invalid_field`, `dataset.csv_unknown_column`, `dataset.too_many_cases`, `dataset.case_too_large`, `dataset.file_too_large` (errors) and `dataset.input_mismatch`, `dataset.few_cases` (warnings). See [Evals: Datasets](evals.md#datasets).
 

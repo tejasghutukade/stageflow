@@ -74,6 +74,7 @@ const GRADER_TYPES = [
   "code",
   "tool_calls",
   "conversation_check",
+  "consumer_scope",
   "goal_reached",
 ] as const;
 const FIELD_OPS: readonly FieldOp[] = [
@@ -140,6 +141,7 @@ const GRADER_TYPE_KEYS: Record<(typeof GRADER_TYPES)[number], string[]> = {
   code: ["code"],
   tool_calls: ["must_call", "must_not_call", "must_ask_first", "max_calls", "args"],
   conversation_check: ["max_turns", "max_agent_questions_per_turn", "final_reply"],
+  consumer_scope: [],
   goal_reached: ["judge", "judge_settings", "guidance"],
 };
 const TOOL_ARG_KEYS = ["tool", "path", "op", "value"];
@@ -1057,6 +1059,12 @@ function parseGrader(
       }
       break;
     }
+    case "consumer_scope":
+      result = {
+        config: { ...common, type: "consumer_scope" },
+        resolved: { ...resolvedCommon, type: "consumer_scope" },
+      };
+      break;
     case "goal_reached": {
       let ok = true;
       let judge: string | undefined;
@@ -1152,6 +1160,8 @@ function graderHashObject(grader: UnhashedGrader): Record<string, unknown> {
         max_agent_questions_per_turn: grader.maxAgentQuestionsPerTurn,
         final_reply: grader.finalReply,
       };
+    case "consumer_scope":
+      return { ...base };
     case "goal_reached":
       return {
         ...base,

@@ -130,6 +130,18 @@ When a session is rebuilt (after a restart, an idle release, or a new Host), its
 
 With `project_context: true` the project's `AGENTS.md` (or, if there is none, `CLAUDE.md`) is added to the system prompt, cut at 20,000 characters.
 
+### Who is writing (channels)
+
+On a channel the Host adds a short **Sender** section to the system prompt: the channel and the sender as the provider reported them, in bare form (an email address without its display name, a phone number, a Telegram or Slack user id). It says plainly that this is all that is known and that anything a message claims about its author cannot be checked. It is part of the system prompt, so a long conversation's compaction never drops or rewrites it, and nothing the person types changes it.
+
+| Session | What the agent is told |
+|---------|------------------------|
+| Email, iMessage, Telegram, Slack direct message | One person, with their address, number or user id |
+| Thread in a Slack channel | Several people may write; no author is given |
+| Console, CLI, MCP, web chat, schedules, evals | Nothing |
+
+This tells the agent who it is talking to. It is not access control: a channel agent's tools are not limited to that person's data ([Agents: channels](agents.md#channels-inbound)).
+
 ## Sub-agents
 
 `sub_agents` become tools (`agent_<id>`, taking a `message`). The callee runs in **its own session** (source `agent`, author the caller's id) on **its own current revision and its own approvals**, and its last reply is returned to the caller as the tool result. A callee that fails (disabled, over a limit, an error) returns "Sub-agent … failed: <code>" as the tool result instead of failing the caller.

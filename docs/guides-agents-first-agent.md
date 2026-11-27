@@ -30,7 +30,9 @@ Every new agent is **disabled**. Nothing runs until you enable it.
 | `agent.mcp_server_unknown` | A server under `tools.mcp` is in neither the project `.mcp.json` nor the servers saved from the console |
 | `agent.connection_unknown` | `channel.connection_id` is not a known connection |
 | `agent.channel_nobody_allowed` | `allow_from` is empty, so nobody can message the agent |
-| `agent.channel_open_to_anyone` | `allow_from` contains `*` |
+| `agent.channel_open_to_anyone` | `allow_from` contains `*` or a public mail domain |
+| `agent.channel_open_with_tools` | Open to anyone and the agent has tools, memories or project context; it cannot be enabled like this |
+| `agent.channel_username_entry` | A Telegram `@username` in `allow_from`; use the numeric user id |
 | `agent.shell_not_path_confined` | `bash` is granted; it is not confined by the path guard and always asks first |
 | `agent.channel_approvers_unused` | `approvals.approvers.channel_ids` is set; approving from a chat channel is not supported yet |
 

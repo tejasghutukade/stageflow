@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { LuBot, LuCheck, LuKeyRound, LuLink2, LuTriangleAlert } from "react-icons/lu";
-import { IdentityApiError, identityApi, type IdentityScope, type SigningAlgorithm } from "../../api/identity";
+import { IdentityApiError, identityApi, type ChannelProvider, type IdentityScope, type SigningAlgorithm } from "../../api/identity";
 import { chatOrigin, useHostInfo } from "../../hostInfo";
 import { IdentityDialog } from "./identityOverlay";
 import { AgentChips, ScopePicker } from "./identityPickers";
@@ -20,8 +20,9 @@ import {
   type ConnectionKind,
 } from "./identityView";
 
-const KIND_ICON = { handoff: LuLink2, oidc: LuKeyRound, service: LuBot } as const;
-const KINDS: readonly ConnectionKind[] = ["handoff", "oidc", "service"];
+const KIND_ICON = { handoff: LuLink2, oidc: LuKeyRound, service: LuBot, channel: LuLink2 } as const;
+const KINDS = ["handoff", "oidc", "service", "channel"] as const;
+const CHANNEL_PROVIDERS: readonly ChannelProvider[] = ["imessage", "telegram", "agentmail", "email"];
 
 function errorCode(err: unknown): string {
   return err instanceof IdentityApiError ? err.code : "request_failed";
@@ -51,7 +52,7 @@ function AlgorithmChips({ value, onChange }: { value: SigningAlgorithm[]; onChan
 
 function KindPicker({ value, onChange }: { value: ConnectionKind; onChange: (kind: ConnectionKind) => void }) {
   return (
-    <div className="grid gap-2 sm:grid-cols-3" role="tablist" aria-label="Connection type">
+    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4" role="tablist" aria-label="Connection type">
       {KINDS.map((kind) => {
         const Icon = KIND_ICON[kind];
         const active = kind === value;
@@ -127,6 +128,9 @@ export function IdentityConnectDialog({
   const [accountId, setAccountId] = useState("");
   const [scope, setScope] = useState<IdentityScope>("assigned");
   const [resources, setResources] = useState("");
+  const [channelConnectionId, setChannelConnectionId] = useState("");
+  const [provider, setProvider] = useState<ChannelProvider>("imessage");
+  const [unmappedReply, setUnmappedReply] = useState("");
 
   const hostInfo = useHostInfo();
   const agentOption = agents.find((entry) => entry.id === agent);
@@ -147,6 +151,14 @@ export function IdentityConnectDialog({
     if (kind === "handoff") return Boolean(agent.trim() && issuer.trim() && audience.trim() && chosenAlgorithms.length > 0 && jwksOk);
     if (kind === "oidc") {
       return Boolean(agent.trim() && issuer.trim() && clientId.trim() && redirectUri.trim() && oidcAlgorithms.length > 0 && validClientSecret(clientSecret));
+    }
+    if (kind === "channel") {
+      return Boolean(
+        agent.trim() &&
+          channelConnectionId.trim() &&
+          unmappedReply.trim() &&
+          (scope !== "selected" || picked.length > 0),
+      );
     }
     return Boolean(agent.trim() && accountId.trim() && (scope !== "selected" || picked.length > 0));
   })();
@@ -180,6 +192,17 @@ export function IdentityConnectDialog({
           redirectUri: redirectUri.trim(),
           algorithms: oidcAlgorithms,
         });
+      } else if (kind === "channel") {
+        await identityApi.registerChannel({
+          id: connectionId,
+          channelConnectionId: channelConnectionId.trim(),
+          agentId: agent.trim(),
+          provider,
+          unmappedReply: unmappedReply.trim(),
+          scope,
+          agents: [agent.trim()],
+          resources: scope === "selected" ? picked : [],
+        });
       } else {
         await identityApi.registerService({
           id: connectionId,
@@ -199,7 +222,8 @@ export function IdentityConnectDialog({
   }
 
   const info = KIND_INFO[kind];
-  const submitLabel = kind === "oidc" ? "Register draft" : kind === "service" ? "Create service identity" : "Register handoff";
+  const submitLabel =
+    kind === "oidc" ? "Register draft" : kind === "service" ? "Create service identity" : kind === "channel" ? "Register channel" : "Register handoff";
 
   return (
     <IdentityDialog
@@ -229,7 +253,14 @@ export function IdentityConnectDialog({
           hint="Letters, numbers, - and _. Shown in audit entries."
           error={idTaken ? "A connection with this id already exists." : idInvalid ? "Use letters, numbers, - and _ only." : undefined}
         >
-          <input className={`${INPUT} ${MONO}`} value={id} placeholder={kind === "service" ? "nightly-report" : "shop-app"} autoComplete="off" spellCheck={false} onChange={(event) => setId(event.target.value)} />
+          <input
+            className={`${INPUT} ${MONO}`}
+            value={id}
+            placeholder={kind === "service" ? "nightly-report" : kind === "channel" ? "sms-support" : "shop-app"}
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(event) => setId(event.target.value)}
+          />
         </Field>
         <div className="flex min-w-0 flex-col gap-1.5">
           <span className="text-[13px] font-medium leading-normal text-[#ecedee]">{kind === "service" ? "Agent it runs" : "Agent customers talk to"}</span>
@@ -300,6 +331,43 @@ export function IdentityConnectDialog({
             <input className={`${INPUT} ${MONO}`} value={accountId} placeholder="acct_reports" autoComplete="off" spellCheck={false} onChange={(event) => setAccountId(event.target.value)} />
           </Field>
           <ScopePicker name="service-scope" value={scope} onChange={setScope} resources={resources} onResources={setResources} />
+        </>
+      ) : null}
+
+      {kind === "channel" ? (
+        <>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Communications connection" hint="The connection id from Connections for this line or inbox.">
+              <input
+                className={`${INPUT} ${MONO}`}
+                value={channelConnectionId}
+                placeholder="alerts-imessage"
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(event) => setChannelConnectionId(event.target.value)}
+              />
+            </Field>
+            <Field label="Provider" hint="Must match the communications connection provider.">
+              <select className={INPUT} value={provider} onChange={(event) => setProvider(event.target.value as ChannelProvider)}>
+                {CHANNEL_PROVIDERS.map((entry) => (
+                  <option key={entry} value={entry}>
+                    {entry}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <ScopePicker name="channel-scope" value={scope} onChange={setScope} resources={resources} onResources={setResources} />
+          <Field label="Unmatched sender reply" hint="Fixed text when the sender is not mapped to an account. The agent does not respond.">
+            <textarea
+              className={`${INPUT} min-h-20 py-2 text-[13px] leading-[1.5]`}
+              value={unmappedReply}
+              placeholder="We could not match your message to an account."
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(event) => setUnmappedReply(event.target.value)}
+            />
+          </Field>
         </>
       ) : null}
 

@@ -14,6 +14,7 @@ import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { isFloatingModelId, mapJudge } from "../evals/judgeProviders.js";
 import { classifyTool } from "../agents/toolRisk.js";
+import { evalFixturePrincipal } from "../evals/consumer/fixtureCatalog.js";
 import { checkDatasetAgainstAgent } from "./datasetAgentCheck.js";
 import { checkDatasetAgainstStage } from "./datasetStageCheck.js";
 import {
@@ -36,15 +37,18 @@ export const EVAL_LARGE_RUN = 500;
 export const EVAL_TOO_LARGE_RUN = 5000;
 
 /** The slice of the dataset loader's report that eval validation reads. */
+export type DatasetReportCase = {
+  id: string;
+  input: Record<string, unknown>;
+  expected?: unknown;
+  tags?: string[];
+  metadata?: unknown;
+};
+
 export type DatasetReport = {
   path: string;
   relPath: string;
-  cases: Array<{
-    id: string;
-    input: Record<string, unknown>;
-    expected?: unknown;
-    tags?: string[];
-  }>;
+  cases: DatasetReportCase[];
   findings: ValidationFinding[];
   contentHash: string;
 };
@@ -58,7 +62,7 @@ export type ValidateEvalContext = {
   agents?: AgentCatalogPort;
 };
 
-const CONVERSATION_GRADER_TYPES: readonly string[] = ["tool_calls", "conversation_check", "goal_reached"];
+const CONVERSATION_GRADER_TYPES: readonly string[] = ["tool_calls", "conversation_check", "consumer_scope", "goal_reached"];
 
 export function evalFinding(
   relPath: string,
@@ -716,6 +720,27 @@ async function validateAgentEval(
   }
 
   for (const grader of loaded.graders) {
+    if (grader.type === "consumer_scope") {
+      const missingPrincipal = runnable.filter((c) => {
+        const metadata = c.metadata as Record<string, unknown> | undefined;
+        return typeof metadata?.principal !== "string" || metadata.principal.length === 0;
+      });
+      if (missingPrincipal.length > 0) {
+        add(
+          "error",
+          "eval.cases_missing_principal",
+          `Grader "${grader.id}": ${missingPrincipal.length} case(s) lack metadata.principal; first: ${missingPrincipal[0]?.id}`,
+        );
+      }
+      for (const c of runnable) {
+        const metadata = c.metadata as Record<string, unknown> | undefined;
+        const principal = typeof metadata?.principal === "string" ? metadata.principal : undefined;
+        if (!principal) continue;
+        if (!evalFixturePrincipal(principal)) {
+          add("error", "dataset.principal_unknown", `Case ${c.id}: metadata.principal ${JSON.stringify(principal)} is not in the eval fixture catalog`);
+        }
+      }
+    }
     if (grader.type === "goal_reached") {
       const missingGoal = runnable.filter((c) => {
         const expected = c.expected as Record<string, unknown> | null | undefined;

@@ -26,6 +26,35 @@ export async function boundedJson(url: URL, body: unknown, headers: Record<strin
   }
 }
 
+/** Like boundedJson, but a non-2xx status is returned instead of thrown. The body of a refusal is discarded. */
+export async function boundedPost(url: URL, body: unknown, headers: Record<string, string>, signal: AbortSignal,
+  fetcher: typeof fetch = fetch): Promise<{ status: number; json: unknown }> {
+  const boundedSignal = AbortSignal.any([signal, AbortSignal.timeout(3_000)]);
+  const response = await fetcher(url, {
+    method: "POST", redirect: "error", signal: boundedSignal,
+    headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body),
+  });
+  try {
+    if (!response.ok || !response.body) return { status: response.status, json: undefined };
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      bytes += part.value.length;
+      if (bytes > 65_536) {
+        await reader.cancel();
+        throw new Error("response_too_large");
+      }
+      chunks.push(part.value);
+    }
+    return { status: response.status, json: parseBoundedJson(Buffer.concat(chunks).toString("utf8")) };
+  } finally {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
+
 export async function boundedGet(url: URL, signal: AbortSignal, fetcher: typeof fetch = fetch): Promise<unknown> {
   const boundedSignal = AbortSignal.any([signal, AbortSignal.timeout(3_000)]);
   const response = await fetcher(url, { method: "GET", redirect: "error", signal: boundedSignal });

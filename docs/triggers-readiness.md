@@ -190,7 +190,7 @@ UI tile **Email** → `event.source: email.message` (any `email.*` prefix uses `
 
 ## Smoke catalog (Docker and local)
 
-The [`examples/triggers-readiness/`](../examples/triggers-readiness/) bundle ships in the Docker image at `/opt/stageflow/catalog/triggers-readiness` (registered via `STAGEFLOW_ENSURE_PROJECT_ROOTS` in [`docker-compose.yml`](../docker-compose.yml)). See [examples/triggers-readiness/README.md](../examples/triggers-readiness/README.md) for trigger ids and test commands.
+The [`examples/triggers-readiness/`](../examples/triggers-readiness/) bundle ships in the Docker image at `/opt/stageflow/catalog/triggers-readiness`. A default Compose run does not register it; add that path with `STAGEFLOW_ENSURE_PROJECT_ROOTS` or register the catalog in the console. See [examples/triggers-readiness/README.md](../examples/triggers-readiness/README.md) for trigger ids and test commands.
 
 ---
 

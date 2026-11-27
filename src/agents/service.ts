@@ -1,5 +1,6 @@
 import { grantedStageflowTools } from "../toolkit/meta.js";
-import { senderAllowed } from "./communications/allowlist.js";
+import { isUsernameEntry, normalizeSender, openToAnyone, senderAllowed } from "./communications/allowlist.js";
+import { openChannelIssues } from "./communications/openChannel.js";
 import { createHash, randomBytes } from "node:crypto";
 import { access, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -18,7 +19,7 @@ import {
 import { attachmentIssuesFromFiles, readFunctionFile } from "../config/loadFunction.js";
 import { FunctionService } from "../functions/service.js";
 import { FunctionStore } from "../functions/store.js";
-import { agentThreadKey, inboundDedupeKey, type AgentInboundMessage } from "./communications/port.js";
+import { agentThreadKey, inboundDedupeKey, sessionThreadKey, type AgentInboundMessage } from "./communications/port.js";
 import { generateAgentId } from "./agentId.js";
 import { newWebChatSlug } from "./webChat/slug.js";
 import { ApprovalBroker } from "./approvalBroker.js";
@@ -26,6 +27,7 @@ import { deliveryLedger, scheduleLedger, type DeliveryLedger, type ScheduleLedge
 import { TurnLifecycle, type FinishInput } from "./turnLifecycle.js";
 import { AgentError } from "./errors.js";
 import { applyEvalOverrides, EVAL_SESSION_SOURCE, isEvalSession, type EvalSessionOverrides } from "./evalSession.js";
+import { consumerChannelIssues } from "./consumerSafety.js";
 import { agentMemoryIssues } from "../memory/agentIssues.js";
 import { diffLines, type DiffLine } from "./lineDiff.js";
 import { exportTurnsToOtlp } from "./otlpExport.js";
@@ -61,6 +63,11 @@ export type AgentEnvironment = {
   connectionIdentity?(connectionId: string): Promise<string | undefined>;
   /** What the model catalog says about an id, or undefined when it cannot be checked. */
   modelInfo?(id: string): Promise<{ known: boolean; nativeTools: boolean } | undefined>;
+};
+
+export type ConsumerPublicationGuard = {
+  identityEnabled: boolean;
+  hasChannelConnection(agentId: string, channelConnectionId: string): boolean;
 };
 
 const NO_ENVIRONMENT: AgentEnvironment = {
@@ -157,6 +164,7 @@ export class AgentService {
   private readonly store: AgentStore;
   private readonly connection: import("better-sqlite3").Database | undefined;
   private readonly environment: AgentEnvironment;
+  private readonly getConsumerPublication: (() => ConsumerPublicationGuard | undefined) | undefined;
   private readonly now: () => Date;
   private readonly tails = new Map<string, Promise<unknown>>();
   /** Overrides of open eval sessions. Memory only: eval sessions do not survive a Host restart. */
@@ -177,11 +185,13 @@ export class AgentService {
     now?: () => Date;
     /** How long a file must be unchanged before its stamp is trusted (default 2 s). */
     treeTrustMs?: number;
+    getConsumerPublication?: () => ConsumerPublicationGuard | undefined;
   }) {
     this.store = options.store;
     this.connection = options.connection;
     this.treeTrustMs = options.treeTrustMs ?? 2_000;
     this.environment = options.environment ?? NO_ENVIRONMENT;
+    this.getConsumerPublication = options.getConsumerPublication;
     this.now = options.now ?? (() => new Date());
     this.lifecycle = new TurnLifecycle(this.store, this.approvalBroker, () => this.iso());
     this.deliveries = deliveryLedger(this.store, () => this.iso());
@@ -404,7 +414,7 @@ export class AgentService {
       description: definition?.description ?? null,
       enabled: definition?.enabled ?? false,
       revision: row.currentRevision,
-      issues: [...row.issues, ...sessionIssues],
+      issues: [...row.issues, ...sessionIssues, ...(definition?.enabled ? openChannelIssues(definition) : [])],
       model: definition?.model ?? null,
       tools: {
         builtin: definition?.tools.builtin ?? [],
@@ -620,8 +630,13 @@ export class AgentService {
       }
       if (definition.channel.allow_from.length === 0) {
         warnings.push({ path: "channel.allow_from", code: "agent.channel_nobody_allowed", message: "Nobody is allowed to message this agent yet. Add the people or domains it should answer." });
-      } else if (definition.channel.allow_from.includes("*")) {
+      } else if (openToAnyone(definition.channel.allow_from)) {
         warnings.push({ path: "channel.allow_from", code: "agent.channel_open_to_anyone", message: "Anyone who can reach this connection can talk to this agent" });
+      }
+      // Shown as a warning while the agent is off; it cannot be enabled like this.
+      warnings.push(...openChannelIssues(definition));
+      if (definition.channel.allow_from.some(isUsernameEntry)) {
+        warnings.push({ path: "channel.allow_from", code: "agent.channel_username_entry", message: "A Telegram @username can change hands. Use the person's numeric user id instead; the Host log shows it when they write." });
       }
     }
     if (definition.approvals.approvers.channel_ids.length > 0) {
@@ -721,6 +736,27 @@ export class AgentService {
     }));
   }
 
+  private async channelConsumerPublicationIssues(projectRoot: string, definition: AgentDefinition): Promise<AgentIssue[]> {
+    const publication = this.getConsumerPublication?.();
+    if (!publication) {
+      if (definition.channel?.access === "authenticated") {
+        return [{ path: "channel.access", code: "identity.setup_required", message: "Protected channel needs identity, a channel connection, and only declared customer resource tools" }];
+      }
+      return [];
+    }
+    return consumerChannelIssues(definition, {
+      hasConsumerAuthorization: publication.identityEnabled,
+      hasChannelConnection: publication.hasChannelConnection,
+      loadSubAgent: async (id) => {
+        try {
+          return (await this.get(projectRoot, id)).definition;
+        } catch {
+          return null;
+        }
+      },
+    });
+  }
+
   async validate(projectRoot: string, rawInput: unknown): Promise<ValidationResult> {
     const raw = this.prepareWebChat(await this.withGeneratedId(projectRoot, rawInput), "preview");
     const accepted = await this.acceptAgent(projectRoot, raw);
@@ -729,8 +765,10 @@ export class AgentService {
     const conflicts = await this.channelConflicts(projectRoot, parsed.value);
     const missing = agentMemoryIssues(parsed.value.memories);
     const functions = await this.functionAttachmentIssues(projectRoot, parsed.value);
-    if (conflicts.length > 0 || missing.length > 0 || functions.length > 0) {
-      return { definition: null, issues: [...conflicts, ...missing, ...functions], warnings: [], yaml: null };
+    const open = parsed.value.enabled ? openChannelIssues(parsed.value) : [];
+    const channelConsumer = parsed.value.enabled ? await this.channelConsumerPublicationIssues(projectRoot, parsed.value) : [];
+    if (conflicts.length > 0 || missing.length > 0 || functions.length > 0 || open.length > 0 || channelConsumer.length > 0) {
+      return { definition: null, issues: [...conflicts, ...missing, ...functions, ...open, ...channelConsumer], warnings: [], yaml: null };
     }
     return {
       definition: parsed.value,
@@ -817,8 +855,9 @@ export class AgentService {
       const conflicts = await this.channelConflicts(projectRoot, definition);
       const missing = agentMemoryIssues(definition.memories);
       const functions = await this.functionAttachmentIssues(projectRoot, definition);
-      if (conflicts.length > 0 || missing.length > 0 || functions.length > 0) {
-        throw new AgentError("agent.invalid", "Agent definition is invalid", [...conflicts, ...missing, ...functions]);
+      const channelConsumer = definition.enabled ? await this.channelConsumerPublicationIssues(projectRoot, definition) : [];
+      if (conflicts.length > 0 || missing.length > 0 || functions.length > 0 || channelConsumer.length > 0) {
+        throw new AgentError("agent.invalid", "Agent definition is invalid", [...conflicts, ...missing, ...functions, ...channelConsumer]);
       }
       const existing = this.store.getDefinition(agentProjectKey(projectRoot), definition.id);
       const onDisk = await access(this.file(projectRoot, definition.id)).then(
@@ -864,8 +903,10 @@ export class AgentService {
       const conflicts = await this.channelConflicts(projectRoot, definition);
       const missing = agentMemoryIssues(definition.memories);
       const functions = await this.functionAttachmentIssues(projectRoot, definition);
-      if (conflicts.length > 0 || missing.length > 0 || functions.length > 0) {
-        throw new AgentError("agent.invalid", "Agent definition is invalid", [...conflicts, ...missing, ...functions]);
+      const open = definition.enabled ? openChannelIssues(definition) : [];
+      const channelConsumer = definition.enabled ? await this.channelConsumerPublicationIssues(projectRoot, definition) : [];
+      if (conflicts.length > 0 || missing.length > 0 || functions.length > 0 || open.length > 0 || channelConsumer.length > 0) {
+        throw new AgentError("agent.invalid", "Agent definition is invalid", [...conflicts, ...missing, ...functions, ...open, ...channelConsumer]);
       }
       if (sameDefinition(revision.definition, definition)) return;
       await this.writeRevision(projectRoot, definition, actor, input.summary?.trim() || null);
@@ -877,7 +918,8 @@ export class AgentService {
     await this.exclusive(projectRoot, async () => {
       await this.sync(projectRoot);
       const { row, revision } = this.currentRevision(projectRoot, agentId);
-      const missing = enabled ? agentMemoryIssues(revision.definition.memories) : [];
+      const channelConsumer = enabled ? await this.channelConsumerPublicationIssues(projectRoot, revision.definition) : [];
+      const missing = enabled ? [...agentMemoryIssues(revision.definition.memories), ...openChannelIssues(revision.definition), ...channelConsumer] : [];
       if (enabled && (row.issues.length > 0 || missing.length > 0)) {
         throw new AgentError("agent.invalid", "Fix the agent file before enabling it", [...row.issues, ...missing]);
       }
@@ -1120,7 +1162,7 @@ export class AgentService {
   async beginTurn(
     projectRoot: string,
     sessionId: string,
-    input: { text: string; author?: string | null; resumeTurnId?: string },
+    input: { text: string; author?: string | null; resumeTurnId?: string; allowCarriedHistory?: boolean },
   ): Promise<ActiveTurn> {
     return this.exclusive(projectRoot, async () => {
       await this.sync(projectRoot);
@@ -1155,7 +1197,7 @@ export class AgentService {
         // A channel thread that rolled onto this session starts from the previous session's last few messages, so the
         // agent keeps the conversation. They are context for the model only; this session's transcript stays its own.
         const carried =
-          own.length === 0 && session.rolledFromSessionId !== undefined
+          own.length === 0 && session.rolledFromSessionId !== undefined && input.allowCarriedHistory !== false
             ? this.store.listMessages(session.rolledFromSessionId).slice(-ROLLOVER_CARRIED_MESSAGES)
             : [];
         const history = [...carried, ...own];
@@ -1511,25 +1553,39 @@ export class AgentService {
 
   /* ---------- communications ---------- */
 
-  async receive(
-    projectRoot: string,
-    message: AgentInboundMessage,
-  ): Promise<{ agentId: string; sessionId: string; duplicate: boolean }> {
+  async prepareInbound(projectRoot: string, message: AgentInboundMessage): Promise<{ agentId: string; sessionId?: string }> {
+    return this.exclusive(projectRoot, async () => {
+      await this.sync(projectRoot);
+      const { projectKey, target } = this.boundInbound(projectRoot, message);
+      const threadKey = sessionThreadKey(message);
+      if (threadKey === undefined) throw new AgentError("agent.sender_not_allowed");
+      const existing = this.store.findSessionByThread(projectKey, target.agentId, threadKey) ?? this.sessionKeyedByThreadOnly(projectKey, target.agentId, message, threadKey);
+      if (existing && isEvalSession(existing)) throw new AgentError("agent.session_not_found");
+      return { agentId: target.agentId, ...(existing ? { sessionId: existing.id } : {}) };
+    });
+  }
+
+  async noteInbound(projectRoot: string, message: AgentInboundMessage): Promise<{ duplicate: boolean }> {
     return this.exclusive(projectRoot, async () => {
       await this.sync(projectRoot);
       const projectKey = agentProjectKey(projectRoot);
-      const bound = this.store
-        .listDefinitions(projectKey)
-        .filter((row) => !row.archived && row.currentRevision > 0)
-        .map((row) => this.store.getRevision(projectKey, row.agentId, row.currentRevision)!)
-        .filter((revision) => revision.definition.channel?.connection_id === message.connectionId);
-      const target = bound.find((revision) => revision.definition.enabled) ?? bound[0];
-      if (!target) throw new AgentError("agent.unbound");
-      if (!target.definition.enabled) throw new AgentError("agent.disabled");
-      if (!senderAllowed(target.definition.channel?.allow_from ?? [], message.from)) throw new AgentError("agent.sender_not_allowed");
-      const threadKey = agentThreadKey(message);
+      return { duplicate: !this.store.rememberInboundEvent(projectKey, inboundDedupeKey(message), this.iso()) };
+    });
+  }
+
+  async receive(
+    projectRoot: string,
+    message: AgentInboundMessage,
+    identity?: { boundAccountId?: string; sessionBoundAccountId?: string },
+  ): Promise<{ agentId: string; sessionId: string; duplicate: boolean }> {
+    return this.exclusive(projectRoot, async () => {
+      await this.sync(projectRoot);
+      const { projectKey, target } = this.boundInbound(projectRoot, message);
+      const threadKey = sessionThreadKey(message);
+      // A conversation that belongs to one person cannot be continued by a message with no sender.
+      if (threadKey === undefined) throw new AgentError("agent.sender_not_allowed");
       const now = this.iso();
-      const existing = this.store.findSessionByThread(projectKey, target.agentId, threadKey);
+      const existing = this.store.findSessionByThread(projectKey, target.agentId, threadKey) ?? this.sessionKeyedByThreadOnly(projectKey, target.agentId, message, threadKey);
       // Channel threads never continue an eval session, and this path never opens one.
       if (existing && isEvalSession(existing)) throw new AgentError("agent.session_not_found");
       if (!this.store.rememberInboundEvent(projectKey, inboundDedupeKey(message), now)) {
@@ -1539,8 +1595,15 @@ export class AgentService {
       const definition = existing ? await this.effectiveDefinition(projectRoot, existing) : null;
       const stalePinned = Boolean(definition && stageflowStaleIssues(definition).length > 0);
       // Roll onto a new session at a turn or time limit, unless the thread is over its cost cap for the last 24 hours.
+      const accountRemapped = Boolean(
+        existing &&
+          identity?.boundAccountId &&
+          identity.sessionBoundAccountId &&
+          identity.boundAccountId !== identity.sessionBoundAccountId,
+      );
       const rollOver = Boolean(
         stalePinned ||
+          accountRemapped ||
           (existing &&
             definition &&
             !this.threadCostBlocked(definition, existing) &&
@@ -1558,7 +1621,7 @@ export class AgentService {
         source: message.provider,
         sourceRef: message.from ?? null,
         threadKey,
-        ...(existing ? { rolledFromSessionId: existing.id } : {}),
+        ...(existing && !accountRemapped ? { rolledFromSessionId: existing.id } : {}),
         title: null,
         createdAt: now,
         updatedAt: now,
@@ -1570,6 +1633,35 @@ export class AgentService {
       });
       return { agentId: target.agentId, sessionId: session.id, duplicate: false };
     });
+  }
+
+  private boundInbound(projectRoot: string, message: AgentInboundMessage) {
+    const projectKey = agentProjectKey(projectRoot);
+    const bound = this.store
+      .listDefinitions(projectKey)
+      .filter((row) => !row.archived && row.currentRevision > 0)
+      .map((row) => this.store.getRevision(projectKey, row.agentId, row.currentRevision)!)
+      .filter((revision) => revision.definition.channel?.connection_id === message.connectionId);
+    const target = bound.find((revision) => revision.definition.enabled) ?? bound[0];
+    if (!target) throw new AgentError("agent.unbound");
+    if (!target.definition.enabled) throw new AgentError("agent.disabled");
+    if (openChannelIssues(target.definition).length > 0) throw new AgentError("agent.channel_open_with_tools");
+    if (!senderAllowed(target.definition.channel?.allow_from ?? [], message.from, message.fromUsername)) throw new AgentError("agent.sender_not_allowed");
+    return { projectKey, target };
+  }
+
+  /**
+   * A session opened before keys carried the sender is keyed by its thread alone. The person who started it
+   * carries on in it; anyone else in that thread gets a session of their own.
+   */
+  private sessionKeyedByThreadOnly(projectKey: string, agentId: string, message: AgentInboundMessage, threadKey: string): AgentSession | undefined {
+    const older = agentThreadKey(message);
+    if (older === threadKey || !message.from) return undefined;
+    const session = this.store.findSessionByThread(projectKey, agentId, older);
+    if (!session?.sourceRef) return undefined;
+    const started = normalizeSender(session.sourceRef);
+    const same = started === normalizeSender(message.from);
+    return same ? session : undefined;
   }
 
   /**

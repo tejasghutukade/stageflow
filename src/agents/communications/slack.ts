@@ -72,13 +72,15 @@ export function parseSlackInbound(
     return { ok: false, code: "agent.invalid" };
   }
   const user = typeof record.user === "string" ? record.user : undefined;
+  // A direct message is one conversation per person; a channel thread is shared by the people in it.
+  const direct = record.channel_type === "im" && user !== undefined;
   return {
     ok: true,
     message: {
       provider: "slack",
       connectionId: config.connectionId,
       eventId: `slack:${eventId}`,
-      threadId: thread,
+      threadId: direct ? `dm:${channel}:${user}` : thread,
       text,
       replyTo: channel,
       ...(user !== undefined ? { from: user } : {}),

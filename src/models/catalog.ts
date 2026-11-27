@@ -8,7 +8,7 @@ import { resolveCredentialBinding } from "../runtime/credentialBinding.js";
 import { readFactorySettings } from "../runtime/settingsFile.js";
 
 /** Last resort when nothing is connected and nothing is configured. Pi resolves unknown OpenRouter ids. */
-export const LAST_RESORT_MODEL = "openrouter/nvidia/nemotron-3.5-lightning:free";
+export const LAST_RESORT_MODEL = "openrouter/anthropic/claude-sonnet-5.5";
 
 export type CatalogModel = {
   /** `provider/model`, the form Pi resolves and stage, pipeline and agent files store. */

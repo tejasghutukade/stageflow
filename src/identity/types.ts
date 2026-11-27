@@ -1,5 +1,15 @@
 export type ConsumerScope = "own" | "assigned" | "selected" | "workspace";
 
+export type ChannelProvider = "imessage" | "telegram" | "agentmail" | "email";
+
+export type ChannelAssurance = "provider_verified" | "address_only";
+
+/** How long a resolve-sender result is reused. A changed number stops working after this. */
+export const CHANNEL_SENDER_CACHE_MS = 300_000;
+
+/** A channel has no sign-in moment. The grant is re-read on every message and expires with the session. */
+export const CHANNEL_GRANT_MS = 24 * 60 * 60 * 1000;
+
 export type ConsumerPermission = {
   scope: ConsumerScope;
   agents: string[];
@@ -58,7 +68,7 @@ export type ConsumerRuntimeTool = {
 };
 
 export class ConsumerAccessError extends Error {
-  constructor(readonly code: "identity.verification_required" | "identity.not_available" | "identity.setup_required" | "identity.conflict") {
+  constructor(readonly code: "identity.verification_required" | "identity.not_available" | "identity.setup_required" | "identity.conflict" | "identity.step_up_required") {
     super(code);
   }
 }

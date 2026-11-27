@@ -126,16 +126,14 @@ Mandatory bar: `GET /livez` → 200. Optional stretch flags: `--readyz`, `--chec
 
 ## Pull and run (GHCR) {#pull-and-run-ghcr}
 
-Published image: **`ghcr.io/tejasghutukade/stageflow`**. This is the recommended way to run Stageflow. Tags per release: semver `x.y.z` and major.minor `x.y` (same digest). The current minor tag is `0.66` (`0.66.0` is that exact release).
-
+Published image: **`ghcr.io/tejasghutukade/stageflow`**. This is the recommended way to run Stageflow. Tags per release: semver `x.y.z` and major.minor `x.y` (same digest). The current minor tag is `0.67` (`0.67.0` is that exact release).
 This starts the console on this machine. The `stageflow-data` volume keeps providers and pipelines you save in the console. Pass `sf ui` because the image command is `sf mcp`. This command does not mount the Docker socket, so stage file tools run in the Stageflow container. [Compose from a checkout](#local-try-compose) is what turns the stage sandbox on.
 
 ```bash
 docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.66 \
-  sf ui
+  ghcr.io/tejasghutukade/stageflow:0.67 \  sf ui
 ```
 
 Open [http://127.0.0.1:3847](http://127.0.0.1:3847). The published port stays on `127.0.0.1`. The process inside the container still binds `0.0.0.0`. The container logs print `Control token: <token>` on first start. Later starts reuse it and print the file path. Copy that into the console prompt. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`.
@@ -437,6 +435,25 @@ volumes:
 ## Reverse proxy and public hostname {#reverse-proxy}
 
 To reach the console through a reverse proxy, the proxy must pass the `Host` header through unchanged (nginx: `proxy_set_header Host $host;`). Put the public hostname in `STAGEFLOW_ALLOWED_HOSTS`. The Host checks both `Host` and `Origin` against that list, so a rewritten `Host` or an unlisted name is refused. Keep the control token required, and see [MCP — access control](mcp.md#access-control).
+
+### One container per data volume {#one-container-per-data-volume}
+
+Run one Stageflow container on a data volume. The Host takes `host.lock` in `$STAGEFLOW_HOME` and refuses a second process on that directory ([Data directory](data-directory.md)). A platform that starts a second replica on the same volume is refused. Give each Host its own volume.
+
+### Publishing customer chat {#publishing-customer-chat}
+
+The shipped Compose file publishes `127.0.0.1:3847` for a local try. On a cloud host, terminate TLS at the load balancer and forward the browser's `Host` unchanged.
+
+Customer chat and the operator console are the same process. Forward only the routes in [Web chat — Behind a reverse proxy](guides-agents-web-chat.md#behind-a-reverse-proxy): `GET /chat/<slug>` and its assets, `/api/public/chat/<slug>/…` (admission, messages, the OIDC callback, and step-up), and `POST /api/agent-inbound/<connection id>` when a webhook must reach the container. Keep `/`, the rest of `/api`, `/mcp`, and the console on a private path, such as a VPN or a tunnel to the container port. Operators paste the control token on that private path.
+
+Set `STAGEFLOW_PUBLIC_URL` to the HTTPS origin customers use. Set `STAGEFLOW_PUBLIC_CHAT_URL` when chat has its own hostname, so shareable links, OIDC redirects, and email step-up links use that origin. Add the hostname to `STAGEFLOW_ALLOWED_HOSTS`. When the chat page is hosted on another site, add that site's origin to `STAGEFLOW_PUBLIC_CHAT_ORIGINS`. Plain `http` is accepted only for loopback. Leave `STAGEFLOW_IDENTITY_ALLOW_LOOPBACK` unset on a public host. The order API the agent calls must be `https` and reachable from the container.
+
+Two proxy behaviors apply to every customer at once:
+
+- Stageflow counts chat messages per connecting address. Behind a load balancer that address is the balancer, so one busy customer can make the next customer's message return `web_chat.rate_limited`. Raise `web_chat.rate_limit_per_minute`, or enforce the limit at the proxy, where each client address is still visible.
+- Replies are streamed as a series of small chunks. A proxy that buffers the response holds them until the turn finishes, so the customer sees a blank chat and then the whole answer, and a long turn can hit the proxy's timeout. Disable response buffering for `/api/public/chat/` and set a long read timeout.
+
+Example: a shop serves support chat at `https://chat.example.com/chat/support`. The load balancer forwards only `/chat/` and `/api/public/chat/`. The container has `STAGEFLOW_ALLOWED_HOSTS=chat.example.com` and `STAGEFLOW_PUBLIC_CHAT_URL=https://chat.example.com`. Staff open the console through a tunnel to `127.0.0.1:3847` and paste the control token there. Customers never reach the console on `chat.example.com`.
 
 ## CLI via `docker exec` {#cli-via-docker-exec}
 

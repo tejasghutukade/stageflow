@@ -18,6 +18,15 @@ function ViaTag({ via }: { via: string }) {
   return <span className={`rounded-[4px] border border-[#ffffff1a] bg-[#1a1c21] px-1.5 text-[11px] leading-[18px] text-[#a7aab2] ${NOWRAP}`}>via {via}</span>;
 }
 
+function ExpTag() {
+  return (
+    <span className={`rounded-[4px] border border-[#ffffff2e] px-1.5 text-[11px] leading-[18px] text-[#8b8f98] ${NOWRAP}`} title="Experimental: not yet tested end to end">
+      <span className="sr-only">experimental</span>
+      <span aria-hidden="true">Exp</span>
+    </span>
+  );
+}
+
 function FieldInput({ field, value, onChange }: { field: ChannelProviderField; value: string; onChange: (value: string) => void }) {
   const id = `connection-field-${field.key}`;
   return (
@@ -153,6 +162,7 @@ export function AddConnectionDialog({
                   <Icon className="size-3.5 block text-[#a7aab2]" aria-hidden />
                   {entry.label}
                   {entry.via ? <ViaTag via={entry.via} /> : null}
+                  {entry.experimental ? <ExpTag /> : null}
                 </button>
               );
             })}
