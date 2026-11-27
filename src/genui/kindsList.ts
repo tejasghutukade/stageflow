@@ -1,4 +1,4 @@
-import { LIVE_DECLARATIVE_KIND, LIVE_HTML_KIND, type StaticArtifactKind } from "../artifacts/kinds.js";
+import { LIVE_DECLARATIVE_KIND, LIVE_HTML_KIND, type StaticArtifactKind } from "../artifacts/kindNames.js";
 
 /** Artifact kinds an agent may place in chat with `present_ui`. */
 export const PRESENTABLE_ARTIFACT_KINDS = [

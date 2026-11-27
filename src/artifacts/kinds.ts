@@ -1,15 +1,9 @@
 import path from "node:path";
 import { artifactMediaType } from "../runread/readArtifact.js";
 
-export const LIVE_DECLARATIVE_KIND = "live.declarative";
-export const LIVE_HTML_KIND = "live.html";
+import { LIVE_DECLARATIVE_KIND, LIVE_HTML_KIND, type StaticArtifactKind } from "./kindNames.js";
 
-export type StaticArtifactKind =
-  | "static.markdown"
-  | "static.image"
-  | "static.table"
-  | "static.text"
-  | "static.html";
+export { LIVE_DECLARATIVE_KIND, LIVE_HTML_KIND, type StaticArtifactKind } from "./kindNames.js";
 
 export function inferStaticKind(relativePath: string): StaticArtifactKind {
   const ext = path.posix.extname(relativePath.replace(/\\/g, "/")).toLowerCase();
