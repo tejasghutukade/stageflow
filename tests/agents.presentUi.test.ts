@@ -5,12 +5,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { AgentChatController } from "../src/agents/chatTurn.js";
 import { createEvalGate, EvalGateRegistry, type EvalGatePolicy } from "../src/agents/evalGate.js";
 import { parseUiPartCard } from "../src/artifacts/uiPartCard.js";
-import { agentPresentUiPrompt, createPresentUiTool, messageReplayText, presentArtifact, REPLAY_PROGRAM_MAX, presentCard, PRESENT_UI_TOOL_NAME, uiPartsFromToolOutput } from "../src/agents/presentUi.js";
+import { createPresentUiTool } from "../src/agents/presentUi.js";
+import { agentPresentUiPrompt, messageReplayText, presentArtifact, REPLAY_PROGRAM_MAX, presentCard, PRESENT_UI_TOOL_NAME, uiPartsFromToolOutput } from "../src/genui/index.js";
 import { catalogRootsForArtifacts } from "../src/artifacts/projectScope.js";
 import { publishArtifact } from "../src/artifacts/publish.js";
 import { UI_PART_KIND_ARTIFACT_REF, UI_PART_KIND_CARD, UI_PART_SCHEMA_VERSION } from "../src/artifacts/uiPart.js";
 import { grantedToolIds, parseAgentDefinition } from "../src/config/loadAgent.js";
 import type { McpToolDeps } from "../src/mcp/deps.js";
+import { consoleUrl } from "../src/mcp/writeTarget.js";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import { createRunStore, sqliteConnectionFromStore } from "../src/runstore/createStore.js";
 import { agentInput, agentsFixture, scriptedBackend, type AgentsFixture } from "./helpers/agentsHarness.js";
@@ -347,7 +349,7 @@ describe("presentArtifact", () => {
       projectRoot: projectA,
       key: published.key,
       allowedKinds: ["static.markdown"],
-      consoleDeps: deps,
+      consoleUrl: (hashPath: string) => consoleUrl(deps, hashPath),
     });
     expect(shown.ok).toBe(true);
     if (!shown.ok) return;
@@ -362,7 +364,7 @@ describe("presentArtifact", () => {
       projectRoot: projectB,
       key: published.key,
       allowedKinds: ["static.markdown"],
-      consoleDeps: deps,
+      consoleUrl: (hashPath: string) => consoleUrl(deps, hashPath),
     });
     expect(other).toMatchObject({ ok: false, code: "ui.cross_project" });
     const kind = presentArtifact({
@@ -371,7 +373,7 @@ describe("presentArtifact", () => {
       projectRoot: projectA,
       key: published.key,
       allowedKinds: ["static.table"],
-      consoleDeps: deps,
+      consoleUrl: (hashPath: string) => consoleUrl(deps, hashPath),
     });
     expect(kind).toMatchObject({ ok: false, code: "ui.kind_not_granted" });
     const missing = presentArtifact({
@@ -380,7 +382,7 @@ describe("presentArtifact", () => {
       projectRoot: projectA,
       key: "agent:helper/missing",
       allowedKinds: ["static.markdown"],
-      consoleDeps: deps,
+      consoleUrl: (hashPath: string) => consoleUrl(deps, hashPath),
     });
     expect(missing).toMatchObject({ ok: false, code: "artifact.not_found" });
   });

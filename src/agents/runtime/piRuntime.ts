@@ -34,7 +34,11 @@ import { compactionUsageCost, type CompactionEndSessionEvent } from "../../agent
 import { memoryHome } from "../../memory/host.js";
 import { appendAgentArtifactPrompt, bindAgentArtifactDelete, bindAgentArtifactRead, bindAgentArtifactRefresh, createAgentPublishArtifactTool, type AgentPublishTool } from "../artifactTools.js";
 import { previewPresentArgs } from "../../artifacts/inlinePreview.js";
-import { PRESENT_UI_TOOL_NAME, agentKeepsCardsInConversation, appendAgentPresentUiPrompt, createPresentUiTool, messageReplayText, presentCard, type PresentArtifactResult, type PresentUiTool } from "../presentUi.js";
+import { presentCard, type PresentArtifactResult } from "../../genui/present.js";
+import { agentKeepsCardsInConversation } from "../../genui/prompt.js";
+import { messageReplayText } from "../../genui/replay.js";
+import { PRESENT_UI_TOOL_NAME } from "../../genui/tools.js";
+import { appendAgentPresentUiPrompt, createPresentUiTool, type PresentUiTool } from "../presentUi.js";
 import { SessionPublishError, type SessionPublishBody, type SessionPublishSuccess } from "../../artifacts/sessionPublish.js";
 import { forbiddenWriteTarget } from "../policy.js";
 import { prepareExecutionLaunch, type SandboxRunner } from "../sandbox.js";

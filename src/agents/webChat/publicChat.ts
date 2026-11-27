@@ -7,7 +7,7 @@ import { isAgentError, type AgentLimitKind } from "../errors.js";
 import type { AgentService } from "../service.js";
 import type { AgentMessage, AgentSession } from "../store.js";
 import { BodyError, readJsonBody, writeFrame } from "../ndjson.js";
-import { SlidingWindowLimiter } from "./rateLimit.js";
+import { SlidingWindowLimiter } from "../../util/slidingWindowLimiter.js";
 import type { ConsumerAuthorization } from "../../identity/authorization.js";
 import { ConsumerAccessError } from "../../identity/types.js";
 import { webChatVisitorAssistantText, webChatVisitorParts } from "../../channels/renderUiPart.js";

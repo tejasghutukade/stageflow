@@ -17,7 +17,7 @@ import {
   LuUserCheck,
 } from "react-icons/lu";
 import { contactLines } from "../model/channelContact";
-import { defaultPresentKinds, PRESENTABLE_ARTIFACT_KINDS, type UiPersistence } from "../../../../../src/artifacts/presentableKinds.ts";
+import { defaultPresentKinds, PRESENTABLE_ARTIFACT_KINDS, type UiPersistence } from "../../../../../src/genui/kindsList.ts";
 
 const UI_PERSISTENCE_CHOICES: Array<{ value: UiPersistence; label: string; note: string }> = [
   {

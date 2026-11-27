@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { CONVERSATION_CARD_KINDS } from "./presentableKinds.js";
+import { CONVERSATION_CARD_KINDS } from "../genui/kindsList.js";
 import { UI_PART_SCHEMA_VERSION, capFallbackText } from "./uiPartShared.js";
 
-export { CONVERSATION_CARD_KINDS, isConversationCardKind, type ConversationCardKind } from "./presentableKinds.js";
+export { CONVERSATION_CARD_KINDS, isConversationCardKind, type ConversationCardKind } from "../genui/kindsList.js";
 
 /** A card an agent drew in one conversation. The program lives in the message, not in the artifact store. */
 export const UI_PART_KIND_CARD = "card" as const;

@@ -14,7 +14,7 @@ import { consoleUrl } from "../mcp/writeTarget.js";
 import { sqliteConnectionFromStore } from "../runstore/createStore.js";
 import { guideContextOf } from "../operatorAgent/profiles/guideConfirm.js";
 import type { OperatorAgentTool, OperatorAgentToolResult } from "../operatorAgent/types.js";
-import { readPresentUiCard } from "./presentUi.js";
+import { readPresentUiCard } from "../genui/parts.js";
 import { readGuideThread } from "./threadStore.js";
 
 export const SAVE_CARD_TOOL_NAME = "save_card";

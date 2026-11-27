@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { presentInline } from "../src/agents/presentUi.js";
+import { presentInline } from "../src/genui/present.js";
 import { LIBRARY_NAME, LIBRARY_VERSION } from "../src/artifacts/library/index.js";
 import { catalogRootsForArtifacts } from "../src/artifacts/projectScope.js";
 import { listArtifacts } from "../src/artifacts/query.js";
@@ -16,6 +16,7 @@ import {
 import { artifactStorageKey } from "../src/artifacts/keys.js";
 import { agentProjectKey } from "../src/agents/store.js";
 import type { McpToolDeps } from "../src/mcp/deps.js";
+import { consoleUrl } from "../src/mcp/writeTarget.js";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import { createRunStore, sqliteConnectionFromStore } from "../src/runstore/createStore.js";
 
@@ -76,7 +77,7 @@ describe("session artifacts", () => {
       presentedInMessage: 1,
       nowMs,
       allowedKinds: ["live.declarative"],
-      consoleDeps: { cwd: project } as McpToolDeps,
+      consoleUrl: (hashPath: string) => consoleUrl({ cwd: project } as McpToolDeps, hashPath),
       title: "Card",
     });
     expect(shown.ok).toBe(true);
@@ -110,7 +111,7 @@ describe("session artifacts", () => {
       agentId: "helper",
       presentedInMessage: 1,
       allowedKinds: ["static.markdown"],
-      consoleDeps: { cwd: project } as McpToolDeps,
+      consoleUrl: (hashPath: string) => consoleUrl({ cwd: project } as McpToolDeps, hashPath),
     });
     expect(shown.ok).toBe(true);
     if (!shown.ok) return;
@@ -129,7 +130,7 @@ describe("session artifacts", () => {
       agentId: "helper",
       presentedInMessage: 1,
       allowedKinds: ["static.markdown", "live.html"],
-      consoleDeps: { cwd: project } as McpToolDeps,
+      consoleUrl: (hashPath: string) => consoleUrl({ cwd: project } as McpToolDeps, hashPath),
     });
     expect(shown).toMatchObject({ ok: false, code: "artifact.invalid_shape" });
     if (shown.ok) return;
@@ -148,7 +149,7 @@ describe("session artifacts", () => {
       agentId: "helper",
       presentedInMessage: 1,
       allowedKinds: ["live.declarative"],
-      consoleDeps: { cwd: project } as McpToolDeps,
+      consoleUrl: (hashPath: string) => consoleUrl({ cwd: project } as McpToolDeps, hashPath),
     });
     expect(shown.ok).toBe(false);
     if (shown.ok) return;
@@ -174,7 +175,7 @@ describe("session artifacts", () => {
       agentId: "helper",
       presentedInMessage: 1,
       allowedKinds: ["live.declarative"],
-      consoleDeps: { cwd: project } as McpToolDeps,
+      consoleUrl: (hashPath: string) => consoleUrl({ cwd: project } as McpToolDeps, hashPath),
     });
     expect(shown.ok).toBe(true);
     expect(listArtifacts(db, { limit: 20 }, roots).artifacts).toEqual([]);
@@ -198,7 +199,7 @@ describe("session artifacts", () => {
       presentedInMessage: 1,
       nowMs: Date.parse("2026-01-01T00:00:00.000Z"),
       allowedKinds: ["live.declarative"],
-      consoleDeps: { cwd: project } as McpToolDeps,
+      consoleUrl: (hashPath: string) => consoleUrl({ cwd: project } as McpToolDeps, hashPath),
     });
     expect(shown.ok).toBe(true);
     expect(expireDueSessionArtifacts(db, "2026-11-25T00:00:00.000Z")).toBe(1);

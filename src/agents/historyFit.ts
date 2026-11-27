@@ -5,7 +5,7 @@ import {
   type UiPart,
 } from "../artifacts/uiPart.js";
 import type { AgentDefinition } from "../config/loadAgent.js";
-import { messageReplayText } from "./presentUi.js";
+import { messageReplayText } from "../genui/replay.js";
 import type { ConversationMessage } from "./runtime/types.js";
 
 function uiPartLabel(part: UiPart): string {

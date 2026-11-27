@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createAgentPublishArtifactTool } from "../src/agents/artifactTools.js";
-import { presentArtifact, presentInline, resetCardLimiterForTests, type PresentArtifactResult } from "../src/agents/presentUi.js";
+import { presentArtifact, presentInline, resetCardLimiterForTests, type PresentArtifactResult } from "../src/genui/present.js";
 import { createPiAgentRuntime, type OpenSessionInput, type PiRuntimeOptions } from "../src/agents/runtime/piRuntime.js";
 import type { TurnHooks } from "../src/agents/runtime/types.js";
 import { ARTIFACT_TITLE_MAX_CHARS } from "../src/artifacts/limits.js";
@@ -17,6 +17,7 @@ import { createGuidePresentUiTool } from "../src/guide/presentUi.js";
 import { createGuideSaveCardTool } from "../src/guide/saveCard.js";
 import { createGuideThread, saveGuideThread, type GuideThreadRecord } from "../src/guide/threadStore.js";
 import type { McpToolDeps } from "../src/mcp/deps.js";
+import { consoleUrl } from "../src/mcp/writeTarget.js";
 import { advanceGuideTurn, guideContextOf } from "../src/operatorAgent/profiles/guideConfirm.js";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import { createRunStore } from "../src/runstore/createStore.js";
@@ -109,7 +110,7 @@ const hostPresentUi: NonNullable<PiRuntimeOptions["presentUi"]> = async (input) 
     agentId: input.agentId,
     presentedInMessage: input.presentedInMessage,
     allowedKinds: input.kinds,
-    consoleDeps: consoleDeps(),
+    consoleUrl: (hashPath: string) => consoleUrl(consoleDeps(), hashPath),
   };
   if (typeof input.program === "string") return presentInline({ ...shared, program: input.program, manifest: input.manifest });
   if (!input.key) return { ok: false, code: "artifact.invalid_id", message: "Artifact key is not valid" } satisfies PresentArtifactResult;
@@ -272,9 +273,6 @@ type CardCase = {
 // `persistence: artifacts` is the live-data mode: it saves a session artifact (artifact-ref), allows bindings and network
 // csp, and uses artifact caps. Those rows are by design (AD7 keeps the mode), not differences to remove.
 const BY_DESIGN_ARTIFACTS = "by design: artifacts mode publishes a session artifact (AD7 keeps this mode)";
-// presentInline spreads `kind` and `program` into the live.html manifest, which validateHtmlManifest rejects, so an
-// artifacts-mode agent cannot present a one-off HTML program today. differs today; AD2 makes these equal.
-const INLINE_HTML_BUG = "differs today (inline live.html rejected: kind/program leak into the manifest); AD2 makes these equal";
 
 const CARD_CASES: CardCase[] = [
   {
@@ -291,8 +289,7 @@ const CARD_CASES: CardCase[] = [
     name: "valid live.html card with a vendored library (HTML cards reachable)",
     call: { title: "Regional chart", program: html, manifest: htmlManifest },
     htmlCards: true,
-    // differs today; AD2 makes these equal (should be artifact-ref, like the other artifacts-mode rows)
-    expect: { verdict: "card", per: { "agent.artifacts": { verdict: "artifact.invalid_shape", note: INLINE_HTML_BUG } } },
+    expect: { verdict: "card", per: { "agent.artifacts": { verdict: "artifact-ref", note: BY_DESIGN_ARTIFACTS } } },
   },
   {
     name: "live.html when HTML cards are not reachable",
@@ -303,8 +300,8 @@ const CARD_CASES: CardCase[] = [
       per: {
         // differs today; AD4 makes these equal (the HTML-cards-reachable signal only changes the agent prompt, not the tool)
         "agent.conversation": { verdict: "card", note: "differs today; AD4 makes these equal" },
-        // differs today; AD4 makes these equal (and AD2 for the inline live.html rejection)
-        "agent.artifacts": { verdict: "artifact.invalid_shape", note: `${INLINE_HTML_BUG}; AD4 for the reachability signal` },
+        // differs today; AD4 makes these equal (the reachability signal does not reach the tool)
+        "agent.artifacts": { verdict: "artifact-ref", note: "differs today; AD4 makes these equal" },
       },
     },
   },
@@ -330,8 +327,8 @@ const CARD_CASES: CardCase[] = [
   {
     name: "HTML card with csp origins",
     call: { title: "Chart", program: html, manifest: { kind: "live.html", format: "html", csp: { connectDomains: ["https://api.example.com"] } } },
-    // By design artifacts mode would accept csp origins (with an approval warning); today it hits the inline live.html bug.
-    expect: { verdict: "ui.card_display_only", per: { "agent.artifacts": { verdict: "artifact.invalid_shape", note: INLINE_HTML_BUG } } },
+    // Artifacts mode accepts csp origins (publish adds the origin approval warning).
+    expect: { verdict: "ui.card_display_only", per: { "agent.artifacts": { verdict: "artifact-ref", note: BY_DESIGN_ARTIFACTS } } },
   },
   {
     name: "program over 64 KiB",
@@ -346,7 +343,7 @@ const CARD_CASES: CardCase[] = [
   {
     name: "HTML card with an unknown library version",
     call: { title: "Chart", program: html, manifest: { kind: "live.html", format: "html", libraries: [{ name: "chartjs", version: "0.0.1" }] } },
-    expect: { verdict: "ui.unknown_library", per: { "agent.artifacts": { verdict: "artifact.invalid_shape", note: `${INLINE_HTML_BUG}; only presentCard maps ui.unknown_library` } } },
+    expect: { verdict: "ui.unknown_library" },
   },
   {
     name: "a saved artifact key instead of a program",

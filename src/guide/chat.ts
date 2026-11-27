@@ -12,7 +12,8 @@ import { redactString } from "../logging/redact.js";
 import { buildWorkshopChatPrompt, parseWorkshopChatAttachments } from "../workshop/chatAttachments.js";
 import { resolveWorkshopModel } from "../workshop/modelSettings.js";
 import { advanceGuideTurn, guideContextOf } from "../operatorAgent/profiles/guideConfirm.js";
-import { GUIDE_PRESENT_UI_TOOL_NAMES, guideMessageReplayText } from "./presentUi.js";
+import { toolPartsReplayText } from "../genui/replay.js";
+import { GUIDE_PRESENT_UI_TOOL_NAMES } from "./presentUi.js";
 import { GUIDE_SAVE_CARD_TOOL_NAMES } from "./saveCard.js";
 import { GUIDE_UI_TOOL_NAMES } from "./showUi.js";
 import {
@@ -117,7 +118,7 @@ async function openGuideSession(
     await session.prepareRestart?.(
       record.messages.map((message) => ({
         role: message.role,
-        text: message.role === "assistant" ? guideMessageReplayText(message) : message.text,
+        text: message.role === "assistant" ? toolPartsReplayText(message) : message.text,
       })),
     );
   }

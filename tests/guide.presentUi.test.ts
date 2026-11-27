@@ -2,16 +2,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { PRESENT_UI_TOOL_NAME } from "../src/agents/presentUi.js";
+import { PRESENT_UI_TOOL_NAME, resetCardLimiterForTests, toolPartsReplayText as guideMessageReplayText } from "../src/genui/index.js";
 import { UI_PART_KIND_CARD, UI_PART_SCHEMA_VERSION } from "../src/artifacts/uiPart.js";
-import { guideMessageReplayText } from "../src/guide/presentUi.js";
 import { resetGuideSessionsForTests, streamGuideTurn } from "../src/guide/chat.js";
 import { createGuideThread, readGuideThread } from "../src/guide/threadStore.js";
 import { createWorkshopOperatorHost } from "../src/operatorAgent/fakeHost.js";
 import { guideContextOf } from "../src/operatorAgent/profiles/guideConfirm.js";
 import { createGuidePresentUiTool } from "../src/guide/presentUi.js";
 import { createStageflowGuideProfile } from "../src/operatorAgent/profiles/stageflowGuide.js";
-import { resetCardLimiterForTests } from "../src/agents/presentUi.js";
 
 const program = 'root = Card([CardHeader("Regional sales", "This week"), TextContent("North leads.")])';
 const manifest = { kind: "live.declarative", format: "openui-lang", library: { name: "stageflow", version: "1.0.0" }, bindings: [] };

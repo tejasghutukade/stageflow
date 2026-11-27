@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type Database from "better-sqlite3";
-import { SlidingWindowLimiter } from "../agents/webChat/rateLimit.js";
+import { SlidingWindowLimiter } from "../util/slidingWindowLimiter.js";
 import { ArtifactPublishError } from "./limits.js";
 import { deleteOriginApprovals } from "./originApproval.js";
 import { ArtifactQueryError } from "./query.js";

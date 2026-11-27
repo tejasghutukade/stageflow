@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentChatController } from "../src/agents/chatTurn.js";
 import { AgentInboundRouter, type InboundConnections } from "../src/agents/communications/inbound.js";
-import { PRESENT_UI_TOOL_NAME } from "../src/agents/presentUi.js";
+import { PRESENT_UI_TOOL_NAME } from "../src/genui/index.js";
 import { UI_PART_KIND_ARTIFACT_REF, UI_PART_SCHEMA_VERSION } from "../src/artifacts/uiPart.js";
 import { AgentService } from "../src/agents/service.js";
 import { ConsumerAuthorization } from "../src/identity/authorization.js";

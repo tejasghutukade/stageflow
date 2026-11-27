@@ -7,25 +7,22 @@ import { STAGE_ID_PATTERN } from "../config/createStage.js";
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
 import { ArtifactKeyError, artifactStorageKey, assertArtifactId, GUIDE_OWNER_KEY, publicArtifactKey, stageOwnerKey } from "./keys.js";
 import { assertBindingsAtPublish } from "./bindings.js";
-import { assertHtmlDocumentAtPublish } from "./htmlScan.js";
 import { declaredOriginCount, deleteOriginApprovals, ORIGIN_APPROVAL_WARNING } from "./originApproval.js";
-import { htmlDbManifest, htmlIdentityHash, validateHtmlManifest, type HtmlManifest } from "./htmlManifest.js";
-import { assertLiveProgramAtPublish } from "./program.js";
-import { contentTypeForKind, isLiveDeclarativeKind, isLiveHtmlKind, LIVE_DECLARATIVE_KIND, type StaticArtifactKind } from "./kinds.js";
+import { htmlDbManifest, htmlIdentityHash, type HtmlManifest } from "./htmlManifest.js";
+import { contentTypeForKind, isLiveDeclarativeKind, isLiveHtmlKind } from "./kinds.js";
+import { genUiKind } from "../genui/kinds.js";
+import { assertGenUiSize, checkGenUiContent, parseGenUiManifest } from "../genui/validate.js";
 import {
   ARTIFACT_DESCRIPTION_MAX_CHARS,
   ARTIFACT_SUMMARY_MAX_CHARS,
   ARTIFACT_TAG_MAX,
   ARTIFACT_TAG_PATTERN,
   ARTIFACT_TITLE_MAX_CHARS,
-  LIVE_HTML_MAX_BYTES,
-  LIVE_PROGRAM_MAX_BYTES,
-  STATIC_CONTENT_MAX_BYTES,
   ArtifactPublishError,
   artifactVersionsToKeep,
   type ArtifactIssue,
 } from "./limits.js";
-import { liveDbManifest, liveIdentityHash, validateLiveManifest, type LiveManifest } from "./manifest.js";
+import { liveDbManifest, liveIdentityHash, type LiveManifest } from "./manifest.js";
 import { artifactOwnerKey, type ArtifactOwner } from "./record.js";
 import { canonicalProjectWireId } from "./projectScope.js";
 import {
@@ -46,14 +43,6 @@ import {
   versionDirectoryExistsSync,
 } from "./store.js";
 import { pruneArtifactVersions } from "./versions.js";
-
-const STATIC_KINDS = new Set<StaticArtifactKind>([
-  "static.markdown",
-  "static.image",
-  "static.table",
-  "static.text",
-  "static.html",
-]);
 
 const OWNER_ID_MAX = 64;
 const PUBLISH_VERSION_ATTEMPTS = 8;
@@ -160,7 +149,7 @@ function fail(
 }
 
 function acceptedKind(kind: string): string {
-  if (kind === LIVE_DECLARATIVE_KIND || isLiveHtmlKind(kind) || STATIC_KINDS.has(kind as StaticArtifactKind)) return kind;
+  if (genUiKind(kind)) return kind;
   fail(400, "artifact.invalid_kind", "kind", `Unsupported artifact kind: ${kind}`);
 }
 
@@ -437,31 +426,15 @@ function validateRequest(input: PublishRequest): {
     summary = input.summary;
   }
   if (!Buffer.isBuffer(input.bytes)) fail(400, "artifact.invalid_shape", "content", "content is required");
-  const cap = isLiveHtmlKind(kind)
-    ? LIVE_HTML_MAX_BYTES
-    : isLiveDeclarativeKind(kind)
-      ? LIVE_PROGRAM_MAX_BYTES
-      : STATIC_CONTENT_MAX_BYTES;
-  if (input.bytes.length > cap) {
-    fail(413, "artifact.too_large", "content", `content is larger than ${cap} bytes`);
-  }
-  let live: LiveManifest | undefined;
-  let html: HtmlManifest | undefined;
-  if (isLiveDeclarativeKind(kind)) {
-    if (!isUtf8(input.bytes)) fail(400, "artifact.invalid_shape", "content", "Program must be valid UTF-8");
-    if (input.manifest === undefined) {
-      fail(400, "artifact.invalid_shape", "manifest", "manifest is required for a live artifact");
-    }
-    live = validateLiveManifest(input.manifest, input.bytes.toString("utf8"));
-  } else if (isLiveHtmlKind(kind)) {
-    if (!isUtf8(input.bytes)) fail(400, "artifact.invalid_shape", "content", "HTML must be valid UTF-8");
-    if (input.manifest === undefined) {
-      fail(400, "artifact.invalid_shape", "manifest", "manifest is required for a live artifact");
-    }
-    html = validateHtmlManifest(input.manifest);
-  } else if (input.manifest !== undefined) {
-    fail(400, "artifact.invalid_shape", "manifest", "manifest is only valid for a live artifact");
-  }
+  assertGenUiSize(kind, input.bytes.length, "artifact");
+  const bytes = input.bytes;
+  const { live, html } = parseGenUiManifest({
+    kind,
+    manifest: input.manifest,
+    program: () => bytes.toString("utf8"),
+    bytes,
+    mode: "artifact",
+  });
   const fileName = contentFileName(kind, input.bytes);
   return {
     id: input.id,
@@ -593,18 +566,19 @@ export async function publishArtifact(
   const publicKey = publicArtifactKey(ownerKey, fields.id);
   const now = input.now ?? new Date().toISOString();
   let programWarnings: ArtifactIssue[] = [];
-  if (fields.live) {
-    await assertBindingsAtPublish(project.path, input.owner, fields.live.bindings);
-    programWarnings = await assertLiveProgramAtPublish(project.path, fields.live);
-  } else if (fields.html) {
-    await assertBindingsAtPublish(project.path, input.owner, fields.html.bindings);
-    programWarnings = await assertHtmlDocumentAtPublish(input.bytes.toString("utf8"), fields.html.csp);
-    if (declaredOriginCount(fields.html.csp) > 0) {
-      programWarnings = [
-        ...programWarnings,
-        { path: "manifest.csp", message: ORIGIN_APPROVAL_WARNING },
-      ];
-    }
+  const bindings = fields.live?.bindings ?? fields.html?.bindings;
+  if (bindings) {
+    await assertBindingsAtPublish(project.path, input.owner, bindings);
+    programWarnings = await checkGenUiContent({
+      kind: fields.kind,
+      content: { ...(fields.live ? { live: fields.live } : {}), ...(fields.html ? { html: fields.html } : {}) },
+      program: () => input.bytes.toString("utf8"),
+      projectRoot: project.path,
+      mode: "artifact",
+    });
+  }
+  if (fields.html && declaredOriginCount(fields.html.csp) > 0) {
+    programWarnings = [...programWarnings, { path: "manifest.csp", message: ORIGIN_APPROVAL_WARNING }];
   }
   const contentHash = fields.html
     ? htmlIdentityHash(input.bytes, fields.html)

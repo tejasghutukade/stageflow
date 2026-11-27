@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
-import { PRESENT_UI_TOOL_NAME } from "../src/agents/presentUi.js";
+import { PRESENT_UI_TOOL_NAME } from "../src/genui/index.js";
 import { catalogRootsForArtifacts } from "../src/artifacts/projectScope.js";
 import { publishArtifact, type PublishRequest } from "../src/artifacts/publish.js";
 import { UI_PART_KIND_ARTIFACT_REF, UI_PART_SCHEMA_VERSION } from "../src/artifacts/uiPart.js";

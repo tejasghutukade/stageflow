@@ -1,8 +1,7 @@
 import { AGENT_ID_PATTERN, isReservedAgentId, RESERVED_AGENT_IDS } from "../agents/agentId.js";
-import { isPresentableArtifactKind } from "../artifacts/kinds.js";
-import { defaultPresentKinds, isConversationCardKind, UI_PERSISTENCE_VALUES } from "../artifacts/presentableKinds.js";
+import { defaultPresentKinds, isConversationCardKind, isPresentableArtifactKind, UI_PERSISTENCE_VALUES } from "../genui/kindsList.js";
 import { normalizeEntry, SENDER_ENTRY } from "../agents/communications/allowlist.js";
-import { PRESENT_UI_TOOL_NAME } from "../agents/presentUi.js";
+import { PRESENT_UI_TOOL_NAME } from "../genui/tools.js";
 import { grantedStageflowTools, isOperatorOnlyGroup, isOperatorOnlyTool, isToolGroupId, stageflowGrantId, TOOL_META } from "../toolkit/meta.js";
 import { stageflowDefinitionValidation } from "../toolkit/stageflowToolNames.js";
 import { Cron } from "croner";

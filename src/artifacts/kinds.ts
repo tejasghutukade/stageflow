@@ -4,8 +4,6 @@ import { artifactMediaType } from "../runread/readArtifact.js";
 export const LIVE_DECLARATIVE_KIND = "live.declarative";
 export const LIVE_HTML_KIND = "live.html";
 
-export { PRESENTABLE_ARTIFACT_KINDS, isPresentableArtifactKind, type PresentableArtifactKind } from "./presentableKinds.js";
-
 export type StaticArtifactKind =
   | "static.markdown"
   | "static.image"

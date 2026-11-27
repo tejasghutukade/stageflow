@@ -8,7 +8,9 @@ import { EVAL_SESSION_SOURCE, isEvalSession, type EvalSessionOverrides } from ".
 import { guardedStream } from "./guardrails.js";
 import { fitHistory } from "./historyFit.js";
 import { uiErrorPart, UI_PART_KIND_ERROR } from "../artifacts/uiPart.js";
-import { agentKeepsCardsInConversation, isPresentedUiPart, PRESENT_UI_TOOL_NAME, uiPartsFromToolOutput } from "./presentUi.js";
+import { isPresentedUiPart, uiPartsFromToolOutput } from "../genui/parts.js";
+import { agentKeepsCardsInConversation } from "../genui/prompt.js";
+import { PRESENT_UI_TOOL_NAME } from "../genui/tools.js";
 import type { OtlpSink } from "./otlpSink.js";
 import { isToolGranted, requiresAskFirst } from "./policy.js";
 import type { ConversationBackend, ConversationMessage, GateDecision, RuntimeUsage, ToolCall, TurnHooks } from "./runtime/types.js";

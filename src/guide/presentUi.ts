@@ -1,15 +1,11 @@
 import { Type } from "typebox";
 import {
   agentPresentUiPrompt,
-  isPresentedUiPart,
-  messageReplayText,
+  CONVERSATION_CARD_KINDS,
   PRESENT_UI_TOOL_NAME,
   presentCard,
   presentCardParameterSchema,
-} from "../agents/presentUi.js";
-import { CONVERSATION_CARD_KINDS } from "../artifacts/presentableKinds.js";
-import type { UiPart, UiPartCard } from "../artifacts/uiPart.js";
-import { parseUiPartEnvelope, UI_PART_KIND_CARD } from "../artifacts/uiPart.js";
+} from "../genui/index.js";
 import type { McpToolDeps } from "../mcp/deps.js";
 import { guideContextOf, type GuideSessionContext } from "../operatorAgent/profiles/guideConfirm.js";
 import type { OperatorAgentTool, OperatorAgentToolContext, OperatorAgentToolResult } from "../operatorAgent/types.js";
@@ -66,27 +62,6 @@ function bumpPresentCount(ctx: OperatorAgentToolContext, threadId: string): Guid
   };
   ctx.setContext(next);
   return next;
-}
-
-export function guideMessageReplayText(message: {
-  text: string;
-  parts?: ReadonlyArray<{ type: string; name?: string; status?: string; result?: unknown }>;
-}): string {
-  const parts: UiPart[] = [];
-  for (const part of message.parts ?? []) {
-    if (part.type !== "tool" || part.name !== PRESENT_UI_TOOL_NAME || part.status !== "complete") continue;
-    const envelope = parseUiPartEnvelope(part.result);
-    if (!envelope.ok || envelope.part.kind !== UI_PART_KIND_CARD) continue;
-    parts.push(envelope.part);
-  }
-  if (parts.length === 0) return message.text.trim();
-  return messageReplayText({ text: message.text, parts });
-}
-
-export function readPresentUiCard(result: unknown): UiPartCard | null {
-  const envelope = parseUiPartEnvelope(result);
-  if (!envelope.ok || !isPresentedUiPart(envelope.part) || envelope.part.kind !== UI_PART_KIND_CARD) return null;
-  return envelope.part;
 }
 
 export function createGuidePresentUiTool(

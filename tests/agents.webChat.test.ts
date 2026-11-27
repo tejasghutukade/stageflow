@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
-import { PRESENT_UI_TOOL_NAME } from "../src/agents/presentUi.js";
+import { PRESENT_UI_TOOL_NAME } from "../src/genui/index.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { loadControlTokens } from "../src/server/controlToken.js";
 import { startUiServer } from "../src/server/http.js";

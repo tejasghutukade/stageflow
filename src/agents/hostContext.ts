@@ -12,9 +12,10 @@ import { AgentChatController } from "./chatTurn.js";
 import { otlpSinkFromEnv, type OtlpSink } from "./otlpSink.js";
 import type { ContactInfo } from "../channels/types.js";
 import type { McpToolDeps } from "../mcp/deps.js";
+import { consoleUrl } from "../mcp/writeTarget.js";
 import { catalogRootsForArtifacts } from "../artifacts/projectScope.js";
 import { publishSessionArtifact } from "../artifacts/sessionPublish.js";
-import { presentArtifact, presentInline } from "./presentUi.js";
+import { presentArtifact, presentInline } from "../genui/present.js";
 import { queryBinding } from "../artifacts/bindingQuery.js";
 import { createUiEventHandler, loadChatArtifact, validateChatBindingArgs, type UiEventHandler } from "./uiEvents.js";
 import { sqliteConnectionFromStore } from "../runstore/createStore.js";
@@ -180,7 +181,7 @@ export function createAgentHostContext(options: {
                 agentId,
                 presentedInMessage,
                 allowedKinds: kinds,
-                consoleDeps: { ...options.toolkitDeps!, cwd: options.cwd },
+                consoleUrl: (hashPath: string) => consoleUrl({ ...options.toolkitDeps!, cwd: options.cwd }, hashPath),
               };
               if (typeof program === "string") return presentInline({ ...shared, program, manifest });
               if (!key) return { ok: false as const, code: "artifact.invalid_id", message: "Artifact key is not valid" };
