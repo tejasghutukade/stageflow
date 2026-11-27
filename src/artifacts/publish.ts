@@ -5,7 +5,8 @@ import { AGENT_ID_PATTERN } from "../agents/agentId.js";
 import { agentProjectKey } from "../agents/store.js";
 import { STAGE_ID_PATTERN } from "../config/createStage.js";
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
-import { ArtifactKeyError, artifactStorageKey, assertArtifactId, GUIDE_OWNER_KEY, publicArtifactKey, stageOwnerKey } from "./keys.js";
+import { ArtifactKeyError, artifactStorageKey, assertArtifactId, publicArtifactKey } from "./keys.js";
+import { ownerColumns, ownerFields, type OwnerField } from "./owners.js";
 import { assertBindingsAtPublish } from "./bindings.js";
 import { declaredOriginCount, deleteOriginApprovals, ORIGIN_APPROVAL_WARNING } from "./originApproval.js";
 import { htmlDbManifest, htmlIdentityHash, type HtmlManifest } from "./htmlManifest.js";
@@ -174,19 +175,21 @@ function rejectEvalOwnerPiece(value: string, issuePath: string): void {
   }
 }
 
+const OWNER_FIELD_RULES: Record<OwnerField, { pattern: RegExp; label: string }> = {
+  agent: { pattern: AGENT_ID_PATTERN, label: "Agent id" },
+  pipeline: { pattern: STAGE_ID_PATTERN, label: "Pipeline id" },
+  stage: { pattern: STAGE_ID_PATTERN, label: "Stage id" },
+};
+
 function ownerKeyOf(owner: ArtifactOwner): string {
   try {
-    if (owner.kind === "guide") return GUIDE_OWNER_KEY;
-    if (owner.kind === "agent") {
-      rejectEvalOwnerPiece(owner.agent, "owner.agent");
-      assertOwnerId(owner.agent, "owner.agent", AGENT_ID_PATTERN, "Agent id");
-      return `agent:${owner.agent}`;
+    const fields = ownerFields(owner);
+    for (const { field, value } of fields) rejectEvalOwnerPiece(value, `owner.${field}`);
+    for (const { field, value } of fields) {
+      const rule = OWNER_FIELD_RULES[field];
+      assertOwnerId(value, `owner.${field}`, rule.pattern, rule.label);
     }
-    rejectEvalOwnerPiece(owner.pipeline, "owner.pipeline");
-    rejectEvalOwnerPiece(owner.stage, "owner.stage");
-    assertOwnerId(owner.pipeline, "owner.pipeline", STAGE_ID_PATTERN, "Pipeline id");
-    assertOwnerId(owner.stage, "owner.stage", STAGE_ID_PATTERN, "Stage id");
-    return stageOwnerKey(owner.pipeline, owner.stage);
+    return artifactOwnerKey(owner);
   } catch (error) {
     if (error instanceof ArtifactPublishError) throw error;
     if (error instanceof ArtifactKeyError) {
@@ -466,12 +469,7 @@ function syncPublishedSearch(
     description: fields.description,
     tagsJson: JSON.stringify(fields.tags),
     summary: fields.summary,
-    ownerText: artifactSearchOwnerText({
-      owner_kind: input.owner.kind,
-      owner_pipeline: input.owner.kind === "stage" ? input.owner.pipeline : null,
-      owner_stage: input.owner.kind === "stage" ? input.owner.stage : null,
-      owner_agent: input.owner.kind === "agent" ? input.owner.agent : null,
-    }),
+    ownerText: artifactSearchOwnerText(ownerColumns(input.owner)),
     projectRootId: projectId,
     kind: fields.kind,
     body,
@@ -802,10 +800,7 @@ export async function publishArtifact(
                )`,
             ).run({
               key: storageKey,
-              owner_kind: owner.kind,
-              owner_pipeline: owner.kind === "stage" ? owner.pipeline : null,
-              owner_stage: owner.kind === "stage" ? owner.stage : null,
-              owner_agent: owner.kind === "agent" ? owner.agent : null,
+              ...ownerColumns(owner),
               project_root_id: project.id,
               id: fields.id,
               title: fields.title,

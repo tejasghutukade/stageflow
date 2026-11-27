@@ -14,6 +14,7 @@ import { LIVE_SNAPSHOT_MAX_BYTES, ArtifactPublishError } from "./limits.js";
 import { loadStoredLiveBindings } from "./htmlManifest.js";
 import { argsHash, type LiveBinding, type LiveBindingSet } from "./manifest.js";
 import { ArtifactQueryError } from "./query.js";
+import { ownerFromRow } from "./owners.js";
 import type { ArtifactOwner } from "./record.js";
 import { isLiveKind } from "./kinds.js";
 import { storedProjectMatches } from "./projectIdentity.js";
@@ -200,11 +201,6 @@ export function withRefreshLock<T>(
   });
 }
 
-function ownerOf(row: ArtifactLiveRow): ArtifactOwner {
-  if (row.owner_kind === "guide") return { kind: "guide" };
-  if (row.owner_kind === "agent") return { kind: "agent", agent: row.owner_agent ?? "" };
-  return { kind: "stage", pipeline: row.owner_pipeline ?? "", stage: row.owner_stage ?? "" };
-}
 
 export function projectMatches(stored: string, projectRoot: string, projectId?: string): boolean {
   return storedProjectMatches(stored, { id: projectId, path: projectRoot });
@@ -632,7 +628,7 @@ async function refreshLocked(
     for (const id of options.skipBindingIds ?? []) selected.delete(id);
     const invoke = deps.invoke ?? defaultInvoke(db);
     const now = deps.now ?? (() => new Date().toISOString());
-    const owner = ownerOf(row);
+    const owner = ownerFromRow(row);
     const startedVersion = row.current_version;
     const sources = new Map<string, ArtifactSnapshotSource>();
     const runnable = new Set<string>();

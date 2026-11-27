@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { UI_PART_KIND_ARTIFACT_REF, UI_PART_SCHEMA_VERSION } from "../src/artifacts/uiPart.js";
 import { catalogRootsForArtifacts } from "../src/artifacts/projectScope.js";
 import { listArtifacts } from "../src/artifacts/query.js";
-import { parseOwnerKey } from "../src/artifacts/keys.js";
+import { parseOwnerKey } from "../src/artifacts/owners.js";
 import { deletePublishedArtifact } from "../src/artifacts/publish.js";
 import { readArtifactContent } from "../src/artifacts/content.js";
 import { createGuideSaveCardTool } from "../src/guide/saveCard.js";

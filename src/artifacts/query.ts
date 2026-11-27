@@ -8,7 +8,8 @@ import {
   type ArtifactRow,
   type ArtifactStatus,
 } from "./record.js";
-import { assertArtifactId, parseOwnerKey, type ParsedOwner } from "./keys.js";
+import { assertArtifactId } from "./keys.js";
+import { ownerMatchSql, ownerSearchTextSql, ownerSubstringSql, parseOwnerKey, type ParsedOwner } from "./owners.js";
 import { ARTIFACT_TAG_PATTERN } from "./limits.js";
 import { canonicalProjectWireId } from "./projectScope.js";
 import { artifactScopePredicate, EVAL_SESSION_ARTIFACT_EXCLUSION } from "./scopeSql.js";
@@ -192,25 +193,18 @@ export function parseArtifactLiveFilter(raw: string | null): boolean | undefined
   invalidFilter("live must be true or false");
 }
 
-type OwnerFilter =
-  | { mode: "stage"; pipeline: string; stage: string }
-  | { mode: "agent"; agent: string }
-  | { mode: "guide" }
-  | { mode: "substring"; value: string };
+type OwnerFilter = { mode: "owner"; owner: ParsedOwner } | { mode: "substring"; value: string };
 
 function parseOwnerFilter(owner: string): OwnerFilter {
-  if (owner === "guide") return { mode: "guide" };
-  if (owner.startsWith("stage:")) {
-    const parts = owner.slice("stage:".length).split(":");
-    if (parts.length === 2 && parts[0] && parts[1]) {
-      return { mode: "stage", pipeline: parts[0], stage: parts[1] };
-    }
-  }
-  if (owner.startsWith("agent:")) {
-    const agent = owner.slice("agent:".length);
-    if (agent.length > 0) return { mode: "agent", agent };
-  }
+  const parsed = parseOwnerKey(owner);
+  if (parsed) return { mode: "owner", owner: parsed };
   return { mode: "substring", value: owner.toLowerCase() };
+}
+
+function ownerFilterSql(filter: OwnerFilter | undefined): { sql: string | null; params: Record<string, string | null> } {
+  if (filter?.mode === "owner") return ownerMatchSql(filter.owner, { alias: "a", paramPrefix: "owner_" });
+  if (filter?.mode === "substring") return { sql: ownerSubstringSql("a", "owner_sub"), params: { owner_sub: filter.value } };
+  return { sql: null, params: {} };
 }
 
 export function parseArtifactScope(raw: string | null): "project" | "session" | undefined {
@@ -394,29 +388,15 @@ function listArtifactsBySearch(
     artifactScopePredicate(query.scope),
     EVAL_SESSION_ARTIFACT_EXCLUSION,
   ];
-  if (ownerFilter?.mode === "stage") {
-    whereParts.push(
-      "a.owner_kind = 'stage' AND a.owner_pipeline = @owner_pipeline AND a.owner_stage = @owner_stage",
-    );
-  } else if (ownerFilter?.mode === "agent") {
-    whereParts.push("a.owner_kind = 'agent' AND a.owner_agent = @owner_agent");
-  } else if (ownerFilter?.mode === "guide") {
-    whereParts.push("a.owner_kind = 'guide'");
-  } else if (ownerFilter?.mode === "substring") {
-    whereParts.push(
-      `instr(lower(trim(coalesce(a.owner_pipeline, '') || ' ' || coalesce(a.owner_stage, '') || ' ' || coalesce(a.owner_agent, '') || CASE WHEN a.owner_kind = 'guide' THEN ' guide' ELSE '' END)), @owner_sub) > 0`,
-    );
-  }
+  const ownerSql = ownerFilterSql(ownerFilter);
+  if (ownerSql.sql) whereParts.push(ownerSql.sql);
   const params: Record<string, string | number | null> = {
     project: projectId ?? null,
     status: query.status ?? null,
     kind_pattern: kindPattern,
     live: live === null ? null : live ? 1 : 0,
     tag: query.tag ?? null,
-    owner_pipeline: ownerFilter?.mode === "stage" ? ownerFilter.pipeline : null,
-    owner_stage: ownerFilter?.mode === "stage" ? ownerFilter.stage : null,
-    owner_agent: ownerFilter?.mode === "agent" ? ownerFilter.agent : null,
-    owner_sub: ownerFilter?.mode === "substring" ? ownerFilter.value : null,
+    ...ownerSql.params,
   };
   const terms = artifactSearchTerms(textQuery);
   terms.forEach((term, index) => {
@@ -431,12 +411,7 @@ function listArtifactsBySearch(
          OR lower(COALESCE(a.summary, '')) LIKE @like_${index} ESCAPE '\\'
          OR lower(a.id) LIKE @like_${index} ESCAPE '\\'
          OR lower(
-           CASE a.owner_kind
-             WHEN 'agent' THEN 'agent:' || COALESCE(a.owner_agent, '') || ' ' || COALESCE(a.owner_agent, '')
-             WHEN 'guide' THEN 'guide'
-             ELSE 'stage:' || COALESCE(a.owner_pipeline, '') || ':' || COALESCE(a.owner_stage, '')
-               || ' ' || COALESCE(a.owner_pipeline, '') || ' ' || COALESCE(a.owner_stage, '')
-           END
+           ${ownerSearchTextSql("a")}
          ) LIKE @like_${index} ESCAPE '\\'
        )`,
     )
@@ -568,19 +543,8 @@ export function listArtifacts(
     EVAL_SESSION_ARTIFACT_EXCLUSION,
     cursorPredicate(sort, order),
   ];
-  if (ownerFilter?.mode === "stage") {
-    whereParts.push(
-      "a.owner_kind = 'stage' AND a.owner_pipeline = @owner_pipeline AND a.owner_stage = @owner_stage",
-    );
-  } else if (ownerFilter?.mode === "agent") {
-    whereParts.push("a.owner_kind = 'agent' AND a.owner_agent = @owner_agent");
-  } else if (ownerFilter?.mode === "guide") {
-    whereParts.push("a.owner_kind = 'guide'");
-  } else if (ownerFilter?.mode === "substring") {
-    whereParts.push(
-      `instr(lower(trim(coalesce(a.owner_pipeline, '') || ' ' || coalesce(a.owner_stage, '') || ' ' || coalesce(a.owner_agent, '') || CASE WHEN a.owner_kind = 'guide' THEN ' guide' ELSE '' END)), @owner_sub) > 0`,
-    );
-  }
+  const ownerSql = ownerFilterSql(ownerFilter);
+  if (ownerSql.sql) whereParts.push(ownerSql.sql);
 
   const sql = `SELECT ${SELECT_COLS} ${FROM}
        WHERE ${whereParts.join("\n         AND ")}
@@ -595,11 +559,7 @@ export function listArtifacts(
       kind_pattern: kindPattern,
       live: query.live === true ? 1 : query.live === false ? 0 : null,
       tag: query.tag ?? null,
-      owner_mode: ownerFilter?.mode === "stage" || ownerFilter?.mode === "agent" ? ownerFilter.mode : null,
-      owner_pipeline: ownerFilter?.mode === "stage" ? ownerFilter.pipeline : null,
-      owner_stage: ownerFilter?.mode === "stage" ? ownerFilter.stage : null,
-      owner_agent: ownerFilter?.mode === "agent" ? ownerFilter.agent : null,
-      owner_sub: ownerFilter?.mode === "substring" ? ownerFilter.value : null,
+      ...ownerSql.params,
       cursor_primary: cursorDecoded?.primary ?? null,
       cursor_key: cursorDecoded?.key ?? null,
       limit: query.limit + 1,
@@ -612,20 +572,6 @@ export function listArtifacts(
     next_cursor: extra
       ? encodeArtifactCursor(sort, order, sortPrimaryValue(extra, sort), extra.key)
       : null,
-  };
-}
-
-function ownerClause(owner: ParsedOwner): { sql: string; params: Record<string, string> } {
-  if (owner.kind === "guide") return { sql: `a.owner_kind = 'guide'`, params: {} };
-  if (owner.kind === "agent") {
-    return {
-      sql: `a.owner_kind = 'agent' AND a.owner_agent = @agent`,
-      params: { agent: owner.agent },
-    };
-  }
-  return {
-    sql: `a.owner_kind = 'stage' AND a.owner_pipeline = @pipeline AND a.owner_stage = @stage`,
-    params: { pipeline: owner.pipeline, stage: owner.stage },
   };
 }
 
@@ -659,7 +605,7 @@ export function readArtifact(
   if (projectId?.includes("::")) {
     throw new ArtifactQueryError(400, "artifact.invalid_id", `Project id must not contain "::"`);
   }
-  const ownerSql = ownerClause(owner);
+  const ownerSql = ownerMatchSql(owner, { alias: "a" });
   const rows = db
     .prepare(
       `SELECT ${SELECT_COLS} ${FROM}

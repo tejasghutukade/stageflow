@@ -14,6 +14,7 @@ import { payloadInstanceMismatch } from "../envelope/payloadSchema.js";
 import { readFunctionDefinitionSync } from "../functions/toolPolicy.js";
 import type { LiveBinding } from "./manifest.js";
 import { ArtifactPublishError, type ArtifactIssue } from "./limits.js";
+import { ownerCanBind, ownerTitle } from "./owners.js";
 import type { ArtifactOwner } from "./record.js";
 
 const READ_METHODS = new Set(["GET", "HEAD"]);
@@ -181,10 +182,18 @@ export async function ownerFunctionAccess(
   owner: ArtifactOwner,
   functionId: string,
 ): Promise<OwnerFunctionAccess> {
-  if (owner.kind === "agent") return agentFunctionAccess(projectRoot, owner.agent, functionId);
-  if (owner.kind === "guide") return { ok: false, message: "Guide artifacts do not attach functions" };
-  return stageFunctionAccess(projectRoot, owner.pipeline, owner.stage, functionId);
+  const access = FUNCTION_ACCESS[owner.kind] as OwnerAccess<ArtifactOwner> | undefined;
+  if (!ownerCanBind(owner) || !access) return { ok: false, message: `${ownerTitle(owner)} artifacts do not attach functions` };
+  return access(projectRoot, owner, functionId);
 }
+
+type OwnerAccess<O> = (projectRoot: string, owner: O, functionId: string) => Promise<OwnerFunctionAccess>;
+
+/** How each owner kind that can bind (`canBind` in owners.ts) looks up a function attachment. */
+const FUNCTION_ACCESS: { [K in ArtifactOwner["kind"]]?: OwnerAccess<Extract<ArtifactOwner, { kind: K }>> } = {
+  agent: (projectRoot, owner, functionId) => agentFunctionAccess(projectRoot, owner.agent, functionId),
+  stage: (projectRoot, owner, functionId) => stageFunctionAccess(projectRoot, owner.pipeline, owner.stage, functionId),
+};
 
 async function agentFunctionAccess(projectRoot: string, agentId: string, functionId: string): Promise<OwnerFunctionAccess> {
   const read = await readTextRetry(path.join(projectRoot, "agents", `${agentId}.agent.yaml`));

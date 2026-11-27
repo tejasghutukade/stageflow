@@ -1,19 +1,10 @@
-import { GUIDE_OWNER_KEY } from "./keys.js";
 import { parseStoredHtmlManifest, type HtmlCsp } from "./htmlManifest.js";
 import { isLiveHtmlKind, isLiveKind } from "./kinds.js";
 import { parseStoredLiveManifest } from "./manifest.js";
 import type { ArtifactOriginView } from "./originApproval.js";
+import { artifactOwnerKey, ownerFromRow, type ArtifactOwner } from "./owners.js";
 
-export type ArtifactOwner =
-  | { kind: "stage"; pipeline: string; stage: string }
-  | { kind: "agent"; agent: string }
-  | { kind: "guide" };
-
-export function artifactOwnerKey(owner: ArtifactOwner): string {
-  if (owner.kind === "guide") return GUIDE_OWNER_KEY;
-  if (owner.kind === "agent") return `agent:${owner.agent}`;
-  return `stage:${owner.pipeline}:${owner.stage}`;
-}
+export { artifactOwnerKey, type ArtifactOwner } from "./owners.js";
 
 export const ARTIFACT_STATUSES = ["available", "expired"] as const;
 export type ArtifactStatus = (typeof ARTIFACT_STATUSES)[number];
@@ -119,12 +110,7 @@ export type ArtifactRow = {
 const LIVE_STATUSES = new Set(["fresh", "stale", "refreshing", "error"]);
 
 export function artifactRecord(row: ArtifactRow, registered: boolean): ArtifactRecord {
-  const owner: ArtifactOwner =
-    row.owner_kind === "guide"
-      ? { kind: "guide" }
-      : row.owner_kind === "agent"
-        ? { kind: "agent", agent: row.owner_agent ?? "" }
-        : { kind: "stage", pipeline: row.owner_pipeline ?? "", stage: row.owner_stage ?? "" };
+  const owner: ArtifactOwner = ownerFromRow(row);
   const ownerKey = artifactOwnerKey(owner);
   let tags: string[] = [];
   try {

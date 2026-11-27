@@ -3,7 +3,7 @@ import type Database from "better-sqlite3";
 import { LIBRARY_NAME, LIBRARY_VERSION, OPENUI_LANG_FORMAT } from "../artifacts/library/index.js";
 import { ArtifactPublishError } from "../artifacts/limits.js";
 import { publishArtifact } from "../artifacts/publish.js";
-import { artifactOwnerKey, type ArtifactOwner } from "../artifacts/record.js";
+import { artifactOwnerKey, ownerMatchSql, type ArtifactOwner } from "../artifacts/owners.js";
 import { sessionArtifactExpiresAt } from "../artifacts/sessionScope.js";
 import { UI_PART_KIND_ARTIFACT_REF, UI_PART_SCHEMA_VERSION, type UiPartArtifactRef, type UiPartEnvelope } from "../artifacts/uiPart.js";
 import type { UiPartCard } from "../artifacts/uiPartCard.js";
@@ -44,10 +44,8 @@ type SavedRow = { id: string; current_version: number; project_root_id: string; 
 function savedCardRow(db: Database.Database, owner: ArtifactOwner, id: string): SavedRow | undefined {
   const columns = `SELECT id, current_version, project_root_id, title, deleted_at, status FROM artifacts`;
   const order = `ORDER BY deleted_at IS NULL DESC LIMIT 1`;
-  if (owner.kind === "agent") {
-    return db.prepare(`${columns} WHERE owner_kind = 'agent' AND owner_agent = ? AND id = ? ${order}`).get(owner.agent, id) as SavedRow | undefined;
-  }
-  return db.prepare(`${columns} WHERE owner_kind = ? AND id = ? ${order}`).get(owner.kind, id) as SavedRow | undefined;
+  const match = ownerMatchSql(owner);
+  return db.prepare(`${columns} WHERE ${match.sql} AND id = @id ${order}`).get({ ...match.params, id }) as SavedRow | undefined;
 }
 
 function hashPath(ownerKey: string, id: string, projectId: string): string {
@@ -68,10 +66,9 @@ function artifactRef(key: string, version: number, title: string, url: string): 
   return { ok: true, value: envelope as unknown as Record<string, unknown> };
 }
 
+/** A stage's owner is applied by its publish port, so a stage surface has none of its own to save under. */
 function ownerOf(surface: Surface): ArtifactOwner | undefined {
-  if (surface.owner.kind === "agent") return { kind: "agent", agent: surface.owner.agent };
-  if (surface.owner.kind === "guide") return { kind: "guide" };
-  return undefined;
+  return surface.owner.kind === "stage" ? undefined : surface.owner;
 }
 
 /**

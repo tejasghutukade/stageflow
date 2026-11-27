@@ -2,6 +2,7 @@ import { isUtf8 } from "node:buffer";
 import type Database from "better-sqlite3";
 import { contentTooLarge } from "../../artifacts/content.js";
 import { ARTIFACT_ID_PATTERN } from "../../artifacts/keys.js";
+import { ownerKeyFromRow } from "../../artifacts/owners.js";
 import { parseStoredHtmlManifest } from "../../artifacts/htmlManifest.js";
 import { parseStoredLiveManifest } from "../../artifacts/manifest.js";
 import { readArtifactSnapshots } from "../../artifacts/refresh.js";
@@ -48,9 +49,7 @@ function pastExpiry(expiresAt: string | null, nowIso: string): boolean {
 }
 
 function publicKeyOf(row: OwnedRow): string {
-  if (row.owner_kind === "agent") return `agent:${row.owner_agent ?? ""}/${row.id}`;
-  if (row.owner_kind === "guide") return `guide/${row.id}`;
-  return `stage:${row.owner_pipeline ?? ""}:${row.owner_stage ?? ""}/${row.id}`;
+  return `${ownerKeyFromRow(row)}/${row.id}`;
 }
 
 function ownedRows(db: Database.Database, sessionId: string, id: string): OwnedRow[] {

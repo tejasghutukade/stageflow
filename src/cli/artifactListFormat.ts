@@ -2,11 +2,10 @@ import type { BindingQueryResult } from "../artifacts/bindingQuery.js";
 import type { ArtifactRefreshResult } from "../artifacts/refresh.js";
 import { artifactOwnerKey, type ArtifactOwner, type ArtifactLiveView, type ArtifactRecord } from "../artifacts/record.js";
 import { publicArtifactKey } from "../artifacts/keys.js";
+import { hasOwnerKeyPrefix, ownerFilterNames, ownerLabel } from "../artifacts/owners.js";
 
 export function ownerDisplayText(owner: ArtifactOwner): string {
-  if (owner.kind === "guide") return "guide";
-  if (owner.kind === "agent") return `agent:${owner.agent}`;
-  return `${owner.pipeline}:${owner.stage}`;
+  return ownerLabel(owner);
 }
 
 export function ownerKeyFromRecord(record: ArtifactRecord): string {
@@ -16,18 +15,8 @@ export function ownerKeyFromRecord(record: ArtifactRecord): string {
 export function matchesOwnerFilter(record: ArtifactRecord, filter: string): boolean {
   const trimmed = filter.trim();
   if (trimmed.length === 0) return true;
-  if (trimmed.startsWith("stage:")) {
-    return ownerKeyFromRecord(record) === trimmed;
-  }
-  if (trimmed.startsWith("agent:")) {
-    return ownerKeyFromRecord(record) === trimmed;
-  }
-  if (record.owner.kind === "guide") return trimmed === "guide";
-  if (record.owner.kind === "agent") {
-    return record.owner.agent === trimmed || `agent:${record.owner.agent}` === trimmed;
-  }
-  const needle = `${record.owner.pipeline}:${record.owner.stage}`;
-  return needle === trimmed;
+  if (hasOwnerKeyPrefix(trimmed)) return ownerKeyFromRecord(record) === trimmed;
+  return ownerFilterNames(record.owner).includes(trimmed);
 }
 
 export function matchesKindFilter(record: ArtifactRecord, kind: string | undefined): boolean {

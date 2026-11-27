@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
+import { ownerKeyFromRow } from "./owners.js";
 import type { ArtifactOwner } from "./record.js";
 import { ArtifactPublishError, type ArtifactIssue } from "./limits.js";
 import { STATIC_CONTENT_MAX_BYTES } from "./limits.js";
@@ -117,7 +118,7 @@ export function publishSessionArtifact(
     ...(body.manifest !== undefined ? { manifest: body.manifest } : {}),
     publishSource: "api",
     source: {
-      kind: context.owner.kind === "agent" ? "agent" : context.owner.kind === "guide" ? "guide" : "stage",
+      kind: context.owner.kind,
       ...(context.source.runId !== undefined ? { runId: context.source.runId } : {}),
       ...(context.source.stageId !== undefined ? { stageId: context.source.stageId } : {}),
       ...(context.source.attempt !== undefined ? { attempt: context.source.attempt } : {}),
@@ -256,7 +257,7 @@ export function publishedArtifactsForRun(
   for (const row of rows) {
     const stored = row.storage_key.includes("::")
       ? row.storage_key.slice(row.storage_key.indexOf("::") + 2)
-      : `${row.owner_kind === "agent" ? `agent:${row.owner_agent ?? ""}` : `stage:${row.owner_pipeline ?? ""}:${row.owner_stage ?? ""}`}/${row.id}`;
+      : `${ownerKeyFromRow(row)}/${row.id}`;
     const item: PublishedArtifactSummary = {
       key: stored,
       version: row.version,

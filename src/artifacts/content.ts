@@ -2,6 +2,7 @@ import { isUtf8 } from "node:buffer";
 import { readFile, stat } from "node:fs/promises";
 import type Database from "better-sqlite3";
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
+import { ownerMatchSql, ownerWorkspaceContent } from "./owners.js";
 import { artifactOwnerKey, type ArtifactExpiredReason, type ArtifactOwner } from "./record.js";
 import type { RunStore } from "../runstore/port.js";
 import { attemptArtifactsDir } from "../runstore/workspaceLayout.js";
@@ -98,27 +99,11 @@ export function servedArtifactMediaType(kind: string, relativePath: string, byte
 
 function locateContent(
   db: Database.Database,
-  ownerKind: "stage" | "agent",
-  owner: { pipeline?: string; stage?: string; agent?: string },
+  owner: ArtifactOwner,
   id: string,
   projectId: string,
 ): ContentRow | undefined {
-  if (ownerKind === "agent") {
-    return db
-      .prepare(
-        `SELECT a.kind, a.source_run_id, a.source_stage_id, a.source_attempt,
-                v.relative_path, v.content_hash,
-                v.source_run_id AS version_run_id,
-                v.source_stage_id AS version_stage_id,
-                v.source_attempt AS version_attempt
-         FROM artifacts a
-         LEFT JOIN artifact_versions v ON v.key = a.key AND v.version = a.current_version
-         WHERE a.deleted_at IS NULL AND a.hidden = 0 AND a.id = @id
-           AND a.project_root_id = @project
-           AND a.owner_kind = 'agent' AND a.owner_agent = @agent`,
-      )
-      .get({ id, project: projectId, agent: owner.agent ?? "" }) as ContentRow | undefined;
-  }
+  const match = ownerMatchSql(owner, { alias: "a" });
   return db
     .prepare(
       `SELECT a.kind, a.source_run_id, a.source_stage_id, a.source_attempt,
@@ -130,14 +115,9 @@ function locateContent(
        LEFT JOIN artifact_versions v ON v.key = a.key AND v.version = a.current_version
        WHERE a.deleted_at IS NULL AND a.hidden = 0 AND a.id = @id
          AND a.project_root_id = @project
-         AND a.owner_kind = 'stage' AND a.owner_pipeline = @pipeline AND a.owner_stage = @stage`,
+         AND ${match.sql}`,
     )
-    .get({
-      id,
-      project: projectId,
-      pipeline: owner.pipeline ?? "",
-      stage: owner.stage ?? "",
-    }) as ContentRow | undefined;
+    .get({ id, project: projectId, ...match.params }) as ContentRow | undefined;
 }
 
 function mapPathError(error: unknown): ArtifactContentError {
@@ -174,18 +154,10 @@ export async function readArtifactContent(
   if (record.status === "expired") {
     throw unavailable(expiredContentMessage(record.expired_reason));
   }
-  if (record.owner.kind === "guide") {
+  if (!ownerWorkspaceContent(record.owner)) {
     throw unavailable("The artifact file is no longer in the store");
   }
-  const row = locateContent(
-    db,
-    record.owner.kind,
-    record.owner.kind === "agent"
-      ? { agent: record.owner.agent }
-      : { pipeline: record.owner.pipeline, stage: record.owner.stage },
-    record.id,
-    record.project.id,
-  );
+  const row = locateContent(db, record.owner, record.id, record.project.id);
   if (!row || row.relative_path === null || row.relative_path.trim().length === 0) {
     throw unavailable("The artifact file is no longer in the run workspace");
   }

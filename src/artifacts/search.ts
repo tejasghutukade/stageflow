@@ -3,6 +3,7 @@ import type Database from "better-sqlite3";
 import { PATH_DENIED_MESSAGE, resolveContainedRelativePath } from "../runread/readArtifact.js";
 import { attemptArtifactsDir } from "../runstore/workspaceLayout.js";
 import { ARTIFACT_FTS_SQL } from "../runstore/sqlite/migrations/027-artifact-search.js";
+import { ownerSearchText, type OwnerColumns } from "./owners.js";
 import { readStoredArtifactFile } from "./store.js";
 
 /** First 64 KiB of UTF-8 text, cut on a code-point boundary. */
@@ -138,20 +139,8 @@ export function capUtf8(bytes: Buffer, maxBytes: number): Buffer {
   return bytes.subarray(0, end);
 }
 
-export function artifactSearchOwnerText(row: {
-  owner_kind: string;
-  owner_pipeline: string | null;
-  owner_stage: string | null;
-  owner_agent: string | null;
-}): string {
-  if (row.owner_kind === "guide") return "guide";
-  if (row.owner_kind === "agent") {
-    const agent = row.owner_agent ?? "";
-    return `agent:${agent} ${agent}`.trim();
-  }
-  const pipeline = row.owner_pipeline ?? "";
-  const stage = row.owner_stage ?? "";
-  return `stage:${pipeline}:${stage} ${pipeline} ${stage}`.trim();
+export function artifactSearchOwnerText(row: OwnerColumns): string {
+  return ownerSearchText(row);
 }
 
 export function artifactSearchTagsText(tagsJson: string | null): string {

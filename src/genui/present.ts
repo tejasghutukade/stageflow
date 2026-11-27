@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import { ARTIFACT_TITLE_MAX_CHARS, ArtifactPublishError } from "../artifacts/limits.js";
-import { artifactStorageKey, parseOwnerKey, publicArtifactKey } from "../artifacts/keys.js";
+import { artifactStorageKey, publicArtifactKey } from "../artifacts/keys.js";
+import { parseOwnerKey } from "../artifacts/owners.js";
 import { storedProjectMatches } from "../artifacts/projectIdentity.js";
 import { publishArtifact } from "../artifacts/publish.js";
 import { ArtifactQueryError, readArtifact } from "../artifacts/query.js";

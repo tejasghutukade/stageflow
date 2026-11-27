@@ -8,7 +8,7 @@ import { isLiveKind } from "./kinds.js";
 import { LIVE_BINDING_ARGS_MAX_BYTES, ArtifactPublishError } from "./limits.js";
 import { argsHash, type LiveBinding, type LiveBindingSet } from "./manifest.js";
 import { ArtifactQueryError } from "./query.js";
-import type { ArtifactOwner } from "./record.js";
+import { ownerFromRow } from "./owners.js";
 import {
   effectiveTtlSeconds,
   REFRESH_RETRY_AFTER_SECONDS,
@@ -133,11 +133,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 
-function ownerOf(row: ArtifactLiveRow): ArtifactOwner {
-  if (row.owner_kind === "agent") return { kind: "agent", agent: row.owner_agent ?? "" };
-  if (row.owner_kind === "guide") return { kind: "guide" };
-  return { kind: "stage", pipeline: row.owner_pipeline ?? "", stage: row.owner_stage ?? "" };
-}
 
 function loadRow(db: Database.Database, key: string): ArtifactLiveRow | undefined {
   return db
@@ -568,7 +563,7 @@ async function executeVariant(
     const outcome = await executeLiveBinding(
       db,
       deps.projectRoot,
-      ownerOf(row),
+      ownerFromRow(row),
       binding,
       index,
       deps.invoke ?? defaultInvoke(db),

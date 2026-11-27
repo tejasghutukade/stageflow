@@ -2,7 +2,8 @@ import { writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import * as readline from "node:readline";
-import { artifactStorageKey, parseOwnerKey } from "../artifacts/keys.js";
+import { artifactStorageKey } from "../artifacts/keys.js";
+import { hasOwnerKeyPrefix, parseOwnerKey } from "../artifacts/owners.js";
 import { ArtifactPublishError } from "../artifacts/limits.js";
 import { isLiveKind } from "../artifacts/kinds.js";
 import { approveOrigins, revokeOrigins } from "../artifacts/originApproval.js";
@@ -247,7 +248,7 @@ function parseListArgs(args: string[]): ParsedListArgs {
 
 function ownerListFilter(owner: string): string {
   const trimmed = owner.trim();
-  if (trimmed.startsWith("stage:") || trimmed.startsWith("agent:")) return trimmed;
+  if (hasOwnerKeyPrefix(trimmed)) return trimmed;
   const colon = trimmed.indexOf(":");
   if (colon > 0 && trimmed.indexOf(":", colon + 1) === -1) return `stage:${trimmed}`;
   return trimmed;
