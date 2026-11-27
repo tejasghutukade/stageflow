@@ -158,7 +158,7 @@ function permission(scope: ConsumerScope, agents: string[], resources: string[] 
   return {
     scope,
     agents,
-    actions: ["order:read", "conversation:use"],
+    actions: ["order:read", "order:list", "account:read", "conversation:use"],
     ...(resources ? { resources } : {}),
   };
 }
@@ -197,6 +197,28 @@ const routes: Route[] = [
       };
       ctx.authorization.registerOidc(input, clientSecret, false);
       ctx.json(ctx.res, 201, ctx.authorization.oidcSummary(input.id));
+    },
+  },
+  {
+    method: "POST",
+    pattern: /^\/api\/identity\/connections\/channel$/,
+    handle: async (ctx) => {
+      const body = await readBody(ctx.req);
+      const provider = body.provider;
+      if (provider !== "imessage" && provider !== "telegram" && provider !== "agentmail" && provider !== "email") {
+        throw new ConsumerAccessError("identity.setup_required");
+      }
+      const resources = optionalResources(body.resources);
+      const id = requireText(body.id);
+      ctx.authorization.registerChannel({
+        id,
+        channelConnectionId: requireText(body.channelConnectionId),
+        agentId: requireText(body.agentId),
+        provider,
+        unmappedReply: requireText(body.unmappedReply),
+        permission: permission(requireScope(body.scope), requireAgents(body.agents), resources),
+      });
+      ctx.json(ctx.res, 201, ctx.authorization.connectionView(id) ?? { id });
     },
   },
   {

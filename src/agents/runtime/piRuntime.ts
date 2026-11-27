@@ -554,7 +554,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
     }
     const systemPrompt = appendAgentPresentUiPrompt(
       appendAgentArtifactPrompt(
-        `${definition.instructions}${context}${memory ? `\n\n${memorySession(memory).prompt}` : ""}`,
+        `${definition.instructions}${context}${memory ? `\n\n${memorySession(memory).prompt}` : ""}${input.senderFact ? `\n\n${input.senderFact}` : ""}`,
         definition,
         projectRoot,
       ),

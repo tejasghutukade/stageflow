@@ -29,6 +29,12 @@ export async function allowWithinScope(engine: AuthorizationEngine, input: Autho
 
 function relationAllows(input: AuthorizationInput): boolean {
   const permission = input.authority.principal.permission;
+  if (input.action === "account:read") {
+    return input.authority.principal.accountId === input.resource.id
+      && input.resource.ownerAccountId === input.resource.id
+      && input.resource.workspaceId === input.authority.principal.workspaceId;
+  }
+  if (input.action === "order:list") return permission.actions.includes("order:list");
   if (input.action !== "order:read") return false;
   return scopeAllows({
     workspaceId: input.authority.principal.workspaceId,

@@ -150,7 +150,7 @@ describe("stale Stageflow tool names", () => {
       project,
       agentInput("im_helper", {
         limits: { always_on: true },
-        channel: { connection_id: "conn_im", allow_from: ["*"] },
+        channel: { connection_id: "conn_im", allow_from: ["+15551212"] },
         tools: { stageflow: { tools: ["get_run"] } },
       }),
       { source: "console" },

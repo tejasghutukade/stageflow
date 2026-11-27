@@ -9,14 +9,12 @@ Docker is the recommended way to run Stageflow: pull the published image and ope
 
 ## Docker (recommended)
 
-The image is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.67` is the current minor tag (`0.67.0` is that exact release). Each release is also tagged `x.y.z` and `x.y`.
-
+The image is [`ghcr.io/tejasghutukade/stageflow`](https://github.com/tejasghutukade/stageflow/pkgs/container/stageflow). `0.68` is the current minor tag (`0.68.0` is that exact release). Each release is also tagged `x.y.z` and `x.y`.
 ```bash
 docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.67 \
-  sf ui
+  ghcr.io/tejasghutukade/stageflow:0.68 \  sf ui
 ```
 
 Open [http://127.0.0.1:3847](http://127.0.0.1:3847). Go to **Settings → Providers** and connect a model, then **New pipeline** on the Pipelines page. Pipelines you save in the console live on the `stageflow-data` volume, under `/data`.
@@ -31,8 +29,7 @@ docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
   -v "$PWD":/project \
-  ghcr.io/tejasghutukade/stageflow:0.67 \
-  sf ui
+  ghcr.io/tejasghutukade/stageflow:0.68 \  sf ui
 ```
 
 That project needs the same files as the Node scaffold below (`stageflow.yaml`, a pipeline, a task), or you create them from the console. Building the image from a git checkout, instead of pulling it, is [Docker — Local try](docker.md#local-try-compose).

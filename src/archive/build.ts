@@ -10,6 +10,7 @@ import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
 import Database from "better-sqlite3";
+import { removeIdentitySecrets } from "../identity/archiveCopy.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import { backupsDir, checkOutPath, verifyDbSnapshot } from "../runstore/backup.js";
@@ -229,6 +230,8 @@ async function planRuns(store: BuildArchiveOptions["store"], homeDir: string, en
   }
 }
 
+const IDENTITY_DB = "identity/consumer-identity.db";
+
 function vacuumInto(source: string, dest: string): number {
   const db = new Database(source, { fileMustExist: true });
   try {
@@ -339,8 +342,11 @@ export async function buildArchive(options: BuildArchiveOptions): Promise<Archiv
         } else {
           version = vacuumInto(entry.source, dest);
         }
+        // The identity database keeps sign-in client secrets and refresh tokens in its rows; they follow the secret rule.
+        const scrubbed = entry.name === IDENTITY_DB && !includeSecrets && removeIdentitySecrets(dest);
+        if (entry.name === IDENTITY_DB && includeSecrets) files.hasSecretKind = true;
         const result = await tar.addFile(entry.name, dest, { mode: 0o600, mtimeSeconds: now.getTime() / 1000 });
-        await files.add({ path: entry.name, kind: "file", size: result.size, sha256: result.sha256 });
+        await files.add({ path: entry.name, kind: "file", size: result.size, sha256: result.sha256, ...(scrubbed ? { note: "sign-in client secrets and refresh tokens removed" } : {}) });
         rmSync(dest, { force: true });
       } else if (entry.kind === "redacted") {
         try {

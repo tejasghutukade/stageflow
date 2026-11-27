@@ -302,6 +302,34 @@ describe("requests match the Host routes", () => {
     });
   });
 
+  it("registers a channel connection without a secret", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: "sms-id", kind: "channel", active: true, status: "active" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const created = await identityApi.registerChannel({
+      id: "sms-id",
+      channelConnectionId: "sms",
+      agentId: "help",
+      provider: "imessage",
+      unmappedReply: "We could not match your number.",
+      scope: "assigned",
+      agents: ["help"],
+      resources: [],
+    });
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/identity/connections/channel");
+    expect(fetchMock.mock.calls[0]![1]?.method).toBe("POST");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body))).toEqual({
+      id: "sms-id",
+      channelConnectionId: "sms",
+      agentId: "help",
+      provider: "imessage",
+      unmappedReply: "We could not match your number.",
+      scope: "assigned",
+      agents: ["help"],
+      resources: [],
+    });
+    expect(JSON.stringify(created)).not.toContain(SECRET);
+  });
+
   it("keeps the workspace id from the connection list", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ workspaceId: "business-a", connections: [connectionPayload] })));
     const overview = await identityApi.overview();

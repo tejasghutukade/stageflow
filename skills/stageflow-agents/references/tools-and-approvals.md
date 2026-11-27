@@ -57,7 +57,7 @@ Use a server name that `list_catalog` with `kind: mcp_servers` or the project's 
 
 Read-only MCP tools stay out of `ask_first`. Each tool that creates, updates, deletes, sends, or pays goes in, as `<server>.<tool>`.
 
-`orders` with exactly `[status]` is the protected-chat order tool. It opens no MCP server. Expect warning `agent.mcp_server_unknown` for `orders`. It is allowed only with `web_chat.access: authenticated`. See [channels-and-identity.md](channels-and-identity.md).
+Protected chat customer resource tools are `tools.mcp.orders: [status, list]` (`orders.status`, `orders.list`) and `tools.mcp.account: [profile]` (`account.profile`). They open no MCP server. Expect warning `agent.mcp_server_unknown` for `orders` and `account`. Allowed with `web_chat.access: authenticated` or `channel.access: authenticated` on a consumer-safe agent. See [channels-and-identity.md](channels-and-identity.md).
 
 ## Skills
 

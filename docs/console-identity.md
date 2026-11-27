@@ -7,8 +7,6 @@ title: Console - Identity
 
 Identity is in the **Connect** group of the sidebar, after Connections. It is where an operator decides who may talk to a protected agent and what each person may see. This page walks each screen. For the concepts and the security model, see [Consumer identity](consumer-identity.md). For a start-to-finish setup, see [Protect an agent's chat with customer sign-in](guides-agents-protected-chat.md).
 
-Status: experimental.
-
 **Who this is for.** *Consumers* are the people who use a business's agents: its customers and its employees. They are not Workspace owners or operators, and this page does not change how you sign in to the console. A consumer proves who they are through your own login. Stageflow never holds their password or MFA.
 
 | Route | Screen |

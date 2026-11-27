@@ -1,11 +1,11 @@
-import { LuBot, LuChevronRight, LuKeyRound, LuLink2, LuPlug } from "react-icons/lu";
+import { LuBot, LuChevronRight, LuKeyRound, LuLink2, LuMessageCircle, LuPlug } from "react-icons/lu";
 import type { IdentityConnection } from "../../api/identity";
 import { CARD, EYEBROW, EmptyState, MONO, StatusLabel, TILE, Tag } from "./identityParts";
 import { KIND_INFO, connectionKind, connectionStatus, type ConnectionKind } from "./identityView";
 
-const KIND_ICON = { handoff: LuLink2, oidc: LuKeyRound, service: LuBot } as const;
+const KIND_ICON = { handoff: LuLink2, oidc: LuKeyRound, service: LuBot, channel: LuMessageCircle } as const;
 const GRID = "grid grid-cols-[minmax(0,1fr)_200px_150px_20px] items-center gap-4";
-const KINDS: readonly ConnectionKind[] = ["handoff", "oidc", "service"];
+const KINDS = ["handoff", "oidc", "service"] as const;
 
 export function ConnectionsPanel({
   connections,

@@ -2,7 +2,7 @@
 
 This guide takes you from nothing to an agent that answers **"where is my order?"** for a signed-in customer, and refuses everyone else's. It uses the existing login your product already has, so customers keep one password and one MFA, and Stageflow never stores either.
 
-Status: experimental. One read-only capability is supported, order status.
+Supported read tools are `orders.status`, `orders.list`, and `account.profile`.
 
 What you will end up with:
 
@@ -24,7 +24,7 @@ You need:
 
 ## 1. Create a protected agent
 
-A protected agent is deliberately small. It may answer from its instructions and read order status. Everything else is off, because a protected conversation cannot safely reach tools that cannot check who is asking.
+A protected agent is deliberately small. It may answer from its instructions and use the declared customer resource tools. Everything else is off, because a protected conversation cannot safely reach tools that cannot check who is asking.
 
 Create the agent in the console (**Agents → New**) or as a file, `agents/support.agent.yaml`:
 
@@ -38,7 +38,8 @@ instructions: |
   If you cannot find or are not allowed to read an order, say so plainly.
 tools:
   mcp:
-    orders: [status]
+    orders: [status, list]
+    account: [profile]
 web_chat:
   enabled: true
   access: authenticated
@@ -50,7 +51,7 @@ Rules the Host enforces when you publish it:
 |---------|-----|
 | `web_chat.access: authenticated` | Public links are anonymous and tool-less |
 | the Pi backend | The protected tool gate is part of the Pi runtime |
-| `tools.mcp` holds only `orders: [status]`, or nothing | That is the one supported protected tool |
+| `tools.mcp` holds only declared customer resource tools (`orders: [status, list]`, `account: [profile]`), or nothing | Those are the supported protected tools |
 | no `project_context`, `memories`, `skills`, `browser`, built-in file or shell tools, or Stageflow tools | Those paths cannot yet check the person |
 | sub-agents only if each is itself this restricted | A child can narrow a person's access, never widen it |
 
@@ -165,7 +166,7 @@ const reply = await fetch(`${base}/threads/${thread.thread.id}/messages`, {
 
 The bearer lasts as long as the verified proof (five minutes for a handoff) and cannot be refreshed; mint a new handoff token when it expires. Never put it in a URL, a prompt or a log. For OIDC, call `POST …/oidc/start` with the connection id, send the browser to the returned `authorizationUrl`, and the callback returns the same `{ token }`. The route, headers and limits are in [Consumer identity](consumer-identity.md#existing-login-handoff) and [Agent API](agent-api.md).
 
-Serve the endpoint over TLS, add your site's origin to `STAGEFLOW_PUBLIC_CHAT_ORIGINS` if the page is hosted elsewhere, and add the public hostname to `STAGEFLOW_ALLOWED_HOSTS`; see [Web chat](guides-agents-web-chat.md#behind-a-reverse-proxy).
+Serve the endpoint over TLS. Set `STAGEFLOW_PUBLIC_CHAT_URL` (or `STAGEFLOW_PUBLIC_URL`) to the https origin people use for admission and OIDC callbacks when chat is not on the console hostname. Add your site's origin to `STAGEFLOW_PUBLIC_CHAT_ORIGINS` if the page is hosted elsewhere, and add the public hostname to `STAGEFLOW_ALLOWED_HOSTS`; see [Web chat](guides-agents-web-chat.md#behind-a-reverse-proxy). The built-in `/chat/<slug>` page has no sign-in control; your embedded client performs admission.
 
 ## 8. Watch it work
 
@@ -193,6 +194,6 @@ Things to try:
 
 - It does not manage passwords, MFA or accounts. Those stay at your login or provider.
 - It does not turn a login into permission on your systems. Access comes from the mapping you set and your own order API.
-- It does not support other tools, files, shell, browser, memory or channels for protected agents.
+- It does not support other tools, files, shell, browser, or memory for protected agents. Authenticated customer channels are in [Consumer identity](consumer-identity.md#implemented-boundary).
 - It has no SAML or SCIM, and it does not replace the console's own login.
 - Access changes do not retract what a person has already been shown.

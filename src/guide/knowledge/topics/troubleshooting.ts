@@ -84,7 +84,7 @@ Run \`validate\` (with \`kind: draft\`, \`agent\`, or \`eval\`, or \`preflight: 
 | \`agent.guardrail_blocked\` | A \`block_patterns\` regex matched the reply. |
 | \`agent.model_timeout\` | The model sent nothing for 180 s. |
 | \`agent.reply_undelivered\` | A channel reply failed or its outcome is unknown; Resend or Mark as delivered on the run page. |
-| Warnings: \`agent.mcp_server_unknown\`, \`agent.skill_unknown\`, \`agent.model_unknown\`, \`agent.connection_unknown\`, \`agent.channel_nobody_allowed\`, \`agent.channel_open_to_anyone\`, \`agent.shell_not_path_confined\`, \`agent.web_chat_reads_conversations\` | Advice; the agent still saves. |
+| Warnings: \`agent.mcp_server_unknown\`, \`agent.skill_unknown\`, \`agent.model_unknown\`, \`agent.connection_unknown\`, \`agent.channel_nobody_allowed\`, \`agent.channel_open_to_anyone\`, \`agent.channel_username_entry\`, \`agent.shell_not_path_confined\`, \`agent.web_chat_reads_conversations\` | Advice; the agent still saves. |
 
 ## Evals
 

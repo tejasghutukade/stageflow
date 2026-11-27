@@ -6,7 +6,8 @@ import { z } from "zod";
 import { ChannelSecretStore } from "../channels/secretStore.js";
 import { ConsumerAuthorization } from "./authorization.js";
 import { createCerbosAuthorizationEngine } from "./cerbos.js";
-import { createOrderApiAdapter, type OrderDataAdapter } from "./orders.js";
+import { createCustomerApiAdapter, type CustomerDataAdapter } from "./customerApi.js";
+import { DEFAULT_RESOURCE_TYPES, parseResourceTypes, type ResourceTypeDefinition } from "./resourceContract.js";
 import { createScopeAuthorizationEngine, previewAuthority } from "./scope.js";
 import { ConsumerIdentityStore } from "./store.js";
 import { ConsumerAccessError, type AuthorizationEngine, type OwnedResource } from "./types.js";
@@ -28,6 +29,7 @@ const settingsSchema = z.strictObject({
     endpoint: z.string().min(1).max(2048),
     audience: z.string().min(1).max(256),
   }).optional(),
+  resources: z.array(z.unknown()).optional(),
 });
 type Settings = z.infer<typeof settingsSchema>;
 
@@ -94,7 +96,8 @@ export class ConsumerIdentityRuntime {
   private store: ConsumerIdentityStore | undefined;
   private authorization: ConsumerAuthorization | undefined;
   private engine: AuthorizationEngine = createScopeAuthorizationEngine();
-  private orders: OrderDataAdapter | undefined;
+  private orders: CustomerDataAdapter | undefined;
+  private resourceTypes: ResourceTypeDefinition[] = DEFAULT_RESOURCE_TYPES;
 
   constructor(options: ConsumerIdentityRuntimeOptions) {
     this.workspaceId = options.workspaceId?.trim() || "local";
@@ -194,8 +197,9 @@ export class ConsumerIdentityRuntime {
     const audience = input.audience.trim();
     if (!endpoint || !audience || audience.length > 256) setupRequired();
     try {
-      createOrderApiAdapter({
+      createCustomerApiAdapter({
         endpoint, audience, credential: async () => "x", signContext: async () => "x", allowLoopback: this.allowLoopback,
+        resourceTypes: this.effectiveResourceTypes(),
       });
     } catch {
       setupRequired();
@@ -238,7 +242,7 @@ export class ConsumerIdentityRuntime {
     if (!signing) return { ok: false, reason: "no_signing_key" };
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(orderId)) setupRequired();
     try {
-      const resource = await this.orders.ownership(this.workspaceId, orderId, AbortSignal.timeout(3_000));
+      const resource = await this.orders.ownership(this.workspaceId, "orders", orderId, "orderId", AbortSignal.timeout(3_000));
       const signingVerified = await this.verifiesOwnSignature(orders.audience, signing.publicJwk);
       return { ok: true, signingVerified, ownership: { version: resource.version, assignedAccounts: resource.assignedAccountIds.length } };
     } catch {
@@ -264,11 +268,16 @@ export class ConsumerIdentityRuntime {
       this.engine = this.buildEngine(this.settings.engine);
       this.orders = this.settings.orders && this.secrets.has(SIGNING_SECRET) ? this.buildOrders() : undefined;
       const engine: AuthorizationEngine = { check: (input, signal) => this.engine.check(input, signal) };
-      const orders: OrderDataAdapter = {
-        ownership: (workspaceId, orderId, signal) => this.requireOrders().ownership(workspaceId, orderId, signal),
-        read: (authority, resource, signal) => this.requireOrders().read(authority, resource, signal),
+      this.resourceTypes = this.effectiveResourceTypes();
+      const orders: CustomerDataAdapter = {
+        ownership: (workspaceId, typeId, resourceId, ownershipIdField, signal) => this.requireOrders().ownership(workspaceId, typeId, resourceId, ownershipIdField, signal),
+        read: (typeId, authority, resource, contextAction, readPath, signal) => this.requireOrders().read(typeId, authority, resource, contextAction, readPath, signal),
+        list: (typeId, authority, listPath, signal) => this.requireOrders().list(typeId, authority, listPath, signal),
+        resolveSender: (workspaceId, channel, sender, signal) => this.orders?.resolveSender
+          ? this.orders.resolveSender(workspaceId, channel, sender, signal)
+          : Promise.resolve({ status: "unavailable" }),
       };
-      this.authorization = new ConsumerAuthorization(store, engine, orders, POLICY_REVISION, this.allowLoopback);
+      this.authorization = new ConsumerAuthorization(store, engine, orders, POLICY_REVISION, this.allowLoopback, this.resourceTypes);
       this.store = store;
     } catch (error) {
       store.close();
@@ -276,9 +285,18 @@ export class ConsumerIdentityRuntime {
     }
   }
 
-  private requireOrders(): OrderDataAdapter {
+  private requireOrders(): CustomerDataAdapter {
     if (!this.orders) throw new Error("order_unavailable");
     return this.orders;
+  }
+
+  private effectiveResourceTypes(): ResourceTypeDefinition[] {
+    if (!this.settings.resources) return DEFAULT_RESOURCE_TYPES;
+    try {
+      return parseResourceTypes(this.settings.resources);
+    } catch {
+      setupRequired();
+    }
   }
 
   private buildEngine(choice: IdentityEngineChoice): AuthorizationEngine {
@@ -290,15 +308,17 @@ export class ConsumerIdentityRuntime {
     }
   }
 
-  private buildOrders(): OrderDataAdapter {
+  private buildOrders(): CustomerDataAdapter {
     const orders = this.settings.orders;
     if (!orders) setupRequired();
-    return createOrderApiAdapter({
+    this.resourceTypes = this.effectiveResourceTypes();
+    return createCustomerApiAdapter({
       endpoint: orders.endpoint,
       audience: orders.audience,
       credential: async () => this.secrets.get(CREDENTIAL_SECRET) ?? "",
       signContext: (claims) => this.signContext(claims),
       allowLoopback: this.allowLoopback,
+      resourceTypes: this.resourceTypes,
       ...(this.fetcher ? { fetch: this.fetcher } : {}),
     });
   }

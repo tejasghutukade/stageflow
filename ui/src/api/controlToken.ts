@@ -3,22 +3,48 @@ const CONTROL_TOKEN_KEY = "stageflow.controlToken";
 export const CONTROL_TOKEN_REQUIRED_EVENT = "sf-control-token-required";
 
 let controlTokenRequired = false;
-const controlTokenRequiredListeners = new Set<() => void>();
+const controlTokenRequiredListeners = new Set<(hadStoredToken: boolean) => void>();
 
 export function wasControlTokenRequired(): boolean {
   return controlTokenRequired;
 }
 
-export function subscribeControlTokenRequired(listener: () => void): () => void {
+export function subscribeControlTokenRequired(listener: (hadStoredToken: boolean) => void): () => void {
   controlTokenRequiredListeners.add(listener);
   return () => controlTokenRequiredListeners.delete(listener);
 }
 
 export function notifyControlTokenRequired(): void {
+  const hadStoredToken = getControlToken().length > 0;
+  if (hadStoredToken) {
+    setControlToken("");
+  }
   controlTokenRequired = true;
-  for (const listener of controlTokenRequiredListeners) listener();
+  for (const listener of controlTokenRequiredListeners) listener(hadStoredToken);
   if (typeof window === "undefined") return;
   window.dispatchEvent(new Event(CONTROL_TOKEN_REQUIRED_EVENT));
+}
+
+export function acknowledgeControlToken(): void {
+  controlTokenRequired = false;
+}
+
+export type VerifyControlTokenResult = "ok" | "rejected" | "unreachable";
+
+/** Ask the Host whether a bearer is accepted before persisting it in the browser. */
+export async function verifyControlToken(token: string): Promise<VerifyControlTokenResult> {
+  const trimmed = token.trim();
+  if (trimmed.length === 0) return "rejected";
+  try {
+    const res = await fetch("/api/health", {
+      headers: { Authorization: `Bearer ${trimmed}` },
+    });
+    if (res.status === 401 || res.status === 403) return "rejected";
+    if (!res.ok) return "unreachable";
+    return "ok";
+  } catch {
+    return "unreachable";
+  }
 }
 
 export function getControlToken(): string {

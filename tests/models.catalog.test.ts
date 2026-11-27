@@ -141,7 +141,13 @@ describe("model catalog", () => {
     it("prefers stageflow settings, then the last-resort model when connected, then a free model, then the first", async () => {
       const connected = fakeRuntime({
         connected: ["openrouter"],
-        models: { openrouter: [{ id: "zzz", provider: "openrouter" }, { id: "nvidia/nemotron-3.5-lightning:free", provider: "openrouter" }] },
+        models: {
+          openrouter: [
+            { id: "zzz", provider: "openrouter" },
+            { id: "anthropic/claude-sonnet-5.5", provider: "openrouter" },
+            { id: "nvidia/nemotron-3.5-lightning:free", provider: "openrouter" },
+          ],
+        },
       });
       await expect(catalogFor(connected.runtime).defaultModel()).resolves.toBe(LAST_RESORT_MODEL);
 

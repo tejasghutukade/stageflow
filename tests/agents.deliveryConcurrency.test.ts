@@ -30,7 +30,7 @@ describe("reply delivery under overlapping sweeps", () => {
       if (failing) throw new ChannelError("CHANNEL_CONNECTION_FAILED", true);
       await gate;
     };
-    const delivery = new ReplyDelivery({ service, reply, backoffMs: [1, 1, 1] });
+    const delivery = new ReplyDelivery({ service, projectRoot: project, reply, backoffMs: [1, 1, 1] });
     const chat = new AgentChatController({ service, backend: scriptedBackend((m) => `re: ${m.at(-1)!.text}`) });
     const router = new AgentInboundRouter({ service, chat, connections: { find: () => undefined, reply }, projectRoot: project, delivery });
     await router.deliver(inbound("1"));
@@ -62,7 +62,7 @@ describe("reply delivery under overlapping sweeps", () => {
     await service.setEnabled(project, "pal", true, { source: "console" });
     const sends: string[] = [];
     const reply = async (_c: string, to: string) => void sends.push(to);
-    const delivery = new ReplyDelivery({ service, reply, backoffMs: [1] });
+    const delivery = new ReplyDelivery({ service, projectRoot: project, reply, backoffMs: [1] });
     const chat = new AgentChatController({ service, backend: scriptedBackend(() => "ok") });
     const router = new AgentInboundRouter({ service, chat, connections: { find: () => undefined, reply }, projectRoot: project, delivery });
     await router.deliver(inbound("1"));

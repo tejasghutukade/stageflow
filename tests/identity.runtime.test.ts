@@ -1,6 +1,7 @@
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -174,6 +175,21 @@ describe("managed consumer identity runtime", () => {
     expect(runtime.current()).toBeUndefined();
     runtime.enable();
     expect(runtime.current()!.listConnections()).toHaveLength(1);
+  });
+
+  it("refuses enable when settings.resources is present but invalid", async () => {
+    const dir = await home();
+    const settingsPath = path.join(dir, "identity", "settings.json");
+    mkdirSync(path.dirname(settingsPath), { recursive: true, mode: 0o700 });
+    await writeFile(settingsPath, `${JSON.stringify({
+      version: 1,
+      enabled: false,
+      engine: { kind: "scope" },
+      resources: [{}],
+    }, null, 2)}\n`, { mode: 0o600 });
+    const runtime = runtimeFor(dir);
+    runtime.init();
+    expect(() => runtime.enable()).toThrowError("identity.setup_required");
   });
 
   it("refuses a database that belongs to another Workspace", async () => {

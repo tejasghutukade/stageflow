@@ -10,6 +10,7 @@ export const ORDER_API_FIXTURE_AUDIENCE = "orders-api";
 export const ORDER_API_FIXTURE_PRIVATE_STATUS = "private-fixture-status";
 
 const PRIVATE_STATUS = ORDER_API_FIXTURE_PRIVATE_STATUS;
+const PRIVATE_NAME = "private-fixture-name";
 
 export type OrderApiFixture = {
   url: string;
@@ -18,6 +19,7 @@ export type OrderApiFixture = {
   credential: string;
   resource(): OwnedResource;
   setVersion(version: string): void;
+  setListIncludesOtherAccount(include: boolean): void;
   peers(): string[];
   close(): Promise<void>;
 };
@@ -27,17 +29,31 @@ export async function startOrderApiFixture(options: {
   chatBearer?: string;
   audience?: string;
   secret?: string;
+  accountId?: string;
 } = {}): Promise<OrderApiFixture> {
   const credential = options.credential ?? ORDER_API_FIXTURE_CREDENTIAL;
   const chatBearer = options.chatBearer ?? "chat-session-bearer";
   const audience = options.audience ?? ORDER_API_FIXTURE_AUDIENCE;
   const secret = options.secret ?? ORDER_API_FIXTURE_SECRET;
+  const accountId = options.accountId ?? "account-a";
   const key = new TextEncoder().encode(secret);
   let record: OwnedResource = {
-    id: "order-a", workspaceId: "w", ownerAccountId: "account-a", assignedAccountIds: [], version: "v1",
+    id: "order-a", workspaceId: "w", ownerAccountId: accountId, assignedAccountIds: [], version: "v1",
   };
+  let listOtherAccount = false;
   const peers: string[] = [];
   const current = (): OwnedResource => ({ ...record, assignedAccountIds: [...record.assignedAccountIds] });
+  const accountResource = (): OwnedResource => ({
+    id: accountId, workspaceId: record.workspaceId, ownerAccountId: accountId, assignedAccountIds: [], version: "acct-v1",
+  });
+
+  const paths = new Set([
+    "/stageflow/order-ownership",
+    "/stageflow/order-status",
+    "/stageflow/orders-list",
+    "/stageflow/account-ownership",
+    "/stageflow/account-profile",
+  ]);
 
   const server = createServer(async (req, res) => {
     const peer = req.socket.remoteAddress ?? "";
@@ -45,22 +61,54 @@ export async function startOrderApiFixture(options: {
     try {
       if (peer !== "127.0.0.1" && peer !== "::ffff:127.0.0.1" && peer !== "::1") return send(res, 403, { error: "forbidden" });
       const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
-      if (req.method !== "POST" || (pathname !== "/stageflow/order-ownership" && pathname !== "/stageflow/order-status")) {
-        return send(res, 404, { error: "not_found" });
-      }
+      if (req.method !== "POST" || !paths.has(pathname)) return send(res, 404, { error: "not_found" });
       const raw = await readBody(req);
       if (!acceptedCredential(bearer(req.headers.authorization), credential, chatBearer)) return send(res, 401, { error: "unauthorized" });
       if (pathname === "/stageflow/order-ownership") {
         const body = jsonObject(raw);
+        if (body.orderId === "order-other-account") {
+          return send(res, 200, {
+            id: "order-other-account", workspaceId: record.workspaceId, ownerAccountId: "account-b", assignedAccountIds: [], version: "v9",
+          });
+        }
         const owned = current();
         if (body.workspaceId !== owned.workspaceId || body.orderId !== owned.id) return send(res, 404, { error: "not_available" });
         return send(res, 200, owned);
       }
+      if (pathname === "/stageflow/orders-list") {
+        const body = jsonObject(raw);
+        if (body.workspaceId !== record.workspaceId) return send(res, 404, { error: "not_available" });
+        const resources = [{ id: record.id, version: record.version }];
+        if (listOtherAccount) resources.push({ id: "order-other-account", version: "v9" });
+        return send(res, 200, { resources });
+      }
+      if (pathname === "/stageflow/account-ownership") {
+        const body = jsonObject(raw);
+        const owned = accountResource();
+        if (body.workspaceId !== owned.workspaceId || body.accountId !== owned.id) return send(res, 404, { error: "not_available" });
+        return send(res, 200, owned);
+      }
       const context = req.headers["stageflow-authorization"];
       if (typeof context !== "string" || !context) return send(res, 401, { error: "unauthorized" });
-      const payload = await verifyContext(context, key, audience);
-      if (!payload) return send(res, 401, { error: "unauthorized" });
       const body = jsonObject(raw);
+      if (pathname === "/stageflow/account-profile") {
+        const owned = accountResource();
+        const payload = await verifyContext(context, key, audience, "account:read");
+        if (!payload) return send(res, 401, { error: "unauthorized" });
+        if (body.accountId !== owned.id || payload.resource !== owned.id || payload.workspace !== owned.workspaceId
+          || body.expectedVersion !== owned.version || payload.resource_version !== owned.version) {
+          return send(res, 404, { error: "not_available" });
+        }
+        const grant = payload.grant;
+        if (typeof payload.sub !== "string" || typeof grant !== "string" || !grant) return send(res, 401, { error: "unauthorized" });
+        return send(res, 200, {
+          ownership: owned,
+          receipt: { principalId: payload.sub, grantId: grant },
+          profile: { accountId: owned.id, displayName: PRIVATE_NAME },
+        });
+      }
+      const payload = await verifyContext(context, key, audience, "order:read");
+      if (!payload) return send(res, 401, { error: "unauthorized" });
       const owned = current();
       if (body.orderId !== owned.id || payload.resource !== owned.id || payload.workspace !== owned.workspaceId
         || body.expectedVersion !== owned.version || payload.resource_version !== owned.version) {
@@ -100,6 +148,9 @@ export async function startOrderApiFixture(options: {
       if (!version) throw new Error("version required");
       record = { ...record, version };
     },
+    setListIncludesOtherAccount(include: boolean) {
+      listOtherAccount = include;
+    },
     peers: () => peers.slice(),
     close: () => close(server),
   };
@@ -118,7 +169,7 @@ function acceptedCredential(token: string | null, credential: string, chatBearer
   return presented.length === expected.length && timingSafeEqual(presented, expected);
 }
 
-async function verifyContext(token: string, key: Uint8Array, audience: string): Promise<JWTPayload | undefined> {
+async function verifyContext(token: string, key: Uint8Array, audience: string, action: string): Promise<JWTPayload | undefined> {
   try {
     const { payload } = await jwtVerify(token, key, {
       algorithms: ["HS256"],
@@ -126,7 +177,7 @@ async function verifyContext(token: string, key: Uint8Array, audience: string): 
       clockTolerance: 0,
       requiredClaims: ["aud", "sub", "workspace", "action", "resource", "resource_version", "jti", "iat", "exp"],
     });
-    if (payload.aud !== audience || payload.action !== "order:read") return undefined;
+    if (payload.aud !== audience || payload.action !== action) return undefined;
     if (typeof payload.sub !== "string" || !payload.sub) return undefined;
     if (typeof payload.workspace !== "string" || !payload.workspace) return undefined;
     if (typeof payload.resource !== "string" || !payload.resource) return undefined;

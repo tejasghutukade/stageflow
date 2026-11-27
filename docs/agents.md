@@ -1,6 +1,6 @@
 # Agents
 
-Experimental. Agents, web chat, and the Claude and Cursor backends work; their shape may still change.
+Agents are stable: the definition file, `/api/agents`, the public chat API, `sf agents` and the agent MCP tools keep their shape between releases. [Consumer identity](consumer-identity.md) (customer sign-in, protected chat, and the customer resource API) is stable on a self-hosted Host. The Claude and Cursor backends and the Slack channel stay experimental. See [who should talk to a channel agent](#who-should-talk-to-a-channel-agent) before you put one on a channel.
 
 Project-owned agents live under `agents/<id>.agent.yaml`. An agent is a configured assistant: instructions, a model, the tools it may use, who may talk to it, and how it is recorded. They are separate from the stage `agent:` field (Pi vs Claude backend selection).
 
@@ -63,7 +63,11 @@ limits:
 | AgentMail | Email address, `@domain` | The `From` address |
 | iMessage | `+` phone number (E.164) | The sender's number |
 | Slack | Slack user id such as `U02ABC1234`, or `*` | The user id of the message author |
-| Telegram | `@username`, or `*` | The sender's username (no `@`). A sender with no username can only get in through `*`. |
+| Telegram | Numeric user id such as `123456789`, `@username`, or `*` | The sender's user id, which never changes. A `@username` entry matches the current username and warns (`agent.channel_username_entry`): a username can change hands. |
+
+On an allow-list channel, an agent that anyone can message (`*`, or a public mail domain such as `@gmail.com`) cannot be enabled while it has tools, skills, memories, project context or sub-agents (`agent.channel_open_with_tools`): every sender on a channel is trusted alike and gets all of them. List the people or company domains instead, or keep the agent to talking. An agent already enabled in that state shows **Needs setup** and stops answering on its channel until it is fixed.
+
+**Whose conversation it is.** An email thread and a Telegram chat belong to one sender: a second allowed person who writes into the same email thread gets a session of their own and never sees the first person's conversation. iMessage is one session per sender. Slack: a direct message is one session per person; a thread in a channel is one session shared by everyone who writes in it, since they can all read it anyway. A message with no sender is ignored. Telegram groups and channels are ignored; the agent answers one-to-one chats only.
 
 `always_on` skips `session_minutes` and `max_turns`; `cost_usd` then counts per day. The older `channels: [{ connection_id }]` list still loads as the one `channel` (more than one is an error). A saved agent shows `agent.channel_nobody_allowed` or `agent.channel_open_to_anyone` when the list is empty or `*`. See [Agent definition](agent-definition.md#channel) for the grammar.
 
@@ -71,20 +75,38 @@ How messages arrive depends on the provider:
 
 | Provider | How the Host gets messages | Details |
 |----------|----------------------------|---------|
-| AgentMail | The Host holds a WebSocket open to the inbox; a webhook also works | [below](#agentmail-and-imessage-the-host-listens) |
+| AgentMail | The Host holds a WebSocket open to the inbox | [below](#agentmail-and-imessage-the-host-listens) |
 | iMessage (Photon) | The Host holds a stream open to the project | [below](#agentmail-and-imessage-the-host-listens) |
 | Slack | Webhook | `inboundSecret` on the connection |
 | Telegram | Webhook | `inboundSecret` on the connection |
 
-Slack, Telegram and AgentMail connections accept an optional `inboundSecret` and then receive webhooks at `POST /api/agent-inbound/<connection id>`:
+Slack and Telegram connections accept an optional `inboundSecret` and then receive webhooks at `POST /api/agent-inbound/<connection id>` (an AgentMail connection answers `404` there; its mail arrives on the stream):
 
 | Provider | `inboundSecret` is | Verified by |
 |----------|--------------------|-------------|
 | Slack | App signing secret | `x-slack-signature` + timestamp |
 | Telegram | `secret_token` from `setWebhook` | `x-telegram-bot-api-secret-token` |
-| AgentMail | Webhook secret | `x-agentmail-signature` (HMAC-SHA256 of the body) |
 
-The route needs no console token; the signature is the credential. A message starts or continues the session for its thread, the agent's reply goes back to the sender on the same connection once per turn, and a redelivered event is ignored. A channel thread rolls onto a new session when it reaches its turn or time limit. Its cost limit counts the thread's spend over the last 24 hours, across rollovers, so a rollover does not reset it. Once that 24-hour spend is under the limit again, the thread continues on a new session. While a thread is past its cost limit it stays on the same session, and the sender is told the cost limit was reached. A webhook reply goes into the conversation: Slack in the channel, Telegram to the chat, AgentMail as a reply to the message. Messages for a connection no enabled agent is bound to are dropped.
+The route needs no console token; the signature is the credential. A message starts or continues the sender's session for its thread, the agent's reply goes back to the sender on the same connection once per turn, and a redelivered event is ignored. A channel thread rolls onto a new session when it reaches its turn or time limit. Its cost limit counts the thread's spend over the last 24 hours, across rollovers, so a rollover does not reset it. Once that 24-hour spend is under the limit again, the thread continues on a new session. While a thread is past its cost limit it stays on the same session, and the sender is told the cost limit was reached. A reply goes into the conversation: Slack in the channel, Telegram to the chat, AgentMail as a reply to the message. Messages for a connection no enabled agent is bound to are dropped.
+
+## Who should talk to a channel agent
+
+How you set `channel.access` decides what a channel can do.
+
+**Authenticated customer channels** (`channel.access: authenticated` with identity on) tie each admitted sender to one account. Customer-facing iMessage, Telegram and AgentMail work here, and `allow_from: ["*"]` is allowed so that every customer can write in; a sender with no account gets the connection's fixed reply and no turn runs. Email accounts (IMAP) are not supported: they give no sender verdict, so their senders are never admitted. the agent may use only the declared customer resource tools (`orders.status`, `orders.list`, `account.profile`) and each read is checked against that person's mapping. Setup is in [Consumer identity](consumer-identity.md) and [Protect an agent's chat with customer sign-in](guides-agents-protected-chat.md). Slack cannot serve customers: senders are never admitted on an authenticated Slack agent, so every message is refused.
+
+**Allow-listed internal channels** (default `channel.access: allow_list`, or omitted) trust everyone in `allow_from` alike. Whatever the agent's tools can reach, any allowed sender can reach.
+
+- **Good fit:** your team, named partners, a company domain. People who may all see what the agent can reach.
+- **Also fine:** an agent open to anyone that can only talk (no tools, skills, memories, project context or sub-agents), such as an FAQ.
+- **Wrong pattern on allow_list:** an agent that looks up one customer's orders for whoever writes in. Nothing ties the sender to an account; use authenticated access and identity instead.
+
+What holds this in place:
+
+- An allow-list agent open to anyone cannot be enabled with tools (`agent.channel_open_with_tools`).
+- A conversation belongs to its sender; a second sender in the same thread gets a session of their own.
+- On allow_list channels the agent is told who is writing, as the provider reported it, and that claims in a message cannot be checked ([Agent runtime](agent-runtime.md#who-is-writing-channels)). That informs the agent. It does not limit its tools.
+- On authenticated channels assurance and the consumer gate limit tools before execution.
 
 ## Schedules
 
@@ -120,7 +142,7 @@ Base `/api/public/chat/<slug>`. A visitor id (client-generated, kept in the brow
 
 Error codes (always friendly `message`, never internals): `web_chat.rate_limited` (429, `retryAfterSec`), `web_chat.message_too_long` (413), `web_chat.busy` (409, a turn is already running for this thread), `web_chat.limit_reached` (409, agent max_turns / session_minutes / cost cap), `web_chat.unavailable` (404), `web_chat.failed` (500). Before streaming starts these are plain JSON with the HTTP status; once streaming they arrive as an `error` frame.
 
-CORS: same-origin by default. `STAGEFLOW_PUBLIC_CHAT_ORIGINS` (comma-separated) lets a page hosted elsewhere call the API, so the chat page can be deployed separately later; it only needs its API base URL. Exposing the Host to the internet (restricting the console) is a later follow-up.
+CORS: same-origin by default. `STAGEFLOW_PUBLIC_CHAT_ORIGINS` (comma-separated) lets a page hosted elsewhere call the API, so the chat page can be deployed separately; it only needs its API base URL. To put the Host on the internet, see [Behind a reverse proxy](guides-agents-web-chat.md#behind-a-reverse-proxy): forward only the public routes and keep the console private.
 
 ## AgentMail and iMessage: the Host listens
 

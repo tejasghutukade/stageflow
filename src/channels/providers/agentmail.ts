@@ -18,7 +18,6 @@ export const AGENTMAIL_META: ProviderMeta = {
     { key: "inbox", label: "Inbox address", hint: "An existing AgentMail inbox. Stageflow does not create one.", target: "config", input: "text", required: true, placeholder: "research@agentmail.to" },
     { key: "region", label: "Region", target: "config", input: "select", required: false, defaultValue: "us", options: [{ value: "us", label: "United States" }, { value: "eu", label: "Europe" }] },
     { key: "apiKey", label: "API key", hint: "Needs to read the inbox and send messages.", target: "secret", input: "password", required: true, placeholder: "am_..." },
-    { key: "inboundSecret", label: "Webhook secret (optional)", hint: "Lets agents receive mail for this inbox. Sign webhooks to /api/agent-inbound/<connection id> with this secret (HMAC-SHA256 of the body in the x-agentmail-signature header).", target: "secret", input: "password", required: false },
   ],
   recipient: { label: "To", placeholder: "oncall@acme.com, lead@acme.com", multiple: true, cc: true, template: false },
   envNames: ["AGENTMAIL_API_KEY"],
@@ -70,6 +69,8 @@ export function createAgentMailProvider(options: AgentMailOptions = {}): Channel
     id: "agentmail",
     meta: AGENTMAIL_META,
     operations: ["send"],
+    // `inboundSecret` is no longer used (agents receive mail over the stream the Host opens); it stays accepted so a
+    // connection saved with one keeps loading.
     secrets: { required: ["apiKey"], optional: ["inboundSecret"] },
     validateConfig,
     validateTarget,

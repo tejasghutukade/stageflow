@@ -41,14 +41,6 @@
           "input": "password",
           "required": true,
           "placeholder": "am_..."
-        },
-        {
-          "key": "inboundSecret",
-          "label": "Webhook secret (optional)",
-          "hint": "Lets agents receive mail for this inbox. Sign webhooks to /api/agent-inbound/<connection id> with this secret (HMAC-SHA256 of the body in the x-agentmail-signature header).",
-          "target": "secret",
-          "input": "password",
-          "required": false
         }
       ],
       "recipient": {
@@ -70,6 +62,7 @@
       "label": "Slack",
       "blurb": "Not connected · post as a bot",
       "icon": "hash",
+      "experimental": true,
       "fields": [
         {
           "key": "botToken",
@@ -206,6 +199,7 @@
       "blurb": "Not connected · via Photon",
       "icon": "phone",
       "via": "Photon",
+      "experimental": true,
       "note": "Enable WhatsApp for the project in the Photon dashboard first. Uses the Spectrum SDK packages (optional dependencies). Stages pin an approved template per recipient.",
       "fields": [
         {

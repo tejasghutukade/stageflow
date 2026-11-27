@@ -130,6 +130,7 @@ export type GraderConfig =
       max_agent_questions_per_turn?: number;
       final_reply?: FinalReplyCheck[];
     })
+  | (GraderCommon & { type: "consumer_scope" })
   | (GraderCommon & { type: "goal_reached"; judge?: string; judge_settings?: JudgeSettings; guidance?: string });
 
 export type EvalFile = {
@@ -202,6 +203,7 @@ export type ResolvedGrader =
       maxAgentQuestionsPerTurn?: number;
       finalReply: FinalReplyCheck[];
     })
+  | (ResolvedGraderCommon & { type: "consumer_scope" })
   | (ResolvedGraderCommon & { type: "goal_reached"; judge: string; judgeSettings?: JudgeSettings; guidance?: string });
 
 export type PlanCase = {

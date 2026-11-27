@@ -24,6 +24,7 @@ import { AgentService, type AgentEnvironment } from "./service.js";
 import type { ConversationBackend } from "./sessions.js";
 import { getModelCatalog } from "../models/catalog.js";
 import { EvalGateRegistry } from "./evalGate.js";
+import { EvalConsumerRegistry } from "../evals/consumer/evalConsumerRegistry.js";
 import { defaultAgentProjectRoot } from "./projectRoot.js";
 import { PublicWebChat } from "./webChat/publicChat.js";
 import { AgentStore } from "./store.js";
@@ -37,6 +38,8 @@ export type AgentHostContext = {
   uiEvents: UiEventHandler;
   /** Eval tool gates by session id; the eval runner registers a gate for each eval session it opens. */
   evalGates: EvalGateRegistry;
+  /** Fixture consumer bindings for eval leakage runs. */
+  evalConsumers: EvalConsumerRegistry;
   backend: ConversationBackend;
   /** Streams held open to AgentMail and iMessage; absent unless the Host listens (not in tests). */
   channelListeners?: ChannelSupervisor;
@@ -118,6 +121,7 @@ export function createAgentHostContext(options: {
     | "functionInvoker"
   >;
 }): AgentHostContext {
+  const consumerAuthorization = () => options.consumerAuthorizationSource?.() ?? options.consumerAuthorization;
   const service = new AgentService({
     store: new AgentStore(options.connection),
     connection: options.connection,
@@ -128,6 +132,10 @@ export function createAgentHostContext(options: {
         cwd: options.cwd,
         ...(options.channels ? { channels: options.channels } : {}),
       }),
+    getConsumerPublication: () => {
+      const auth = consumerAuthorization();
+      return auth ? { identityEnabled: true, hasChannelConnection: (agentId, connectionId) => auth.hasChannelConnection(agentId, connectionId) } : undefined;
+    },
   });
   service.recoverInterruptedTurns();
   let toolkit: ToolkitTool[] | undefined;
@@ -183,12 +191,13 @@ export function createAgentHostContext(options: {
         : {}),
     });
   const evalGates = new EvalGateRegistry();
-  const consumerAuthorization = () => options.consumerAuthorizationSource?.() ?? options.consumerAuthorization;
+  const evalConsumers = new EvalConsumerRegistry();
   const chat = new AgentChatController({
     get consumerAuthorization() { return consumerAuthorization(); },
     service,
     backend,
     evalGates,
+    evalConsumers,
     otlpSink: "otlpSink" in options ? options.otlpSink : otlpSinkFromEnv(),
     logError: (message) => console.error(message),
   });
@@ -199,8 +208,11 @@ export function createAgentHostContext(options: {
   });
   // The send ledger lives under the project root, so use the agents' writable root, not a read-only install dir.
   const channelConnectionsForAgents = channelInboundConnections(defaultAgentProjectRoot(options.cwd));
+  const projectRoot = defaultAgentProjectRoot(options.cwd);
   const delivery = new ReplyDelivery({
     service,
+    projectRoot,
+    get consumerAuthorization() { return consumerAuthorization(); },
     reply: (connectionId, to, text, key) => channelConnectionsForAgents.reply(connectionId, to, text, key),
     log: (message) => console.error(message),
   });
@@ -208,7 +220,8 @@ export function createAgentHostContext(options: {
     service,
     chat,
     connections: channelConnectionsForAgents,
-    projectRoot: defaultAgentProjectRoot(options.cwd),
+    projectRoot,
+    get consumerAuthorization() { return consumerAuthorization(); },
     logError: (message) => console.error(message),
     delivery,
   });
@@ -263,7 +276,7 @@ export function createAgentHostContext(options: {
   channelListeners?.start();
   if (options.listenOnChannels) delivery.start();
   if (options.listenOnChannels) void inbound.resumeInterrupted().catch((error) => console.error(`agent resume failed: ${String(error)}`));
-  return { service, chat, uiEvents, evalGates, backend, inbound, publicChat, channelContact, ...(channelListeners ? { channelListeners } : {}), delivery, stop: async () => {
+  return { service, chat, uiEvents, evalGates, evalConsumers, backend, inbound, publicChat, channelContact, ...(channelListeners ? { channelListeners } : {}), delivery, stop: async () => {
       delivery.stop();
       await channelListeners?.stop();
       // The Host owns every runtime session's lifetime: nothing outlives it.

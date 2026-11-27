@@ -144,6 +144,13 @@ describe("Pi agent runtime", () => {
     expect(fake.opened[0]!.systemPrompt).toContain("Help.");
   });
 
+  it("puts the channel sender in the system prompt", async () => {
+    const fake = fakeOpen(async () => undefined);
+    const runtime = createPiAgentRuntime({ cwd: "/p", agentDir: "/a", openSession: fake.open });
+    await runtime.complete({ sessionId: "s", projectRoot: "/p", definition: definition(), messages: [{ role: "user", text: "x" }], signal: new AbortController().signal, onDelta: () => undefined, hooks: hooks(), senderFact: "## Sender\nTheir phone number: +14155550123" });
+    expect(fake.opened[0]!.systemPrompt).toMatch(/Help\.[\s\S]*## Sender\nTheir phone number: \+14155550123/);
+  });
+
   it("maps Pi events to text, usage, tool hooks and tool outputs", async () => {
     const h = hooks();
     const fake = fakeOpen(async (emit) => {

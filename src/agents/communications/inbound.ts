@@ -1,11 +1,11 @@
 import { assistantMessageTextForChannel } from "../../channels/renderUiPart.js";
 import type { ContactInfo } from "../../channels/types.js";
+import type { ConsumerAuthorization } from "../../identity/authorization.js";
 import { isAgentError } from "../errors.js";
 import { ReplyDelivery } from "./delivery.js";
 import { SlidingWindowLimiter } from "../webChat/rateLimit.js";
 import type { AgentChatController } from "../chatTurn.js";
 import type { AgentService } from "../service.js";
-import { parseAgentMailInbound, verifyAgentMailSignature } from "./agentmail.js";
 import type { AgentInboundMessage } from "./port.js";
 import { parseSlackInbound, verifySlackSignature } from "./slack.js";
 import { parseTelegramInbound, verifyTelegramSecret } from "./telegram.js";
@@ -36,6 +36,9 @@ const MAX_REPLY_CHARS = 3500;
 /** Messages one sender may send an agent per minute before the rest are ignored. */
 const SENDER_LIMIT_PER_MINUTE = 20;
 
+/** Providers that reach an agent by webhook. AgentMail and iMessage are listened to instead (a stream the Host opens). */
+const WEBHOOK_PROVIDERS = new Set(["slack", "telegram"]);
+
 /**
  * Receives provider webhooks for agents. A request is accepted only when the connection has an
  * inbound secret and the provider's signature verifies; everything else is refused without
@@ -52,6 +55,7 @@ export class AgentInboundRouter {
       chat: Pick<AgentChatController, "send">;
       connections: InboundConnections;
       projectRoot: string;
+      consumerAuthorization?: ConsumerAuthorization | undefined;
       logError?: (message: string) => void;
       senderLimitPerMinute?: number;
       delivery?: ReplyDelivery;
@@ -61,6 +65,8 @@ export class AgentInboundRouter {
       options.delivery ??
       new ReplyDelivery({
         service: options.service,
+        projectRoot: options.projectRoot,
+        ...(options.consumerAuthorization !== undefined ? { consumerAuthorization: options.consumerAuthorization } : {}),
         reply: (connectionId, to, text, key) => options.connections.reply(connectionId, to, text, key),
         ...(options.logError ? { log: options.logError } : {}),
       });
@@ -68,7 +74,7 @@ export class AgentInboundRouter {
 
   async handle(connectionId: string, headers: Headers, rawBody: string): Promise<InboundResponse> {
     const connection = this.options.connections.find(connectionId);
-    if (!connection || connection.secret === undefined) return { status: 404 };
+    if (!connection || connection.secret === undefined || !WEBHOOK_PROVIDERS.has(connection.provider)) return { status: 404 };
     const verified = this.verify(connection.provider, connection.secret, connectionId, headers, rawBody);
     if (!verified) return { status: 401 };
 
@@ -98,16 +104,97 @@ export class AgentInboundRouter {
       return { status: 200, body: { ignored: true } };
     }
     let routed: Awaited<ReturnType<AgentService["receive"]>>;
+    let consumerSessionId: string | undefined;
+    let identity: { boundAccountId?: string; sessionBoundAccountId?: string } | undefined;
     try {
-      routed = await this.options.service.receive(this.options.projectRoot, message);
+      const admitted = await this.admitSender(message);
+      if (admitted.status === "unmapped") return { status: 200, body: { unmatched: true } };
+      if (admitted.status === "refused") {
+        this.options.logError?.(`agent inbound ${message.provider}: sender not admitted`);
+        return { status: 200, body: { ignored: true } };
+      }
+      if (admitted.status === "admitted") {
+        consumerSessionId = admitted.consumerSessionId;
+        identity = {
+          boundAccountId: admitted.accountId,
+          ...(admitted.sessionBoundAccountId ? { sessionBoundAccountId: admitted.sessionBoundAccountId } : {}),
+        };
+      }
+      routed = await this.options.service.receive(this.options.projectRoot, message, identity);
+      if (consumerSessionId) await this.bindSender(routed.agentId, routed.sessionId, consumerSessionId);
     } catch (error) {
       // An unbound, disabled or not-allowed sender looks the same as success to the sender; nothing is retried.
-      if (isAgentError(error)) return { status: 200, body: { ignored: true } };
+      if (isAgentError(error)) {
+        // A Telegram user id is not something a person knows; the log is where an operator finds the one to allow.
+        if (error.code === "agent.sender_not_allowed" && message.provider === "telegram" && message.from) {
+          this.options.logError?.(`agent inbound telegram ${message.connectionId}: ignored a message from user id ${message.from}${message.fromUsername ? ` (@${message.fromUsername})` : ""}, who is not on the allow list`);
+        }
+        return { status: 200, body: { ignored: true } };
+      }
       throw error;
     }
     if (routed.duplicate) return { status: 200, body: { duplicate: true } };
-    void this.converse(routed, message);
+    void this.converse(routed, message, undefined, consumerSessionId);
     return { status: 200, body: { ok: true } };
+  }
+
+  private boundConversationAccount(agentId: string, sessionId: string): string | undefined {
+    const auth = this.options.consumerAuthorization;
+    if (!auth) return undefined;
+    const binding = auth.bindingFor(sessionId);
+    if (binding?.agentId !== agentId) return undefined;
+    try {
+      return auth.conversation(sessionId, binding.sessionId, binding.agentId).principal.accountId;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async admitSender(
+    message: AgentInboundMessage,
+  ): Promise<
+    | { status: "not_required" }
+    | { status: "refused" }
+    | { status: "unmapped" }
+    | { status: "admitted"; consumerSessionId: string; accountId: string; sessionBoundAccountId?: string }
+  > {
+    const auth = this.options.consumerAuthorization;
+    const prepared = await this.options.service.prepareInbound(this.options.projectRoot, message);
+    const definition = (await this.options.service.get(this.options.projectRoot, prepared.agentId)).definition;
+    const authenticated = definition?.channel?.access === "authenticated";
+    if (!auth) return authenticated ? { status: "refused" } : { status: "not_required" };
+    const sessionBoundAccountId = prepared.sessionId ? this.boundConversationAccount(prepared.agentId, prepared.sessionId) : undefined;
+    const admission = await auth.admitChannelSender({
+      agentId: prepared.agentId,
+      channelConnectionId: message.connectionId,
+      provider: message.provider,
+      sender: message.from,
+      ...(prepared.sessionId ? { conversationId: prepared.sessionId } : {}),
+      ...(message.dmarcPass !== undefined ? { dmarcPass: message.dmarcPass } : {}),
+      signal: AbortSignal.timeout(3_000),
+    });
+    if (admission.outcome === "not_required") return authenticated ? { status: "refused" } : { status: "not_required" };
+    if (admission.outcome === "unmapped") {
+      const noted = await this.options.service.noteInbound(this.options.projectRoot, message);
+      if (!noted.duplicate && message.replyTo) {
+        await this.options.connections.reply(message.connectionId, message.replyTo, admission.reply, `agent-unmapped:${message.connectionId}:${message.eventId}`).catch(() => undefined);
+      }
+      this.options.logError?.(`agent inbound ${message.provider}: sender not matched (${admission.reason})`);
+      return { status: "unmapped" };
+    }
+    return {
+      status: "admitted",
+      consumerSessionId: admission.sessionId,
+      accountId: admission.accountId,
+      ...(sessionBoundAccountId ? { sessionBoundAccountId } : {}),
+    };
+  }
+
+  private async bindSender(agentId: string, sessionId: string, consumerSessionId: string): Promise<void> {
+    const auth = this.options.consumerAuthorization;
+    if (!auth) return;
+    const detail = await this.options.service.getSession(this.options.projectRoot, sessionId);
+    auth.bind(sessionId, consumerSessionId, agentId, detail.session.revision);
   }
 
   private verify(provider: string, secret: string, connectionId: string, headers: Headers, rawBody: string): boolean {
@@ -119,7 +206,6 @@ export class AgentInboundRouter {
       ).ok;
     }
     if (provider === "telegram") return verifyTelegramSecret({ connectionId, secretToken: secret }, headers["x-telegram-bot-api-secret-token"]).ok;
-    if (provider === "agentmail") return verifyAgentMailSignature({ connectionId, webhookSecret: secret }, headers["x-agentmail-signature"], rawBody).ok;
     return false;
   }
 
@@ -127,9 +213,7 @@ export class AgentInboundRouter {
     const result =
       provider === "slack"
         ? parseSlackInbound({ connectionId, signingSecret: secret }, payload)
-        : provider === "telegram"
-          ? parseTelegramInbound({ connectionId, secretToken: secret }, payload)
-          : parseAgentMailInbound({ connectionId, webhookSecret: secret }, payload);
+        : parseTelegramInbound({ connectionId, secretToken: secret }, payload);
     if (!result.ok) return undefined;
     if ("ignored" in result) return { ignored: true };
     return { message: result.message };
@@ -140,12 +224,40 @@ export class AgentInboundRouter {
     const turns = await this.options.service.resumableTurns(this.options.projectRoot);
     for (const turn of turns) {
       const message: AgentInboundMessage = { provider: turn.provider as AgentInboundMessage["provider"], connectionId: turn.connectionId, eventId: `resume:${turn.turnId}`, threadId: turn.threadId, text: turn.text, from: turn.from, replyTo: turn.from };
-      void this.converse({ agentId: turn.agentId, sessionId: turn.sessionId }, message, turn.turnId);
+      let consumerSessionId: string | undefined;
+      try {
+        const admitted = await this.admitSender(message);
+        if (admitted.status === "unmapped") {
+          await this.options.service.completeTurn(this.options.projectRoot, turn.turnId, { status: "failed", errorCode: "identity.sender_unmapped" });
+          continue;
+        }
+        if (admitted.status === "refused") {
+          await this.options.service.completeTurn(this.options.projectRoot, turn.turnId, { status: "failed", errorCode: "identity.verification_required" });
+          continue;
+        }
+        if (admitted.status === "admitted") consumerSessionId = admitted.consumerSessionId;
+      } catch (error) {
+        await this.options.service.completeTurn(this.options.projectRoot, turn.turnId, {
+          status: "failed",
+          errorCode: isAgentError(error) ? error.code : "identity.verification_required",
+        });
+        continue;
+      }
+      try {
+        if (consumerSessionId) await this.bindSender(turn.agentId, turn.sessionId, consumerSessionId);
+      } catch (error) {
+        await this.options.service.completeTurn(this.options.projectRoot, turn.turnId, {
+          status: "failed",
+          errorCode: isAgentError(error) ? error.code : "identity.verification_required",
+        });
+        continue;
+      }
+      void this.converse({ agentId: turn.agentId, sessionId: turn.sessionId }, message, turn.turnId, consumerSessionId);
     }
     return turns.length;
   }
 
-  private async converse(routed: { agentId: string; sessionId: string }, message: AgentInboundMessage, resumeTurnId?: string): Promise<void> {
+  private async converse(routed: { agentId: string; sessionId: string }, message: AgentInboundMessage, resumeTurnId?: string, consumerSessionId?: string): Promise<void> {
     const { chat, connections, logError } = this.options;
     try {
       const detail = await chat.send({
@@ -156,6 +268,7 @@ export class AgentInboundRouter {
         author: message.from ?? null,
         source: message.provider,
         ...(resumeTurnId ? { resumeTurnId } : {}),
+        ...(consumerSessionId ? { consumerSessionId } : {}),
       });
       const turn = detail.turns.at(-1);
       const reply = [...detail.messages].reverse().find((m) => m.role === "assistant" && m.turnId === turn?.id);

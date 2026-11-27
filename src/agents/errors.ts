@@ -22,6 +22,7 @@ export type AgentErrorCode =
   | "agent.approval_forbidden"
   | "agent.unbound"
   | "agent.sender_not_allowed"
+  | "agent.channel_open_with_tools"
   | "agent.outbound_unknown"
   | "agent.trace_metadata_body"
   | "agent.guardrail_blocked"
@@ -53,6 +54,7 @@ const STATUS: Partial<Record<AgentErrorCode, number>> = {
   "agent.model_timeout": 504,
   "agent.approval_forbidden": 403,
   "agent.sender_not_allowed": 403,
+  "agent.channel_open_with_tools": 409,
 };
 
 /** Domain failure with a stable code; the HTTP, CLI and MCP layers map it, they don't parse messages. */

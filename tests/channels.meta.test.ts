@@ -25,7 +25,9 @@ describe("provider meta", () => {
 
   it.each(builtIns.map(provider => [provider.id, provider] as const))("%s: form fields match what the provider accepts", (_id, provider) => {
     const secretFields = provider.meta.fields.filter(field => field.target === "secret").map(field => field.key).sort();
-    const accepted = [...provider.secrets.required, ...(provider.secrets.optional ?? [])].sort();
+    // AgentMail still accepts a webhook secret saved by an older version, and no longer asks for one.
+    const noLongerAsked = provider.id === "agentmail" ? ["inboundSecret"] : [];
+    const accepted = [...provider.secrets.required, ...(provider.secrets.optional ?? [])].filter(key => !noLongerAsked.includes(key)).sort();
     expect(secretFields).toEqual(accepted);
     expect(provider.meta.fields.some(field => field.target === "credential")).toBe(Boolean(provider.credentialProvider));
     for (const field of provider.meta.fields) {

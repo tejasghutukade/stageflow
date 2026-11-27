@@ -14,6 +14,7 @@ export const SLACK_META: ProviderMeta = {
   label: "Slack",
   blurb: "Not connected · post as a bot",
   icon: "hash",
+  experimental: true,
   fields: [
     { key: "botToken", label: "Bot token", hint: "xoxb-… from your Slack app (OAuth & Permissions). Needs chat:write.", target: "secret", input: "password", required: true, placeholder: "xoxb-..." },
     { key: "teamId", label: "Workspace ID (optional)", hint: "Pins the connection to one workspace, such as T0123ABCD.", target: "config", input: "text", required: false, placeholder: "T0123ABCD" },

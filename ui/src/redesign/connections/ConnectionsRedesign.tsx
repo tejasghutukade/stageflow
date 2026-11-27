@@ -35,6 +35,15 @@ function ViaTag({ via }: { via: string }) {
   );
 }
 
+function ExpTag() {
+  return (
+    <span className={`rounded-[4px] border border-[#ffffff2e] px-1.5 text-[11px] leading-[18px] text-[#8b8f98] ${NOWRAP}`} title="Experimental: not yet tested end to end">
+      <span className="sr-only">experimental</span>
+      <span aria-hidden="true">Exp</span>
+    </span>
+  );
+}
+
 function SectionHead({ title, subtitle, aside }: { title: string; subtitle: string; aside?: ReactNode }) {
   return (
     <div className="flex items-end justify-between gap-4">
@@ -75,6 +84,7 @@ function ChannelRow({ row, checking, onCheck, now }: { row: ConnectionRow; check
           <div className="flex items-center gap-2">
             <span className="truncate text-[13px] font-medium leading-normal text-[#ecedee]">{row.name}</span>
             {row.via ? <ViaTag via={row.via} /> : null}
+            {row.experimental ? <ExpTag /> : null}
           </div>
           <span className={`truncate text-xs leading-normal text-[#8b8f98] ${MONO}`} title={row.secondary}>{row.secondary}</span>
         </div>

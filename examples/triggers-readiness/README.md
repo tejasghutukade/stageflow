@@ -26,7 +26,7 @@ sf run \
 
 ## Docker Compose
 
-The image copies this tree to `/opt/stageflow/catalog/triggers-readiness` and registers it via `STAGEFLOW_ENSURE_PROJECT_ROOTS`. After `docker compose up --build -d`, open **Triggers** — you should see six `readiness-*` triggers.
+The image copies this tree to `/opt/stageflow/catalog/triggers-readiness`. A default `docker compose up` does not register it; add the catalog root in the console (**Settings → Catalog**) or set `STAGEFLOW_ENSURE_PROJECT_ROOTS` to `/opt/stageflow/catalog/triggers-readiness`. Then open **Triggers** — you should see six `readiness-*` triggers.
 
 Optional `.env` for event triggers:
 

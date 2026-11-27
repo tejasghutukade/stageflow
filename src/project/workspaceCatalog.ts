@@ -34,12 +34,9 @@ catalog:
     - .
   tasks:
     - .
-  triggers:
-    - .
   patterns:
     pipeline: "*.pipeline.yaml"
     task: "*.task.yaml"
-    trigger: "*.trigger.yaml"
 `;
 }
 
