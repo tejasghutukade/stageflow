@@ -580,6 +580,7 @@ if (typeof globalThis !== "undefined") {
   globalThis.__sfAcceptCsp = acceptArtifactCsp;
   globalThis.__sfParseLoad = parseSandboxLoadParams;
   globalThis.__sfCreateLoadGuard = createLoadGuard;
+  globalThis.__sfCreateHeightGuard = createHeightGuard;
 }
 if (typeof window !== "undefined") startShell();
 `;
@@ -1136,6 +1137,32 @@ function isIpv4(host) {
 function endsWith(value, suffix) {
   return value.length >= suffix.length && value.slice(value.length - suffix.length) === suffix;
 }
+// A page sized to its own frame (min-height: 100vh plus padding) grows by the same step on every resize.
+// Three equal increases in a row are that loop: hold the height one step above where it started.
+function createHeightGuard() {
+  var current = null;
+  var start = null;
+  var deltas = [];
+  var locked = null;
+  return function (height) {
+    if (locked !== null) return height < locked ? height : locked;
+    if (current !== null && height > current) {
+      var delta = height - current;
+      if (!deltas.length) start = current;
+      deltas.push(delta);
+      var n = deltas.length;
+      if (n >= 3 && deltas[n - 2] === delta && deltas[n - 3] === delta) {
+        locked = start + delta;
+        current = locked;
+        return locked;
+      }
+    } else {
+      deltas = [];
+    }
+    current = height;
+    return height;
+  };
+}
 function createLoadGuard() {
   var seen = 0;
   return {
@@ -1156,6 +1183,7 @@ function startShell() {
   var nonce = "";
   var frame = document.getElementById("sf-live");
   var loadGuard = createLoadGuard();
+  var heightGuard = createHeightGuard();
   var hostTimes = [];
   var nestedTimes = [];
   var hostFlight = Object.create(null);
@@ -1300,7 +1328,9 @@ function startShell() {
       var height = data.params.height;
       if (!(height >= 0)) height = 0;
       if (height > MAX_H) height = MAX_H;
-      frame.style.height = Math.round(height) + "px";
+      height = heightGuard(Math.round(height));
+      frame.style.height = height + "px";
+      data = { jsonrpc: data.jsonrpc, method: data.method, params: Object.assign({}, data.params, { height: height }) };
     }
     window.parent.postMessage({ jsonrpc: "2.0", method: "sf/sandbox-relay", params: { nonce: nonce, message: data } }, parentOrigin);
   }

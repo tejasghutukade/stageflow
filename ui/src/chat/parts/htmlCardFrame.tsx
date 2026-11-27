@@ -18,6 +18,35 @@ const NO_BINDING: (name: string) => Promise<ToolCallBody> = async () => ({
   _meta: { source: "executed", fetched_at: new Date().toISOString() },
 });
 
+/**
+ * Stops a card that sizes itself to its own frame (e.g. `min-height: 100vh` plus padding) from growing without end:
+ * each resize makes the page taller by the same amount, which reports a new height, and so on up to the limit.
+ * Three equal increases in a row are that loop; the height then stays one step above where it started.
+ */
+export function createHeightGuard(): (reported: number) => number | null {
+  let current: number | null = null;
+  let start: number | null = null;
+  let deltas: number[] = [];
+  let locked: number | null = null;
+  return (reported) => {
+    if (locked !== null) return reported < locked ? reported : null;
+    if (current !== null && reported > current) {
+      const delta = reported - current;
+      if (deltas.length === 0) start = current;
+      deltas.push(delta);
+      if (deltas.length >= 3 && deltas.slice(-3).every((value) => value === delta)) {
+        locked = (start ?? current) + delta;
+        current = locked;
+        return locked;
+      }
+    } else {
+      deltas = [];
+    }
+    current = reported;
+    return reported;
+  };
+}
+
 /** Changes whenever the card's content does, so a new program or library set mounts a fresh frame and bridge. */
 function cardKey(origin: string, program: string, libraries: readonly { name: string; version: string }[]): string {
   let hash = 0;
@@ -74,6 +103,7 @@ function HtmlCardFrame({
     const csp = liveHtmlDocumentCsp({}, { ...libraryCspSources(origin, libraries), shellOrigin: origin, needsEval });
     return { csp, needsEval, nonce: createNonce(), libraryRefs: libraries.map((library) => ({ name: library.name, version: library.version })) };
   });
+  const [heightGuard] = useState(createHeightGuard);
   const bridgeRef = useRef<HostBridge | null>(null);
   if (bridgeRef.current === null) {
     bridgeRef.current = createHostBridge({
@@ -85,7 +115,10 @@ function HtmlCardFrame({
       allowEval: setup.needsEval,
       readContext: () => readLiveHtmlHostContext(containerRef.current),
       callBinding: NO_BINDING,
-      onHeight: (px) => setHeight(px),
+      onHeight: (px) => {
+        const next = heightGuard(px);
+        if (next !== null) setHeight(next);
+      },
       onLinkBlocked: () => undefined,
       onReady: () => setPhase("live"),
       onSandboxError: () => {

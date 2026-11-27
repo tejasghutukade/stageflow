@@ -689,6 +689,16 @@ describe("sandbox shell", () => {
     expect(messages).toHaveLength(before);
   });
 
+  it("the shell holds a page that sizes itself to its own frame instead of growing to the limit", () => {
+    const context = vm.createContext({ TextEncoder, URLSearchParams }) as { __sfCreateHeightGuard: () => (height: number) => number };
+    vm.runInContext(shellScript(["http://127.0.0.1:1"]), context);
+    const real = context.__sfCreateHeightGuard();
+    expect([300, 420, 380, 500].map(real)).toEqual([300, 420, 380, 500]);
+    const loop = context.__sfCreateHeightGuard();
+    expect([280, 360, 440, 520, 600, 680].map(loop)).toEqual([280, 360, 440, 360, 360, 360]);
+    expect(loop(300)).toBe(300);
+  });
+
   it("createLoadGuard keeps the first nested load and tears the frame down on the second", () => {
     const guard = createLoadGuard();
     expect(guard.onLoad()).toBe("keep");

@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Scope switches on the Agents and Catalog pages cancel in-flight loads that would overwrite the new view.
 - The public chat page no longer goes blank as soon as a reply starts streaming (React "maximum update depth"): message selectors return stable values.
 - A conversation that hits a limit says which one (`limit`: `turns`, `minutes`, `cost` on `web_chat.limit_reached`) and offers **Start a new chat**. `limits.session_minutes` now counts idle minutes since the last message (it used to count from the session's start, which cut off active conversations); the form calls it "Close after idle", and "Messages per session" replaces "Model turns per session".
+- An HTML card or live HTML page that sizes itself to its frame (`min-height: 100vh` plus padding) no longer grows to the 4000px limit and shows up blank: the sandbox shell and the chat card stop that resize loop, and the prompt tells agents not to size cards to the viewport.
 - The public chat page keeps the open conversation in the address (`?c=<id>`), so a refresh or the back button returns to it instead of a new chat.
 
 ## [0.67.0] - 2026-11-16

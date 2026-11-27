@@ -11,6 +11,7 @@ import {
   SHELL_RELAY_METHOD,
 } from "../../redesign/artifacts/liveHtml/hostBridge";
 import { ChatSandboxProvider } from "../sandboxContext";
+import { createHeightGuard } from "./htmlCardFrame";
 import { registerBuiltinUiParts } from "./builtins";
 import { renderUiPart } from "./registry";
 
@@ -142,10 +143,35 @@ describe("card part", () => {
     expect(frame.className).not.toContain("invisible");
   });
 
+  it("stops a card that sizes itself to its frame from growing without end", async () => {
+    const el = await mountHtml(card({ format: "live.html", program: "<body style='min-height:100vh;padding:40px'></body>" }), [SANDBOX]);
+    const { frame, win, posted } = fakeShell(el);
+    await emitFrom(win, { jsonrpc: "2.0", method: SHELL_READY_METHOD, params: { version: SHELL_PROTOCOL_VERSION } });
+    const load = posted.find((message) => (message as { method?: string }).method === SHELL_LOAD_METHOD) as { params: { nonce: string } };
+    for (const height of [280, 360, 440, 520, 600, 680]) {
+      await emitFrom(win, {
+        jsonrpc: "2.0",
+        method: SHELL_RELAY_METHOD,
+        params: { nonce: load.params.nonce, message: { jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height } } },
+      });
+    }
+    expect(frame.style.height).toBe("360px");
+  });
+
   it("says so when the sandbox refuses the card instead of staying blank", async () => {
     const el = await mountHtml(card({ format: "live.html", program: "<p>Chart</p>" }), [SANDBOX]);
     const { win } = fakeShell(el);
     await emitFrom(win, { jsonrpc: "2.0", method: SHELL_ERROR_METHOD, params: { reason: "csp" } });
     expect(el.querySelector('[data-testid="html-card-stopped"]')?.textContent).toContain("could not be shown");
+  });
+});
+
+describe("height guard", () => {
+  it("follows real size changes and freezes a self-feeding loop one step in", () => {
+    const guard = createHeightGuard();
+    expect([300, 420, 380, 500].map(guard)).toEqual([300, 420, 380, 500]);
+    const loop = createHeightGuard();
+    expect([280, 360, 440, 520, 600].map(loop)).toEqual([280, 360, 440, 360, null]);
+    expect(loop(300)).toBe(300);
   });
 });

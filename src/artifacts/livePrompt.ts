@@ -42,6 +42,7 @@ export function htmlCardPromptSection(): string {
     `kind live.html. format html. One self-contained HTML document, at most ${LIVE_HTML_MAX_BYTES} bytes in artifacts and at most 64 KiB as a conversation card. libraries is an optional list of {name, version} from the Host list below (at most 6, no URLs).`,
     "The page has no network access, no fetch, and no external URLs: leave csp empty and put data in the page.",
     "Use inline CSS and JS. Respect light and dark mode with the Host's --sf-* theme variables.",
+    "The card grows to fit its content: do not size the page to the viewport (no 100vh, no height: 100% on html or body); give elements their own sizes.",
     "Prefer a live.declarative card when the built-in components fit; use HTML for a pie chart with custom labels, a map, a diagram, or a small interactive widget.",
     "",
     "Vendored libraries:",
