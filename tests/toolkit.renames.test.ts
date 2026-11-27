@@ -24,8 +24,8 @@ describe("tool rename table", () => {
     }
   });
 
-  it("defines exactly 62 consolidated tools", () => {
-    expect(distinctNewToolNames().length).toBe(62);
+  it("defines exactly 63 consolidated tools", () => {
+    expect(distinctNewToolNames().length).toBe(63);
   });
 
   it("gives every absorbed old tool the same risk and operatorOnly on each new tool", () => {

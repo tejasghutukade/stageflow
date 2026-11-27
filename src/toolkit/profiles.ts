@@ -9,7 +9,7 @@ import { isOperatorOnlyTool, TOOL_META } from "./meta.js";
  * except the ones only a person may decide.
  */
 
-export const GUIDE_OWN_TOOL_NAMES = ["confirm_action", "show_ui", "list_guide_topics", "read_guide_topic"] as const;
+export const GUIDE_OWN_TOOL_NAMES = ["confirm_action", "show_ui", "present_ui", "save_card", "list_guide_topics", "read_guide_topic"] as const;
 
 /** Tool names Guide may call. Operator-only decisions stay out. */
 export function stageflowGuideToolNames(): readonly string[] {

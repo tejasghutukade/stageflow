@@ -117,7 +117,7 @@ export function publishSessionArtifact(
     ...(body.manifest !== undefined ? { manifest: body.manifest } : {}),
     publishSource: "api",
     source: {
-      kind: context.owner.kind === "agent" ? "agent" : "stage",
+      kind: context.owner.kind === "agent" ? "agent" : context.owner.kind === "guide" ? "guide" : "stage",
       ...(context.source.runId !== undefined ? { runId: context.source.runId } : {}),
       ...(context.source.stageId !== undefined ? { stageId: context.source.stageId } : {}),
       ...(context.source.attempt !== undefined ? { attempt: context.source.attempt } : {}),

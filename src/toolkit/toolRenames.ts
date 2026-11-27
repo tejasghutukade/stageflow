@@ -47,6 +47,7 @@ export const TOOL_RENAMES: Readonly<Record<string, ToolRenameEntry>> = {
   run_stage: row("start_run", { stage: true }),
   rerun: row("start_run", { from_run: true }),
   get_run: row("get_run"),
+  run_stats: row("run_stats"),
   list_runs: row("get_run"),
   export_run: row("get_run", { view: "export" }),
   list_stage_events: row("get_stage", { view: "events" }),

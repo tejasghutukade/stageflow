@@ -3,7 +3,8 @@ import { authorizationHeaders, notifyControlTokenRequired } from "./controlToken
 
 export type ArtifactOwner =
   | { kind: "stage"; pipeline: string; stage: string }
-  | { kind: "agent"; agent: string };
+  | { kind: "agent"; agent: string }
+  | { kind: "guide" };
 
 export type ArtifactPublishedKind =
   | "static.markdown"

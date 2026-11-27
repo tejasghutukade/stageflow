@@ -12,6 +12,7 @@ const CORE_TOOLS = [
   "write_task",
   "start_run",
   "get_run",
+  "run_stats",
   "get_stage",
   "run_files",
   "wait_run",
@@ -99,7 +100,7 @@ describe("TOOL_META toolsets", () => {
     }
   });
 
-  it("puts exactly the 17 core tools in the core toolset", () => {
+  it("puts exactly the 18 core tools in the core toolset", () => {
     expect(toolsInToolset("core").sort()).toEqual([...CORE_TOOLS].sort());
   });
 });

@@ -537,6 +537,20 @@ export type ListRunsFilter = {
   origin?: RunOrigin | "any";
 };
 
+/** Light rows for run_stats. Inclusive window on created_at. Eval-origin runs are omitted. */
+export type RunStatRow = {
+  pipeline_id: string;
+  status: RunStatus;
+  created_at: string;
+};
+
+export type ListRunStatsFilter = {
+  since: string;
+  until: string;
+  status?: RunStatus;
+  pipeline?: string;
+};
+
 /**
  * Persistence port for pipeline run state.
  * Call sites should prefer CreatedRun.workspaceDir from createRun over
@@ -695,6 +709,8 @@ export interface RunStore {
     attempt?: number,
   ): Promise<StageLogEvent[]>;
   listRuns(filter?: ListRunsFilter): Promise<RunSummary[]>;
+  /** Status, pipeline and created_at only. No stages. Eval-origin runs are omitted. */
+  listRunStatRows(filter: ListRunStatsFilter): Promise<RunStatRow[]>;
   /** One light row per run created at or after `since` (ISO), newest first, with summed stage cost. No stages are loaded. */
   listRunOverviewRows(since: string): Promise<OverviewRunRow[]>;
   createEvalRun(input: CreateEvalRunInput): Promise<EvalRunRow>;

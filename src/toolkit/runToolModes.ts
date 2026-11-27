@@ -114,6 +114,17 @@ export const startRunFlatSchema = z
     }
   });
 
+export const runStatsFlatSchema = z
+  .object({
+    since: z.string().optional(),
+    until: z.string().optional(),
+    group_by: z.enum(["day", "week", "pipeline"]).optional(),
+    pipeline: z.string().optional(),
+    status: runStatusSchema.optional(),
+    timezone: z.string().optional(),
+  })
+  .strict();
+
 export const getRunFlatSchema = z
   .object({
     runId: z.string().min(1).optional(),

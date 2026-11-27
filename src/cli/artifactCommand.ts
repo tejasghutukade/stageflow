@@ -2,7 +2,7 @@ import { writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import * as readline from "node:readline";
-import { artifactStorageKey, parseOwnerKey, stageOwnerKey } from "../artifacts/keys.js";
+import { artifactStorageKey, parseOwnerKey } from "../artifacts/keys.js";
 import { ArtifactPublishError } from "../artifacts/limits.js";
 import { isLiveKind } from "../artifacts/kinds.js";
 import { approveOrigins, revokeOrigins } from "../artifacts/originApproval.js";
@@ -26,7 +26,7 @@ import {
   type ArtifactListQuery,
 } from "../artifacts/query.js";
 import { catalogRootsForArtifacts } from "../artifacts/projectScope.js";
-import type { ArtifactOwner, ArtifactRecord } from "../artifacts/record.js";
+import { artifactOwnerKey, type ArtifactOwner, type ArtifactRecord } from "../artifacts/record.js";
 import { readRunArtifact } from "../runread/readArtifact.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import { createRunStoreAfterHostEnsure, sqliteConnectionFromStore } from "../runstore/createStore.js";
@@ -602,8 +602,7 @@ async function runPromoteSubcommand(
   try {
     const roots = await catalogRootsForArtifacts(store);
     const record = readArtifact(db, parts.ownerKey, parts.id, parsed.projectRoot, roots);
-    const ownerKey =
-      record.owner.kind === "agent" ? `agent:${record.owner.agent}` : stageOwnerKey(record.owner.pipeline, record.owner.stage);
+    const ownerKey = artifactOwnerKey(record.owner);
     promoteSessionArtifact(db, artifactStorageKey(record.project.id, ownerKey, record.id));
     const kept = readArtifact(db, parts.ownerKey, parts.id, parsed.projectRoot, roots);
     if (parsed.json) out.log(JSON.stringify(kept));
@@ -783,11 +782,7 @@ async function runPublishSubcommand(
 }
 
 function storageKeyFor(record: ArtifactRecord): string {
-  const ownerKey =
-    record.owner.kind === "agent"
-      ? `agent:${record.owner.agent}`
-      : stageOwnerKey(record.owner.pipeline, record.owner.stage);
-  return artifactStorageKey(record.project.id, ownerKey, record.id);
+  return artifactStorageKey(record.project.id, artifactOwnerKey(record.owner), record.id);
 }
 
 async function runRefreshSubcommand(
@@ -986,10 +981,7 @@ async function runOriginsSubcommand(
     if (!origins || record.kind !== "live.html") {
       return reportCommandError("no origins to approve", "artifact.invalid_shape", parsed.json, out);
     }
-    const owner =
-      record.owner.kind === "agent"
-        ? `agent:${record.owner.agent}`
-        : stageOwnerKey(record.owner.pipeline, record.owner.stage);
+    const owner = artifactOwnerKey(record.owner);
     const storageKey = artifactStorageKey(record.project.id, owner, record.id);
     if (parsed.subcommand === "origins") {
       if (parsed.json) out.log(JSON.stringify({ key: record.key, origins }));

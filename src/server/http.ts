@@ -498,6 +498,8 @@ export type OperatorRouteDeps = {
   channels?: ChannelService;
   /** Host memories. Guide and MCP use the same host the console does. */
   memories?: MemoryHost;
+  /** Filled as the sandbox listener starts; Guide reads cardsReachable for HTML cards. */
+  sandboxAdvertised?: { origins: string[]; cardsReachable: boolean };
 };
 
 /**
@@ -558,6 +560,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
     resolveAgentPort({
       cwd,
       projectRoot: cwd,
+      guideHtmlCardsAvailable: () => deps.sandboxAdvertised?.cardsReachable === true,
       guideDeps: {
         manager,
         store,
@@ -4006,6 +4009,7 @@ export async function startUiServer(
           ...(boot.evalServices ? { evalServices: boot.evalServices } : {}),
           ...(boot.channels ? { channels: boot.channels } : {}),
           ...(boot.memories ? { memories: boot.memories } : {}),
+          ...(boot.sandboxAdvertised ? { sandboxAdvertised: boot.sandboxAdvertised } : {}),
           ...(options.agentConversationBackend
             ? { agentConversationBackend: options.agentConversationBackend }
             : {}),

@@ -1,4 +1,8 @@
 import { readGuideUi as readGuideUiContract, type GuidePipelineStage, type GuideUi } from "@stageflow/guide-card-contract";
+import type { UiPartArtifactRef } from "../../../../src/artifacts/uiPartArtifactRef.ts";
+import type { UiPartCard } from "../../../../src/artifacts/uiPartCard.ts";
+import { UI_PART_KIND_ARTIFACT_REF, UI_PART_KIND_CARD } from "../../../../src/artifacts/uiPart.ts";
+import { parseUiPartEnvelope } from "../../../../src/artifacts/uiPart.ts";
 import type { StatusSignal } from "../statusSignal";
 
 export type { GuidePipelineStage, GuideUi };
@@ -6,6 +10,18 @@ export type { GuidePipelineStage, GuideUi };
 /** The card payload of a `show_ui` result, or null when it is not one the console can draw. */
 export function readGuideUi(result: unknown): GuideUi | null {
   return readGuideUiContract(result);
+}
+
+export function readPresentUiCard(result: unknown): UiPartCard | null {
+  const parsed = parseUiPartEnvelope(result);
+  if (!parsed.ok || parsed.part.kind !== UI_PART_KIND_CARD) return null;
+  return parsed.part;
+}
+
+export function readSavedCard(result: unknown): UiPartArtifactRef | null {
+  const parsed = parseUiPartEnvelope(result);
+  if (!parsed.ok || parsed.part.kind !== UI_PART_KIND_ARTIFACT_REF) return null;
+  return parsed.part;
 }
 
 /** Stages in dependency order; ties keep the authored order, and cycles fall back to it. */
@@ -66,6 +82,9 @@ const EXACT_LABELS: Record<string, [string, string]> = {
   list_guide_topics: ["Looking through Guide topics", "Looked through Guide topics"],
   read_guide_topic: ["Reading a Guide topic", "Read a Guide topic"],
   show_ui: ["Preparing a view", "Showed a view"],
+  present_ui: ["Drawing a chart", "Drew a chart"],
+  save_card: ["Saving the card", "Saved the card"],
+  run_stats: ["Counting runs", "Counted runs"],
   wait_run: ["Waiting for the run", "Waited for the run"],
 };
 

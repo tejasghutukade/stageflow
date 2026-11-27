@@ -2,7 +2,7 @@ import { isUtf8 } from "node:buffer";
 import { readFile, stat } from "node:fs/promises";
 import type Database from "better-sqlite3";
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
-import type { ArtifactExpiredReason } from "./record.js";
+import { artifactOwnerKey, type ArtifactExpiredReason, type ArtifactOwner } from "./record.js";
 import type { RunStore } from "../runstore/port.js";
 import { attemptArtifactsDir } from "../runstore/workspaceLayout.js";
 import {
@@ -11,7 +11,7 @@ import {
   resolveContainedRelativePath,
   type ContainedPathMessages,
 } from "../runread/readArtifact.js";
-import { artifactStorageKey, stageOwnerKey } from "./keys.js";
+import { artifactStorageKey } from "./keys.js";
 import { readArtifact } from "./query.js";
 import { readStoredArtifactFile } from "./store.js";
 import { artifactVersionKind, readArtifactVersionRow, type ArtifactVersionRow } from "./versions.js";
@@ -174,6 +174,9 @@ export async function readArtifactContent(
   if (record.status === "expired") {
     throw unavailable(expiredContentMessage(record.expired_reason));
   }
+  if (record.owner.kind === "guide") {
+    throw unavailable("The artifact file is no longer in the store");
+  }
   const row = locateContent(
     db,
     record.owner.kind,
@@ -236,13 +239,9 @@ export async function readArtifactContent(
 function storageKeyForRecord(record: {
   id: string;
   project: { id: string };
-  owner: { kind: string; pipeline?: string; stage?: string; agent?: string };
+  owner: ArtifactOwner;
 }): string {
-  const ownerKey =
-    record.owner.kind === "agent"
-      ? `agent:${record.owner.agent ?? ""}`
-      : stageOwnerKey(record.owner.pipeline ?? "", record.owner.stage ?? "");
-  return artifactStorageKey(record.project.id, ownerKey, record.id);
+  return artifactStorageKey(record.project.id, artifactOwnerKey(record.owner), record.id);
 }
 
 async function readRunVersionContent(

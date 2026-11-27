@@ -182,6 +182,7 @@ export async function ownerFunctionAccess(
   functionId: string,
 ): Promise<OwnerFunctionAccess> {
   if (owner.kind === "agent") return agentFunctionAccess(projectRoot, owner.agent, functionId);
+  if (owner.kind === "guide") return { ok: false, message: "Guide artifacts do not attach functions" };
   return stageFunctionAccess(projectRoot, owner.pipeline, owner.stage, functionId);
 }
 

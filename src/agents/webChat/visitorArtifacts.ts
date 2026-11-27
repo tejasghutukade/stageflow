@@ -49,6 +49,7 @@ function pastExpiry(expiresAt: string | null, nowIso: string): boolean {
 
 function publicKeyOf(row: OwnedRow): string {
   if (row.owner_kind === "agent") return `agent:${row.owner_agent ?? ""}/${row.id}`;
+  if (row.owner_kind === "guide") return `guide/${row.id}`;
   return `stage:${row.owner_pipeline ?? ""}:${row.owner_stage ?? ""}/${row.id}`;
 }
 

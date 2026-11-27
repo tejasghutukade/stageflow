@@ -68,6 +68,8 @@ export type OperatorAgentProfile = {
   tools: OperatorAgentTool[];
   contextAdapter: OperatorAgentContextAdapter;
   greeting?: string;
+  /** When set, the live operator session uses this instead of `playbook` (Guide HTML cards depend on sandbox reachability). */
+  resolvePlaybook?: () => string;
 };
 
 export type OperatorAgentSessionEvent =

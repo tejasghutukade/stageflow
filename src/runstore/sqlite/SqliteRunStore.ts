@@ -46,10 +46,12 @@ import {
   type FeedbackReplayStagePassRecord,
   type ForkGenerationPatch,
   type ForkGenerationRecord,
+  type ListRunStatsFilter,
   type ListRunsFilter,
   type RunDetail,
   type RunMeta,
   type RunPipelineDagSnapshot,
+  type RunStatRow,
   type RunStatus,
   type RunStore,
   type RunSummary,
@@ -1401,6 +1403,28 @@ export class SqliteRunStore implements RunStore {
       );
     }
     return summaries;
+  }
+
+  async listRunStatRows(filter: ListRunStatsFilter): Promise<RunStatRow[]> {
+    await this.ready();
+    const clauses = ["created_at >= ?", "created_at <= ?", "origin IS NOT 'eval'"];
+    const params: unknown[] = [filter.since, filter.until];
+    if (filter.status !== undefined) {
+      clauses.push("status = ?");
+      params.push(filter.status);
+    }
+    if (filter.pipeline !== undefined && filter.pipeline.trim().length > 0) {
+      const pipeline = filter.pipeline.trim();
+      const normalized = normalizeCatalogPath(pipeline);
+      clauses.push("(pipeline_id = ? OR pipeline_path = ? OR pipeline_path = ?)");
+      params.push(pipeline, pipeline, normalized);
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT pipeline_id, status, created_at FROM runs WHERE ${clauses.join(" AND ")} ORDER BY created_at ASC`,
+      )
+      .all(...params) as RunStatRow[];
+    return rows;
   }
 
   async listRunOverviewRows(since: string): Promise<OverviewRunRow[]> {

@@ -50,7 +50,7 @@ An agent can be given Stageflow's own tools (the ones in [MCP tools](mcp.md#tool
 | Group | Tools | Notes |
 |-------|-------|-------|
 | `discover` | `list_catalog` with `kind: skills`, `list_catalog` with `kind: pipelines`, `list_catalog` with `kind: tasks`, `list_catalog` with `kind: models`, `list_catalog` with `kind: providers`, `list_catalog` with `kind: health`, `validate` (catalog paths, `draft`, `preflight: true`, and the rest), `read_pipeline` with `view: dag`, `list_catalog` with `kind: mcp_servers` (read), `probe_project_mcp` (external) | `get_started` is operator-only. |
-| `runs.read` | `get_run` (omit `runId`), `get_run`, `get_run` with `view: export`, `get_stage` with `view: events`, `log`, `envelope`, or `verification`, `run_files` with `view: artifact`, `changes`, `diff`, or `file`, `wait_run` | All read. |
+| `runs.read` | `get_run` (omit `runId`), `get_run`, `get_run` with `view: export`, `run_stats`, `get_stage` with `view: events`, `log`, `envelope`, or `verification`, `run_files` with `view: artifact`, `changes`, `diff`, or `file`, `wait_run` | All read. `run_stats` counts by status over `created_at` (`day`, `week`, or `pipeline`). |
 | `runs.control` | `start_run`, `start_run` with `stage`, `start_run` with `from_run`, `stage_action` with `action: retry`, `resume`, `recover`, or `stop_recovery` | Write. |
 | `runs.cleanup` | `cancel_run`, `abandon_stage`, `delete_runs`, `delete_runs` with `gc: true` | Destructive. |
 | `gates.read` | `list_waiting` with `detail: full` or `summary` | Read. |

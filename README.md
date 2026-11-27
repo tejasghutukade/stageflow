@@ -235,7 +235,7 @@ Runtime state (SQLite `state.db` and per-run workspaces) is **global** — `~/.s
 
 ## MCP
 
-Host MCP via `sf ui` or `sf mcp` at `http://127.0.0.1:3847/mcp` (URL printed on boot). A bare `/mcp` URL loads the 17 core tools; add `?toolsets=all` (or named sets) for the full 57 — see [Toolsets](docs/mcp.md#toolsets). Sessions are the default. Point a Cursor (or other) MCP client at that URL. Do not run both hosts against the same store.
+Host MCP via `sf ui` or `sf mcp` at `http://127.0.0.1:3847/mcp` (URL printed on boot). A bare `/mcp` URL loads the 18 core tools; add `?toolsets=all` (or named sets) for the full 63 — see [Toolsets](docs/mcp.md#toolsets). Sessions are the default. Point a Cursor (or other) MCP client at that URL. Do not run both hosts against the same store.
 
 Stageflow runs as **one global auto-starting service per machine** (not one process per project): `sf run`, `sf run-stage`, and `sf runs *` health-probe the well-known port and spawn the service headlessly if nothing answers, so you do not have to start `sf ui`/`sf mcp` by hand before using the CLI.
 

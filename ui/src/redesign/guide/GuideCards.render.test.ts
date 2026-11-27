@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { GuideUi } from "./api";
 import { ChoicesCard, GuideUiCard, ToolActivity, type ToolActivityProps } from "./GuideCards";
 import { GuideToolActivity, guideToolView, toolActivityState } from "./GuideTools";
+import { GuideSavedCard } from "./GuideSavedCard";
 
 type Ui<C extends GuideUi["component"]> = Extract<GuideUi, { component: C }>;
 
@@ -270,6 +271,42 @@ describe("guideToolView", () => {
     expect(guideToolView({ toolName: "show_ui", result: { ui: confirmResult.ui }, status: complete })).toMatchObject({ kind: "choices", confirm: false });
   });
 
+  it("renders present_ui as a generative card", () => {
+    const envelope = {
+      type: "ui",
+      ui: {
+        v: 1,
+        kind: "card",
+        title: "Runs",
+        format: "static.markdown",
+        program: "# One\n\n- two",
+        fallback: { text: "Runs", url: "" },
+      },
+    };
+    expect(guideToolView({ toolName: "present_ui", result: envelope, status: complete })).toEqual({
+      kind: "present",
+      part: envelope.ui,
+    });
+  });
+
+  it("renders save_card as an artifact reference", () => {
+    const envelope = {
+      type: "ui",
+      ui: {
+        v: 1,
+        kind: "artifact-ref",
+        key: "guide/card_abc",
+        version: 1,
+        title: "Runs this week",
+        fallback: { text: "Open in Artifacts", url: "/artifacts/guide/card_abc" },
+      },
+    };
+    expect(guideToolView({ toolName: "save_card", result: envelope, status: complete })).toEqual({
+      kind: "artifact",
+      part: envelope.ui,
+    });
+  });
+
   it("falls back to an activity row while running, on error, or without a valid ui", () => {
     expect(guideToolView({ toolName: "confirm_action", result: undefined, status: { type: "running" } })).toEqual({ kind: "activity" });
     expect(guideToolView({ toolName: "show_ui", result: "boom", isError: true, status: complete })).toEqual({ kind: "activity" });
@@ -315,5 +352,25 @@ describe("toolActivityState", () => {
     expect(toolActivityState({ result: null, status: { type: "complete" } })).toBe("complete");
     expect(toolActivityState({ result: undefined, status: { type: "running" } })).toBe("running");
     expect(toolActivityState({ result: undefined, status: { type: "incomplete", reason: "cancelled" } })).toBe("stopped");
+  });
+});
+
+describe("GuideSavedCard", () => {
+  it("renders the artifact reference and its Artifacts link", () => {
+    const html = renderToStaticMarkup(
+      createElement(GuideSavedCard, {
+        part: {
+          v: 1,
+          kind: "artifact-ref",
+          key: "guide/card_abc",
+          version: 1,
+          title: "Runs this week",
+          fallback: { text: "Open in Artifacts", url: "/artifacts/guide/card_abc" },
+        },
+      }),
+    );
+    expect(html).toContain("Runs this week");
+    expect(html).toContain("Open in Artifacts");
+    expect(html).not.toContain("Promote");
   });
 });

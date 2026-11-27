@@ -62,6 +62,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Working against a running Host](working-against-a-host.md) | Checklist for agents that create and run work on an already-running Host: find the Host and `home_id`, pick the project, run through the Host, verify it is visible |
 | [Operator console](operator-console.md) | Navigation, command palette, keyboard shortcuts and routes |
 | [Console: Overview](console-overview.md) | Control center: what needs you, what is running, system health, run trends |
+| [Console: Guide](console-guide.md) | Built-in Guide chat: show_ui cards and generative present_ui charts |
 | [Console: Inbox](console-inbox.md) | Gates and agent approvals waiting on you, desktop notifications |
 | [Console: Pipeline runs](console-runs.md) | Run list, Start a run, run detail (Timeline, Graph, List; Transcript, Events, Envelope, Artifacts) |
 | [Console: Artifacts](console-artifacts.md) | Artifacts list in the Activity rail: kind, owner, source run |

@@ -1,16 +1,16 @@
 import type { BindingQueryResult } from "../artifacts/bindingQuery.js";
 import type { ArtifactRefreshResult } from "../artifacts/refresh.js";
-import type { ArtifactOwner, ArtifactLiveView, ArtifactRecord } from "../artifacts/record.js";
+import { artifactOwnerKey, type ArtifactOwner, type ArtifactLiveView, type ArtifactRecord } from "../artifacts/record.js";
 import { publicArtifactKey } from "../artifacts/keys.js";
 
 export function ownerDisplayText(owner: ArtifactOwner): string {
+  if (owner.kind === "guide") return "guide";
   if (owner.kind === "agent") return `agent:${owner.agent}`;
   return `${owner.pipeline}:${owner.stage}`;
 }
 
 export function ownerKeyFromRecord(record: ArtifactRecord): string {
-  if (record.owner.kind === "agent") return `agent:${record.owner.agent}`;
-  return `stage:${record.owner.pipeline}:${record.owner.stage}`;
+  return artifactOwnerKey(record.owner);
 }
 
 export function matchesOwnerFilter(record: ArtifactRecord, filter: string): boolean {
@@ -22,6 +22,7 @@ export function matchesOwnerFilter(record: ArtifactRecord, filter: string): bool
   if (trimmed.startsWith("agent:")) {
     return ownerKeyFromRecord(record) === trimmed;
   }
+  if (record.owner.kind === "guide") return trimmed === "guide";
   if (record.owner.kind === "agent") {
     return record.owner.agent === trimmed || `agent:${record.owner.agent}` === trimmed;
   }

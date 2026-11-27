@@ -19,7 +19,7 @@ export function describeInternalAgents(host: OperatorAgentHost): InternalAgentIn
     id: profile.id,
     title: profile.title,
     ...(profile.greeting !== undefined ? { greeting: profile.greeting } : {}),
-    playbook: profile.playbook,
+    playbook: profile.resolvePlaybook?.() ?? profile.playbook,
     tools: profile.tools.map((tool) => tool.name),
   }));
 }

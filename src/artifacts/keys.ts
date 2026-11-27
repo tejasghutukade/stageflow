@@ -71,12 +71,16 @@ export function publicArtifactKey(ownerKey: string, id: string): string {
   return `${ownerKey}/${id}`;
 }
 
+export const GUIDE_OWNER_KEY = "guide";
+
 export type ParsedOwner =
   | { kind: "stage"; pipeline: string; stage: string }
-  | { kind: "agent"; agent: string };
+  | { kind: "agent"; agent: string }
+  | { kind: "guide" };
 
 export function parseOwnerKey(ownerKey: string): ParsedOwner | undefined {
   if (ownerKey.includes("::")) return undefined;
+  if (ownerKey === GUIDE_OWNER_KEY) return { kind: "guide" };
   if (ownerKey.startsWith("stage:")) {
     const rest = ownerKey.slice("stage:".length);
     const colon = rest.indexOf(":");

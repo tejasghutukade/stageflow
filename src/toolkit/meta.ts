@@ -134,6 +134,7 @@ export const TOOL_META: Readonly<Record<string, ToolMeta>> = {
   import_task: t("pipelines.author", "external", "catalog"),
 
   get_run: t("runs.read", "read", "core"),
+  run_stats: t("runs.read", "read", "core"),
   get_stage: t("runs.read", "read", "core"),
   run_files: t("runs.read", "read", "core"),
   wait_run: t("runs.read", "read", "core"),

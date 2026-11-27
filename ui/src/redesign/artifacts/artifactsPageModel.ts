@@ -380,11 +380,13 @@ export function applyArtifactPage(
 }
 
 export function artifactOwnerKey(owner: ArtifactRecord["owner"]): string {
+  if (owner.kind === "guide") return "guide";
   if (owner.kind === "agent") return `agent:${owner.agent}`;
   return `stage:${owner.pipeline}:${owner.stage}`;
 }
 
 export function artifactOwnerLabel(owner: ArtifactRecord["owner"]): string {
+  if (owner.kind === "guide") return "Guide";
   if (owner.kind === "agent") return `agent · ${owner.agent}`;
   return `${owner.pipeline} / ${owner.stage}`;
 }

@@ -212,7 +212,7 @@ describe("MCP connect-time toolsets", () => {
     expect(toolsInToolset("evals")).toHaveLength(14);
   });
 
-  it("stateful ?toolsets=all lists all 62 tools", async () => {
+  it("stateful ?toolsets=all lists all 63 tools", async () => {
     const base = await startStatefulHost();
     const { sessionId } = await mcpInitialize(base, "?toolsets=all");
     expect(await mcpSessionListTools(base, sessionId)).toEqual(ALL_TOOLS);
@@ -365,7 +365,7 @@ describe("MCP connect-time toolsets", () => {
     );
   });
 
-  it("recordMcpTools returns all 62 tools regardless of session selection", () => {
+  it("recordMcpTools returns all 63 tools regardless of session selection", () => {
     const names = recordMcpTools({
       cwd: process.cwd(),
       store: {} as never,

@@ -144,6 +144,7 @@ export function artifactSearchOwnerText(row: {
   owner_stage: string | null;
   owner_agent: string | null;
 }): string {
+  if (row.owner_kind === "guide") return "guide";
   if (row.owner_kind === "agent") {
     const agent = row.owner_agent ?? "";
     return `agent:${agent} ${agent}`.trim();

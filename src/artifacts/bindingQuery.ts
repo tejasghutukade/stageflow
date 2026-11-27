@@ -135,6 +135,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function ownerOf(row: ArtifactLiveRow): ArtifactOwner {
   if (row.owner_kind === "agent") return { kind: "agent", agent: row.owner_agent ?? "" };
+  if (row.owner_kind === "guide") return { kind: "guide" };
   return { kind: "stage", pipeline: row.owner_pipeline ?? "", stage: row.owner_stage ?? "" };
 }
 

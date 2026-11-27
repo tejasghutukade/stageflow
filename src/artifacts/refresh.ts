@@ -201,6 +201,7 @@ export function withRefreshLock<T>(
 }
 
 function ownerOf(row: ArtifactLiveRow): ArtifactOwner {
+  if (row.owner_kind === "guide") return { kind: "guide" };
   if (row.owner_kind === "agent") return { kind: "agent", agent: row.owner_agent ?? "" };
   return { kind: "stage", pipeline: row.owner_pipeline ?? "", stage: row.owner_stage ?? "" };
 }

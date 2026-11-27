@@ -195,9 +195,11 @@ export function parseArtifactLiveFilter(raw: string | null): boolean | undefined
 type OwnerFilter =
   | { mode: "stage"; pipeline: string; stage: string }
   | { mode: "agent"; agent: string }
+  | { mode: "guide" }
   | { mode: "substring"; value: string };
 
 function parseOwnerFilter(owner: string): OwnerFilter {
+  if (owner === "guide") return { mode: "guide" };
   if (owner.startsWith("stage:")) {
     const parts = owner.slice("stage:".length).split(":");
     if (parts.length === 2 && parts[0] && parts[1]) {
@@ -398,9 +400,11 @@ function listArtifactsBySearch(
     );
   } else if (ownerFilter?.mode === "agent") {
     whereParts.push("a.owner_kind = 'agent' AND a.owner_agent = @owner_agent");
+  } else if (ownerFilter?.mode === "guide") {
+    whereParts.push("a.owner_kind = 'guide'");
   } else if (ownerFilter?.mode === "substring") {
     whereParts.push(
-      `instr(lower(trim(coalesce(a.owner_pipeline, '') || ' ' || coalesce(a.owner_stage, '') || ' ' || coalesce(a.owner_agent, ''))), @owner_sub) > 0`,
+      `instr(lower(trim(coalesce(a.owner_pipeline, '') || ' ' || coalesce(a.owner_stage, '') || ' ' || coalesce(a.owner_agent, '') || CASE WHEN a.owner_kind = 'guide' THEN ' guide' ELSE '' END)), @owner_sub) > 0`,
     );
   }
   const params: Record<string, string | number | null> = {
@@ -429,6 +433,7 @@ function listArtifactsBySearch(
          OR lower(
            CASE a.owner_kind
              WHEN 'agent' THEN 'agent:' || COALESCE(a.owner_agent, '') || ' ' || COALESCE(a.owner_agent, '')
+             WHEN 'guide' THEN 'guide'
              ELSE 'stage:' || COALESCE(a.owner_pipeline, '') || ':' || COALESCE(a.owner_stage, '')
                || ' ' || COALESCE(a.owner_pipeline, '') || ' ' || COALESCE(a.owner_stage, '')
            END
@@ -569,9 +574,11 @@ export function listArtifacts(
     );
   } else if (ownerFilter?.mode === "agent") {
     whereParts.push("a.owner_kind = 'agent' AND a.owner_agent = @owner_agent");
+  } else if (ownerFilter?.mode === "guide") {
+    whereParts.push("a.owner_kind = 'guide'");
   } else if (ownerFilter?.mode === "substring") {
     whereParts.push(
-      `instr(lower(trim(coalesce(a.owner_pipeline, '') || ' ' || coalesce(a.owner_stage, '') || ' ' || coalesce(a.owner_agent, ''))), @owner_sub) > 0`,
+      `instr(lower(trim(coalesce(a.owner_pipeline, '') || ' ' || coalesce(a.owner_stage, '') || ' ' || coalesce(a.owner_agent, '') || CASE WHEN a.owner_kind = 'guide' THEN ' guide' ELSE '' END)), @owner_sub) > 0`,
     );
   }
 
@@ -609,6 +616,7 @@ export function listArtifacts(
 }
 
 function ownerClause(owner: ParsedOwner): { sql: string; params: Record<string, string> } {
+  if (owner.kind === "guide") return { sql: `a.owner_kind = 'guide'`, params: {} };
   if (owner.kind === "agent") {
     return {
       sql: `a.owner_kind = 'agent' AND a.owner_agent = @agent`,

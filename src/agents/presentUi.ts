@@ -119,12 +119,13 @@ function presentedTitle(given: unknown, manifest: Record<string, unknown>, progr
   return heading && heading.length > 0 ? heading : "Chat";
 }
 
-/** Characters of an HTML card kept when a session is replayed; most cards fit, so the agent can still edit them. */
+/** Characters of a card program kept when a session is replayed; most cards fit, so the agent can still edit them. */
 export const REPLAY_PROGRAM_MAX = 12_000;
 
 function replayUiPart(part: UiPartArtifactRef | UiPartCard): unknown {
-  if (part.kind !== UI_PART_KIND_CARD || part.format !== "live.html" || part.program.length <= REPLAY_PROGRAM_MAX) return { type: "ui", ui: part };
-  const note = `<!-- Replay kept the first ${REPLAY_PROGRAM_MAX} of ${part.program.length} characters. This card is incomplete here: to change it, write the whole card again. -->`;
+  if (part.kind !== UI_PART_KIND_CARD || part.program.length <= REPLAY_PROGRAM_MAX) return { type: "ui", ui: part };
+  const said = `Replay kept the first ${REPLAY_PROGRAM_MAX} of ${part.program.length} characters. This card is incomplete here: to change it, write the whole card again.`;
+  const note = part.format === "live.html" ? `<!-- ${said} -->` : `[${said}]`;
   return { type: "ui", ui: { ...part, program: `${part.program.slice(0, REPLAY_PROGRAM_MAX)}\n${note}` } };
 }
 
@@ -465,7 +466,7 @@ function presentUiParameterSchema() {
   });
 }
 
-function presentCardParameterSchema() {
+export function presentCardParameterSchema() {
   return Type.Object({
     title: Type.Optional(Type.String({ description: "Short title shown above the card." })),
     program: Type.String({ description: "The card program: live.declarative, markdown text (static.markdown), or a full HTML document (live.html)." }),

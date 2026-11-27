@@ -4,8 +4,8 @@ import { sqliteConnectionFromStore } from "../runstore/createStore.js";
 import { ArtifactContentError, readArtifactContent, STATIC_HTML_CONTENT_SECURITY_POLICY } from "../artifacts/content.js";
 import { isLiveHtmlKind, isLiveKind } from "../artifacts/kinds.js";
 import { approveOrigins, originApprovalView, revokeOrigins } from "../artifacts/originApproval.js";
-import { artifactStorageKey, stageOwnerKey } from "../artifacts/keys.js";
-import { artifactLiveManifestFields } from "../artifacts/record.js";
+import { artifactStorageKey } from "../artifacts/keys.js";
+import { artifactLiveManifestFields, artifactOwnerKey, type ArtifactOwner } from "../artifacts/record.js";
 import { ArtifactPublishError, STATIC_CONTENT_MAX_BYTES } from "../artifacts/limits.js";
 import { deletePublishedArtifact, publishArtifact, type PublishRequest } from "../artifacts/publish.js";
 import { promoteSessionArtifact } from "../artifacts/sessionScope.js";
@@ -28,7 +28,6 @@ import { catalogRootsForArtifacts } from "../artifacts/projectScope.js";
 import { bindingQueryHttpStatus, queryBinding } from "../artifacts/bindingQuery.js";
 import { refreshHttpStatus } from "../artifacts/refreshPolicy.js";
 import { readArtifactSnapshots, refreshArtifact, type ArtifactRefreshDeps } from "../artifacts/refresh.js";
-import type { ArtifactOwner } from "../artifacts/record.js";
 import { artifactVersionKind, listArtifactVersions, readArtifactVersionRow } from "../artifacts/versions.js";
 
 type Json = (res: ServerResponse, status: number, body: unknown) => void;
@@ -404,13 +403,9 @@ function queryRequestFromBody(body: unknown): { bindingId: string; args?: Record
 function storageKeyFor(record: {
   id: string;
   project: { id: string };
-  owner: { kind: string; pipeline?: string; stage?: string; agent?: string };
+  owner: ArtifactOwner;
 }): string {
-  const ownerKey =
-    record.owner.kind === "agent"
-      ? `agent:${record.owner.agent ?? ""}`
-      : stageOwnerKey(record.owner.pipeline ?? "", record.owner.stage ?? "");
-  return artifactStorageKey(record.project.id, ownerKey, record.id);
+  return artifactStorageKey(record.project.id, artifactOwnerKey(record.owner), record.id);
 }
 
 function unexpectedFailure(method: string, pathname: string): { error: string; code: string } {

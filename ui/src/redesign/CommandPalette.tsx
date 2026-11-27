@@ -145,13 +145,17 @@ export function CommandPalette({
         .then((page) => {
           const hits = page.artifacts.map((record) => {
             const ownerKey =
-              record.owner.kind === "agent"
-                ? `agent:${record.owner.agent}`
-                : `stage:${record.owner.pipeline}:${record.owner.stage}`;
+              record.owner.kind === "guide"
+                ? "guide"
+                : record.owner.kind === "agent"
+                  ? `agent:${record.owner.agent}`
+                  : `stage:${record.owner.pipeline}:${record.owner.stage}`;
             const context =
-              record.owner.kind === "agent"
-                ? record.owner.agent
-                : `${record.owner.pipeline} / ${record.owner.stage}`;
+              record.owner.kind === "guide"
+                ? "Guide"
+                : record.owner.kind === "agent"
+                  ? record.owner.agent
+                  : `${record.owner.pipeline} / ${record.owner.stage}`;
             return {
               title: record.title,
               context,

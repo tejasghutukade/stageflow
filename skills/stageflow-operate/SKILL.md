@@ -147,6 +147,7 @@ Read [references/runs.md](references/runs.md) first; it has the full table and t
 | Want | MCP | CLI |
 |---|---|---|
 | List, filter | `get_run` (omit `runId`) (`status`, `since`, `pipeline`, `caller_id`) | `sf runs list [--status ...] [--since iso] [--pipeline x] --json` |
+| Counts by status | `run_stats` (`since`, `until`, `group_by` day, week, or pipeline, optional `pipeline`, `status`, `timezone`) | |
 | One run | `get_run` | `sf runs show --run <id> --json` |
 | Why a stage failed verification | `get_stage` with `view: verification` | `sf runs verify --run <id> --stage <s> --json` |
 | Retry a failed stage (new attempt) | `stage_action` with `action: retry` | `sf runs retry --run <id> --stage <s> --json` |

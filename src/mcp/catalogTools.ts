@@ -42,6 +42,7 @@ import { listCatalogFlatSchema, validateFlatSchema } from "../toolkit/catalogToo
 import {
   envelopeRefField,
   getRunFlatSchema,
+  runStatsFlatSchema,
   inlinePipelineSchema,
   startRunFlatSchema,
   taskFileSchema,
@@ -54,6 +55,7 @@ import { listProjectMcpCatalog } from "../config/resolveStageMcpServers.js";
 import { runValidateKind } from "./validateMcpKinds.js";
 import { buildRunExportPayload } from "../runstore/exportRunPayload.js";
 import { redactRunManifestForRead } from "../runstore/runManifest.js";
+import { collectRunStats } from "../runstore/runStats.js";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { runSkillsDir } from "../runtime/runSkills.js";
 import { listSkillsWithOrigin } from "../config/listSkills.js";
@@ -599,6 +601,24 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         const mapped = mapStoreLookupError(err, { policy: "run" });
         return textResult({ error: mapped.error, status: mapped.status }, true);
       }
+    },
+  );
+
+  server.registerTool(
+    "run_stats",
+    {
+      description:
+        "Count runs by status. group_by is day, week, or pipeline. Buckets use created_at. since defaults to 30 days before until; until defaults to now. timezone is an IANA name (default UTC). Day and week buckets include zeros. Eval runs are left out. A long window or many pipelines is capped.",
+      inputSchema: runStatsFlatSchema,
+    },
+    async (args) => {
+      const parsed = runStatsFlatSchema.safeParse(args);
+      if (!parsed.success) {
+        return textResult({ error: parsed.error.issues[0]?.message ?? "Invalid arguments", status: 400 }, true);
+      }
+      const result = await collectRunStats(store, parsed.data);
+      if (!result.ok) return textResult({ error: result.message, status: 400 }, true);
+      return textResult(result.value);
     },
   );
 

@@ -5,7 +5,7 @@ import { AGENT_ID_PATTERN } from "../agents/agentId.js";
 import { agentProjectKey } from "../agents/store.js";
 import { STAGE_ID_PATTERN } from "../config/createStage.js";
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
-import { ArtifactKeyError, artifactStorageKey, assertArtifactId, publicArtifactKey, stageOwnerKey } from "./keys.js";
+import { ArtifactKeyError, artifactStorageKey, assertArtifactId, GUIDE_OWNER_KEY, publicArtifactKey, stageOwnerKey } from "./keys.js";
 import { assertBindingsAtPublish } from "./bindings.js";
 import { assertHtmlDocumentAtPublish } from "./htmlScan.js";
 import { declaredOriginCount, deleteOriginApprovals, ORIGIN_APPROVAL_WARNING } from "./originApproval.js";
@@ -26,7 +26,7 @@ import {
   type ArtifactIssue,
 } from "./limits.js";
 import { liveDbManifest, liveIdentityHash, validateLiveManifest, type LiveManifest } from "./manifest.js";
-import type { ArtifactOwner } from "./record.js";
+import { artifactOwnerKey, type ArtifactOwner } from "./record.js";
 import { canonicalProjectWireId } from "./projectScope.js";
 import {
   artifactSearchOwnerText,
@@ -98,7 +98,7 @@ function isRetryableVersionConflict(error: unknown): boolean {
 
 export type PublishSource = "console" | "api";
 
-export type PublishProvenanceKind = "console" | "api" | "mcp" | "stage" | "agent";
+export type PublishProvenanceKind = "console" | "api" | "mcp" | "stage" | "agent" | "guide";
 
 /** Publisher of this call. Written with the version row. Not taken from a request body. */
 export type PublishProvenance = {
@@ -187,6 +187,7 @@ function rejectEvalOwnerPiece(value: string, issuePath: string): void {
 
 function ownerKeyOf(owner: ArtifactOwner): string {
   try {
+    if (owner.kind === "guide") return GUIDE_OWNER_KEY;
     if (owner.kind === "agent") {
       rejectEvalOwnerPiece(owner.agent, "owner.agent");
       assertOwnerId(owner.agent, "owner.agent", AGENT_ID_PATTERN, "Agent id");
@@ -929,10 +930,7 @@ function locateDeleteTarget(
     return { projectId: canonical.id, storageKey: storageKeyForDelete(canonical.id, ownerKey, id) };
   }
   const record = readArtifact(db, ownerKey, id, undefined, roots);
-  const owner =
-    record.owner.kind === "agent"
-      ? `agent:${record.owner.agent}`
-      : stageOwnerKey(record.owner.pipeline, record.owner.stage);
+  const owner = artifactOwnerKey(record.owner);
   return {
     projectId: record.project.id,
     storageKey: storageKeyForDelete(record.project.id, owner, record.id),
@@ -961,10 +959,7 @@ export async function deletePublishedArtifact(
           [{ path: "origin", message: "indexed artifacts are removed only when their run is deleted" }],
         );
       }
-      const owner =
-        record.owner.kind === "agent"
-          ? `agent:${record.owner.agent}`
-          : stageOwnerKey(record.owner.pipeline, record.owner.stage);
+      const owner = artifactOwnerKey(record.owner);
       const storageKey = artifactStorageKey(record.project.id, owner, record.id);
       db.transaction(() => {
         unindexArtifactSearch(db, storageKey);

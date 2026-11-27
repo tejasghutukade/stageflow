@@ -83,7 +83,7 @@ Put every granted tool whose risk is write, destructive, or external into `ask_f
 | Group | Read (no ask-first) | Ask first |
 |---|---|---|
 | `discover` | `list_catalog` with `kind: skills`, `list_catalog` with `kind: pipelines`, `list_catalog` with `kind: tasks`, `list_catalog` with `kind: models`, `list_catalog` with `kind: providers`, `list_catalog` with `kind: health`, `validate` (including `preflight: true`), `read_pipeline` with `view: dag`, `list_catalog` with `kind: mcp_servers` | `probe_project_mcp` (connects out) |
-| `runs.read` | `get_run` (omit `runId`), `get_run`, `get_run` with `view: export`, `get_stage` with `view: events`, `log`, `envelope`, or `verification`, `run_files` with `view: artifact`, `changes`, `diff`, or `file`, `wait_run` | |
+| `runs.read` | `get_run` (omit `runId`), `get_run`, `get_run` with `view: export`, `run_stats`, `get_stage` with `view: events`, `log`, `envelope`, or `verification`, `run_files` with `view: artifact`, `changes`, `diff`, or `file`, `wait_run` | |
 | `runs.control` | | `start_run`, `start_run` with `stage`, `start_run` with `from_run`, `stage_action` with `action: retry`, `resume`, `recover`, or `stop_recovery` |
 | `runs.cleanup` | | `cancel_run`, `abandon_stage`, `delete_runs`, `delete_runs` with `gc: true` |
 | `gates.read` | `list_waiting` with `detail: full` or `summary` | |

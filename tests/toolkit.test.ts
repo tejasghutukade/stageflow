@@ -120,7 +120,7 @@ describe("operator-only tools", () => {
       );
     }
     const core = catalog.toolsets.find((row) => row.id === "core");
-    expect(core?.tools.length).toBe(17);
+    expect(core?.tools.length).toBe(18);
   });
 });
 

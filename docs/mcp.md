@@ -196,7 +196,7 @@ The Host exposes **60** MCP tools. The previous 124 per-endpoint names are remov
 
 ### Toolsets {#toolsets}
 
-Each tool belongs to one **toolset**. A client that connects to `/mcp` with no `toolsets` query receives only the **core** toolset (17 tools: discover, author pipelines and tasks, start and watch runs, read outputs, wait, answer gates, cancel a runaway run, and decide a feedback-loop wait). Add named toolsets with a `toolsets` query on the MCP URL; **core is always included**.
+Each tool belongs to one **toolset**. A client that connects to `/mcp` with no `toolsets` query receives only the **core** toolset (18 tools: discover, author pipelines and tasks, start and watch runs, read outputs, count runs, wait, answer gates, cancel a runaway run, and decide a feedback-loop wait). Add named toolsets with a `toolsets` query on the MCP URL; **core is always included**.
 
 | Toolset | Role |
 |---------|------|
@@ -211,7 +211,7 @@ Each tool belongs to one **toolset**. A client that connects to `/mcp` with no `
 | `memories` | Host memories and cards |
 | `artifacts` | Publish, read and delete artifacts. Off unless the URL asks for it, same as `functions` and `memories` |
 
-**Parse rules.** `toolsets` is comma-separated; names are trimmed and lowercased; duplicates collapse. An empty or missing value means core only. `all` anywhere selects every toolset (all 62 tools). Repeated `toolsets` parameters merge. Any unknown name fails the whole request with HTTP **400** and a JSON-RPC error body `{ "jsonrpc": "2.0", "error": { "code": -32000, "message": "…" }, "id": null }` listing valid names (`core`, the table above, and `all`).
+**Parse rules.** `toolsets` is comma-separated; names are trimmed and lowercased; duplicates collapse. An empty or missing value means core only. `all` anywhere selects every toolset (all 63 tools). Repeated `toolsets` parameters merge. Any unknown name fails the whole request with HTTP **400** and a JSON-RPC error body `{ "jsonrpc": "2.0", "error": { "code": -32000, "message": "…" }, "id": null }` listing valid names (`core`, the table above, and `all`).
 
 **Session binding.** The selection is fixed when a **stateful** session starts at `initialize`. Later requests on that session ignore their query string — sending `?toolsets=all` on a follow-up `tools/list` or `tools/call` does **not** upgrade a core-only session. Open a **new** session (new `initialize` against a URL that includes the toolsets you need), or use the reconnect URL from `get_started`. In **stateless** mode (`sf mcp --mcp-stateless`), each request is parsed again. Toolsets are not permissions: they only change what the external MCP endpoint registers for that session. The toolkit recorder, agent grants, Guide, and eval gates still see the full registry.
 
@@ -219,7 +219,7 @@ Each tool belongs to one **toolset**. A client that connects to `/mcp` with no `
 
 **Console.** Settings → **MCP server** lists toolsets from the same catalog the agent permissions picker uses. Core is always on; check optional toolsets to build the URL and `.cursor/mcp.json` snippet. The URL is not persisted — copy it into the client and reconnect to apply.
 
-The 17 core tool names are: `get_started`, `list_catalog`, `validate`, `read_pipeline`, `write_pipeline`, `write_stage`, `write_task`, `start_run`, `get_run`, `get_stage`, `run_files`, `wait_run`, `stage_action`, `cancel_run`, `list_waiting`, `answer_gate`, `decide_feedback_loop`.
+The 18 core tool names are: `get_started`, `list_catalog`, `validate`, `read_pipeline`, `write_pipeline`, `write_stage`, `write_task`, `start_run`, `get_run`, `run_stats`, `get_stage`, `run_files`, `wait_run`, `stage_action`, `cancel_run`, `list_waiting`, `answer_gate`, `decide_feedback_loop`.
 
 | Field | Role |
 |-------|------|
@@ -302,6 +302,7 @@ Workshop Author profile tools keep names like `write_pipeline` with `mode: creat
 |------|-------|
 | `start_run` | Exactly one of `pipeline`, `stage`, or `from_run` (+ task shapes as before) |
 | `get_run` | Omit `runId` to list; `view: export` to export |
+| `run_stats` | Counts by status. `group_by`: `day` (default), `week`, or `pipeline`. `since` defaults to 30 days before `until`; `until` defaults to now. Optional `pipeline`, `status`, and `timezone` (IANA, default UTC). Buckets use `created_at` and include empty days and weeks. Eval-origin runs are omitted. More than 366 days, 104 weeks, or 50 pipelines is capped (`capped` and `cap_note`). |
 | `get_stage` | `view`: `events`, `log`, `envelope`, `verification` |
 | `run_files` | `view`: `artifact`, `changes`, `diff`, `file` |
 | `wait_run` | Long-poll until terminal or waiting |

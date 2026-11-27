@@ -26,7 +26,7 @@ const ALWAYS_BLOCKED = new Set([
 ]);
 
 /** Tools that only talk to the person or read Stageflow's own docs. They never change the project. */
-const SAFE = new Set(["confirm_action", "show_ui", "list_guide_topics", "read_guide_topic"]);
+const SAFE = new Set(["confirm_action", "show_ui", "present_ui", "list_guide_topics", "read_guide_topic"]);
 
 export type OperatorEvalPolicy = {
   tools: EvalToolPolicy;

@@ -724,7 +724,7 @@ sf artifact list [--q <text>] [--kind <kind>] [--owner <pipeline:stage|agent:id>
 |------|-------------|
 | `--q` | Passed to the index search (`q`). Matches title, description, tags, summary, owner, and extracted text (Markdown, text, CSV, JSON; first 64 KiB). HTML, images, and live snapshots are not searched. See [Search](artifacts.md#search). |
 | `--kind` | Passed to the index (`kind`). A value without a dot matches that prefix (`static` matches `static.markdown`). |
-| `--owner` | Passed to the index. `pipeline:stage` or `stage:<pipeline>:<stage>` for a stage, or `agent:<id>`. |
+| `--owner` | Passed to the index. `pipeline:stage` or `stage:<pipeline>:<stage>` for a stage, `agent:<id>`, or `guide` for cards the Guide saved. |
 | `--tag` | Passed to the index (`tag`). |
 | `--status` | Passed to the index: `available` or `expired`. |
 | `--live` | Passed as `live=true`: only artifacts whose kind starts with `live.`. |
@@ -745,7 +745,7 @@ Human output is a compact table: `KEY`, `KIND`, `TITLE`, `OWNER`, `RUN` (the sam
 sf artifact show <ownerKey>/<id> [--project-root <wire id or path>] [--json]
 ```
 
-`key` is the same form as in list output and the REST route: `stage:<pipeline>:<stage>/<id>` or `agent:<id>/<id>` (no project prefix). When the same owner and id exist in several projects, pass `--project-root` to disambiguate.
+`key` is the same form as in list output and the REST route: `stage:<pipeline>:<stage>/<id>`, `agent:<id>/<id>`, or `guide/<id>` (no project prefix). When the same owner and id exist in several projects, pass `--project-root` to disambiguate.
 
 **Exit codes:** `0` success; `1` not found (`artifact.not_found`), ambiguous owner/id across projects (`artifact.ambiguous`, project roots listed on stderr), invalid key, or other error.
 

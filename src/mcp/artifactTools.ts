@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { ArtifactContentError, readArtifactContent, type ArtifactContentBody } from "../artifacts/content.js";
 import { isLiveKind } from "../artifacts/kinds.js";
-import { artifactStorageKey, stageOwnerKey } from "../artifacts/keys.js";
+import { artifactStorageKey } from "../artifacts/keys.js";
 import { ArtifactPublishError } from "../artifacts/limits.js";
 import { deletePublishedArtifact, publishArtifact, type PublishRequest } from "../artifacts/publish.js";
 import { promoteSessionArtifact } from "../artifacts/sessionScope.js";
@@ -23,7 +23,7 @@ import {
   type ArtifactListQuery,
 } from "../artifacts/query.js";
 import { readArtifactSnapshots, refreshArtifact, type ArtifactSnapshotView } from "../artifacts/refresh.js";
-import type { ArtifactRecord } from "../artifacts/record.js";
+import { artifactOwnerKey, type ArtifactRecord } from "../artifacts/record.js";
 import { capUtf8 } from "../artifacts/search.js";
 import { artifactVersionKind, listArtifactVersions, readArtifactVersionRow } from "../artifacts/versions.js";
 import { sqliteConnectionFromStore } from "../runstore/createStore.js";
@@ -152,11 +152,7 @@ function failureResult(error: ArtifactFailure) {
 }
 
 function storageKeyFor(record: ArtifactRecord): string {
-  const ownerKey =
-    record.owner.kind === "agent"
-      ? `agent:${record.owner.agent}`
-      : stageOwnerKey(record.owner.pipeline, record.owner.stage);
-  return artifactStorageKey(record.project.id, ownerKey, record.id);
+  return artifactStorageKey(record.project.id, artifactOwnerKey(record.owner), record.id);
 }
 
 function contentPayload(body: ArtifactContentBody) {
