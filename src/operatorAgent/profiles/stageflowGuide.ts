@@ -2,7 +2,6 @@ import { createGuideKnowledgeTools } from "../../guide/knowledgeTools.js";
 import {
   createGuidePresentUiTool,
   guidePresentUiPlaybookSection,
-  resolveGuideHtmlCardsAvailable,
   type GuideHtmlCardsSignal,
 } from "../../guide/presentUi.js";
 import { createGuideSaveCardTool } from "../../guide/saveCard.js";
@@ -140,10 +139,8 @@ export type StageflowGuideProfileOptions = {
   htmlCardsAvailable?: GuideHtmlCardsSignal;
 };
 
-function buildArmedPlaybook(htmlCardsAvailable: boolean): string {
-  const armed = STAGEFLOW_GUIDE_PLAYBOOK.replace(UNARMED, ARMED);
-  const section = guidePresentUiPlaybookSection(htmlCardsAvailable);
-  return section ? `${armed}\n\n${section}` : armed;
+function buildArmedPlaybook(htmlCardsAvailable: GuideHtmlCardsSignal | undefined): string {
+  return `${STAGEFLOW_GUIDE_PLAYBOOK.replace(UNARMED, ARMED)}\n\n${guidePresentUiPlaybookSection(htmlCardsAvailable)}`;
 }
 
 export function createStageflowGuideProfile(
@@ -161,14 +158,14 @@ export function createStageflowGuideProfile(
         ...createGuideKnowledgeTools(),
       ]
     : [];
-  const armedBase = deps ? buildArmedPlaybook(resolveGuideHtmlCardsAvailable(htmlSignal)) : STAGEFLOW_GUIDE_PLAYBOOK;
+  const armedBase = deps ? buildArmedPlaybook(htmlSignal) : STAGEFLOW_GUIDE_PLAYBOOK;
   return {
     id: STAGEFLOW_GUIDE_PROFILE_ID,
     title: "Stageflow",
     playbook: armedBase,
     ...(deps
       ? {
-          resolvePlaybook: () => buildArmedPlaybook(resolveGuideHtmlCardsAvailable(htmlSignal)),
+          resolvePlaybook: () => buildArmedPlaybook(htmlSignal),
         }
       : {}),
     greeting: STAGEFLOW_GUIDE_GREETING,

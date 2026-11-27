@@ -40,7 +40,7 @@ import { createFunctionInvoker, type FunctionCallInput, type FunctionRunView } f
 import { listFunctionInvocations } from "../src/functions/history.js";
 import { FunctionService } from "../src/functions/service.js";
 import { FunctionStore } from "../src/functions/store.js";
-import { publishBodyFromToolParams } from "../src/tools/publishArtifact.js";
+import { publishBodyFromToolParams } from "../src/genui/publishParams.js";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import { repairMissingIndexed } from "../src/runstore/artifactRetention.js";
 import { createRunStore, sqliteConnectionFromStore } from "../src/runstore/createStore.js";

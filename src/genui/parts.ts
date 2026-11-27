@@ -6,7 +6,7 @@ import {
   type UiPartArtifactRef,
   type UiPartCard,
 } from "../artifacts/uiPart.js";
-import { PRESENT_UI_TOOL_NAME } from "./tools.js";
+import { PRESENT_UI_TOOL_NAME } from "./names.js";
 
 /** True for a part that puts something on screen (an artifact or a card), as opposed to an error. */
 export function isPresentedUiPart(part: UiPart): part is UiPartArtifactRef | UiPartCard {

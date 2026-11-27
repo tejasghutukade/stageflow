@@ -1,3 +1,5 @@
+import { LIVE_DECLARATIVE_KIND, LIVE_HTML_KIND, type StaticArtifactKind } from "../artifacts/kinds.js";
+
 /** Artifact kinds an agent may place in chat with `present_ui`. */
 export const PRESENTABLE_ARTIFACT_KINDS = [
   "static.markdown",
@@ -32,3 +34,15 @@ export type UiPersistence = (typeof UI_PERSISTENCE_VALUES)[number];
 export function defaultPresentKinds(persistence: UiPersistence): string[] {
   return persistence === "conversation" ? [...CONVERSATION_CARD_KINDS] : [...PRESENTABLE_ARTIFACT_KINDS];
 }
+
+/** Static kinds publish_artifact accepts. */
+export const STATIC_KINDS = [
+  "static.markdown",
+  "static.image",
+  "static.table",
+  "static.text",
+  "static.html",
+] as const satisfies readonly StaticArtifactKind[];
+
+/** Every kind publish_artifact accepts, in the order the tool and prompt list them. */
+export const PUBLISH_KINDS = [...STATIC_KINDS, LIVE_DECLARATIVE_KIND, LIVE_HTML_KIND] as const;

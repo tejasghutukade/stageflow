@@ -24,7 +24,6 @@ export type GuideSessionContext = {
   turn: number;
   confirmations: Confirmation[];
   threadId?: string;
-  presentUiInTurn?: number;
 };
 
 export function guideContextOf(value: unknown): GuideSessionContext {
@@ -35,7 +34,6 @@ export function guideContextOf(value: unknown): GuideSessionContext {
       turn: typeof v.turn === "number" ? v.turn : 0,
       confirmations: Array.isArray(v.confirmations) ? v.confirmations : [],
       ...(typeof v.threadId === "string" && v.threadId ? { threadId: v.threadId } : {}),
-      ...(typeof v.presentUiInTurn === "number" ? { presentUiInTurn: v.presentUiInTurn } : {}),
     };
   }
   return { kind: "stageflow_guide", turn: 0, confirmations: [] };
@@ -49,7 +47,6 @@ export function advanceGuideTurn(value: unknown): GuideSessionContext {
     ...current,
     turn,
     confirmations: current.confirmations.filter((c) => turn - c.turn <= CONFIRMATION_TURNS),
-    presentUiInTurn: 0,
   };
 }
 

@@ -4,31 +4,19 @@ import { grantedStageflowTools } from "../toolkit/meta.js";
 import type { ToolkitTool } from "../toolkit/index.js";
 import { STAGEFLOW_PI_PREFIX } from "./runtime/types.js";
 import { parseArtifactShowKey } from "../cli/artifactListFormat.js";
-import { scrubSecrets } from "../compaction/scrub.js";
 import { inspectArtifactUnderRoot } from "../runtime/artifactDiskInspect.js";
 import { PATH_DENIED_MESSAGE } from "../runread/readArtifact.js";
-import {
-  ARTIFACT_DESCRIPTION_MAX_CHARS,
-  ARTIFACT_SUMMARY_MAX_CHARS,
-  ARTIFACT_TAG_MAX,
-  ARTIFACT_TITLE_MAX_CHARS,
-  LIVE_PROGRAM_MAX_BYTES,
-  STATIC_CONTENT_MAX_BYTES,
-  ArtifactPublishError,
-  type ArtifactIssue,
-} from "../artifacts/limits.js";
-import { SessionPublishError, type SessionPublishBody, type SessionPublishSuccess } from "../artifacts/sessionPublish.js";
+import { STATIC_CONTENT_MAX_BYTES, ArtifactPublishError } from "../artifacts/limits.js";
+import type { SessionPublishBody, SessionPublishSuccess } from "../artifacts/sessionPublish.js";
 import { storedProjectMatches } from "../artifacts/projectIdentity.js";
 import { bindableFunctionsFromAttachments } from "../artifacts/bindable.js";
-import { liveArtifactsPromptSection } from "../artifacts/livePrompt.js";
-import { LIVE_DECLARATIVE_KIND, LIVE_HTML_KIND } from "../artifacts/kinds.js";
-import { PUBLISH_ARTIFACT_TOOL_NAME } from "../tools/stageToolNames.js";
-import {
-  STATIC_KINDS,
-  publishArtifactParameterSchema,
-  publishBodyFromToolParams,
-  readCappedPublishFile,
-} from "../tools/publishArtifact.js";
+import { toPiTool, type GenUiPiTool } from "../genui/adapters/pi.js";
+import { PUBLISH_KINDS } from "../genui/kindsList.js";
+import { genUiPublishPrompt } from "../genui/prompt.js";
+import { publishOnlyPolicy, surfaceKey } from "../genui/surface.js";
+import { publishArtifactSpec } from "../genui/tools.js";
+import type { publishArtifactParameterSchema } from "../genui/publishParams.js";
+import { readCappedPublishFile } from "../tools/publishArtifact.js";
 import { isWritePathForbidden } from "./policy.js";
 
 export const AGENT_ARTIFACT_READ_SENTENCE =
@@ -61,24 +49,9 @@ export function agentArtifactPromptSection(
   projectRoot?: string,
 ): string | undefined {
   if (agentHoldsArtifactWrite(definition)) {
-    const mib = Math.floor(STATIC_CONTENT_MAX_BYTES / (1024 * 1024));
-    const lines = [
-      "# Published artifacts",
-      "",
-      "Use publish_artifact for a final deliverable a person should open later. Skip scratch notes, logs, and intermediate files. Artifacts you publish are owned by this agent. This prompt does not list other agents' artifacts.",
-      "",
-      "The id is a lowercase slug: it starts with a letter, then has up to 63 letters, digits, underscores, or hyphens (`^[a-z][a-z0-9_-]{0,63}$`). Publishing the same id again creates a new version. If the bytes and kind are unchanged, the current version is kept and the tool returns unchanged.",
-      "",
-      `Kinds: ${STATIC_KINDS.join(", ")}, ${LIVE_DECLARATIVE_KIND}, ${LIVE_HTML_KIND}. Static content is at most ${mib} MiB. A live.declarative program is the content string, at most ${Math.round(LIVE_PROGRAM_MAX_BYTES / 1024)} KiB. live.html takes format, csp, libraries, bindings, and optional refresh. The title is at most ${ARTIFACT_TITLE_MAX_CHARS} characters. You may set at most ${ARTIFACT_TAG_MAX} tags, each matching [a-z0-9_-] and at most 32 characters. Description and summary are at most ${ARTIFACT_DESCRIPTION_MAX_CHARS} and ${ARTIFACT_SUMMARY_MAX_CHARS} characters.`,
-      "",
-      "Give path, content, or content_base64, and only one of them. path is relative to the project root. It must stay inside the project, must not be absolute, must not contain .., must not name an agent definition, must not point under the Stageflow home, and must not be a symlink. content is inline text. content_base64 is an image (png, jpeg, gif, or webp).",
-    ];
-    if (agentHoldsArtifactRead(definition)) {
-      lines.push("", AGENT_ARTIFACT_READ_SENTENCE);
-    }
     const functions = projectRoot ? bindableFunctionsFromAttachments(projectRoot, definition.tools.functions ?? []) : [];
-    lines.push("", liveArtifactsPromptSection(functions));
-    return withArtifactSentences(definition, lines.join("\n"));
+    const notes = agentHoldsArtifactRead(definition) ? [AGENT_ARTIFACT_READ_SENTENCE] : [];
+    return withArtifactSentences(definition, genUiPublishPrompt({ publisher: "agent", notes, functions }));
   }
   if (agentHoldsArtifactRead(definition)) return withArtifactSentences(definition, AGENT_ARTIFACT_READ_SENTENCE);
   return withArtifactSentences(definition, undefined);
@@ -106,41 +79,6 @@ export function appendAgentArtifactPrompt(
   const section = agentArtifactPromptSection(definition, projectRoot);
   if (section === undefined) return systemPrompt;
   return `${systemPrompt}\n\n${section}`;
-}
-
-function toolError(code: string, message: string, issues?: ArtifactIssue[]) {
-  const payload = {
-    code,
-    message: scrubSecrets(message),
-    ...(issues !== undefined
-      ? {
-          issues: issues.map((issue) => ({
-            path: issue.path,
-            message: scrubSecrets(issue.message),
-            ...(issue.code ? { code: issue.code } : {}),
-          })),
-        }
-      : {}),
-  };
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(payload) }],
-    details: payload,
-    isError: true as const,
-  };
-}
-
-function toolOk(result: SessionPublishSuccess) {
-  const payload: { key: string; version: number; unchanged?: true; url?: string; warnings?: SessionPublishSuccess["warnings"] } = {
-    key: result.key,
-    version: result.version,
-  };
-  if (result.unchanged) payload.unchanged = true;
-  if (result.url) payload.url = result.url;
-  if (result.warnings && result.warnings.length > 0) payload.warnings = result.warnings;
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(payload) }],
-    details: payload,
-  };
 }
 
 function denyPath(): never {
@@ -178,64 +116,29 @@ export async function readAgentPublishPath(
   return readCappedPublishFile(presence.absolutePath, STATIC_CONTENT_MAX_BYTES);
 }
 
-function rejectForeignOwner(agentId: string, params: unknown): void {
-  if (params === null || typeof params !== "object" || Array.isArray(params)) return;
-  if (!("owner" in params)) return;
-  const owner = (params as { owner?: unknown }).owner;
-  const self =
-    owner !== null &&
-    typeof owner === "object" &&
-    !Array.isArray(owner) &&
-    (owner as { kind?: unknown }).kind === "agent" &&
-    (owner as { agent?: unknown }).agent === agentId &&
-    Object.keys(owner).every((key) => key === "kind" || key === "agent");
-  if (!self) {
-    throw new ArtifactPublishError(403, "artifact.invalid_shape", "An agent can only publish artifacts it owns", [
-      { path: "owner", message: "An agent can only publish artifacts it owns" },
-    ]);
-  }
-}
+export type AgentPublishTool = GenUiPiTool<ReturnType<typeof publishArtifactParameterSchema>>;
 
-export type AgentPublishTool = {
-  name: typeof PUBLISH_ARTIFACT_TOOL_NAME;
-  label: string;
-  description: string;
-  parameters: ReturnType<typeof publishArtifactParameterSchema>;
-  execute(toolCallId: string, params: unknown): Promise<{
-    content: Array<{ type: "text"; text: string }>;
-    details: Record<string, unknown>;
-    isError?: true;
-  }>;
-};
-
+/** publish_artifact for an agent session: the agent publishes as itself, and paths resolve inside its project. */
 export function createAgentPublishArtifactTool(options: {
   agentId: string;
   projectRoot: string;
   stageflowHome: string;
+  /** The session the tool serves; only names the surface. */
+  sessionId?: string;
   publish: (body: SessionPublishBody) => Promise<SessionPublishSuccess>;
 }): AgentPublishTool {
-  const mib = Math.floor(STATIC_CONTENT_MAX_BYTES / (1024 * 1024));
-  return {
-    name: PUBLISH_ARTIFACT_TOOL_NAME,
-    label: "Publish artifact",
-    description: `Publish a titled, versioned artifact owned by this agent. Kinds: ${STATIC_KINDS.join(", ")}, live.declarative, live.html. Static content at most ${mib} MiB. live.declarative takes content as the program plus format, library, bindings, and optional refresh. live.html takes the HTML document plus format, csp, libraries ({name, version} from the Host list), bindings, and optional refresh. Pass path, content, or content_base64. Publishing the same id again creates a new version. A validation error returns a code and issues; fix the arguments and call again.`,
-    parameters: publishArtifactParameterSchema(),
-    execute: async (_toolCallId, params) => {
-      try {
-        rejectForeignOwner(options.agentId, params);
-        const body = await publishBodyFromToolParams(params, (rawPath) =>
-          readAgentPublishPath(options.projectRoot, options.stageflowHome, rawPath),
-        );
-        const result = await options.publish(body);
-        return toolOk(result);
-      } catch (error) {
-        if (error instanceof ArtifactPublishError || error instanceof SessionPublishError) {
-          return toolError(error.code, error.message, error.issues);
-        }
-        return toolError("artifact.invalid_shape", "artifact publish failed");
-      }
+  const id = options.sessionId ?? options.agentId;
+  return toPiTool(publishArtifactSpec("agent"), {
+    key: surfaceKey("agent", id),
+    id,
+    owner: { kind: "agent", agent: options.agentId },
+    projectRoot: options.projectRoot,
+    policy: publishOnlyPolicy(PUBLISH_KINDS),
+    publish: {
+      readPath: (rawPath) => readAgentPublishPath(options.projectRoot, options.stageflowHome, rawPath),
+      publish: options.publish,
     },
-  };
+  });
 }
 
 function artifactNotFound() {

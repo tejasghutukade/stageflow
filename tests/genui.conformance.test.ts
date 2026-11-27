@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createAgentPublishArtifactTool } from "../src/agents/artifactTools.js";
-import { presentArtifact, presentInline, resetCardLimiterForTests, type PresentArtifactResult } from "../src/genui/present.js";
+import { resetCardLimiterForTests } from "../src/genui/budget.js";
 import { createPiAgentRuntime, type OpenSessionInput, type PiRuntimeOptions } from "../src/agents/runtime/piRuntime.js";
 import type { TurnHooks } from "../src/agents/runtime/types.js";
 import { ARTIFACT_TITLE_MAX_CHARS } from "../src/artifacts/limits.js";
@@ -99,23 +99,12 @@ const assistantEnd = {
   message: { role: "assistant", model: "m", content: [{ type: "text", text: "ok" }], usage: { input: 1, output: 1, cost: { total: 0 } } },
 };
 
-/** The Host's presentUi port, as `src/agents/hostContext.ts` wires it, against the fixture store. */
-const hostPresentUi: NonNullable<PiRuntimeOptions["presentUi"]> = async (input) => {
-  const shared = {
-    db: fx.connection,
-    roots: roots(),
-    projectRoot: input.projectRoot,
-    ...(input.title !== undefined ? { title: input.title } : {}),
-    sessionId: input.sessionId,
-    agentId: input.agentId,
-    presentedInMessage: input.presentedInMessage,
-    allowedKinds: input.kinds,
-    consoleUrl: (hashPath: string) => consoleUrl(consoleDeps(), hashPath),
-  };
-  if (typeof input.program === "string") return presentInline({ ...shared, program: input.program, manifest: input.manifest });
-  if (!input.key) return { ok: false, code: "artifact.invalid_id", message: "Artifact key is not valid" } satisfies PresentArtifactResult;
-  return presentArtifact({ ...shared, key: input.key, ...(input.version !== undefined ? { version: input.version } : {}) });
-};
+/** The Host's artifact store port, as `src/agents/hostContext.ts` wires it, against the fixture store. */
+const hostArtifactStore: NonNullable<PiRuntimeOptions["artifactStore"]> = async () => ({
+  db: fx.connection,
+  roots: roots(),
+  consoleUrl: (hashPath: string) => consoleUrl(consoleDeps(), hashPath),
+});
 
 async function definitionOf(agentId: string): Promise<AgentDefinition> {
   const record = await fx.service.get(fx.project, agentId);
@@ -141,7 +130,7 @@ async function agentSurface(agentId: "conv" | "arts", htmlCards: boolean): Promi
     agentDir: fx.home,
     idleReleaseMs: 0,
     htmlCardsAvailable: htmlCards,
-    presentUi: hostPresentUi,
+    artifactStore: hostArtifactStore,
     openSession: async (input) => {
       opened = input;
       return {
@@ -295,24 +284,13 @@ const CARD_CASES: CardCase[] = [
     name: "live.html when HTML cards are not reachable",
     call: { title: "Regional chart", program: html, manifest: htmlManifest },
     htmlCards: false,
-    expect: {
-      verdict: "ui.kind_not_granted",
-      per: {
-        // differs today; AD4 makes these equal (the HTML-cards-reachable signal only changes the agent prompt, not the tool)
-        "agent.conversation": { verdict: "card", note: "differs today; AD4 makes these equal" },
-        // differs today; AD4 makes these equal (the reachability signal does not reach the tool)
-        "agent.artifacts": { verdict: "artifact-ref", note: "differs today; AD4 makes these equal" },
-      },
-    },
+    // AD4: the reachability signal is a policy field read when the card is drawn, on every surface.
+    expect: { verdict: "ui.kind_not_granted" },
   },
   {
     name: "missing manifest.kind",
     call: { title: "Runs", program: declarative, manifest: { format: "openui-lang", library: { name: "stageflow", version: "1.0.0" }, bindings: [] } },
-    expect: {
-      verdict: "ui.kind_not_granted",
-      // differs today; AD3 makes these equal (presentInline checks kind before the grant)
-      per: { "agent.artifacts": { verdict: "artifact.invalid_shape", note: "differs today; AD3 makes these equal" } },
-    },
+    expect: { verdict: "artifact.invalid_shape" },
   },
   {
     name: "kind not granted",
@@ -352,8 +330,6 @@ const CARD_CASES: CardCase[] = [
       verdict: "ui.key_needs_artifacts",
       per: {
         "agent.artifacts": { verdict: "artifact.not_found", note: BY_DESIGN_ARTIFACTS },
-        // differs today; AD3 makes these equal (the Guide only checks that program is text)
-        guide: { verdict: "artifact.invalid_shape", note: "differs today; AD3 makes these equal" },
       },
     },
   },
@@ -410,16 +386,10 @@ describe("generative UI conformance: per-reply cap", () => {
     });
   }
 
-  it("refuses the 5th of five parallel cards on the Guide (slot reserved before awaiting)", async () => {
-    const outcomes = await (await surface("guide")).reply(Array.from({ length: 5 }, () => validCall), { parallel: true });
-    expect(outcomes.map(ok).sort()).toEqual(["ok", "ok", "ok", "ok", "ui.message_cap"]);
-  });
-
-  for (const name of ["agent.conversation", "agent.artifacts"] as const) {
-    it(`accepts all five parallel cards on ${name} (differs today; AD5 makes these equal)`, async () => {
+  for (const name of SURFACES) {
+    it(`refuses the 5th of five parallel cards on ${name} (slot reserved before awaiting)`, async () => {
       const outcomes = await (await surface(name)).reply(Array.from({ length: 5 }, () => validCall), { parallel: true });
-      // differs today; AD5 makes these equal: piRuntime counts inlinePresented after the await, so parallel calls all see slot 1.
-      expect(outcomes.map(ok)).toEqual(["ok", "ok", "ok", "ok", "ok"]);
+      expect(outcomes.map(ok).sort()).toEqual(["ok", "ok", "ok", "ok", "ui.message_cap"]);
     });
   }
 });
@@ -427,37 +397,28 @@ describe("generative UI conformance: per-reply cap", () => {
 // ---------------------------------------------------------------------------------------------------------------
 // Titles
 
-type TitleCase = { name: string; call: Call; card: string; artifacts: string };
+type TitleCase = { name: string; call: Call; title: string };
 
 const longTitle = "T".repeat(ARTIFACT_TITLE_MAX_CHARS + 30);
 
+// One rule on every surface: the given title (trimmed), else manifest.title, else the first markdown heading, else "Card".
 const TITLE_CASES: TitleCase[] = [
-  { name: "a given title is trimmed", call: { title: "  Sales  ", program: declarative, manifest: declarativeManifest }, card: "Sales", artifacts: "Sales" },
-  {
-    name: "a long title is cut to the title limit",
-    call: { title: longTitle, program: declarative, manifest: declarativeManifest },
-    card: longTitle.slice(0, ARTIFACT_TITLE_MAX_CHARS),
-    artifacts: longTitle.slice(0, ARTIFACT_TITLE_MAX_CHARS),
-  },
-  // differs today; AD3 makes these equal if the plan unifies title rules (cards fall back to "Card"; presentInline uses presentedTitle)
-  { name: "no title falls back to manifest.title", call: { program: declarative, manifest: { ...declarativeManifest, title: "From manifest" } }, card: "Card", artifacts: "From manifest" },
-  // differs today; see above
-  { name: "no title falls back to the markdown heading", call: { program: markdown, manifest: { kind: "static.markdown" } }, card: "Card", artifacts: "Weekly notes" },
-  // differs today; see above
-  { name: "no title and nothing to derive it from", call: { program: declarative, manifest: declarativeManifest }, card: "Card", artifacts: "Chat" },
-  { name: "a blank title counts as no title", call: { title: "   ", program: declarative, manifest: declarativeManifest }, card: "Card", artifacts: "Chat" },
+  { name: "a given title is trimmed", call: { title: "  Sales  ", program: declarative, manifest: declarativeManifest }, title: "Sales" },
+  { name: "a long title is cut to the title limit", call: { title: longTitle, program: declarative, manifest: declarativeManifest }, title: longTitle.slice(0, ARTIFACT_TITLE_MAX_CHARS) },
+  { name: "no title falls back to manifest.title", call: { program: declarative, manifest: { ...declarativeManifest, title: "From manifest" } }, title: "From manifest" },
+  { name: "no title falls back to the markdown heading", call: { program: markdown, manifest: { kind: "static.markdown" } }, title: "Weekly notes" },
+  { name: "no title and nothing to derive it from", call: { program: declarative, manifest: declarativeManifest }, title: "Card" },
+  { name: "a blank title counts as no title", call: { title: "   ", program: declarative, manifest: declarativeManifest }, title: "Card" },
 ];
 
 describe("generative UI conformance: title fallback", () => {
   for (const testCase of TITLE_CASES) {
     for (const name of SURFACES) {
-      const expected = name === "agent.artifacts" ? testCase.artifacts : testCase.card;
-      const differs = testCase.card !== testCase.artifacts ? " (differs today between cards and artifacts mode)" : "";
-      it(`${testCase.name} on ${name} -> ${JSON.stringify(expected.length > 20 ? `${expected.slice(0, 8)}…` : expected)}${differs}`, async () => {
+      it(`${testCase.name} on ${name} -> ${JSON.stringify(testCase.title.length > 20 ? `${testCase.title.slice(0, 8)}…` : testCase.title)}`, async () => {
         const [outcome] = await (await surface(name)).reply([testCase.call]);
         expect(outcome?.ok, JSON.stringify(outcome)).toBe(true);
         if (!outcome?.ok) return;
-        expect(outcome.ui.title).toBe(expected);
+        expect(outcome.ui.title).toBe(testCase.title);
       });
     }
   }

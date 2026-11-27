@@ -7,8 +7,6 @@ import { ArtifactQueryError, readArtifact } from "../artifacts/query.js";
 import {
   assertSessionArtifactCaps,
   newSessionArtifactId,
-  SESSION_ARTIFACT_RATE_LIMIT,
-  SESSION_ARTIFACT_RATE_WINDOW_MS,
   SESSION_ARTIFACTS_PER_MESSAGE,
   sessionArtifactExpiresAt,
 } from "../artifacts/sessionScope.js";
@@ -23,7 +21,7 @@ import {
 } from "../artifacts/uiPart.js";
 import { readArtifactVersionRow } from "../artifacts/versions.js";
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
-import { SlidingWindowLimiter } from "../util/slidingWindowLimiter.js";
+import { takeCardRate } from "./budget.js";
 import { genUiKind } from "./kinds.js";
 import { assertGenUiSize, validateGenUi } from "./validate.js";
 
@@ -71,12 +69,20 @@ function manifestRecord(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>;
 }
 
-/** The title shown with a presented artifact: the one given, else the manifest's, else a markdown program's first heading, else "Chat". */
+/** The title of a card or one-off program: the one given, else the manifest's, else a markdown first heading, else "Card"; cut to the title limit. */
 export function presentedTitle(given: unknown, manifest: Record<string, unknown>, program: string): string {
+  return titleText(given, manifest, program).slice(0, ARTIFACT_TITLE_MAX_CHARS);
+}
+
+function titleText(given: unknown, manifest: Record<string, unknown>, program: string): string {
   if (typeof given === "string" && given.trim().length > 0) return given.trim();
   if (typeof manifest.title === "string" && manifest.title.trim().length > 0) return manifest.title.trim();
   const heading = /^#{1,3}\s+(.+?)\s*#*\s*$/m.exec(program)?.[1]?.trim();
-  return heading && heading.length > 0 ? heading : "Chat";
+  return heading && heading.length > 0 ? heading : "Card";
+}
+
+function kindRequired(allowedKinds: readonly string[]): PresentArtifactResult {
+  return toolFailure("artifact.invalid_shape", `manifest.kind is required: one of ${allowedKinds.join(", ")}`);
 }
 
 function readScoped(
@@ -114,9 +120,7 @@ export async function presentInline(input: PresentArtifactInput): Promise<Presen
   if (program.trim().length === 0) return toolFailure("artifact.invalid_shape", "program is required");
   if (!manifest) return toolFailure("artifact.invalid_shape", "manifest is required");
   const kind = typeof manifest.kind === "string" ? manifest.kind : "";
-  if (!kind) {
-    return toolFailure("artifact.invalid_shape", `manifest.kind is required: one of ${input.allowedKinds.join(", ")}`);
-  }
+  if (!kind) return kindRequired(input.allowedKinds);
   const entry = genUiKind(kind);
   if (!input.allowedKinds.includes(kind) || !entry?.presentable) {
     return toolFailure("ui.kind_not_granted", `This agent cannot present ${kind} artifacts: use one of ${input.allowedKinds.join(", ")}`);
@@ -128,7 +132,7 @@ export async function presentInline(input: PresentArtifactInput): Promise<Presen
   try {
     assertSessionArtifactCaps(input.db, sessionId, input.presentedInMessage ?? 1, nowMs);
     const evalSession = sessionIsEval(input.db, sessionId);
-    const title = presentedTitle(input.title, manifest, program).slice(0, ARTIFACT_TITLE_MAX_CHARS);
+    const title = presentedTitle(input.title, manifest, program);
     const artifactManifest = entry.toArtifactManifest(manifest, program);
     const published = await publishArtifact(input.db, {
       owner: { kind: "agent", agent: agentId },
@@ -165,15 +169,10 @@ export async function presentInline(input: PresentArtifactInput): Promise<Presen
   }
 }
 
-let cardLimiter = new SlidingWindowLimiter(SESSION_ARTIFACT_RATE_WINDOW_MS);
-
-export function resetCardLimiterForTests(): void {
-  cardLimiter = new SlidingWindowLimiter(SESSION_ARTIFACT_RATE_WINDOW_MS);
-}
-
 export type PresentCardInput = {
   projectRoot: string;
-  sessionId: string;
+  /** Rate-limit key of the surface (`surfaceKey`). */
+  surfaceKey: string;
   title?: string;
   program: string;
   manifest: unknown;
@@ -189,8 +188,9 @@ export async function presentCard(input: PresentCardInput): Promise<PresentArtif
   if (program.trim().length === 0) return toolFailure("artifact.invalid_shape", "program is required");
   if (!manifest) return toolFailure("artifact.invalid_shape", "manifest is required");
   const kind = typeof manifest.kind === "string" ? manifest.kind : "";
-  if (!kind || !input.allowedKinds.includes(kind) || !genUiKind(kind)?.canBeCard) {
-    return toolFailure("ui.kind_not_granted", `This agent cannot draw ${kind || "that"} cards. Kinds: ${input.allowedKinds.join(", ")}`);
+  if (!kind) return kindRequired(input.allowedKinds);
+  if (!input.allowedKinds.includes(kind) || !genUiKind(kind)?.canBeCard) {
+    return toolFailure("ui.kind_not_granted", `This agent cannot draw ${kind} cards. Kinds: ${input.allowedKinds.join(", ")}`);
   }
   try {
     assertGenUiSize(kind, Buffer.byteLength(program, "utf8"), "card");
@@ -201,10 +201,9 @@ export async function presentCard(input: PresentCardInput): Promise<PresentArtif
   if (input.presentedInMessage > SESSION_ARTIFACTS_PER_MESSAGE) {
     return toolFailure("ui.message_cap", `A reply can hold at most ${SESSION_ARTIFACTS_PER_MESSAGE} cards`);
   }
-  const rate = cardLimiter.take(input.sessionId, SESSION_ARTIFACT_RATE_LIMIT, input.nowMs ?? Date.now());
+  const rate = takeCardRate(input.surfaceKey, input.nowMs ?? Date.now());
   if (!rate.ok) return toolFailure("ui.rate_limited", `Too many cards. Try again in ${rate.retryAfterSec}s`);
-  const titleSource = typeof input.title === "string" && input.title.trim().length > 0 ? input.title.trim() : "Card";
-  const title = titleSource.slice(0, ARTIFACT_TITLE_MAX_CHARS);
+  const title = presentedTitle(input.title, manifest, program);
   let library: UiPartCard["library"];
   let libraries: UiPartCard["libraries"];
   try {

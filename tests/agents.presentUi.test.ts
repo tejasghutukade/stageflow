@@ -5,8 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { AgentChatController } from "../src/agents/chatTurn.js";
 import { createEvalGate, EvalGateRegistry, type EvalGatePolicy } from "../src/agents/evalGate.js";
 import { parseUiPartCard } from "../src/artifacts/uiPartCard.js";
-import { createPresentUiTool } from "../src/agents/presentUi.js";
-import { agentPresentUiPrompt, messageReplayText, presentArtifact, REPLAY_PROGRAM_MAX, presentCard, PRESENT_UI_TOOL_NAME, uiPartsFromToolOutput } from "../src/genui/index.js";
+import { agentPresentUiPrompt, messageReplayText, presentUiSpec, toPiTool, uiPolicy, presentArtifact, REPLAY_PROGRAM_MAX, presentCard, PRESENT_UI_TOOL_NAME, uiPartsFromToolOutput } from "../src/genui/index.js";
 import { catalogRootsForArtifacts } from "../src/artifacts/projectScope.js";
 import { publishArtifact } from "../src/artifacts/publish.js";
 import { UI_PART_KIND_ARTIFACT_REF, UI_PART_KIND_CARD, UI_PART_SCHEMA_VERSION } from "../src/artifacts/uiPart.js";
@@ -130,7 +129,7 @@ describe("conversation cards", () => {
   const session = () => `ses_card_${n++}`;
 
   it("returns the checked program as a card part and writes nothing", async () => {
-    const result = await presentCard({ ...base, sessionId: session(), title: "Regional sales" });
+    const result = await presentCard({ ...base, surfaceKey: session(), title: "Regional sales" });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.envelope.ui).toEqual({
@@ -147,13 +146,13 @@ describe("conversation cards", () => {
   });
 
   it("uses the markdown itself as the channel fallback", async () => {
-    const result = await presentCard({ ...base, sessionId: session(), program: "# Notes\n\n- one", manifest: { kind: "static.markdown" } });
+    const result = await presentCard({ ...base, surfaceKey: session(), program: "# Notes\n\n- one", manifest: { kind: "static.markdown" } });
     expect(result.ok && result.envelope.ui.kind === UI_PART_KIND_CARD && result.envelope.ui.fallback.text).toBe("# Notes\n\n- one");
   });
 
   it("refuses live data, actions, a bad program, a kind outside the grant and a fifth card", async () => {
     const codes = async (overrides: Partial<Parameters<typeof presentCard>[0]>) => {
-      const result = await presentCard({ ...base, sessionId: session(), ...overrides });
+      const result = await presentCard({ ...base, surfaceKey: session(), ...overrides });
       return result.ok ? "ok" : result.code;
     };
     expect(await codes({ manifest: { ...manifest, bindings: [{ id: "rows", function: "weekly", args: {} }] } })).toBe("ui.card_display_only");
@@ -168,7 +167,7 @@ describe("conversation cards", () => {
     const chartVersion = "4.6.2";
     const accepted = await presentCard({
       ...base,
-      sessionId: session(),
+      surfaceKey: session(),
       title: "Regional chart",
       program: htmlProgram,
       manifest: { kind: "live.html", format: "html", libraries: [{ name: "chartjs", version: chartVersion }] },
@@ -180,7 +179,7 @@ describe("conversation cards", () => {
       libraries: [{ name: "chartjs", version: chartVersion }],
     });
     const codes = async (overrides: Partial<Parameters<typeof presentCard>[0]>) => {
-      const result = await presentCard({ ...base, sessionId: session(), ...overrides });
+      const result = await presentCard({ ...base, surfaceKey: session(), ...overrides });
       return result.ok ? "ok" : result.code;
     };
     expect(
@@ -210,7 +209,8 @@ describe("conversation cards", () => {
   });
 
   it("refuses a saved artifact key when cards stay in the conversation", async () => {
-    const tool = createPresentUiTool({ kinds: ["live.declarative"], projectRoot: tmpdir(), persistence: "conversation", present: async () => ({ ok: false, code: "x", message: "x" }) });
+    const policy = { ...uiPolicy({ present: true, persistence: "conversation", kinds: ["live.declarative"], functions: [] }, () => false), canSave: false, canPublish: false as const };
+    const tool = toPiTool(presentUiSpec(policy), { key: "agent:ses_key", id: "ses_key", owner: { kind: "agent", agent: "helper" }, projectRoot: tmpdir(), policy });
     const result = await tool.execute("call", { key: "agent:helper/weekly" });
     expect(result.isError).toBe(true);
     expect(result.details).toMatchObject({ code: "ui.key_needs_artifacts" });

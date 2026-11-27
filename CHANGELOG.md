@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - The catalog default model with OpenRouter connected is `openrouter/anthropic/claude-sonnet-5.5` (was `openrouter/nvidia/nemotron-3.5-lightning:free`). `sf init` with only OpenRouter configured uses the same id.
 - A new `$STAGEFLOW_HOME/workspace` manifest no longer lists a `catalog.triggers` root (triggers start empty). Shipped `docker-compose.yml` no longer auto-registers the in-image `triggers-readiness` catalog.
+- `present_ui` behaves the same for agents and the Guide: a card or one-off program without a title takes the manifest's `title`, then a markdown heading, then "Card" (artifacts mode used "Chat"); a missing `manifest.kind` is `artifact.invalid_shape`; a `live.html` card or one-off program is refused (`ui.kind_not_granted`) while chat readers cannot reach the HTML sandbox; parallel calls count toward the four-card reply cap; the Guide answers an artifact key with `ui.key_needs_artifacts`.
 
 ## [0.68.0] - 2026-11-26
 

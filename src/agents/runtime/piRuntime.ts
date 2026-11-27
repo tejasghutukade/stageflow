@@ -32,13 +32,15 @@ import { AgentError } from "../errors.js";
 import { MEMORY_STORE_BASH_DENIED, memoryStorePathInCommand } from "../../memory/bashDeny.js";
 import { compactionUsageCost, type CompactionEndSessionEvent } from "../../agent/compactionEvents.js";
 import { memoryHome } from "../../memory/host.js";
-import { appendAgentArtifactPrompt, bindAgentArtifactDelete, bindAgentArtifactRead, bindAgentArtifactRefresh, createAgentPublishArtifactTool, type AgentPublishTool } from "../artifactTools.js";
+import { appendAgentArtifactPrompt, bindAgentArtifactDelete, bindAgentArtifactRead, bindAgentArtifactRefresh, readAgentPublishPath, type AgentPublishTool } from "../artifactTools.js";
 import { previewPresentArgs } from "../../artifacts/inlinePreview.js";
-import { presentCard, type PresentArtifactResult } from "../../genui/present.js";
-import { agentKeepsCardsInConversation } from "../../genui/prompt.js";
+import { toPiTool, type GenUiPiTool } from "../../genui/adapters/pi.js";
+import { TurnBudget } from "../../genui/budget.js";
+import { PUBLISH_KINDS } from "../../genui/kindsList.js";
+import { genUiPresentPrompt } from "../../genui/prompt.js";
 import { messageReplayText } from "../../genui/replay.js";
-import { PRESENT_UI_TOOL_NAME } from "../../genui/tools.js";
-import { appendAgentPresentUiPrompt, createPresentUiTool, type PresentUiTool } from "../presentUi.js";
+import { htmlSignal, surfaceKey, uiPolicy, type ArtifactStoreAccess, type Surface } from "../../genui/surface.js";
+import { PRESENT_UI_TOOL_NAME, presentUiSpec, publishArtifactSpec } from "../../genui/tools.js";
 import { SessionPublishError, type SessionPublishBody, type SessionPublishSuccess } from "../../artifacts/sessionPublish.js";
 import { forbiddenWriteTarget } from "../policy.js";
 import { prepareExecutionLaunch, type SandboxRunner } from "../sandbox.js";
@@ -50,7 +52,7 @@ export type PiRuntimeOptions = {
   cwd: string;
   agentDir: string;
   sandbox?: SandboxRunner;
-  /** When true, conversation-mode prompts may teach HTML cards (sandbox listener is up). */
+  /** Whether chat readers can reach the HTML card sandbox: live.html cards are taught and accepted only while true. */
   htmlCardsAvailable?: boolean | (() => boolean);
   /** Stageflow's own tools, built lazily because they need Host services that start after the runtime. */
   toolkit?: () => ToolkitTool[];
@@ -61,19 +63,8 @@ export type PiRuntimeOptions = {
     projectRoot: string;
     body: SessionPublishBody;
   }) => Promise<SessionPublishSuccess>;
-  /** Resolves a present_ui call against the session project. Absent when the Host has no artifact store. */
-  presentUi?: (input: {
-    projectRoot: string;
-    key?: string;
-    version?: number;
-    title?: string;
-    program?: string;
-    manifest?: unknown;
-    sessionId: string;
-    agentId: string;
-    presentedInMessage: number;
-    kinds: readonly string[];
-  }) => Promise<PresentArtifactResult>;
+  /** The artifact store present_ui uses to show saved artifacts and save one-off programs. Absent when the Host has none. */
+  artifactStore?: () => Promise<ArtifactStoreAccess | undefined>;
   /**
    * How long a session may sit unused before its Pi session and isolated MCP processes are released. A later message
    * reopens it from the stored transcript. Default 30 minutes; 0 keeps sessions until released or disposed.
@@ -98,7 +89,7 @@ export type OpenSessionInput = {
   /** In-session publish tool, present only when the agent holds artifacts.write. */
   agentPublishTool?: AgentPublishTool;
   /** In-session present_ui tool, present only when the agent holds ui.present. */
-  presentUiTool?: PresentUiTool;
+  presentUiTool?: GenUiPiTool;
   memory?: StageMemory;
   /** Defaults to true; one-shot judge sessions have no use for it. */
   workingState?: boolean;
@@ -417,8 +408,8 @@ type Bound = {
   mcpServers: string[];
   subAgents: string[];
   functionTools: ResolvedFunctionTool[];
-  /** Inline present_ui calls in the current turn. Reset at the start of each turn. */
-  inlinePresented: { n: number };
+  /** Cards drawn in the current turn. Reset at the start of each turn. */
+  budget: TurnBudget;
   /** Armed while no turn runs; releases the session when it fires. */
   idleTimer?: ReturnType<typeof setTimeout> | undefined;
   /** Set while a turn runs: the stall watchdog's pause handle. */
@@ -517,61 +508,32 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
         if (tool.name === "get_artifact") return bindAgentArtifactRead(tool, projectRoot, input.anonymousPublicTools ? input.sessionId : undefined);
         return tool;
       });
-    const agentPublishTool = grantedSf.has("save_artifact")
-      ? createAgentPublishArtifactTool({
-          agentId: definition.id,
-          projectRoot,
-          stageflowHome: globalStageflowHome(),
-          publish: (body) => {
-            if (!options.publishAgentArtifact) {
-              return Promise.reject(new SessionPublishError("artifact.invalid_shape", "artifact publish is not available"));
-            }
-            return options.publishAgentArtifact({
-              agentId: definition.id,
-              sessionId: input.sessionId,
-              projectRoot,
-              body,
-            });
-          },
-        })
-      : undefined;
-    const inlinePresented = { n: 0 };
-    const presentUiTool = definition.ui.present
-      ? createPresentUiTool({
-          kinds: definition.ui.kinds,
-          projectRoot,
-          persistence: definition.ui.persistence,
-          present: async (args) => {
-            const inline = args.program !== undefined;
-            const presentedInMessage = inline ? inlinePresented.n + 1 : 0;
-            if (agentKeepsCardsInConversation(definition)) {
-              const card = await presentCard({
-                projectRoot,
-                sessionId: input.sessionId,
-                ...(args.title !== undefined ? { title: args.title } : {}),
-                program: args.program ?? "",
-                manifest: args.manifest,
-                presentedInMessage,
-                allowedKinds: definition.ui.kinds,
-              });
-              if (card.ok) inlinePresented.n += 1;
-              return card;
-            }
-            if (!options.presentUi) return { ok: false, code: "ui.unavailable", message: "present_ui is not available" };
-            const result = await options.presentUi({
-              ...args,
-              presentedInMessage,
-              projectRoot,
-              sessionId: input.sessionId,
-              agentId: definition.id,
-              kinds: definition.ui.kinds,
-            });
-            if (inline && result.ok) inlinePresented.n += 1;
-            return result;
-          },
-        })
-      : undefined;
-    const state: Bound = { opened: undefined as never, definitionKey: definition.id, hooks: undefined, mcpServers, subAgents, functionTools, inlinePresented };
+    const budget = new TurnBudget();
+    const surface: Surface = {
+      key: surfaceKey("agent", input.sessionId),
+      id: input.sessionId,
+      owner: { kind: "agent", agent: definition.id },
+      projectRoot,
+      policy: {
+        ...uiPolicy(definition.ui, htmlSignal(options.htmlCardsAvailable)),
+        canSave: false,
+        canPublish: grantedSf.has("save_artifact") ? { kinds: PUBLISH_KINDS } : false,
+      },
+      budget,
+      ...(options.artifactStore ? { artifacts: options.artifactStore } : {}),
+      publish: {
+        readPath: (rawPath) => readAgentPublishPath(projectRoot, globalStageflowHome(), rawPath),
+        publish: (body) => {
+          if (!options.publishAgentArtifact) {
+            return Promise.reject(new SessionPublishError("artifact.invalid_shape", "artifact publish is not available"));
+          }
+          return options.publishAgentArtifact({ agentId: definition.id, sessionId: input.sessionId, projectRoot, body });
+        },
+      },
+    };
+    const agentPublishTool: AgentPublishTool | undefined = surface.policy.canPublish ? toPiTool(publishArtifactSpec("agent"), surface) : undefined;
+    const presentUiTool = surface.policy.canPresent ? toPiTool(presentUiSpec(surface.policy), surface) : undefined;
+    const state: Bound = { opened: undefined as never, definitionKey: definition.id, hooks: undefined, mcpServers, subAgents, functionTools, budget };
     const context = definition.project_context ? await projectContext(projectRoot) : "";
     let memory: StageMemory | undefined;
     if (definition.memories?.length) {
@@ -582,20 +544,13 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
         throw new AgentError("agent.invalid", `Memory could not be opened (${code})`);
       }
     }
-    const systemPrompt = appendAgentPresentUiPrompt(
-      appendAgentArtifactPrompt(
-        `${definition.instructions}${context}${memory ? `\n\n${memorySession(memory).prompt}` : ""}${input.senderFact ? `\n\n${input.senderFact}` : ""}`,
-        definition,
-        projectRoot,
-      ),
+    const withArtifacts = appendAgentArtifactPrompt(
+      `${definition.instructions}${context}${memory ? `\n\n${memorySession(memory).prompt}` : ""}${input.senderFact ? `\n\n${input.senderFact}` : ""}`,
       definition,
-      {
-        htmlCardsAvailable:
-          typeof options.htmlCardsAvailable === "function"
-            ? options.htmlCardsAvailable()
-            : options.htmlCardsAvailable === true,
-      },
+      projectRoot,
     );
+    const presentSection = genUiPresentPrompt(surface.policy);
+    const systemPrompt = presentSection === undefined ? withArtifacts : `${withArtifacts}\n\n${presentSection}`;
     state.opened = await open({
       projectRoot,
       definition,
@@ -646,7 +601,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
     async complete(input) {
       const { state, fresh } = await ensure(input);
       disarmIdle(state);
-      state.inlinePresented.n = 0;
+      state.budget.reset();
       state.hooks = input.hooks;
       const user = input.messages.at(-1);
       if (!user || user.role !== "user") return { text: "", toolOutputs: [] };

@@ -1,6 +1,6 @@
 import { UI_PART_KIND_CARD, type UiPart, type UiPartArtifactRef, type UiPartCard } from "../artifacts/uiPart.js";
 import { isPresentedUiPart, readPresentUiCard } from "./parts.js";
-import { PRESENT_UI_TOOL_NAME } from "./tools.js";
+import { PRESENT_UI_TOOL_NAME } from "./names.js";
 
 /** Characters of a card program kept when a session is replayed; most cards fit, so the agent can still edit them. */
 export const REPLAY_PROGRAM_MAX = 12_000;
