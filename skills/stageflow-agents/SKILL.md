@@ -27,7 +27,7 @@ This skill does what the console's Agent Author does (interview, draft, validate
 
 `ui: { present: true }` lets the agent draw cards in its replies with `present_ui`. One setting decides what a card is:
 
-- `ui.persistence: conversation` (default): the card's program (`live.declarative` or `static.markdown`) is stored in the chat message and deleted with the conversation. It shows only what the agent writes into it, so no bindings, actions or artifact keys. The public chat link still opens, and visitors see the cards. To change a card, call `present_ui` again with the whole updated program and the same title.
+- `ui.persistence: conversation` (default): the card's program (`live.declarative` or `static.markdown`) is stored in the chat message and deleted with the conversation. It shows only what the agent writes into it, so no bindings, actions or artifact keys. The public chat link still opens, and visitors see the cards. To change a card, call `present_ui` again with the whole updated program.
 - `ui.persistence: artifacts`: each card is saved as a session artifact (30 days unless promoted), and the agent may also present existing artifacts by key, bind live data from `ui.functions` and use manifest `actions` (a user message, or a tool call that still goes through approvals). The public chat link does not open.
 
 Kinds default to what the mode allows; list `ui.kinds` only to narrow them. Do not paste a card's program into the reply. If the program is invalid, the tool result is the validation error: fix it and call `present_ui` again. With `artifacts`, publish with `publish_artifact` first and pass its key, omit `version` so refresh works, and expect a key from another project to be refused. Eval sessions stub `present_ui`.
