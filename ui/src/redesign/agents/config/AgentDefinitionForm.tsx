@@ -17,7 +17,20 @@ import {
   LuUserCheck,
 } from "react-icons/lu";
 import { contactLines } from "../model/channelContact";
-import { PRESENTABLE_ARTIFACT_KINDS } from "../../../../../src/artifacts/presentableKinds.ts";
+import { defaultPresentKinds, PRESENTABLE_ARTIFACT_KINDS, type UiPersistence } from "../../../../../src/artifacts/presentableKinds.ts";
+
+const UI_PERSISTENCE_CHOICES: Array<{ value: UiPersistence; label: string; note: string }> = [
+  {
+    value: "conversation",
+    label: "Keep cards in the conversation (recommended)",
+    note: "Each card is stored inside its chat message and deleted with the conversation. It shows only what the agent writes into it, so it is safe on the public chat page. Ask the agent to change a card and it draws an updated one.",
+  },
+  {
+    value: "artifacts",
+    label: "Save cards as artifacts",
+    note: "Each card is also saved as an artifact (kept 30 days unless you promote it). The agent can show existing artifacts and cards can load live data or run buttons. The public chat page does not open for this agent.",
+  },
+];
 import { agentsApi, type AgentDefinition, type ChannelContact, type AgentIssue, type AgentRevisionMeta, type BuiltinToolGroup, type ChannelListenerState } from "../../../api/agents";
 import { fetchMemories, type MemorySummary } from "../../../api";
 import { MONO, NOWRAP } from "../agentsTokens";
@@ -518,56 +531,98 @@ export function AgentDefinitionForm({
         <div className="flex flex-col gap-2 rounded-lg border border-[var(--sf-hairline)] px-3.5 py-3" data-testid="present-ui">
           <div className="flex items-start justify-between gap-3">
             <div className="flex flex-col gap-1">
-              <span className="text-xs font-medium leading-[1.33333] text-[var(--sf-text-2)]">Show artifacts in chat</span>
+              <span className="text-xs font-medium leading-[1.33333] text-[var(--sf-text-2)]">Cards in chat</span>
               <span className="text-xs leading-[1.33333] text-[var(--sf-text-3)]">
-                {def.ui.present ? "On. The agent can place an allowed artifact into the conversation." : "Off. The agent cannot call present_ui."}
+                {def.ui.present
+                  ? "On. The agent can draw cards (layouts, tables, numbers, markdown) in its replies with present_ui."
+                  : "Off. The agent replies with text only."}
               </span>
             </div>
             <Toggle
               on={def.ui.present}
-              label="Show artifacts in chat"
+              label="Cards in chat"
               onChange={
                 update
-                  ? (present) =>
+                  ? (present) => {
+                      const persistence = def.ui.persistence ?? "conversation";
                       update({
                         ...def,
                         ui: {
                           present,
-                          kinds: present ? (def.ui.kinds.length > 0 ? def.ui.kinds : [...PRESENTABLE_ARTIFACT_KINDS]) : [],
-                          functions: present ? def.ui.functions : [],
+                          persistence,
+                          kinds: present ? (def.ui.kinds.length > 0 ? def.ui.kinds : defaultPresentKinds(persistence)) : [],
+                          functions: present && persistence === "artifacts" ? def.ui.functions : [],
                         },
-                      })
+                      });
+                    }
                   : undefined
               }
             />
           </div>
           {def.ui.present ? (
             <>
-              <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-                {PRESENTABLE_ARTIFACT_KINDS.map((kind) => (
-                  <label key={kind} className="flex items-center gap-1.5 text-xs text-[var(--sf-text-2)]">
-                    <input
-                      type="checkbox"
-                      checked={def.ui.kinds.includes(kind)}
-                      disabled={!update}
-                      onChange={(event) => {
-                        const kinds = event.target.checked ? [...def.ui.kinds, kind] : def.ui.kinds.filter((item) => item !== kind);
-                        update?.({ ...def, ui: { ...def.ui, kinds } });
-                      }}
-                    />
-                    {kind}
-                  </label>
-                ))}
+              <div role="radiogroup" aria-label="Where cards are kept" className="flex flex-col gap-1.5">
+                {UI_PERSISTENCE_CHOICES.map((choice) => {
+                  const selected = (def.ui.persistence ?? "conversation") === choice.value;
+                  return (
+                    <label key={choice.value} className="flex items-start gap-2 text-xs leading-[1.4] text-[var(--sf-text-2)]">
+                      <input
+                        type="radio"
+                        name="ui-persistence"
+                        className="mt-0.5"
+                        checked={selected}
+                        disabled={!update}
+                        onChange={() =>
+                          update?.({
+                            ...def,
+                            ui: {
+                              ...def.ui,
+                              persistence: choice.value,
+                              kinds: defaultPresentKinds(choice.value),
+                              functions: choice.value === "artifacts" ? def.ui.functions : [],
+                            },
+                          })
+                        }
+                      />
+                      <span className="flex flex-col gap-0.5">
+                        <span className="font-medium text-[var(--sf-text-1)]">{choice.label}</span>
+                        <span className="text-[var(--sf-text-3)]">{choice.note}</span>
+                      </span>
+                    </label>
+                  );
+                })}
               </div>
-              <ChipListField
-                values={def.ui.functions}
-                onChange={update ? (functions) => update({ ...def, ui: { ...def.ui, functions } }) : undefined}
-                placeholder="Function id"
-                ariaLabel="Functions a presented artifact may call"
-              />
+              {def.ui.persistence === "artifacts" ? (
+                <>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                    {PRESENTABLE_ARTIFACT_KINDS.map((kind) => (
+                      <label key={kind} className="flex items-center gap-1.5 text-xs text-[var(--sf-text-2)]">
+                        <input
+                          type="checkbox"
+                          checked={def.ui.kinds.includes(kind)}
+                          disabled={!update}
+                          onChange={(event) => {
+                            const kinds = event.target.checked ? [...def.ui.kinds, kind] : def.ui.kinds.filter((item) => item !== kind);
+                            update?.({ ...def, ui: { ...def.ui, kinds } });
+                          }}
+                        />
+                        {kind}
+                      </label>
+                    ))}
+                  </div>
+                  <ChipListField
+                    values={def.ui.functions}
+                    onChange={update ? (functions) => update({ ...def, ui: { ...def.ui, functions } }) : undefined}
+                    placeholder="Function id"
+                    ariaLabel="Functions a card may load live data from"
+                  />
+                  <Note>Functions a card may call for live data. Only read-only functions are accepted.</Note>
+                </>
+              ) : null}
               <FieldMessages {...at("ui.kinds")} />
               <FieldMessages {...at("ui.present")} />
               <FieldMessages {...at("ui.functions")} />
+              <FieldMessages {...at("ui.persistence")} />
             </>
           ) : null}
         </div>
@@ -916,7 +971,7 @@ export function AgentDefinitionForm({
                   {changed(webChat.enabled, saved?.web_chat?.enabled ?? false) ? <ChangedDot /> : null}
                 </span>
                 <span className="text-xs leading-[1.33333] text-[var(--sf-text-3)]">
-                  Anyone with the link can chat with this agent. Visitors stay anonymous and can only chat.
+                  Anyone with the link can chat with this agent and see its cards, without signing in. The link only opens for an agent with no tools, skills, memories, project context or sub-agents.
                 </span>
               </div>
             </div>

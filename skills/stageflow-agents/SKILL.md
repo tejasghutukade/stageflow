@@ -25,9 +25,12 @@ This skill does what the console's Agent Author does (interview, draft, validate
 
 ## Presenting UI
 
-Show an artifact in the conversation only when the person should see it there, not as a substitute for the Artifacts page. Grant `ui.present: true` and the kinds they may see (`static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`, `live.declarative`, `live.html`). `ui.functions` lists function ids a live artifact may call from chat. A binding query for any other id is refused. The default is off. Without the grant, `present_ui` is refused. Chat buttons come from the artifact manifest `actions` list (a user message, or a tool call that still goes through approvals). Eval sessions cannot use them.
+`ui: { present: true }` lets the agent draw cards in its replies with `present_ui`. One setting decides what a card is:
 
-Publish with `publish_artifact`, then call `present_ui` with the returned key. For a one-off chart or table, call `present_ui` with `program` and `manifest` instead of a key. The Host saves a session artifact (it expires in 30 days and stays off the default Artifacts list until someone promotes it). Do not paste the artifact body into the reply. Omit `version` so the chat keeps the current version and refresh works. A key from another project is refused. If the program is invalid, the tool result is the validation error: fix it and call `present_ui` again. A deleted or expired artifact shows an unavailable card after reload; the message keeps the reference and does not run the tool again.
+- `ui.persistence: conversation` (default): the card's program (`live.declarative` or `static.markdown`) is stored in the chat message and deleted with the conversation. It shows only what the agent writes into it, so no bindings, actions or artifact keys. The public chat link still opens, and visitors see the cards. To change a card, call `present_ui` again with the whole updated program and the same title.
+- `ui.persistence: artifacts`: each card is saved as a session artifact (30 days unless promoted), and the agent may also present existing artifacts by key, bind live data from `ui.functions` and use manifest `actions` (a user message, or a tool call that still goes through approvals). The public chat link does not open.
+
+Kinds default to what the mode allows; list `ui.kinds` only to narrow them. Do not paste a card's program into the reply. If the program is invalid, the tool result is the validation error: fix it and call `present_ui` again. With `artifacts`, publish with `publish_artifact` first and pass its key, omit `version` so refresh works, and expect a key from another project to be refused. Eval sessions stub `present_ui`.
 
 ## Pick the surface
 

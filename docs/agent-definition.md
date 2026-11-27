@@ -59,11 +59,28 @@ Operator-only Stageflow tools (`gates.decide` and `get_started`) cannot be grant
 
 ### `ui`
 
-Off unless `present` is true. This is the grant for `present_ui`, the tool that places an artifact into the conversation. The chat stores a reference (`key`, optional `version`, title, console link), not a copy of the artifact. Pass `program` and `manifest` to save a one-off as a session artifact. A validation error comes back on the tool result so the model can correct it. Chat shows a skeleton while the call streams and a short error card when the program does not parse.
+Off unless `present` is true. This is the grant for `present_ui`, the tool an agent uses to draw a card in its reply. One setting, `persistence`, decides where cards live and what they can do:
+
+| `persistence` | Where a card lives | What a card can do | Public chat page |
+|---------------|--------------------|--------------------|------------------|
+| `conversation` (default) | Inside the chat message. Nothing is written to the artifact store; the card is deleted with the conversation. | Show what the agent writes into it: layouts, tables, numbers, markdown. No live data, no buttons, no existing artifacts. | Opens. Visitors see the cards. |
+| `artifacts` | Saved as a session artifact (kept 30 days unless promoted). | Also show existing artifacts by key, load live data from `ui.functions`, run buttons, and use every presentable kind. | Does not open (the agent counts as having tools). |
+
+The smallest setup is:
 
 ```yaml
 ui:
   present: true
+```
+
+That draws `live.declarative` and `static.markdown` cards kept in the conversation. To change a card, ask the agent: it calls `present_ui` again with the whole updated program, and the new card appears in its reply. Earlier cards stay as they were. A program that does not parse comes back on the tool result so the model can fix it; chat shows a skeleton while the call streams and a short error card if it gives up.
+
+For live data and buttons:
+
+```yaml
+ui:
+  present: true
+  persistence: artifacts
   kinds: [static.markdown, live.declarative]
   functions: [weekly_sales]
 ```
@@ -71,10 +88,11 @@ ui:
 | Field | Type | Default | Rules |
 |-------|------|---------|-------|
 | `ui.present` | boolean | `false` | The model can call `present_ui` only when this is true. Kinds or functions with it off is `agent.ui_present_required`. |
-| `ui.kinds` | list of artifact kinds | `[]` | At least one when `present` is true (`agent.ui_kinds_required`). Each must be `static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`, `live.declarative`, or `live.html` (`agent.ui_kind_unknown`). No duplicates (`agent.ui_kind_duplicate`). A call for another kind is refused (`ui.kind_not_granted`). |
-| `ui.functions` | list of function ids | `[]` | Function ids a presented live artifact may call from chat. Each id matches `^[a-z][a-z0-9_-]{0,63}$` (`agent.ui_function_invalid`). No duplicates (`agent.ui_function_duplicate`). A binding query whose function is not listed is `agent.ui_function_not_granted`. |
+| `ui.persistence` | `conversation` or `artifacts` | `conversation` | See the table above. |
+| `ui.kinds` | list of artifact kinds | both card kinds, or every presentable kind with `artifacts` | Filled in when `present` is true and the list is empty. Each must be `static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`, `live.declarative`, or `live.html` (`agent.ui_kind_unknown`). With `conversation`, only `live.declarative` and `static.markdown` (`agent.ui_kind_needs_artifacts`). No duplicates (`agent.ui_kind_duplicate`). A call for another kind is refused (`ui.kind_not_granted`). |
+| `ui.functions` | list of function ids | `[]` | Only with `persistence: artifacts` (`agent.ui_functions_need_artifacts`). Function ids a card may call for live data. Each id matches `^[a-z][a-z0-9_-]{0,63}$` (`agent.ui_function_invalid`). No duplicates (`agent.ui_function_duplicate`). A binding query whose function is not listed is `agent.ui_function_not_granted`. |
 
-When `live.declarative` or `live.html` is in `ui.kinds`, the agent's prompt also carries that kind's vocabulary, syntax and an example, so it can write a one-off program without reading the docs. Failed attempts do not count toward the four inline presents allowed per message. A key from another project is refused (`ui.cross_project`). A missing key is `artifact.not_found`. After the message is stored, a deleted or expired artifact renders as an unavailable card. Eval sessions stub `present_ui` and do not run it.
+When `live.declarative` or `live.html` is in `ui.kinds`, the agent's prompt carries that kind's vocabulary, syntax and an example, so it can write a program without reading the docs. A reply holds at most four cards; failed attempts do not count. A card kept in the conversation is at most 64 KB and refuses bindings and actions (`ui.card_display_only`) and artifact keys (`ui.key_needs_artifacts`). With `artifacts`, a key from another project is refused (`ui.cross_project`), a missing key is `artifact.not_found`, and a deleted or expired artifact renders as an unavailable card. Email, Telegram, iMessage and Slack get a card's plain-text fallback (a markdown card sends its text). Eval sessions stub `present_ui` and do not run it.
 
 ### `approvals`
 
@@ -157,7 +175,7 @@ web_chat:
 | Field | Type | Default | Rules |
 |-------|------|---------|-------|
 | `web_chat.enabled` | boolean | `false` in a hand-written file | A new agent created through the console, API, CLI or MCP starts with it on. |
-| `web_chat.access` | `public` or `authenticated` | `public` | Public chat is tool-less and has no shared private context. Authenticated chat needs identity turned on and a consumer-safe agent; see [Protect an agent's chat with customer sign-in](guides-agents-protected-chat.md) and [Consumer identity](consumer-identity.md) and restrictions. |
+| `web_chat.access` | `public` or `authenticated` | `public` | Anyone with a public link can chat and see cards kept in the conversation, without signing in. The link opens only for an agent with no tools, skills, memories, project context or sub-agents, and whose cards are not saved as artifacts. Otherwise the page says the chat is not open yet, and the agent's page in the console says what to remove (`agent.web_chat_needs_setup`). Authenticated chat needs identity turned on and a consumer-safe agent; see [Protect an agent's chat with customer sign-in](guides-agents-protected-chat.md) and [Consumer identity](consumer-identity.md) and restrictions. |
 | `web_chat.slug` | string | made on save | 16–32 lowercase letters or digits. The link grants access to public chat, not protected identity. An enabled block with no slug gets a random one when saved through the console, API, CLI or MCP; a hand-written file shows the warning `agent.web_chat_slug_missing` until then. Saving with `slug: ""` rotates the link. |
 | `web_chat.rate_limit_per_minute` | integer | `10` | 1–120 messages per visitor per minute. |
 | `web_chat.max_message_chars` | integer | `4000` | 1–20,000. |

@@ -3,12 +3,14 @@ import {
   assistantMessageTextForChannel,
   renderUiPartForChannel,
   webChatVisitorAssistantText,
+  webChatVisitorParts,
 } from "../src/channels/renderUiPart.js";
 import { CHANNEL_PROVIDER_UI_CAPABILITY, WEB_CHAT_UI_CAPABILITY } from "../src/channels/uiCapability.js";
 import { channelProviders } from "../src/channels/providers.js";
 import {
   UI_PART_KIND_APPROVAL,
   UI_PART_KIND_ARTIFACT_REF,
+  UI_PART_KIND_CARD,
   UI_PART_KIND_FORM,
   UI_PART_SCHEMA_VERSION,
 } from "../src/artifacts/uiPart.js";
@@ -93,5 +95,19 @@ describe("provider ui capabilities", () => {
 
   it("documents web chat as interactive", () => {
     expect(WEB_CHAT_UI_CAPABILITY).toBe("interactive");
+  });
+
+  it("sends a card's fallback on channels and keeps the card itself for web chat visitors", () => {
+    const card = {
+      v: UI_PART_SCHEMA_VERSION,
+      kind: UI_PART_KIND_CARD,
+      title: "Notes",
+      format: "static.markdown" as const,
+      program: "# Notes",
+      fallback: { text: "# Notes", url: "" },
+    };
+    expect(assistantMessageTextForChannel({ text: "Here", parts: [card] }, "telegram")).toBe("Here\n\n# Notes");
+    expect(webChatVisitorAssistantText({ text: "Here", parts: [card, part] })).toBe("Here\n\nWeekly report");
+    expect(webChatVisitorParts([card, part])).toEqual([card]);
   });
 });

@@ -27,7 +27,7 @@ export type AgentDefinition = {
   execution: "trusted-local" | "sandbox";
   model: { backend: "pi" | "claude"; id?: string; thinking: ThinkingLevel };
   tools: { builtin: BuiltinToolGroup[]; builtin_tools: string[]; mcp: Record<string, string[]>; skills: string[]; browser: boolean; stageflow: { groups: string[]; tools: string[] } };
-  ui: { present: boolean; kinds: string[]; functions: string[] };
+  ui: { present: boolean; persistence?: "conversation" | "artifacts"; kinds: string[]; functions: string[] };
   approvals: {
     ask_first: string[];
     approvers: { operators: boolean; channel_ids: string[] };
@@ -85,6 +85,8 @@ export type AgentSummary = {
   updatedAt: string;
   /** Path form `/chat/<slug>` once web chat has a slug; the console prefixes the address it is opened from. */
   webChatUrl?: string | null;
+  /** Why the public chat link does not open, or null. */
+  webChatBlocked?: string | null;
 };
 
 export type AgentDetail = {

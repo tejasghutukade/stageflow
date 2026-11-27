@@ -3,12 +3,12 @@ import { LuMenu, LuX } from "react-icons/lu";
 import { createChatApi, ChatApiError, type ChatAgentInfo } from "./api";
 import { ChatRuntimeProvider } from "./ChatRuntime";
 import { readChatConfig } from "./config";
-import { UNAVAILABLE_CODE } from "./errors";
+import { loadErrorMessage, UNAVAILABLE_CODE } from "./errors";
 import { Thread } from "./Thread";
 import { ThreadSidebar } from "./ThreadSidebar";
 import { getVisitorId } from "./visitor";
 
-type Load = { state: "loading" } | { state: "ready"; agent: ChatAgentInfo } | { state: "unavailable" } | { state: "error" };
+type Load = { state: "loading" } | { state: "ready"; agent: ChatAgentInfo } | { state: "unavailable" } | { state: "error"; code: string | null };
 
 function Centered({ title, body }: { title: string; body: string }) {
   return (
@@ -37,7 +37,13 @@ export function ChatApp() {
     let live = true;
     api.info().then(
       (agent) => live && setLoad({ state: "ready", agent }),
-      (error: unknown) => live && setLoad(error instanceof ChatApiError && error.code === UNAVAILABLE_CODE ? { state: "unavailable" } : { state: "error" }),
+      (error: unknown) =>
+        live &&
+        setLoad(
+          error instanceof ChatApiError && error.code === UNAVAILABLE_CODE
+            ? { state: "unavailable" }
+            : { state: "error", code: error instanceof ChatApiError ? error.code : null },
+        ),
     );
     return () => {
       live = false;
@@ -57,7 +63,10 @@ export function ChatApp() {
 
   if (!api || load.state === "unavailable") return <Unavailable />;
   if (load.state === "loading") return <div className="h-full bg-[var(--sf-ground)]" aria-busy="true" />;
-  if (load.state === "error") return <Centered title="We couldn't load this chat" body="Please check your connection and refresh the page." />;
+  if (load.state === "error") {
+    const message = loadErrorMessage(load.code);
+    return <Centered title={message.title} body={message.body} />;
+  }
 
   const { agent } = load;
   return (

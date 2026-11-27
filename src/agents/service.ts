@@ -29,7 +29,7 @@ import { purgeSessionArtifacts } from "../artifacts/sessionScope.js";
 import type { UiPart } from "../artifacts/uiPart.js";
 import { AgentError } from "./errors.js";
 import { applyEvalOverrides, EVAL_SESSION_SOURCE, isEvalSession, type EvalSessionOverrides } from "./evalSession.js";
-import { consumerChannelIssues } from "./consumerSafety.js";
+import { consumerChannelIssues, publicChatIssues } from "./consumerSafety.js";
 import { agentMemoryIssues } from "../memory/agentIssues.js";
 import { diffLines, type DiffLine } from "./lineDiff.js";
 import { exportTurnsToOtlp } from "./otlpExport.js";
@@ -97,6 +97,8 @@ export type AgentSummary = {
   capture: AgentDefinition["observability"]["capture"] | null;
   /** Path of the public chat page (`/chat/<slug>`) while web chat is switched on and has a link. */
   webChatUrl: string | null;
+  /** Why the public chat link does not open, or null when it does (or web chat is off). */
+  webChatBlocked: string | null;
   stats: SessionStats;
   pendingApprovals: number;
   updatedAt: string;
@@ -431,6 +433,7 @@ export class AgentService {
       subAgents: definition?.sub_agents ?? [],
       capture: definition?.observability.capture ?? null,
       webChatUrl: definition?.web_chat.enabled && definition.web_chat.slug ? `/chat/${definition.web_chat.slug}` : null,
+      webChatBlocked: definition ? (publicChatIssues(definition)[0]?.message ?? null) : null,
       stats: this.store.sessionStats(projectKey, row.agentId, since),
       pendingApprovals: pending.get(row.agentId) ?? 0,
       updatedAt: row.updatedAt,
@@ -563,6 +566,7 @@ export class AgentService {
 
   private async warningsFor(projectRoot: string, definition: AgentDefinition): Promise<AgentIssue[]> {
     const warnings: AgentIssue[] = [...stageflowDefinitionValidation(definition).warnings];
+    warnings.push(...publicChatIssues(definition));
     if (definition.web_chat.enabled && !definition.web_chat.slug) {
       warnings.push({ path: "web_chat.slug", code: "agent.web_chat_slug_missing", message: "Web chat has no link yet; save the agent in the console to generate one" });
     }

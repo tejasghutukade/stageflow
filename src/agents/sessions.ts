@@ -7,8 +7,8 @@ import type { EvalConsumerRegistry } from "../evals/consumer/evalConsumerRegistr
 import { EVAL_SESSION_SOURCE, isEvalSession, type EvalSessionOverrides } from "./evalSession.js";
 import { guardedStream } from "./guardrails.js";
 import { fitHistory } from "./historyFit.js";
-import { uiErrorPart, UI_PART_KIND_ARTIFACT_REF, UI_PART_KIND_ERROR } from "../artifacts/uiPart.js";
-import { PRESENT_UI_TOOL_NAME, uiPartsFromToolOutput } from "./presentUi.js";
+import { uiErrorPart, UI_PART_KIND_ERROR } from "../artifacts/uiPart.js";
+import { agentKeepsCardsInConversation, isPresentedUiPart, PRESENT_UI_TOOL_NAME, uiPartsFromToolOutput } from "./presentUi.js";
 import type { OtlpSink } from "./otlpSink.js";
 import { isToolGranted, requiresAskFirst } from "./policy.js";
 import type { ConversationBackend, ConversationMessage, GateDecision, RuntimeUsage, ToolCall, TurnHooks } from "./runtime/types.js";
@@ -279,7 +279,8 @@ export class AgentConversation {
       const checkConsumer = async (): Promise<GateDecision> => {
         if (!external) return { allow: true };
         if (call.tool === PRESENT_UI_TOOL_NAME) {
-          if (!consumer) return { allow: false, reason: "identity.verification_required" };
+          // A card kept in the conversation only shows what the agent wrote, so anyone the agent talks to may see one.
+          if (!consumer && !agentKeepsCardsInConversation(definition)) return { allow: false, reason: "identity.verification_required" };
           return { allow: true };
         }
         if (!consumer) return { allow: false, reason: "identity.verification_required" };
@@ -550,8 +551,8 @@ export class AgentConversation {
       ...(result.text.length > 0 || uiParts.length > 0 ? { assistantText: failed && stopReason?.code === "identity.step_up_required" ? stopReason.message : result.text } : {}),
       ...(uiParts.length > 0
         ? {
-            assistantParts: uiParts.some((part) => part.kind === UI_PART_KIND_ARTIFACT_REF)
-              ? uiParts.filter((part) => part.kind === UI_PART_KIND_ARTIFACT_REF)
+            assistantParts: uiParts.some(isPresentedUiPart)
+              ? uiParts.filter(isPresentedUiPart)
               : uiParts.filter((part) => part.kind === UI_PART_KIND_ERROR).slice(-1),
           }
         : {}),

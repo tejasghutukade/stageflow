@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createChatModelAdapter, createThreadListAdapter, titleFrom, toThreadMessages } from "./adapters";
 import { ChatApiError, createChatApi, type ChatApi } from "./api";
 import { DEFAULT_API_BASE, readChatConfig } from "./config";
-import { friendlyMessage, needsNewConversation } from "./errors";
+import { friendlyMessage, loadErrorMessage, needsNewConversation } from "./errors";
 import { readFrames, toFrame, type ChatFrame } from "./ndjson";
 import { getVisitorId, newVisitorId, resetVisitorMemoForTests } from "./visitor";
 
@@ -58,6 +58,18 @@ describe("NDJSON frames", () => {
       retryAfterSec: 12,
     });
     expect(toFrame({ type: "error" })).toEqual({ type: "error", code: "web_chat.failed", message: "" });
+  });
+});
+
+describe("load errors", () => {
+  it("says what is wrong instead of blaming the connection", () => {
+    expect(loadErrorMessage(null).title).toBe("We couldn't reach this chat");
+    expect(loadErrorMessage("identity.setup_required")).toEqual({
+      title: "This chat isn't open to the public yet",
+      body: expect.stringContaining("open it in the Stageflow console"),
+    });
+    expect(loadErrorMessage("identity.verification_required").title).toBe("Sign in to use this chat");
+    expect(loadErrorMessage("web_chat.failed").body).not.toContain("connection");
   });
 });
 

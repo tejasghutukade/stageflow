@@ -106,11 +106,48 @@ async function childIsSafe(id: string, load: (id: string) => Promise<AgentDefini
   return true;
 }
 
+/**
+ * What stops an agent from answering anyone with its public chat link. Visitors there are anonymous, so the agent
+ * may only talk and draw cards kept in the conversation. Empty when the link can open.
+ */
+export function publicChatBlockers(definition: AgentDefinition): string[] {
+  const tools = definition.tools;
+  const found: string[] = [];
+  if (tools.builtin.length > 0 || tools.builtin_tools.length > 0 || Object.keys(tools.mcp).length > 0 || tools.stageflow.groups.length > 0
+    || tools.stageflow.tools.length > 0 || (tools.functions?.length ?? 0) > 0 || tools.browser) found.push("tools");
+  if (tools.skills.length > 0) found.push("skills");
+  if ((definition.memories?.length ?? 0) > 0) found.push("memories");
+  if (definition.project_context) found.push("project context");
+  if (definition.sub_agents.length > 0) found.push("sub-agents");
+  if (definition.ui.present && definition.ui.persistence === "artifacts") found.push("cards saved as artifacts");
+  if (definition.model.backend !== "pi") found.push(`the ${definition.model.backend} backend`);
+  return found;
+}
+
+export const PUBLIC_CHAT_BLOCKED = "agent.web_chat_needs_setup";
+
+/** Explains, on the agent, why its public chat link does not open. */
+export function publicChatIssues(definition: AgentDefinition): AgentIssue[] {
+  if (!definition.web_chat.enabled || definition.web_chat.access === "authenticated") return [];
+  const blockers = publicChatBlockers(definition);
+  if (blockers.length === 0) return [];
+  const list = blockers.join(", ");
+  return [{
+    path: "web_chat",
+    code: PUBLIC_CHAT_BLOCKED,
+    message: `The public chat link will not open: anyone with it could use this agent's ${list}. Remove the ${list} to let anyone chat, or keep it to the console. Cards kept in the conversation are allowed.`,
+  }];
+}
+
 async function assertConsumerPublication(
   definition: AgentDefinition,
   authenticated: boolean,
   options: { hasConsumerAuthorization: boolean; loadSubAgent: (id: string) => Promise<AgentDefinition | null> },
 ): Promise<void> {
+  if (!authenticated) {
+    if (publicChatBlockers(definition).length > 0) throw new ConsumerAccessError("identity.setup_required");
+    return;
+  }
   if (!isConsumerSafeAgent(definition) || (definition.sub_agents.length > 0 && !authenticated)) throw new ConsumerAccessError("identity.setup_required");
   const safeSubAgents = definition.sub_agents.length === 0 ? [] : await loadConsumerSubAgents(definition, options.loadSubAgent);
   if (!safeSubAgents) throw new ConsumerAccessError("identity.setup_required");

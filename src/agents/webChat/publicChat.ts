@@ -9,7 +9,7 @@ import { BodyError, readJsonBody, writeFrame } from "../ndjson.js";
 import { SlidingWindowLimiter } from "./rateLimit.js";
 import type { ConsumerAuthorization } from "../../identity/authorization.js";
 import { ConsumerAccessError } from "../../identity/types.js";
-import { webChatVisitorAssistantText } from "../../channels/renderUiPart.js";
+import { webChatVisitorAssistantText, webChatVisitorParts } from "../../channels/renderUiPart.js";
 import type { StepUpOutcome } from "../../identity/stepUp.js";
 
 const SOURCE = "web_public";
@@ -270,7 +270,7 @@ export class PublicWebChat {
     let parts = message.parts;
     if (message.role === "assistant" && message.parts?.length && !consoleAccess) {
       text = webChatVisitorAssistantText(message);
-      parts = undefined;
+      parts = webChatVisitorParts(message.parts);
     }
     return {
       id: message.id,

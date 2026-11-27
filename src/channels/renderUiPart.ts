@@ -2,6 +2,7 @@ import {
   parseUiPart,
   UI_PART_KIND_APPROVAL,
   UI_PART_KIND_ARTIFACT_REF,
+  UI_PART_KIND_CARD,
   UI_PART_KIND_ERROR,
   UI_PART_KIND_FORM,
   type UiPart,
@@ -49,7 +50,7 @@ export function renderUiPartForChannel(
   capability: ChannelUiCapability,
   options: RenderUiPartForChannelOptions = {},
 ): string {
-  if (part.kind === UI_PART_KIND_ERROR) return part.fallback.text;
+  if (part.kind === UI_PART_KIND_ERROR || part.kind === UI_PART_KIND_CARD) return part.fallback.text;
   if (part.kind === UI_PART_KIND_ARTIFACT_REF) return artifactRefChannelText(part, capability, options);
   if (capability === "interactive") return interactiveChannelText(part, options);
   if (capability === "image") {
@@ -83,7 +84,13 @@ export function assistantMessageTextForChannel(
   return [message.text.trim(), ...extras].filter((chunk) => chunk.length > 0).join("\n\n");
 }
 
-/** Protected web-chat visitors have no console token; summarize ui in plain text. */
+/** Protected web-chat visitors have no console token; summarize ui in plain text. Cards are left out: they render from the message. */
 export function webChatVisitorAssistantText(message: { text: string; parts?: readonly unknown[] }): string {
-  return assistantMessageTextForChannel(message, "slack", { consoleAccess: false });
+  const parts = (message.parts ?? []).filter((part) => parseUiPart(part).ok && (part as { kind?: unknown }).kind !== UI_PART_KIND_CARD);
+  return assistantMessageTextForChannel({ ...message, parts }, "slack", { consoleAccess: false });
+}
+
+/** Parts a web-chat visitor without console access can see: cards, which carry their whole program. */
+export function webChatVisitorParts(parts: readonly UiPart[] | undefined): UiPart[] {
+  return (parts ?? []).filter((part) => part.kind === UI_PART_KIND_CARD);
 }

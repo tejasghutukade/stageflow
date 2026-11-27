@@ -809,6 +809,7 @@ Agent chat can carry typed **ui** parts instead of inlining large bodies. Shared
 | `kind` | Schema file | What it shows |
 |--------|-------------|---------------|
 | `artifact-ref` | `uiPartArtifactRef.ts` | A project artifact by `key` and optional `version` (`ArtifactView`) |
+| `card` | `uiPartCard.ts` | A card kept in the conversation (`ui.persistence: conversation`): the `live.declarative` program or markdown travels in the message, so it renders without the artifact store or console access, including on the public chat page |
 | `form` | `uiPartForm.ts` | Validated fields; submit sends a user message through the action bridge |
 | `approval` | `uiPartApproval.ts` | A tool approval with a plain summary; Approve/Deny use the existing approval API |
 

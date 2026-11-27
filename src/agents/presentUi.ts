@@ -15,13 +15,26 @@ import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
 import { consoleUrl } from "../mcp/writeTarget.js";
 import type { McpToolDeps } from "../mcp/deps.js";
 import {
+  CARD_PROGRAM_MAX_BYTES,
+  isConversationCardKind,
   parseUiPartEnvelope,
+  UI_PART_FALLBACK_TEXT_MAX_CHARS,
   UI_PART_KIND_ARTIFACT_REF,
+  UI_PART_KIND_CARD,
   UI_PART_SCHEMA_VERSION,
   type UiPart,
   type UiPartArtifactRef,
+  type UiPartCard,
   type UiPartEnvelope,
 } from "../artifacts/uiPart.js";
+import { validateLiveManifest } from "../artifacts/manifest.js";
+import { assertLiveProgramAtPublish } from "../artifacts/program.js";
+import { SlidingWindowLimiter } from "./webChat/rateLimit.js";
+import {
+  SESSION_ARTIFACT_RATE_LIMIT,
+  SESSION_ARTIFACT_RATE_WINDOW_MS,
+  SESSION_ARTIFACTS_PER_MESSAGE,
+} from "../artifacts/sessionScope.js";
 import { Type } from "typebox";
 import { declarativePromptSection, htmlPromptSection } from "../artifacts/livePrompt.js";
 
@@ -30,16 +43,30 @@ export const PRESENT_UI_TOOL_NAME = "present_ui";
 export const AGENT_PRESENT_UI_SENTENCE =
   "You can place an artifact from this project into the conversation with present_ui. Pass its key, or pass program and manifest to show a one-off chart or table without publishing first. Pass version only when the person should see that version. The chat shows the artifact; do not paste its body into the reply. If present_ui returns a validation error, fix the program and call it again.";
 
+export const AGENT_PRESENT_CARD_SENTENCE =
+  "You can draw a card in this conversation with present_ui: pass program, manifest (with kind) and a short title. The card shows only what you write into the program, so put the numbers and text in it; it cannot load live data or run actions. Cards belong to this conversation and are not saved anywhere else. To change a card, call present_ui again with the complete updated program and the same title; the person sees the new card below the old one. The chat shows the card; do not paste its program into the reply. If present_ui returns a validation error, fix the program and call it again.";
+
 export function agentHoldsPresentUi(definition: Pick<AgentDefinition, "ui">): boolean {
   return definition.ui?.present === true;
+}
+
+/** Cards stay in the conversation unless the agent saves them as artifacts. */
+export function agentKeepsCardsInConversation(definition: Pick<AgentDefinition, "ui">): boolean {
+  return (definition.ui?.persistence ?? "conversation") === "conversation";
 }
 
 export function agentPresentUiPrompt(definition: Pick<AgentDefinition, "ui">): string | undefined {
   if (!agentHoldsPresentUi(definition)) return undefined;
   const kinds = definition.ui.kinds.join(", ");
-  const sections = ["# Showing artifacts in chat", "", `${AGENT_PRESENT_UI_SENTENCE} Kinds you may present: ${kinds}.`];
-  if (definition.ui.kinds.includes("live.declarative")) sections.push("", declarativePromptSection());
-  if (definition.ui.kinds.includes("live.html")) sections.push("", htmlPromptSection());
+  const conversation = agentKeepsCardsInConversation(definition);
+  const sections = conversation
+    ? ["# Drawing cards in chat", "", `${AGENT_PRESENT_CARD_SENTENCE} Kinds you may draw: ${kinds}.`]
+    : ["# Showing artifacts in chat", "", `${AGENT_PRESENT_UI_SENTENCE} Kinds you may present: ${kinds}.`];
+  if (definition.ui.kinds.includes("live.declarative")) {
+    sections.push("", declarativePromptSection());
+    if (conversation) sections.push("", "In a card, bindings must be [] and there are no actions: write the data into the program as literals.");
+  }
+  if (!conversation && definition.ui.kinds.includes("live.html")) sections.push("", htmlPromptSection());
   return sections.join("\n");
 }
 
@@ -49,7 +76,7 @@ export function appendAgentPresentUiPrompt(systemPrompt: string, definition: Pic
   return `${systemPrompt}\n\n${section}`;
 }
 
-export function uiPartsFromToolOutput(tool: string, output: string): UiPartArtifactRef[] {
+export function uiPartsFromToolOutput(tool: string, output: string): Array<UiPartArtifactRef | UiPartCard> {
   if (tool !== PRESENT_UI_TOOL_NAME) return [];
   let value: unknown;
   try {
@@ -58,14 +85,20 @@ export function uiPartsFromToolOutput(tool: string, output: string): UiPartArtif
     return [];
   }
   const parsed = parseUiPartEnvelope(value);
-  return parsed.ok && parsed.part.kind === UI_PART_KIND_ARTIFACT_REF ? [parsed.part] : [];
+  if (!parsed.ok) return [];
+  return parsed.part.kind === UI_PART_KIND_ARTIFACT_REF || parsed.part.kind === UI_PART_KIND_CARD ? [parsed.part] : [];
 }
 
-/** Replay text keeps the structured ui envelope beside the reply, so a restored session is not only the fallback sentence. */
+/** True for a part that puts something on screen (an artifact or a card), as opposed to an error. */
+export function isPresentedUiPart(part: UiPart): part is UiPartArtifactRef | UiPartCard {
+  return part.kind === UI_PART_KIND_ARTIFACT_REF || part.kind === UI_PART_KIND_CARD;
+}
+
+/** Replay text keeps the structured ui envelope beside the reply, so a restored session is not only the fallback sentence. A card keeps its program, so the agent can change it later. */
 export function messageReplayText(message: { text: string; parts?: readonly UiPart[] }): string {
   const text = message.text.trim();
   const ui = (message.parts ?? [])
-    .filter((part) => part.kind === UI_PART_KIND_ARTIFACT_REF)
+    .filter(isPresentedUiPart)
     .map((part) => JSON.stringify({ type: "ui", ui: part }))
     .join("\n");
   if (!ui) return text;
@@ -187,6 +220,80 @@ export async function presentInline(input: PresentArtifactInput): Promise<Presen
   }
 }
 
+let cardLimiter = new SlidingWindowLimiter(SESSION_ARTIFACT_RATE_WINDOW_MS);
+
+export function resetCardLimiterForTests(): void {
+  cardLimiter = new SlidingWindowLimiter(SESSION_ARTIFACT_RATE_WINDOW_MS);
+}
+
+export type PresentCardInput = {
+  projectRoot: string;
+  sessionId: string;
+  title?: string;
+  program: string;
+  manifest: unknown;
+  presentedInMessage: number;
+  allowedKinds: readonly string[];
+  nowMs?: number;
+};
+
+/** Checks a card program and returns it as a ui part. Nothing is written: the card lives in the message. */
+export async function presentCard(input: PresentCardInput): Promise<PresentArtifactResult> {
+  const program = input.program;
+  const manifest = manifestRecord(input.manifest);
+  if (program.trim().length === 0) return toolFailure("artifact.invalid_shape", "program is required");
+  if (!manifest) return toolFailure("artifact.invalid_shape", "manifest is required");
+  const kind = typeof manifest.kind === "string" ? manifest.kind : "";
+  if (!kind || !input.allowedKinds.includes(kind) || !isConversationCardKind(kind)) {
+    return toolFailure("ui.kind_not_granted", `This agent cannot draw ${kind || "that"} cards. Kinds: ${input.allowedKinds.join(", ")}`);
+  }
+  if (Buffer.byteLength(program, "utf8") > CARD_PROGRAM_MAX_BYTES) {
+    return toolFailure("artifact.too_large", `program is larger than ${CARD_PROGRAM_MAX_BYTES} bytes`);
+  }
+  if (input.presentedInMessage > SESSION_ARTIFACTS_PER_MESSAGE) {
+    return toolFailure("ui.message_cap", `A reply can hold at most ${SESSION_ARTIFACTS_PER_MESSAGE} cards`);
+  }
+  const rate = cardLimiter.take(input.sessionId, SESSION_ARTIFACT_RATE_LIMIT, input.nowMs ?? Date.now());
+  if (!rate.ok) return toolFailure("ui.rate_limited", `Too many cards. Try again in ${rate.retryAfterSec}s`);
+  const titleSource = typeof input.title === "string" && input.title.trim().length > 0 ? input.title.trim() : "Card";
+  const title = titleSource.slice(0, ARTIFACT_TITLE_MAX_CHARS);
+  let library: UiPartCard["library"];
+  if (kind === "live.declarative") {
+    const bindings = manifest.bindings;
+    const actions = manifest.actions;
+    if ((Array.isArray(bindings) && bindings.length > 0) || (Array.isArray(actions) && actions.length > 0)) {
+      return toolFailure(
+        "ui.card_display_only",
+        "A card shows only what you write into it: set bindings to [] and leave out actions, and put the data in the program as literals",
+      );
+    }
+    try {
+      const live = validateLiveManifest({ ...manifest, bindings: [], program }, program);
+      await assertLiveProgramAtPublish(input.projectRoot, live);
+      library = { name: live.library.name, version: live.library.version };
+    } catch (error) {
+      if (error instanceof ArtifactPublishError) {
+        const detail = error.issues?.map((issue) => issue.message).filter(Boolean).slice(0, 5).join("; ");
+        return toolFailure(error.code, detail && detail !== error.message ? `${error.message}: ${detail}` : error.message);
+      }
+      throw error;
+    }
+  }
+  const part: UiPartCard = {
+    v: UI_PART_SCHEMA_VERSION,
+    kind: UI_PART_KIND_CARD,
+    title,
+    format: kind,
+    program,
+    ...(library ? { library } : {}),
+    fallback: {
+      text: kind === "static.markdown" ? program.slice(0, UI_PART_FALLBACK_TEXT_MAX_CHARS) : title,
+      url: "",
+    },
+  };
+  return { ok: true, envelope: { type: "ui", ui: part } };
+}
+
 export function presentArtifact(input: PresentArtifactInput): PresentArtifactResult {
   const key = typeof input.key === "string" ? input.key.trim() : "";
   const parts = key.includes("/") ? key.split("/") : [];
@@ -274,9 +381,19 @@ function presentUiParameterSchema() {
   });
 }
 
+function presentCardParameterSchema() {
+  return Type.Object({
+    title: Type.Optional(Type.String({ description: "Short title shown above the card. Reuse it when you redraw a card." })),
+    program: Type.String({ description: "The card's program (live.declarative) or markdown text (static.markdown)." }),
+    manifest: Type.Record(Type.String(), Type.Unknown(), { description: "Manifest with kind. For live.declarative also format, library and bindings: []." }),
+  });
+}
+
 export function createPresentUiTool(options: {
   kinds: readonly string[];
   projectRoot: string;
+  /** "conversation" offers cards only (program and manifest); "artifacts" also shows saved artifacts by key. */
+  persistence?: "conversation" | "artifacts";
   present: (input: {
     key?: string;
     version?: number;
@@ -286,11 +403,14 @@ export function createPresentUiTool(options: {
     presentedInMessage: number;
   }) => Promise<PresentArtifactResult>;
 }): PresentUiTool {
+  const conversation = (options.persistence ?? "artifacts") === "conversation";
   return {
     name: PRESENT_UI_TOOL_NAME,
-    label: "Present artifact",
-    description: `Show an artifact from this project in the conversation. Kinds: ${options.kinds.join(", ")}. Pass key, or program and manifest for a one-off. Pass version only to pin one version. The result is a ui part. A missing key, a key from another project, or an invalid program is refused.`,
-    parameters: presentUiParameterSchema(),
+    label: conversation ? "Draw card" : "Present artifact",
+    description: conversation
+      ? `Draw a card in this conversation. Kinds: ${options.kinds.join(", ")}. Pass program, manifest (with kind) and a title. The card shows only what the program contains. To change a card, call again with the full updated program. An invalid program is refused with the reason.`
+      : `Show an artifact from this project in the conversation. Kinds: ${options.kinds.join(", ")}. Pass key, or program and manifest for a one-off. Pass version only to pin one version. The result is a ui part. A missing key, a key from another project, or an invalid program is refused.`,
+    parameters: (conversation ? presentCardParameterSchema() : presentUiParameterSchema()) as ReturnType<typeof presentUiParameterSchema>,
     execute: async (_toolCallId, params) => {
       const record = params !== null && typeof params === "object" && !Array.isArray(params) ? (params as Record<string, unknown>) : {};
       const key = record.key;
@@ -300,7 +420,10 @@ export function createPresentUiTool(options: {
       const manifest = record.manifest;
       const hasProgram = typeof program === "string";
       const hasKey = typeof key === "string" && key.trim().length > 0;
-      if (hasProgram === hasKey) return presentError("artifact.invalid_shape", "Pass key, or program and manifest, not both");
+      if (conversation && hasKey) {
+        return presentError("ui.key_needs_artifacts", "This agent draws cards in the conversation and cannot show saved artifacts. Pass program and manifest instead");
+      }
+      if (hasProgram === hasKey) return presentError("artifact.invalid_shape", conversation ? "Pass program and manifest" : "Pass key, or program and manifest, not both");
       if (version !== undefined && (typeof version !== "number" || !Number.isInteger(version))) {
         return presentError("artifact.invalid_id", "Version must be a positive integer");
       }

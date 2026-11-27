@@ -396,6 +396,15 @@ export function AgentDetailPage({ agentId }: { agentId: string }) {
           </span>
         </div>
       ) : null}
+      {agent.issues.length === 0 && agent.webChatBlocked ? (
+        <div className="flex shrink-0 items-start gap-3 border-b border-b-[var(--sf-hairline)] bg-[#f5b5440a] px-7 py-3 text-xs leading-[1.5]" role="status" data-testid="web-chat-blocked">
+          <LuTriangleAlert aria-hidden className="mt-0.5 size-3.5 shrink-0 text-[var(--sf-needs)]" />
+          <span className="text-[var(--sf-text-1)]">
+            Public chat page.{" "}
+            <span className="text-[var(--sf-text-2)]">{agent.webChatBlocked}</span>
+          </span>
+        </div>
+      ) : null}
       {confirmDisable ? (
         <ConfirmDialog title={`Disable ${agent.name}?`} confirmLabel="Disable agent" busy={busy} onConfirm={() => void onToggle()} onClose={() => setConfirmDisable(false)}>
           <p>

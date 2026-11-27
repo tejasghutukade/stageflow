@@ -12,8 +12,10 @@ export { UI_PART_KIND_FORM, UI_PART_FORM_EVENT_KEY_PREFIX, formUiEventKey, type 
 export { UI_PART_KIND_APPROVAL, type UiPartApproval } from "./uiPartApproval.js";
 
 export type { UiPartArtifactRef } from "./uiPartArtifactRef.js";
+export { UI_PART_KIND_CARD, CONVERSATION_CARD_KINDS, CARD_PROGRAM_MAX_BYTES, isConversationCardKind, type UiPartCard } from "./uiPartCard.js";
 
 import { parseUiPartArtifactRef, UI_PART_KIND_ARTIFACT_REF, type UiPartArtifactRef } from "./uiPartArtifactRef.js";
+import { parseUiPartCard, UI_PART_KIND_CARD, type UiPartCard } from "./uiPartCard.js";
 
 export const UI_PART_KIND_ERROR = "ui-error" as const;
 export const UI_PART_ERROR_MESSAGE_MAX_CHARS = 240;
@@ -27,7 +29,7 @@ const errorSchema = z.object({
 });
 
 export type UiPartError = z.infer<typeof errorSchema>;
-export type UiPart = UiPartArtifactRef | UiPartForm | UiPartApproval | UiPartError;
+export type UiPart = UiPartArtifactRef | UiPartCard | UiPartForm | UiPartApproval | UiPartError;
 
 export function uiErrorPart(message: string): UiPartError {
   const text = message.trim().slice(0, UI_PART_ERROR_MESSAGE_MAX_CHARS) || "That could not be shown.";
@@ -57,6 +59,11 @@ export function parseUiPart(value: unknown): ParsedUiPart {
     const kind = record.kind;
     if (kind === UI_PART_KIND_ARTIFACT_REF) {
       const parsed = parseUiPartArtifactRef(value);
+      if (!parsed.ok) return { ok: false, kind: "unsupported" };
+      return { ok: true, part: parsed.part };
+    }
+    if (kind === UI_PART_KIND_CARD) {
+      const parsed = parseUiPartCard(value);
       if (!parsed.ok) return { ok: false, kind: "unsupported" };
       return { ok: true, part: parsed.part };
     }

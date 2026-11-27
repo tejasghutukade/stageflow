@@ -33,7 +33,7 @@ import { compactionUsageCost, type CompactionEndSessionEvent } from "../../agent
 import { memoryHome } from "../../memory/host.js";
 import { appendAgentArtifactPrompt, bindAgentArtifactDelete, bindAgentArtifactRead, bindAgentArtifactRefresh, createAgentPublishArtifactTool, type AgentPublishTool } from "../artifactTools.js";
 import { previewPresentArgs } from "../../artifacts/inlinePreview.js";
-import { PRESENT_UI_TOOL_NAME, appendAgentPresentUiPrompt, createPresentUiTool, messageReplayText, type PresentArtifactResult, type PresentUiTool } from "../presentUi.js";
+import { PRESENT_UI_TOOL_NAME, agentKeepsCardsInConversation, appendAgentPresentUiPrompt, createPresentUiTool, messageReplayText, presentCard, type PresentArtifactResult, type PresentUiTool } from "../presentUi.js";
 import { SessionPublishError, type SessionPublishBody, type SessionPublishSuccess } from "../../artifacts/sessionPublish.js";
 import { forbiddenWriteTarget } from "../policy.js";
 import { prepareExecutionLaunch, type SandboxRunner } from "../sandbox.js";
@@ -524,9 +524,23 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
       ? createPresentUiTool({
           kinds: definition.ui.kinds,
           projectRoot,
+          persistence: definition.ui.persistence,
           present: async (args) => {
             const inline = args.program !== undefined;
             const presentedInMessage = inline ? inlinePresented.n + 1 : 0;
+            if (agentKeepsCardsInConversation(definition)) {
+              const card = await presentCard({
+                projectRoot,
+                sessionId: input.sessionId,
+                ...(args.title !== undefined ? { title: args.title } : {}),
+                program: args.program ?? "",
+                manifest: args.manifest,
+                presentedInMessage,
+                allowedKinds: definition.ui.kinds,
+              });
+              if (card.ok) inlinePresented.n += 1;
+              return card;
+            }
             if (!options.presentUi) return { ok: false, code: "ui.unavailable", message: "present_ui is not available" };
             const result = await options.presentUi({
               ...args,

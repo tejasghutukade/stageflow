@@ -54,7 +54,7 @@ async function setup() {
   await fixture.service.create(
     fixture.project,
     agentInput("helper", {
-      ui: { present: true, kinds: ["live.declarative"], functions: ["revenue_by_week"] },
+      ui: { present: true, persistence: "artifacts", kinds: ["live.declarative"], functions: ["revenue_by_week"] },
       tools: { builtin: ["read"], mcp: { web: ["fetch"] } },
       approvals: { ask_first: ["web.fetch"] },
     }),
@@ -138,7 +138,7 @@ describe("chat ui events", () => {
     fixtures.push(narrow);
     await narrow.service.create(
       narrow.project,
-      agentInput("helper", { ui: { present: true, kinds: ["live.declarative"], functions: ["other_fn"] } }),
+      agentInput("helper", { ui: { present: true, persistence: "artifacts", kinds: ["live.declarative"], functions: ["other_fn"] } }),
       { source: "console" },
     );
     await narrow.service.setEnabled(narrow.project, "helper", true, { source: "console" });

@@ -19,7 +19,7 @@ export function defaultDefinition(): AgentDefinition {
     execution: "trusted-local",
     model: { backend: "pi", thinking: "medium" },
     tools: { builtin: [], builtin_tools: [], mcp: {}, skills: [], browser: false, stageflow: { groups: [], tools: [] } },
-    ui: { present: false, kinds: [], functions: [] },
+    ui: { present: false, persistence: "conversation", kinds: [], functions: [] },
     approvals: {
       ask_first: [],
       approvers: { operators: true, channel_ids: [] },

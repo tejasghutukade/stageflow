@@ -4,10 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentChatController } from "../src/agents/chatTurn.js";
 import { createEvalGate, EvalGateRegistry, type EvalGatePolicy } from "../src/agents/evalGate.js";
-import { agentPresentUiPrompt, messageReplayText, presentArtifact, PRESENT_UI_TOOL_NAME, uiPartsFromToolOutput } from "../src/agents/presentUi.js";
+import { agentPresentUiPrompt, createPresentUiTool, messageReplayText, presentArtifact, presentCard, PRESENT_UI_TOOL_NAME, uiPartsFromToolOutput } from "../src/agents/presentUi.js";
 import { catalogRootsForArtifacts } from "../src/artifacts/projectScope.js";
 import { publishArtifact } from "../src/artifacts/publish.js";
-import { UI_PART_KIND_ARTIFACT_REF, UI_PART_SCHEMA_VERSION } from "../src/artifacts/uiPart.js";
+import { UI_PART_KIND_ARTIFACT_REF, UI_PART_KIND_CARD, UI_PART_SCHEMA_VERSION } from "../src/artifacts/uiPart.js";
 import { grantedToolIds, parseAgentDefinition } from "../src/config/loadAgent.js";
 import type { McpToolDeps } from "../src/mcp/deps.js";
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
@@ -43,8 +43,16 @@ describe("present_ui prompt", () => {
     expect(declarative).not.toContain("Live HTML artifacts");
     const markdown = agentPresentUiPrompt({ ui: { present: true, kinds: ["static.markdown"], functions: [] } })!;
     expect(markdown).not.toContain("Syntax: one statement per line");
-    const html = agentPresentUiPrompt({ ui: { present: true, kinds: ["live.html"], functions: [] } })!;
+    const html = agentPresentUiPrompt({ ui: { present: true, persistence: "artifacts", kinds: ["live.html"], functions: [] } })!;
     expect(html).toContain("Live HTML artifacts");
+  });
+
+  it("teaches cards kept in the conversation: display only, redraw to change", () => {
+    const prompt = agentPresentUiPrompt({ ui: { present: true, persistence: "conversation", kinds: ["live.declarative"], functions: [] } })!;
+    expect(prompt).toContain("# Drawing cards in chat");
+    expect(prompt).toContain("To change a card, call present_ui again with the complete updated program");
+    expect(prompt).toContain("bindings must be []");
+    expect(prompt).not.toContain("Pass its key");
   });
 });
 
@@ -53,7 +61,7 @@ describe("ui grant", () => {
     const parsed = parseAgentDefinition({ id: "helper", name: "Helper", instructions: "Help." });
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
-    expect(parsed.value.ui).toEqual({ present: false, kinds: [], functions: [] });
+    expect(parsed.value.ui).toEqual({ present: false, persistence: "conversation", kinds: [], functions: [] });
     expect(grantedToolIds(parsed.value).has(PRESENT_UI_TOOL_NAME)).toBe(false);
     const bad = parseAgentDefinition({
       id: "helper",
@@ -64,6 +72,77 @@ describe("ui grant", () => {
     expect(bad.ok).toBe(false);
     if (bad.ok) return;
     expect(bad.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining(["agent.ui_kind_unknown", "agent.ui_function_invalid"]));
+  });
+});
+
+describe("ui persistence", () => {
+  const parse = (ui: Record<string, unknown>) => parseAgentDefinition({ id: "helper", name: "Helper", instructions: "Help.", ui });
+
+  it("fills the kinds each mode allows when present is on and kinds are left out", () => {
+    const conversation = parse({ present: true });
+    expect(conversation.ok && conversation.value.ui).toEqual({ present: true, persistence: "conversation", kinds: ["live.declarative", "static.markdown"], functions: [] });
+    const artifacts = parse({ present: true, persistence: "artifacts" });
+    expect(artifacts.ok && artifacts.value.ui.kinds).toContain("live.html");
+  });
+
+  it("asks for persistence artifacts before live HTML or functions", () => {
+    const html = parse({ present: true, kinds: ["live.html"] });
+    expect(html.ok).toBe(false);
+    if (!html.ok) expect(html.issues.map((issue) => issue.code)).toContain("agent.ui_kind_needs_artifacts");
+    const functions = parse({ present: true, functions: ["revenue_by_week"] });
+    expect(functions.ok).toBe(false);
+    if (!functions.ok) expect(functions.issues.map((issue) => issue.code)).toContain("agent.ui_functions_need_artifacts");
+    expect(parse({ present: true, persistence: "artifacts", kinds: ["live.html"], functions: ["revenue_by_week"] }).ok).toBe(true);
+  });
+});
+
+describe("conversation cards", () => {
+  const program = 'root = Card([CardHeader("Regional sales", "This week"), TextContent("North leads.")])';
+  const manifest = { kind: "live.declarative", format: "openui-lang", library: { name: "stageflow", version: "1.0.0" }, bindings: [] };
+  const base = { projectRoot: tmpdir(), program, manifest, presentedInMessage: 1, allowedKinds: ["live.declarative", "static.markdown"] };
+  let n = 0;
+  const session = () => `ses_card_${n++}`;
+
+  it("returns the checked program as a card part and writes nothing", async () => {
+    const result = await presentCard({ ...base, sessionId: session(), title: "Regional sales" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.envelope.ui).toEqual({
+      v: UI_PART_SCHEMA_VERSION,
+      kind: UI_PART_KIND_CARD,
+      title: "Regional sales",
+      format: "live.declarative",
+      program,
+      library: { name: "stageflow", version: "1.0.0" },
+      fallback: { text: "Regional sales", url: "" },
+    });
+    expect(uiPartsFromToolOutput(PRESENT_UI_TOOL_NAME, JSON.stringify(result.envelope))).toEqual([result.envelope.ui]);
+    expect(messageReplayText({ text: "Here", parts: [result.envelope.ui] })).toContain(program.slice(0, 20));
+  });
+
+  it("uses the markdown itself as the channel fallback", async () => {
+    const result = await presentCard({ ...base, sessionId: session(), program: "# Notes\n\n- one", manifest: { kind: "static.markdown" } });
+    expect(result.ok && result.envelope.ui.kind === UI_PART_KIND_CARD && result.envelope.ui.fallback.text).toBe("# Notes\n\n- one");
+  });
+
+  it("refuses live data, actions, a bad program, a kind outside the grant and a fifth card", async () => {
+    const codes = async (overrides: Partial<Parameters<typeof presentCard>[0]>) => {
+      const result = await presentCard({ ...base, sessionId: session(), ...overrides });
+      return result.ok ? "ok" : result.code;
+    };
+    expect(await codes({ manifest: { ...manifest, bindings: [{ id: "rows", function: "weekly", args: {} }] } })).toBe("ui.card_display_only");
+    expect(await codes({ manifest: { ...manifest, actions: [{ id: "go", type: "message", label: "Go", template: "go" }] } })).toBe("ui.card_display_only");
+    expect(await codes({ program: "root = Card([" })).toBe("artifact.program_invalid");
+    expect(await codes({ manifest: { kind: "live.html" } })).toBe("ui.kind_not_granted");
+    expect(await codes({ allowedKinds: ["static.markdown"] })).toBe("ui.kind_not_granted");
+    expect(await codes({ presentedInMessage: 5 })).toBe("ui.message_cap");
+  });
+
+  it("refuses a saved artifact key when cards stay in the conversation", async () => {
+    const tool = createPresentUiTool({ kinds: ["live.declarative"], projectRoot: tmpdir(), persistence: "conversation", present: async () => ({ ok: false, code: "x", message: "x" }) });
+    const result = await tool.execute("call", { key: "agent:helper/weekly" });
+    expect(result.isError).toBe(true);
+    expect(result.details).toMatchObject({ code: "ui.key_needs_artifacts" });
   });
 });
 

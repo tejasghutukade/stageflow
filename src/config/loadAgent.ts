@@ -1,5 +1,6 @@
 import { AGENT_ID_PATTERN, isReservedAgentId, RESERVED_AGENT_IDS } from "../agents/agentId.js";
 import { isPresentableArtifactKind } from "../artifacts/kinds.js";
+import { defaultPresentKinds, isConversationCardKind, UI_PERSISTENCE_VALUES } from "../artifacts/presentableKinds.js";
 import { normalizeEntry, SENDER_ENTRY } from "../agents/communications/allowlist.js";
 import { PRESENT_UI_TOOL_NAME } from "../agents/presentUi.js";
 import { grantedStageflowTools, isOperatorOnlyGroup, isOperatorOnlyTool, isToolGroupId, stageflowGrantId, TOOL_META } from "../toolkit/meta.js";
@@ -115,10 +116,12 @@ const toolsSchema = z
 const uiSchema = z
   .strictObject({
     present: z.boolean().default(false),
+    persistence: z.enum(UI_PERSISTENCE_VALUES).default("conversation"),
     kinds: z.array(z.string().trim().min(1)).default([]),
     functions: z.array(z.string().trim().min(1)).default([]),
   })
-  .prefault({});
+  .prefault({})
+  .transform((ui) => (ui.present && ui.kinds.length === 0 ? { ...ui, kinds: defaultPresentKinds(ui.persistence) } : ui));
 
 const approvalsSchema = z
   .strictObject({
@@ -322,12 +325,19 @@ function semanticIssues(definition: AgentDefinition): AgentIssue[] {
     issues.push({ path: "tools.mcp.stageflow", code: "agent.mcp_name_reserved", message: "stageflow is reserved for Stageflow's own tools; rename the MCP server" });
   }
   const seenKinds = new Set<string>();
+  const keptInConversation = definition.ui.persistence === "conversation";
   definition.ui.kinds.forEach((kind, index) => {
     if (!isPresentableArtifactKind(kind)) {
       issues.push({
         path: `ui.kinds.${index}`,
         code: "agent.ui_kind_unknown",
         message: `${kind} is not an artifact kind an agent can present`,
+      });
+    } else if (keptInConversation && !isConversationCardKind(kind)) {
+      issues.push({
+        path: `ui.kinds.${index}`,
+        code: "agent.ui_kind_needs_artifacts",
+        message: `Cards kept in the conversation can be live.declarative or static.markdown. Set ui.persistence to artifacts to show ${kind}`,
       });
     } else if (seenKinds.has(kind)) {
       issues.push({ path: `ui.kinds.${index}`, code: "agent.ui_kind_duplicate", message: `${kind} is listed twice` });
@@ -356,11 +366,11 @@ function semanticIssues(definition: AgentDefinition): AgentIssue[] {
       message: "Turn on ui.present before listing kinds or functions",
     });
   }
-  if (definition.ui.present && definition.ui.kinds.length === 0) {
+  if (keptInConversation && definition.ui.functions.length > 0) {
     issues.push({
-      path: "ui.kinds",
-      code: "agent.ui_kinds_required",
-      message: "Choose at least one artifact kind to present",
+      path: "ui.functions",
+      code: "agent.ui_functions_need_artifacts",
+      message: "Cards kept in the conversation show only what the agent writes into them. Set ui.persistence to artifacts to bind live data from functions",
     });
   }
   if (definition.sub_agents.includes(definition.id)) {

@@ -41,7 +41,7 @@ Behind a reverse proxy every visitor shares the proxy's address, so the per-IP l
 
 ## Safety
 
-- Anonymous public agents must be tool-less, with project context, shared memory, browser, skills and sub-agents off. Unsafe publications return `identity.setup_required`; old unscoped histories are not adopted.
+- Anonymous public agents must be tool-less, with project context, shared memory, browser, skills and sub-agents off; cards kept in the conversation are allowed. Unsafe publications return `identity.setup_required` (see [Why a link does not open](#why-a-link-does-not-open)); old unscoped histories are not adopted.
 - Protected tools require [consumer identity](consumer-identity.md) (turn it on from **Identity** in the console), an `authenticated` agent and an embedded client that signs people in. The built-in chat page has no sign-in button. The step-by-step is [Protect an agent's chat with customer sign-in](guides-agents-protected-chat.md). Supported customer resource tools are `orders.status`, `orders.list`, and `account.profile`. Ask-first tools still wait for an operator and reauthorize after the wait.
 
 ## Troubleshooting
@@ -56,6 +56,10 @@ Behind a reverse proxy every visitor shares the proxy's address, so the per-IP l
 | Browser CORS error from another site | Origin not in `STAGEFLOW_PUBLIC_CHAT_ORIGINS` |
 | Reply appears all at once | The agent has `guardrails.block_patterns`, so streamed text is held until the check passes; or a proxy is buffering |
 
-## Generative UI (experimental)
+## Cards in public chat
 
-The console renders typed **ui** message parts (today: `artifact-ref` pointing at `<ownerKey>/<id>`) through the console part registry, using the same `ArtifactView` component as the Artifacts page. Unsupported kinds show an open-in-console fallback card. See [Chat UI parts](artifacts.md#chat-ui-parts) for the shared schema.
+An agent with `ui: { present: true }` draws cards (layouts, tables, numbers, markdown) in its replies, and visitors see them on the public page. The cards are kept in the conversation: the program travels in the message, nothing is saved to the Artifacts page, and the card is deleted with the conversation. Ask the agent to change a card and it draws an updated one. See [Agent definition: ui](agent-definition.md#ui).
+
+## Why a link does not open
+
+The public page answers anonymous visitors, so it only opens for an agent that can do nothing but talk and draw cards kept in the conversation. Tools, skills, memories, project context, sub-agents or `ui.persistence: artifacts` keep it closed. The visitor sees "This chat isn't open to the public yet"; the agent's page in the console and the **Web chat** section of its form say exactly what to remove. To keep those abilities and still let people chat, protect the chat with sign-in ([Protect an agent's chat with customer sign-in](guides-agents-protected-chat.md)).

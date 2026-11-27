@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
+import { PRESENT_UI_TOOL_NAME } from "../src/agents/presentUi.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { loadControlTokens } from "../src/server/controlToken.js";
 import { startUiServer } from "../src/server/http.js";
@@ -146,6 +147,49 @@ describe("public web chat", () => {
     expect(await response.json()).toMatchObject({ code: "identity.setup_required" });
     expect(backend.calls).toBe(0);
     expect((await host.admin("GET", "/api/agents/approvals")).body.approvals).toEqual([]);
+  });
+
+  it("opens for an agent that only draws cards kept in the conversation and sends the card to the visitor", async () => {
+    const card = {
+      v: 1,
+      kind: "card",
+      title: "Regional sales",
+      format: "live.declarative",
+      program: 'root = Card([CardHeader("Regional sales", "This week")])',
+      library: { name: "stageflow", version: "1.0.0" },
+      fallback: { text: "Regional sales", url: "" },
+    };
+    const backend = scriptedBackend(async (_messages, ctx) => {
+      const result = await ctx.tool(PRESENT_UI_TOOL_NAME, { title: card.title, program: card.program, manifest: { kind: "live.declarative" } }, () =>
+        JSON.stringify({ type: "ui", ui: card }),
+      );
+      return result.ran ? "Here it is." : "skipped";
+    });
+    const host = await startHost(backend);
+    const { slug, detail } = await liveAgent(host, { ui: { present: true } });
+    expect(detail.agent.webChatBlocked).toBeNull();
+    expect(detail.warnings.map((warning: { code: string }) => warning.code)).not.toContain("agent.web_chat_needs_setup");
+    expect((await host.pub(slug, "")).status).toBe(200);
+    const { thread } = (await (await host.pub(slug, "/threads", { method: "POST", visitor: VISITOR })).json()) as { thread: { id: string } };
+    const stream = await host.frames(await host.pub(slug, `/threads/${thread.id}/messages`, { method: "POST", visitor: VISITOR, body: { text: "show sales" } }));
+    expect(stream.at(-1)).toMatchObject({ type: "done", message: { text: "Here it is.", parts: [card] } });
+    const history = await (await host.pub(slug, `/threads/${thread.id}`, { visitor: VISITOR })).json();
+    expect(history.messages.at(-1)).toMatchObject({ role: "assistant", parts: [card] });
+  });
+
+  it("explains on the agent why the link stays closed when cards are saved as artifacts or the agent has tools", async () => {
+    const host = await startHost();
+    const { slug, detail } = await liveAgent(host, { ui: { present: true, persistence: "artifacts" } });
+    expect((await host.pub(slug, "")).status).toBe(503);
+    expect(detail.agent.webChatBlocked).toContain("cards saved as artifacts");
+    expect(detail.warnings).toEqual(expect.arrayContaining([expect.objectContaining({ path: "web_chat", code: "agent.web_chat_needs_setup" })]));
+    const tools = await host.admin("POST", "/api/agents/helper/save", {
+      baseRevision: detail.agent.revision,
+      definition: { ...detail.definition, ui: { present: false }, tools: { ...detail.definition.tools, stageflow: { groups: ["artifacts.write"], tools: [] } } },
+    });
+    expect(tools.status).toBe(200);
+    const after = (await host.admin("GET", "/api/agents/helper")).body;
+    expect(after.agent.webChatBlocked).toMatch(/^The public chat link will not open: anyone with it could use this agent's tools\./);
   });
 
   it("rotates the link: the old one stops working", async () => {
