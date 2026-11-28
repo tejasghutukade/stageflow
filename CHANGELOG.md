@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.69.0] - 2026-11-28
+
 ### Added
 - Agents **save_card**: an agent with `ui.present`, `ui.persistence: conversation` and `artifacts.write` (`save_artifact`) gets the same `save_card` the Guide uses. It saves a card already drawn in the session (latest, by title, or by id) as an artifact owned by the agent, returns the same artifact when the same card is saved again, and shows the saved artifact in the reply. The stored program is scrubbed the same way `publish_artifact` scrubs content. Anonymous visitors on a public link get it only with `web_chat.public_tools`, and their saves are session artifacts of that conversation. Eval sessions stub it. Not-found is `ui.card_not_found` (the Guide keeps `guide.card_not_found`).
 
@@ -14,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The catalog default model with OpenRouter connected is `openrouter/anthropic/claude-sonnet-5.5` (was `openrouter/nvidia/nemotron-3.5-lightning:free`). `sf init` with only OpenRouter configured uses the same id.
 - A new `$STAGEFLOW_HOME/workspace` manifest no longer lists a `catalog.triggers` root (triggers start empty). Shipped `docker-compose.yml` no longer auto-registers the in-image `triggers-readiness` catalog.
 - `present_ui` behaves the same for agents and the Guide: a card or one-off program without a title takes the manifest's `title`, then a markdown heading, then "Card" (artifacts mode used "Chat"); a missing `manifest.kind` is `artifact.invalid_shape`; a `live.html` card or one-off program is refused (`ui.kind_not_granted`) while chat readers cannot reach the HTML sandbox; parallel calls count toward the four-card reply cap; the Guide answers an artifact key with `ui.key_needs_artifacts`.
+- Generative UI is one core module, `src/genui/`, used by stages, project agents, public chat visitors and the Guide: one validator per card kind shared by `present_ui` and `publish_artifact`, each tool defined once, one per-reply card budget and per-minute limit, one prompt composer, one `save_card`, and an owner registry (`src/artifacts/owners.ts`) for artifact owner kinds. The console's HTML cards and live HTML artifacts share one sandbox frame, which now also stops the resize loop on the artifact page. Contributor docs: [Generative UI internals](docs/generative-ui-internals.md).
+
+### Fixed
+- An HTML card or one-off `live.html` program whose manifest carries a `title` takes that title instead of being refused with `artifact.invalid_shape`.
+- In artifacts mode, a one-off `live.html` program is shown as a session artifact instead of failing validation.
 
 ## [0.68.0] - 2026-11-26
 
