@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import type Database from "better-sqlite3";
+import { scrubSecrets } from "../compaction/scrub.js";
 import { LIBRARY_NAME, LIBRARY_VERSION, OPENUI_LANG_FORMAT } from "../artifacts/library/index.js";
 import { ArtifactPublishError } from "../artifacts/limits.js";
 import { publishArtifact } from "../artifacts/publish.js";
@@ -72,8 +73,9 @@ function ownerOf(surface: Surface): ArtifactOwner | undefined {
 }
 
 /**
- * save_card: keep a card this conversation already showed as an artifact owned by the surface's owner. The program is
- * the card as the conversation stored it. A visitor session's save stays in that conversation (session scope).
+ * save_card: keep a card this conversation already showed as an artifact owned by the surface's owner. The stored
+ * program is scrubbed the same way publish_artifact scrubs content. A visitor session's save stays in that
+ * conversation (session scope).
  */
 export async function saveCard(surface: Surface, args: { ref?: string; title?: unknown }): Promise<GenUiToolResult> {
   if (args.title !== undefined && typeof args.title !== "string") return failure("artifact.invalid_id", "Title must be text");
@@ -101,7 +103,7 @@ export async function saveCard(surface: Surface, args: { ref?: string; title?: u
   const { db } = store;
   const { id: cardId, card } = found;
   const titleSource = typeof args.title === "string" && args.title.trim().length > 0 ? args.title.trim() : card.title;
-  const title = titleSource.slice(0, TITLE_MAX) || "Card";
+  const title = scrubSecrets(titleSource).slice(0, TITLE_MAX) || "Card";
   const ownerKey = artifactOwnerKey(owner);
   // A deleted or expired earlier save keeps its id reserved; the next save takes the next stable id.
   let id: string | undefined;
@@ -122,7 +124,7 @@ export async function saveCard(surface: Surface, args: { ref?: string; title?: u
       id,
       kind: card.format,
       title,
-      bytes: Buffer.from(card.program, "utf8"),
+      bytes: Buffer.from(scrubSecrets(card.program), "utf8"),
       ...(manifest ? { manifest } : {}),
       publishSource: "api",
       source: { kind: owner.kind, sessionId: surface.id },

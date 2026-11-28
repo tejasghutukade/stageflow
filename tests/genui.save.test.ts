@@ -4,6 +4,7 @@ import { createEvalGate, EvalGateRegistry } from "../src/agents/evalGate.js";
 import { createPiAgentRuntime, type OpenSessionInput } from "../src/agents/runtime/piRuntime.js";
 import { agentSessionCards } from "../src/agents/sessionCards.js";
 import { classifyTool } from "../src/agents/toolRisk.js";
+import { readStoredArtifactFile } from "../src/artifacts/store.js";
 import { listArtifacts } from "../src/artifacts/query.js";
 import { deletePublishedArtifact } from "../src/artifacts/publish.js";
 import { resetSessionArtifactLimiterForTests } from "../src/artifacts/sessionScope.js";
@@ -101,7 +102,13 @@ function host(options: { evalGates?: EvalGateRegistry } = {}) {
           },
           prompt: async (text: string) => {
             const said = text.slice(text.lastIndexOf("user: ") >= 0 ? text.lastIndexOf("user: ") + 6 : 0).trim();
-            if (said.startsWith("draw ")) {
+            if (said.startsWith("draw-secret")) {
+              await call("present_ui", {
+                title: "Secret card",
+                program: "# Secret card\n\napi_key=sk-live-abcdefghijklmnopqrstuvwxyz\n",
+                manifest: { kind: "static.markdown" },
+              });
+            } else if (said.startsWith("draw ")) {
               const title = said.slice(5);
               await call("present_ui", { title, program: `# ${title}\n\n- North 4`, manifest: { kind: "static.markdown" } });
             } else if (said.startsWith("save")) {
@@ -164,6 +171,25 @@ describe("agent save_card", () => {
     expect(listed.artifacts.map((record) => record.title).sort()).toEqual(["Kept older", "Latest notes"]);
     expect(listed.artifacts.every((record) => record.scope === "project")).toBe(true);
     expect(results.filter((result) => result.tool === "save_card" && result.blocked)).toEqual([]);
+  });
+
+  it("scrubs secrets out of the saved program the way publish_artifact does", async () => {
+    const { chat, lastSave } = host();
+    const first = await chat.send({ projectRoot: fx.project, agentId: "saver", text: "draw-secret", source: "console" });
+    await chat.send({ projectRoot: fx.project, agentId: "saver", sessionId: first.session.id, text: "save", source: "console" });
+    const saved = savedRef(lastSave());
+    const id = saved.key.slice(saved.key.indexOf("/") + 1);
+    const row = fx.connection.prepare(`SELECT key, current_version FROM artifacts WHERE owner_agent = 'saver' AND id = ?`).get(id) as {
+      key: string;
+      current_version: number;
+    };
+    const version = fx.connection.prepare(`SELECT relative_path FROM artifact_versions WHERE key = ? AND version = ?`).get(row.key, row.current_version) as {
+      relative_path: string;
+    };
+    const bytes = await readStoredArtifactFile(row.key, row.current_version, version.relative_path);
+    const text = bytes.toString("utf8");
+    expect(text).toContain("[redacted]");
+    expect(text).not.toContain("sk-live-abcdefghijklmnopqrstuvwxyz");
   });
 
   it("says a card drawn in the reply still running can be saved in a later message", async () => {
