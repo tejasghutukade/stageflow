@@ -29,6 +29,7 @@ Minimum: \`id\`, \`name\`, \`instructions\`. Unknown keys are rejected (\`agent.
 - \`web_chat\`: \`{ enabled, slug, rate_limit_per_minute (1–120, default 10), max_message_chars (1–20000, default 4000) }\`. Agents created through console, API, CLI or MCP start with web chat on and a random slug; the link \`/chat/<slug>\` is the credential. It is live only while the agent is enabled.
 - \`schedule\`: \`{ cron, timezone?, message? }\`. The first tick only stores the next run; a missed time fires once.
 - \`limits\`: \`session_minutes\` (default 10, idle minutes since the last message), \`max_turns\` (default 40), \`cost_usd\` (default none), \`long_context\` (\`summarize\`/\`truncate\`), \`always_on\` (ignores idle time and turns; cost counts per 24 hours). Limits are checked when a turn starts, not during it.
+- \`ui\`: \`present: true\` gives \`present_ui\` (draw cards in chat). \`persistence: conversation\` (default) keeps display-only cards in the message (\`live.declarative\`, \`static.markdown\`, \`live.html\` when the HTML sandbox is reachable); with the \`save_artifact\` grant the agent also gets \`save_card\` to keep a card as an artifact it owns. \`persistence: artifacts\` saves cards as session artifacts and allows artifact keys and live data from \`ui.functions\`.
 
 ## Tools and the gate
 

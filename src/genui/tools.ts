@@ -8,6 +8,7 @@ import { publishArtifactParameterSchema, publishBodyFromToolParams } from "./pub
 import { saveCard } from "./save.js";
 import { PUBLISH_KINDS } from "./kindsList.js";
 import { inlineKinds, type Surface, type SurfacePolicy } from "./surface.js";
+import type { ArtifactOwner } from "../artifacts/owners.js";
 
 export { PRESENT_UI_TOOL_NAME, PUBLISH_ARTIFACT_TOOL_NAME, SAVE_CARD_TOOL_NAME } from "./names.js";
 
@@ -83,7 +84,8 @@ async function presentProgram(surface: Surface, input: { title?: string; program
     projectRoot: surface.projectRoot,
     ...input,
     sessionId: surface.id,
-    agentId: surface.owner.kind === "agent" ? surface.owner.agent : "",
+    ...(surface.owner ? { owner: surface.owner } : {}),
+    hidden: surface.hiddenArtifacts?.(store.db) ?? false,
     presentedInMessage: slot,
     allowedKinds,
   });
@@ -169,17 +171,18 @@ function publishedPayload(result: SessionPublishSuccess): Record<string, unknown
   return payload;
 }
 
-function rejectForeignOwner(agentId: string, params: unknown): void {
+/** An `owner` argument may only name the surface's own owner (same kind and fields, nothing extra). */
+function rejectForeignOwner(own: ArtifactOwner, params: unknown): void {
   if (params === null || typeof params !== "object" || Array.isArray(params)) return;
   if (!("owner" in params)) return;
   const owner = (params as { owner?: unknown }).owner;
+  const ownRecord = own as Record<string, unknown>;
   const self =
     owner !== null &&
     typeof owner === "object" &&
     !Array.isArray(owner) &&
-    (owner as { kind?: unknown }).kind === "agent" &&
-    (owner as { agent?: unknown }).agent === agentId &&
-    Object.keys(owner).every((key) => key === "kind" || key === "agent");
+    Object.keys(owner).length === Object.keys(ownRecord).length &&
+    Object.entries(owner).every(([key, value]) => ownRecord[key] === value);
   if (!self) {
     throw new ArtifactPublishError(403, "artifact.invalid_shape", "An agent can only publish artifacts it owns", [
       { path: "owner", message: "An agent can only publish artifacts it owns" },
@@ -189,7 +192,7 @@ function rejectForeignOwner(agentId: string, params: unknown): void {
 
 async function handlePublish(args: unknown, surface: Surface): Promise<GenUiToolResult> {
   try {
-    if (surface.owner.kind === "agent") rejectForeignOwner(surface.owner.agent, args);
+    if (surface.owner) rejectForeignOwner(surface.owner, args);
     const port = surface.publish;
     if (!port) throw new SessionPublishError("artifact.invalid_shape", "artifact publish is not available");
     const body = await publishBodyFromToolParams(args, port.readPath);
@@ -231,7 +234,7 @@ const SAVE_TEXT = {
   },
   agent: {
     description:
-      "Save a card already drawn in this conversation as an artifact owned by this agent. Leave card_id out to save the latest card, or pass the card's title to pick an earlier one. A card can be saved once it has been shown, in a later message. Optional title. Saving the same card again returns the artifact it already made; it never overwrites another artifact. The saved program is the card exactly as this conversation shows it. Returns an artifact reference.",
+      "Save a card already drawn in this conversation as an artifact owned by this agent. Leave card_id out to save the latest card, or pass the card's title to pick an earlier one. A card can be saved once it has been shown, in a later message. Optional title. Saving the same card again returns the artifact it already made; it never overwrites another artifact. The saved program is the card as this conversation shows it, with secrets redacted. Returns an artifact reference.",
     cardId: "The card's title. Leave it out to save the latest card in this conversation.",
   },
 } as const;

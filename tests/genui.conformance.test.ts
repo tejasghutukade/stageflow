@@ -9,7 +9,7 @@ import type { TurnHooks } from "../src/agents/runtime/types.js";
 import { ARTIFACT_TITLE_MAX_CHARS } from "../src/artifacts/limits.js";
 import { catalogRootsForArtifacts } from "../src/artifacts/projectScope.js";
 import { publishSessionArtifact } from "../src/artifacts/sessionPublish.js";
-import { resetSessionArtifactLimiterForTests } from "../src/artifacts/sessionScope.js";
+import { resetSessionArtifactLimiterForTests, SESSION_ARTIFACT_RATE_LIMIT, SESSION_ARTIFACTS_PER_MESSAGE } from "../src/artifacts/sessionScope.js";
 import { CARD_PROGRAM_MAX_BYTES, UI_PART_KIND_ARTIFACT_REF, UI_PART_KIND_CARD, UI_PART_SCHEMA_VERSION } from "../src/artifacts/uiPart.js";
 import type { AgentDefinition } from "../src/config/loadAgent.js";
 import { agentSessionCards } from "../src/agents/sessionCards.js";
@@ -398,6 +398,27 @@ describe("generative UI conformance: per-reply cap", () => {
 });
 
 // ---------------------------------------------------------------------------------------------------------------
+// Per-minute rate limit: one limiter, keyed per surface (surfaceKey), so one conversation cannot use up another's.
+
+describe("generative UI conformance: per-minute rate limit", () => {
+  for (const name of SURFACES) {
+    it(`refuses cards past the per-minute limit with ui.rate_limited on ${name}, without touching another conversation`, async () => {
+      const busy = await surface(name);
+      const replies = Math.ceil(SESSION_ARTIFACT_RATE_LIMIT / SESSION_ARTIFACTS_PER_MESSAGE);
+      const accepted: string[] = [];
+      for (let reply = 0; reply < replies; reply += 1) {
+        const count = Math.min(SESSION_ARTIFACTS_PER_MESSAGE, SESSION_ARTIFACT_RATE_LIMIT - accepted.length);
+        accepted.push(...(await busy.reply(Array.from({ length: count }, () => validCall))).map(ok));
+      }
+      expect(accepted).toEqual(Array.from({ length: SESSION_ARTIFACT_RATE_LIMIT }, () => "ok"));
+      expect((await busy.reply([validCall])).map(ok)).toEqual(["ui.rate_limited"]);
+      const other = await surface(name);
+      expect((await other.reply([validCall])).map(ok)).toEqual(["ok"]);
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------------------
 // Titles
 
 type TitleCase = { name: string; call: Call; title: string };
@@ -409,6 +430,7 @@ const TITLE_CASES: TitleCase[] = [
   { name: "a given title is trimmed", call: { title: "  Sales  ", program: declarative, manifest: declarativeManifest }, title: "Sales" },
   { name: "a long title is cut to the title limit", call: { title: longTitle, program: declarative, manifest: declarativeManifest }, title: longTitle.slice(0, ARTIFACT_TITLE_MAX_CHARS) },
   { name: "no title falls back to manifest.title", call: { program: declarative, manifest: { ...declarativeManifest, title: "From manifest" } }, title: "From manifest" },
+  { name: "no title falls back to manifest.title on an HTML card", call: { program: html, manifest: { ...htmlManifest, title: "From manifest" } }, title: "From manifest" },
   { name: "no title falls back to the markdown heading", call: { program: markdown, manifest: { kind: "static.markdown" } }, title: "Weekly notes" },
   { name: "no title and nothing to derive it from", call: { program: declarative, manifest: declarativeManifest }, title: "Card" },
   { name: "a blank title counts as no title", call: { title: "   ", program: declarative, manifest: declarativeManifest }, title: "Card" },

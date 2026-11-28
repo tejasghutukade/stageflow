@@ -24,15 +24,6 @@ export const AGENT_PRESENT_CARD_SENTENCE =
 export const SAVE_CARD_SENTENCE =
   "When the person asks to keep or save a card, call save_card. Leave card_id out for the latest card, or pass the card's title to pick an earlier one. Do not draw the card again to save it.";
 
-export function agentHoldsPresentUi(definition: Pick<AgentDefinition, "ui">): boolean {
-  return definition.ui?.present === true;
-}
-
-/** Cards stay in the conversation unless the agent saves them as artifacts. */
-export function agentKeepsCardsInConversation(definition: Pick<AgentDefinition, "ui">): boolean {
-  return (definition.ui?.persistence ?? "conversation") === "conversation";
-}
-
 type PresentPromptPolicy = Pick<SurfacePolicy, "canPresent" | "kinds" | "htmlCardsReachable" | "cardsInConversation"> & Partial<Pick<SurfacePolicy, "canSave">>;
 
 /**

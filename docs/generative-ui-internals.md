@@ -20,7 +20,7 @@ One core module, `src/genui/`, owns kinds, validation, limits, the operations, p
 | `kinds.ts` | The kind registry. One `GenUiKind` per kind (`live.declarative`, `live.html`, `static.markdown`, and the static artifact-only kinds): byte limits for card and artifact mode, `canBeCard`, `presentable`, `parse` (manifest shape), `check` (program against the project), `toArtifactManifest`. `genUiKind(id)` looks one up. |
 | `validate.ts` | The one validation entry (`validateGenUi`, `parseGenUiManifest`, `checkGenUiContent`, `assertGenUiSize`). Card checks and publish checks (`src/artifacts/publish.ts`) both go through it; card-only rules are `mode: "card"`. |
 | `kindsList.ts` | Plain kind lists (`PRESENTABLE_ARTIFACT_KINDS`, `CONVERSATION_CARD_KINDS`, `PUBLISH_KINDS`, `STATIC_KINDS`, `UI_PERSISTENCE_VALUES`). It imports only `src/artifacts/kindNames.ts`, so the console can type-check it. |
-| `surface.ts` | `SurfacePolicy`, `Surface`, `GenUiOwner`, `PublishPort`, `ArtifactStoreAccess`, `surfaceKey`, and the helpers `uiPolicy` (from an agent's `ui` block), `publishOnlyPolicy` (a stage), `inlineKinds`, `htmlSignal`. |
+| `surface.ts` | `SurfacePolicy`, `Surface`, `PublishPort`, `ArtifactStoreAccess`, `surfaceKey`, and the helpers `uiPolicy` (from an agent's `ui` block), `publishOnlyPolicy` (a stage), `inlineKinds`, `htmlSignal`. |
 | `budget.ts` | `TurnBudget` (cards per reply), `TurnBudgets` (one budget per surface key for a tool shared by many threads, the Guide) and the per-surface rate limiter `takeCardRate`. |
 | `present.ts` | The present operations: `presentCard` (a card kept in the message), `presentInline` (a one-off program saved as a session artifact), `presentArtifact` (a saved artifact by key), `presentedTitle`. |
 | `cards.ts` | The `CardSource` port (cards a conversation has shown, newest first) and `pickCard` (id, then title, then latest). |
@@ -38,7 +38,7 @@ One core module, `src/genui/`, owns kinds, validation, limits, the operations, p
 ## Concepts
 
 - **SurfacePolicy** is what a caller lets the model do: `canPresent`, the granted `kinds`, `htmlCardsReachable()` (whether readers of this chat can reach the HTML card sandbox, read when a card is drawn and when a prompt is built), `cardsInConversation`, `canShowSaved`, `canSave`, `visitorSession`, `canPublish` and `describeKinds`. Every difference between callers is a value here, not a code path.
-- **Surface** is one conversation: rate-limit `key` (built only by `surfaceKey`), `id`, `owner`, `projectRoot`, `policy`, and its ports: `budget`, `artifacts` (store access), `publish` (`PublishPort`: read a path under the caller's rules, store the artifact) and `cards` (`CardSource`).
+- **Surface** is one conversation: rate-limit `key` (built only by `surfaceKey`), `id`, `owner` (the `ArtifactOwner` it saves and presents as, and the only owner a `publish_artifact` `owner` argument may name; absent for a stage, whose publish port applies the owner), `hiddenArtifacts` (set by agent callers so an eval session's artifacts are hidden), `projectRoot`, `policy`, and its ports: `budget`, `artifacts` (store access), `publish` (`PublishPort`: read a path under the caller's rules, store the artifact) and `cards` (`CardSource`).
 - **TurnBudget** counts cards in the current reply. A call reserves its slot before it awaits anything and releases it if the card fails, so parallel calls each count and a refused card does not use up the reply.
 - **CardSource** lists the cards a conversation has shown. The Guide reads its thread file (`src/guide/saveCard.ts`); an agent reads its stored session messages (`src/agents/sessionCards.ts`), so a card drawn in the reply still running can be saved in the next message.
 
@@ -46,8 +46,8 @@ One core module, `src/genui/`, owns kinds, validation, limits, the operations, p
 
 | Caller | Where | Owner and policy | Tools |
 |--------|-------|------------------|-------|
-| Stage attempt | `src/tools/publishArtifact.ts` (`createPublishArtifactTool`) | `{ kind: "stage" }`, `publishOnlyPolicy(PUBLISH_KINDS)`; the publish port reads paths inside the attempt's artifacts directory and applies the stage owner | `publish_artifact` via `toPiTool`. Prompt: `genUiPublishPrompt({ publisher: "stage" })` in `src/agent/piAdapter.ts` and `src/tools/publishArtifact.ts` |
-| Project agent | `src/agents/runtime/piRuntime.ts` | `{ kind: "agent", agent }`, `uiPolicy(definition.ui, htmlSignal(...))`, `canSave` when the agent holds `save_card` and the Host has a card source and store, `canPublish` when `save_artifact` is granted | `present_ui`, `save_card`, `publish_artifact` via `toPiTool`. Prompt: `genUiPresentPrompt(surface.policy)`; publish section from `src/agents/artifactTools.ts` |
+| Stage attempt | `src/tools/publishArtifact.ts` (`createPublishArtifactTool`) | no owner, `publishOnlyPolicy(PUBLISH_KINDS)`; the publish port reads paths inside the attempt's artifacts directory and applies the stage owner | `publish_artifact` via `toPiTool`. Prompt: `genUiPublishPrompt({ publisher: "stage" })` in `src/agent/piAdapter.ts` and `src/tools/publishArtifact.ts` |
+| Project agent | `src/agents/runtime/piRuntime.ts` | `{ kind: "agent", agent }`, `hiddenArtifacts` from `agentSessionIsEval`, `uiPolicy(definition.ui, htmlSignal(...))`, `canSave` when the agent holds `save_card` and the Host has a card source and store, `canPublish` when `save_artifact` is granted | `present_ui`, `save_card`, `publish_artifact` via `toPiTool`. Prompt: `genUiPresentPrompt(surface.policy)`; publish section from `src/agents/artifactTools.ts` |
 | Public chat visitor | Same as a project agent, with `visitorSession: true` when the session is anonymous (`anonymousPublicTools`) | A saved card stays in the visitor's conversation (session scope) and is visible through the visitor artifact route (`src/agents/webChat/visitorArtifacts.ts`) | Same tools, under the public-tools grant rules |
 | Guide | `src/guide/presentUi.ts`, `src/guide/saveCard.ts` | `{ kind: "guide" }`; kinds and the HTML signal are resolved per session, so `describeKinds: false`; budget from `TurnBudgets` keyed by thread and turn | `present_ui`, `save_card` via `toOperatorTool`. Prompt: `genUiPresentPrompt` plus the Guide-only rules in `GUIDE_CARD_RULES` |
 
@@ -63,7 +63,7 @@ Validation, the per-reply cap, prompts, tool descriptions, save and publish pick
 
 ## Add a caller
 
-1. Build a `Surface`: pick the owner, build the policy (`uiPolicy`, `publishOnlyPolicy`, or a literal), give it a key from `surfaceKey`, a `TurnBudget`, and the ports it needs (`artifacts`, `publish`, `cards`).
+1. Build a `Surface`: pick the owner (and `hiddenArtifacts` if the caller has hidden sessions), build the policy (`uiPolicy`, `publishOnlyPolicy`, or a literal), give it a key from `surfaceKey`, a `TurnBudget`, and the ports it needs (`artifacts`, `publish`, `cards`).
 2. Wrap the specs with an adapter (`toPiTool`, `toOperatorTool`, or a new adapter in `src/genui/adapters/` that maps a `GenUiToolResult` and contains no business logic).
 3. Put `genUiPresentPrompt` / `genUiPublishPrompt` output in the caller's prompt. Caller-only rules stay in the caller's playbook.
 4. Add the surface to `SURFACES` in `tests/genui.conformance.test.ts`.

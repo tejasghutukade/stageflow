@@ -42,7 +42,7 @@ import { messageReplayText } from "../../genui/replay.js";
 import { htmlSignal, surfaceKey, uiPolicy, type ArtifactStoreAccess, type Surface } from "../../genui/surface.js";
 import type { CardSource } from "../../genui/cards.js";
 import { PRESENT_UI_TOOL_NAME, presentUiSpec, publishArtifactSpec, saveCardSpec } from "../../genui/tools.js";
-import { SessionPublishError, type SessionPublishBody, type SessionPublishSuccess } from "../../artifacts/sessionPublish.js";
+import { agentSessionIsEval, SessionPublishError, type SessionPublishBody, type SessionPublishSuccess } from "../../artifacts/sessionPublish.js";
 import { forbiddenWriteTarget } from "../policy.js";
 import { prepareExecutionLaunch, type SandboxRunner } from "../sandbox.js";
 import { grantedStageflowTools, isOperatorOnlyTool, type ToolkitTool } from "../../toolkit/index.js";
@@ -518,6 +518,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
       key: surfaceKey("agent", input.sessionId),
       id: input.sessionId,
       owner: { kind: "agent", agent: definition.id },
+      hiddenArtifacts: (db) => agentSessionIsEval(db, input.sessionId),
       projectRoot,
       policy: {
         ...uiPolicy(definition.ui, htmlSignal(options.htmlCardsAvailable)),

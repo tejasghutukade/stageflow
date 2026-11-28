@@ -78,17 +78,19 @@ function sessionPublishHidden(db: Database.Database, context: SessionPublishCont
     }
   }
   const sessionId = context.source.sessionId;
-  if (sessionId) {
-    try {
-      const row = db.prepare(`SELECT source FROM agent_sessions WHERE session_id = ?`).get(sessionId) as
-        | { source: string }
-        | undefined;
-      if (row?.source === "eval") return true;
-    } catch {
-      return true;
-    }
+  return sessionId ? agentSessionIsEval(db, sessionId) : false;
+}
+
+/** True for an agent session an eval opened (its artifacts are hidden). Fails closed when the lookup fails. */
+export function agentSessionIsEval(db: Database.Database, sessionId: string): boolean {
+  try {
+    const row = db.prepare(`SELECT source FROM agent_sessions WHERE session_id = ?`).get(sessionId) as
+      | { source: string }
+      | undefined;
+    return row?.source === "eval";
+  } catch {
+    return true;
   }
-  return false;
 }
 
 type WorkerTransport = {

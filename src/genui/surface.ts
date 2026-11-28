@@ -2,6 +2,8 @@ import type Database from "better-sqlite3";
 import type { SessionPublishBody, SessionPublishSuccess } from "../artifacts/sessionPublish.js";
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
 import type { AgentDefinition } from "../config/loadAgent.js";
+import type { ArtifactOwner } from "../artifacts/owners.js";
+import { uiKeepsCardsInConversation } from "./kindsList.js";
 import type { TurnBudget } from "./budget.js";
 import type { CardSource } from "./cards.js";
 
@@ -25,9 +27,6 @@ export type SurfacePolicy = {
   describeKinds: boolean;
 };
 
-/** Who presents or publishes: an agent publishes as itself; a stage's owner is applied by its publish port. */
-export type GenUiOwner = { kind: "agent"; agent: string } | { kind: "stage" } | { kind: "guide" };
-
 export type ArtifactStoreAccess = {
   db: Database.Database;
   roots: readonly CatalogRoot[];
@@ -46,7 +45,13 @@ export type Surface = {
   key: string;
   /** The conversation: an agent session id, a Guide thread id, a stage attempt. */
   id: string;
-  owner: GenUiOwner;
+  /**
+   * The owner this surface saves and presents artifacts as, and the only owner a publish_artifact `owner` argument may
+   * name. Absent for a stage: its publish port applies the stage owner.
+   */
+  owner?: ArtifactOwner;
+  /** True when artifacts this surface writes are hidden (an eval session). Set by the caller; absent means visible. */
+  hiddenArtifacts?: (db: Database.Database) => boolean;
   projectRoot: string;
   policy: SurfacePolicy;
   /** The per-reply card count. */
@@ -58,9 +63,9 @@ export type Surface = {
   cards?: CardSource;
 };
 
-/** The one place a surface's rate-limit key is built. */
-export function surfaceKey(owner: GenUiOwner["kind"], id: string): string {
-  return `${owner}:${id}`;
+/** The one place a surface's rate-limit key is built. `caller` names the kind of surface (agent, guide, stage). */
+export function surfaceKey(caller: "agent" | "guide" | "stage", id: string): string {
+  return `${caller}:${id}`;
 }
 
 /** Kinds a one-off program may use right now: live.html only while its sandbox is reachable. */
@@ -77,7 +82,7 @@ export function uiPolicy(
   ui: AgentDefinition["ui"],
   htmlCardsReachable: () => boolean,
 ): Pick<SurfacePolicy, "canPresent" | "kinds" | "htmlCardsReachable" | "cardsInConversation" | "canShowSaved" | "describeKinds"> {
-  const cardsInConversation = (ui?.persistence ?? "conversation") === "conversation";
+  const cardsInConversation = uiKeepsCardsInConversation(ui);
   return {
     canPresent: ui?.present === true,
     kinds: ui?.kinds ?? [],

@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type Database from "better-sqlite3";
 import { scrubSecrets } from "../compaction/scrub.js";
 import { LIBRARY_NAME, LIBRARY_VERSION, OPENUI_LANG_FORMAT } from "../artifacts/library/index.js";
-import { ArtifactPublishError } from "../artifacts/limits.js";
+import { ARTIFACT_TITLE_MAX_CHARS, ArtifactPublishError } from "../artifacts/limits.js";
 import { publishArtifact } from "../artifacts/publish.js";
 import { artifactOwnerKey, ownerMatchSql, type ArtifactOwner } from "../artifacts/owners.js";
 import { sessionArtifactExpiresAt } from "../artifacts/sessionScope.js";
@@ -10,11 +10,8 @@ import { UI_PART_KIND_ARTIFACT_REF, UI_PART_SCHEMA_VERSION, type UiPartArtifactR
 import type { UiPartCard } from "../artifacts/uiPartCard.js";
 import { CardsUnavailableError, findCard } from "./cards.js";
 import { genUiKind } from "./kinds.js";
-import { sessionIsEval } from "./present.js";
 import type { Surface } from "./surface.js";
 import type { GenUiToolResult } from "./tools.js";
-
-const TITLE_MAX = 120;
 
 function failure(code: string, message: string): GenUiToolResult {
   return { ok: false, code, message };
@@ -67,11 +64,6 @@ function artifactRef(key: string, version: number, title: string, url: string): 
   return { ok: true, value: envelope as unknown as Record<string, unknown> };
 }
 
-/** A stage's owner is applied by its publish port, so a stage surface has none of its own to save under. */
-function ownerOf(surface: Surface): ArtifactOwner | undefined {
-  return surface.owner.kind === "stage" ? undefined : surface.owner;
-}
-
 /**
  * save_card: keep a card this conversation already showed as an artifact owned by the surface's owner. The stored
  * program is scrubbed the same way publish_artifact scrubs content. A visitor session's save stays in that
@@ -80,7 +72,7 @@ function ownerOf(surface: Surface): ArtifactOwner | undefined {
 export async function saveCard(surface: Surface, args: { ref?: string; title?: unknown }): Promise<GenUiToolResult> {
   if (args.title !== undefined && typeof args.title !== "string") return failure("artifact.invalid_id", "Title must be text");
   const source = surface.cards;
-  const owner = ownerOf(surface);
+  const owner = surface.owner;
   if (!source || !owner) return failure("ui.unavailable", "save_card is not available");
   const requested = args.ref?.trim() ?? "";
   let found;
@@ -103,7 +95,7 @@ export async function saveCard(surface: Surface, args: { ref?: string; title?: u
   const { db } = store;
   const { id: cardId, card } = found;
   const titleSource = typeof args.title === "string" && args.title.trim().length > 0 ? args.title.trim() : card.title;
-  const title = scrubSecrets(titleSource).slice(0, TITLE_MAX) || "Card";
+  const title = scrubSecrets(titleSource).slice(0, ARTIFACT_TITLE_MAX_CHARS) || "Card";
   const ownerKey = artifactOwnerKey(owner);
   // A deleted or expired earlier save keeps its id reserved; the next save takes the next stable id.
   let id: string | undefined;
@@ -129,7 +121,7 @@ export async function saveCard(surface: Surface, args: { ref?: string; title?: u
       publishSource: "api",
       source: { kind: owner.kind, sessionId: surface.id },
       ...(surface.policy.visitorSession ? { scope: "session" as const, expiresAt: sessionArtifactExpiresAt(Date.now()) } : {}),
-      ...(owner.kind === "agent" && sessionIsEval(db, surface.id) ? { hidden: true, ownerNamespace: "eval" as const } : {}),
+      ...(surface.hiddenArtifacts?.(db) ? { hidden: true, ownerNamespace: "eval" as const } : {}),
       roots: store.roots,
     });
     return artifactRef(published.key, published.version, title, store.consoleUrl(published.url));

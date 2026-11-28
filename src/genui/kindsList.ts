@@ -30,6 +30,11 @@ export const UI_PERSISTENCE_VALUES = ["conversation", "artifacts"] as const;
 
 export type UiPersistence = (typeof UI_PERSISTENCE_VALUES)[number];
 
+/** Cards stay in the conversation unless `ui.persistence` is `artifacts`. The one place that default is decided. */
+export function uiKeepsCardsInConversation(ui: { persistence?: string } | undefined): boolean {
+  return (ui?.persistence ?? "conversation") === "conversation";
+}
+
 /** Kinds an agent gets when `ui.present` is on and `ui.kinds` is left empty. */
 export function defaultPresentKinds(persistence: UiPersistence): string[] {
   return persistence === "conversation" ? [...CONVERSATION_CARD_KINDS] : [...PRESENTABLE_ARTIFACT_KINDS];

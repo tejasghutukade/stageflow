@@ -9,7 +9,7 @@ import { guardedStream } from "./guardrails.js";
 import { fitHistory } from "./historyFit.js";
 import { uiErrorPart, UI_PART_KIND_ERROR } from "../artifacts/uiPart.js";
 import { isPresentedUiPart, uiPartsFromToolOutput } from "../genui/parts.js";
-import { agentKeepsCardsInConversation } from "../genui/prompt.js";
+import { uiKeepsCardsInConversation } from "../genui/kindsList.js";
 import { PRESENT_UI_TOOL_NAME } from "../genui/tools.js";
 import type { OtlpSink } from "./otlpSink.js";
 import { isToolGranted, requiresAskFirst } from "./policy.js";
@@ -308,7 +308,7 @@ export class AgentConversation {
         if (call.tool === PRESENT_UI_TOOL_NAME) {
           // A card kept in the conversation only shows what the agent wrote, so anyone the agent talks to may see one.
           // Artifact persistence publishes into the visitor's own session; anonymous visitors get that only with public tools.
-          if (agentKeepsCardsInConversation(definition) || consumer || (anonymousPublic && visitorTools)) return { allow: true };
+          if (uiKeepsCardsInConversation(definition.ui) || consumer || (anonymousPublic && visitorTools)) return { allow: true };
           return { allow: false, reason: "identity.verification_required" };
         }
         if (anonymousPublic) {

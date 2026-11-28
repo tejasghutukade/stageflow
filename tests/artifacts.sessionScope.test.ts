@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { presentInline } from "../src/genui/present.js";
+import { agentSessionIsEval } from "../src/artifacts/sessionPublish.js";
 import { LIBRARY_NAME, LIBRARY_VERSION } from "../src/artifacts/library/index.js";
 import { catalogRootsForArtifacts } from "../src/artifacts/projectScope.js";
 import { listArtifacts } from "../src/artifacts/query.js";
@@ -73,7 +74,7 @@ describe("session artifacts", () => {
       program: 'root = TextContent("card")',
       manifest: manifest('root = TextContent("card")'),
       sessionId: "sess-1",
-      agentId: "helper",
+      owner: { kind: "agent", agent: "helper" },
       presentedInMessage: 1,
       nowMs,
       allowedKinds: ["live.declarative"],
@@ -108,7 +109,7 @@ describe("session artifacts", () => {
       program,
       manifest: { kind: "static.markdown" },
       sessionId: "sess-1",
-      agentId: "helper",
+      owner: { kind: "agent", agent: "helper" },
       presentedInMessage: 1,
       allowedKinds: ["static.markdown"],
       consoleUrl: (hashPath: string) => consoleUrl({ cwd: project } as McpToolDeps, hashPath),
@@ -127,7 +128,7 @@ describe("session artifacts", () => {
       program: "# Plan",
       manifest: {},
       sessionId: "sess-1",
-      agentId: "helper",
+      owner: { kind: "agent", agent: "helper" },
       presentedInMessage: 1,
       allowedKinds: ["static.markdown", "live.html"],
       consoleUrl: (hashPath: string) => consoleUrl({ cwd: project } as McpToolDeps, hashPath),
@@ -146,7 +147,7 @@ describe("session artifacts", () => {
       program: 'root = NotAThing("x")',
       manifest: manifest('root = NotAThing("x")'),
       sessionId: "sess-1",
-      agentId: "helper",
+      owner: { kind: "agent", agent: "helper" },
       presentedInMessage: 1,
       allowedKinds: ["live.declarative"],
       consoleUrl: (hashPath: string) => consoleUrl({ cwd: project } as McpToolDeps, hashPath),
@@ -172,12 +173,15 @@ describe("session artifacts", () => {
       program: 'root = TextContent("card")',
       manifest: manifest('root = TextContent("card")'),
       sessionId: "eval-1",
-      agentId: "helper",
+      owner: { kind: "agent", agent: "helper" },
+      hidden: agentSessionIsEval(db, "eval-1"),
       presentedInMessage: 1,
       allowedKinds: ["live.declarative"],
       consoleUrl: (hashPath: string) => consoleUrl({ cwd: project } as McpToolDeps, hashPath),
     });
     expect(shown.ok).toBe(true);
+    expect(agentSessionIsEval(db, "eval-1")).toBe(true);
+    expect(agentSessionIsEval(db, "sess-1")).toBe(false);
     expect(listArtifacts(db, { limit: 20 }, roots).artifacts).toEqual([]);
     expect(listArtifacts(db, { limit: 20, scope: "session" }, roots).artifacts).toEqual([]);
     const removed = await purgeSessionArtifacts(db, ["eval-1"]);
@@ -195,7 +199,7 @@ describe("session artifacts", () => {
       program: 'root = TextContent("card")',
       manifest: manifest('root = TextContent("card")'),
       sessionId: "sess-2",
-      agentId: "helper",
+      owner: { kind: "agent", agent: "helper" },
       presentedInMessage: 1,
       nowMs: Date.parse("2026-01-01T00:00:00.000Z"),
       allowedKinds: ["live.declarative"],

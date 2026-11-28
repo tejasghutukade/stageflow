@@ -141,7 +141,6 @@ export function createPublishArtifactTool(options: PublishArtifactToolOptions) {
   return toPiTool(publishArtifactSpec("stage"), {
     key: surfaceKey("stage", id),
     id,
-    owner: { kind: "stage" },
     projectRoot: options.runWorkspaceDir,
     policy: publishOnlyPolicy(PUBLISH_KINDS),
     publish: { readPath: (rawPath) => readArtifactPath(options, rawPath), publish: options.publish },

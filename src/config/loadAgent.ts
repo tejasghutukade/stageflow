@@ -1,5 +1,5 @@
 import { AGENT_ID_PATTERN, isReservedAgentId, RESERVED_AGENT_IDS } from "../agents/agentId.js";
-import { defaultPresentKinds, isConversationCardKind, isPresentableArtifactKind, UI_PERSISTENCE_VALUES } from "../genui/kindsList.js";
+import { defaultPresentKinds, isConversationCardKind, isPresentableArtifactKind, UI_PERSISTENCE_VALUES, uiKeepsCardsInConversation } from "../genui/kindsList.js";
 import { normalizeEntry, SENDER_ENTRY } from "../agents/communications/allowlist.js";
 import { PRESENT_UI_TOOL_NAME, SAVE_CARD_TOOL_NAME } from "../genui/names.js";
 import { grantedStageflowTools, isOperatorOnlyGroup, isOperatorOnlyTool, isToolGroupId, stageflowGrantId, TOOL_META } from "../toolkit/meta.js";
@@ -501,7 +501,7 @@ export function grantedBuiltinTools(definition: Pick<AgentDefinition, "tools">):
 export function agentHoldsSaveCard(definition: Pick<AgentDefinition, "tools"> & { ui?: AgentDefinition["ui"] }): boolean {
   return (
     definition.ui?.present === true &&
-    (definition.ui.persistence ?? "conversation") === "conversation" &&
+    uiKeepsCardsInConversation(definition.ui) &&
     grantedStageflowTools(definition.tools.stageflow).includes("save_artifact")
   );
 }

@@ -148,7 +148,7 @@ Rules every change must keep:
 - **`src/genui/` owns the behaviour.** It imports nothing from `src/agents/`, `src/guide/`, `src/operatorAgent/`, `src/tools/` or `src/mcp/` (it may use `src/artifacts/` and `src/config/` types). `src/guide/` never imports `src/agents/` generative UI code.
 - **Card and publish validation go through the kind registry** (`src/genui/kinds.ts`, `validate.ts`). One validator per kind; card-only rules are `mode: "card"`. Limits live on the kind entry. Error codes are public.
 - **Each tool is defined once** (`presentUiSpec`, `saveCardSpec`, `publishArtifactSpec` in `tools.ts`). Adapters (`adapters/pi.ts`, `adapters/operator.ts`) map results and contain no business logic.
-- **A new caller builds a `Surface`; it does not copy present, save or publish logic.** Differences between callers are `SurfacePolicy` values or port implementations. The HTML-cards signal goes only into the policy.
+- **A new caller builds a `Surface`; it does not copy present, save or publish logic.** Differences between callers are `SurfacePolicy` values, `Surface` fields (`owner`, `hiddenArtifacts`) or port implementations; `src/genui` never branches on owner kind. The HTML-cards signal goes only into the policy. The `ui.persistence` default is decided only by `uiKeepsCardsInConversation`.
 - **One budget.** `TurnBudget` reserves a slot before any await and releases it on failure; rate-limit keys come only from `surfaceKey`.
 - **One prompt composer.** Generative UI prompt text comes from `src/genui/prompt.ts`. Caller-only rules stay in the caller's playbook.
 - **`save_card` is one operation** (`save.ts`) over a `CardSource` port. A visitor's saved card stays in that visitor's conversation (session scope).

@@ -1,7 +1,7 @@
 import type Database from "better-sqlite3";
 import { ARTIFACT_TITLE_MAX_CHARS, ArtifactPublishError } from "../artifacts/limits.js";
 import { artifactStorageKey, publicArtifactKey } from "../artifacts/keys.js";
-import { parseOwnerKey } from "../artifacts/owners.js";
+import { parseOwnerKey, type ArtifactOwner } from "../artifacts/owners.js";
 import { storedProjectMatches } from "../artifacts/projectIdentity.js";
 import { publishArtifact } from "../artifacts/publish.js";
 import { ArtifactQueryError, readArtifact } from "../artifacts/query.js";
@@ -36,7 +36,10 @@ export type PresentArtifactInput = {
   program?: string;
   manifest?: unknown;
   sessionId?: string;
-  agentId?: string;
+  /** Who a one-off program is saved as (presentInline). */
+  owner?: ArtifactOwner;
+  /** Save a one-off program hidden (an eval session). */
+  hidden?: boolean;
   presentedInMessage?: number;
   nowMs?: number;
   allowedKinds: readonly string[];
@@ -103,17 +106,6 @@ function readScoped(
   }
 }
 
-export function sessionIsEval(db: Database.Database, sessionId: string): boolean {
-  try {
-    const row = db.prepare(`SELECT source FROM agent_sessions WHERE session_id = ?`).get(sessionId) as
-      | { source: string }
-      | undefined;
-    return row?.source === "eval";
-  } catch {
-    return true;
-  }
-}
-
 /** Publishes a one-off program as a session artifact (`ui.persistence: artifacts`) and returns a ref to it. */
 export async function presentInline(input: PresentArtifactInput): Promise<PresentArtifactResult> {
   const program = input.program ?? "";
@@ -127,16 +119,15 @@ export async function presentInline(input: PresentArtifactInput): Promise<Presen
     return toolFailure("ui.kind_not_granted", `This agent cannot present ${kind} artifacts: use one of ${input.allowedKinds.join(", ")}`);
   }
   const sessionId = input.sessionId?.trim() ?? "";
-  const agentId = input.agentId?.trim() ?? "";
-  if (!sessionId || !agentId) return toolFailure("ui.unavailable", "present_ui is not available");
+  const owner = input.owner;
+  if (!sessionId || !owner) return toolFailure("ui.unavailable", "present_ui is not available");
   const nowMs = input.nowMs ?? Date.now();
   try {
     assertSessionArtifactCaps(input.db, sessionId, input.presentedInMessage ?? 1, nowMs);
-    const evalSession = sessionIsEval(input.db, sessionId);
     const title = presentedTitle(input.title, manifest, program);
     const artifactManifest = entry.toArtifactManifest(manifest, program);
     const published = await publishArtifact(input.db, {
-      owner: { kind: "agent", agent: agentId },
+      owner,
       projectRoot: input.projectRoot,
       id: newSessionArtifactId(),
       kind,
@@ -144,10 +135,10 @@ export async function presentInline(input: PresentArtifactInput): Promise<Presen
       bytes: Buffer.from(program, "utf8"),
       ...(artifactManifest ? { manifest: artifactManifest } : {}),
       publishSource: "api",
-      source: { kind: "agent", sessionId },
+      source: { kind: owner.kind, sessionId },
       scope: "session",
       expiresAt: sessionArtifactExpiresAt(nowMs),
-      ...(evalSession ? { hidden: true, ownerNamespace: "eval" as const } : {}),
+      ...(input.hidden ? { hidden: true, ownerNamespace: "eval" as const } : {}),
       roots: input.roots,
     });
     const slash = published.key.lastIndexOf("/");

@@ -123,7 +123,8 @@ const liveHtml: GenUiKind = {
     if (typeof manifest.key === "string" && manifest.key.trim().length > 0) {
       displayOnly("An HTML card cannot reference a saved artifact; write the HTML into program");
     }
-    const { kind: _kind, ...rest } = manifest;
+    // `title` feeds the card's title (presentedTitle); it is not an HTML manifest field.
+    const { kind: _kind, title: _title, ...rest } = manifest;
     const html = validateHtmlManifest({ ...rest, format: "html", bindings: [] }, { enforceEval: true });
     if (htmlCspDeclaresNetwork(html.csp)) {
       displayOnly("An HTML card cannot declare network or external origins: omit csp or leave every list empty");
@@ -134,7 +135,7 @@ const liveHtml: GenUiKind = {
     return input.content.html ? assertHtmlDocumentAtPublish(input.text(), input.content.html.csp) : [];
   },
   toArtifactManifest: (manifest) => {
-    const { kind: _kind, program: _program, ...rest } = manifest;
+    const { kind: _kind, program: _program, title: _title, ...rest } = manifest;
     return rest;
   },
   promptSection: (mode) => (mode === "card" ? htmlCardPromptSection() : htmlPromptSection()),
@@ -172,8 +173,4 @@ const GENUI_KINDS: ReadonlyMap<string, GenUiKind> = new Map(
 
 export function genUiKind(id: string): GenUiKind | undefined {
   return GENUI_KINDS.get(id);
-}
-
-export function genUiKinds(): readonly GenUiKind[] {
-  return [...GENUI_KINDS.values()];
 }
