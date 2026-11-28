@@ -30,7 +30,7 @@ Host-down for list/show when the schema is current; publish and delete need a Ho
 | `sf artifact delete <ownerKey>/<id>` | Remove every published version (irreversible). Indexed-only rows → `artifact.not_deletable`. |
 | `sf artifact read --run --path` | Read a **run workspace** file by path, not the index. |
 
-Owner key form: `stage:<pipeline>:<stage>/<id>` or `agent:<id>/<id>` (CLI also accepts `pipeline:stage` for `--owner` on publish).
+Owner key form: `stage:<pipeline>:<stage>/<id>`, `agent:<id>/<id>` or `guide/<id>` (CLI also accepts `pipeline:stage` for `--owner` on publish; it does not publish as `guide`). `save_card` makes the last two: an agent keeps a chat card as `agent:<id>/card_<hash>`, the Guide as `guide/card_<hash>`. A public chat visitor's saved card is a session artifact of that conversation.
 
 ## MCP
 

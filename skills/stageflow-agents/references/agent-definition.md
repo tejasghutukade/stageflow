@@ -84,10 +84,10 @@ Grant ids (used in `approvals.ask_first`): builtin tool name (`write`, `bash`), 
 |---|---|---|
 | `present` | boolean, `false` | Grants `present_ui`. Off until set |
 | `persistence` | `conversation` or `artifacts`, `conversation` | `conversation`: display-only cards stored in the chat message (visitors on a public link always get them). `artifacts`: cards saved as session artifacts, plus keys, live data and buttons (public visitors get them only with `web_chat.public_tools`) |
-| `kinds` | list, filled per mode | Empty while present gets `live.declarative`, `static.markdown`, and `live.html` (`conversation`) or every kind below (`artifacts`). `static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`, `live.declarative`, `live.html`. Unknown `agent.ui_kind_unknown`. Duplicate `agent.ui_kind_duplicate`. Other than the two card kinds with `conversation`: `agent.ui_kind_needs_artifacts` |
+| `kinds` | list, filled per mode | Empty while present gets `live.declarative`, `static.markdown`, and `live.html` (`conversation`) or every kind below (`artifacts`). `static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`, `live.declarative`, `live.html`. Unknown `agent.ui_kind_unknown`. Duplicate `agent.ui_kind_duplicate`. Other than the three card kinds with `conversation`: `agent.ui_kind_needs_artifacts`. `live.html` cards are offered only while chat readers can reach the HTML sandbox (otherwise `ui.kind_not_granted`) |
 | `functions` | list of function ids, `[]` | Only with `artifacts` (`agent.ui_functions_need_artifacts`). Ids a card may call for live data. Invalid `agent.ui_function_invalid`. Duplicate `agent.ui_function_duplicate`. A binding query for any other id is `agent.ui_function_not_granted` |
 
-Kinds or functions while `present` is false is `agent.ui_present_required`.
+Kinds or functions while `present` is false is `agent.ui_present_required`. With `conversation` and the `save_artifact` grant the agent also gets `save_card` (see [tools-and-approvals.md](tools-and-approvals.md)).
 
 ## approvals
 
