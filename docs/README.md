@@ -28,6 +28,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Context and compaction](context-and-compaction.md) | What happens when a stage or agent fills its context window: assignment in the system prompt, tool-output caps, `working_state`, automatic compaction, cost and visibility |
 | [Envelopes](envelopes.md) | Stage handoff contract (`emit_stage_envelope`, artifacts) |
 | [Artifacts](artifacts.md) | Indexed deliverables: what is recorded, what is left out, and how projects scope the index |
+| [Generative UI internals](generative-ui-internals.md) | For contributors: the `src/genui` core (kinds, validation, surfaces, budgets, prompts, tool specs and adapters), how each caller builds its surface, adding a kind or a caller, the artifact owner registry, the console sandbox frame and renderer registries, the conformance suite |
 | [Verified Stage Execution](verified-stage-execution.md) | After-phase `verify`, evidence, and `on_verify_fail` repair / manual recovery |
 | [Human-in-the-loop](hitl.md) | Gate kinds, operator replies, `--skip-gates`, exit code `2` |
 | [Agents](agents.md) | Project-owned agents (`agents/*.agent.yaml`): overview and where the pieces live |

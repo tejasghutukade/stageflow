@@ -16,7 +16,7 @@ import {
 } from "react-icons/lu";
 import { AgentApiError, agentsApi, streamAgentChat, type AgentApproval, type AgentDetail, type AgentSessionDetail } from "../../../api/agents";
 import { UiMessageParts } from "../../../chat/MessageParts";
-import { ConsoleSandboxProvider } from "../../artifacts/ConsoleSandboxProvider";
+import { ConsoleSandboxProvider } from "../../artifacts/sandbox/sandboxOrigin";
 import { InlinePreviewCard } from "../../../chat/parts/artifactRefPart";
 import { registerBuiltinUiParts } from "../../../chat/parts/builtins";
 

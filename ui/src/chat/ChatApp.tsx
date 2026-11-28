@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { LuMenu, LuX } from "react-icons/lu";
 import { createChatApi, ChatApiError, type ChatAgentInfo } from "./api";
 import { ChatRuntimeProvider } from "./ChatRuntime";
-import { ChatSandboxProvider } from "./sandboxContext";
+import { ChatSandboxProvider } from "../redesign/artifacts/sandbox/sandboxOrigin";
 import { readChatConfig, threadIdFromUrl, urlWithThread } from "./config";
 import { loadErrorMessage, UNAVAILABLE_CODE } from "./errors";
 import { Thread } from "./Thread";

@@ -1,22 +1,15 @@
-import { lazy, Suspense, useState, type ReactNode } from "react";
+import { useState } from "react";
 import { parseArtifactShowKey } from "../../../../src/artifacts/showKey.ts";
 import type { ArtifactLiveAction } from "../../api/artifacts";
 import { liveQueryFromChat, postChatAction, type ChatActionTarget } from "../../chat/parts/chatActions";
+import { renderArtifactFormat } from "../../chat/parts/formats";
 import type { ArtifactDetailMeta } from "./artifactDetailModel";
-import { LIVE_VERSION_SNAPSHOT_NOTE, viewingVersionBanner } from "./artifactDetailModel";
+import { viewingVersionBanner } from "./artifactDetailModel";
 import { ExplanationCard, StaticArtifactBody } from "./renderers/StaticPreview";
 import type { StaticPreview } from "./renderers/previewModel";
 import type { LivePreviewInput } from "./livePreview";
 import type { LiveHtmlFrameProps } from "./liveHtml/LiveHtmlFrame";
 import { useArtifactViewModel, type ArtifactViewIdentity, type ArtifactViewReady } from "./artifactViewModel";
-
-const LiveArtifactRenderer = lazy(() =>
-  import("./live/LiveArtifactRenderer").then((mod) => ({ default: mod.LiveArtifactRenderer })),
-);
-
-const LiveHtmlFrame = lazy(() =>
-  import("./liveHtml/LiveHtmlFrame").then((mod) => ({ default: mod.LiveHtmlFrame })),
-);
 
 export const ARTIFACT_VIEW_INLINE_COLLAPSED_MAX_PX = 420;
 
@@ -53,8 +46,6 @@ export function ArtifactViewContent({
   actions,
   onAction,
 }: ArtifactViewContentProps) {
-  const showLiveProgram = meta.kind === "live.declarative" && (preview === null || preview.mode !== "unavailable");
-  const showLiveHtml = meta.kind === "live.html" && (preview === null || preview.mode !== "unavailable");
   const [expanded, setExpanded] = useState(false);
   const inlineShell =
     density === "inline"
@@ -68,53 +59,21 @@ export function ArtifactViewContent({
         }
       : { className: "min-w-0", style: undefined };
 
-  let body: ReactNode;
-  if (preview?.mode === "unavailable") {
-    body = <StaticArtifactBody preview={preview} imageUrl={imageUrl} imageAlt={meta.title} />;
-  } else if (showLiveHtml) {
-    body = (
-      <div>
-        {historicalSnapshots ? (
-          <p className="mb-3 text-[13px] text-[var(--sf-text-2)]">{LIVE_VERSION_SNAPSHOT_NOTE}</p>
-        ) : null}
-        {liveHtml ? (
-          <Suspense fallback={<p className="text-[13px] text-[var(--sf-text-3)]">Loading live HTML…</p>}>
-            <LiveHtmlFrame {...liveHtml} />
-          </Suspense>
-        ) : (
-          <p className="text-[13px] text-[var(--sf-text-3)]">Loading live HTML…</p>
-        )}
-        {showSourceDetails ? (
-          <details className="mt-4">
-            <summary className="cursor-pointer text-[13px] text-[var(--sf-text-2)]">HTML source</summary>
-            <pre className="sf-mono mt-2 whitespace-pre-wrap text-[13px] text-[var(--sf-text-1)]">{liveHtml?.html ?? ""}</pre>
-          </details>
-        ) : null}
-      </div>
+  const body =
+    preview?.mode === "unavailable" ? (
+      <StaticArtifactBody preview={preview} imageUrl={imageUrl} imageAlt={meta.title} />
+    ) : (
+      renderArtifactFormat(meta.kind, {
+        title: meta.title,
+        preview,
+        imageUrl,
+        program,
+        livePreview,
+        liveHtml,
+        historicalSnapshots,
+        showSourceDetails,
+      })
     );
-  } else if (showLiveProgram) {
-    body = (
-      <div>
-        {livePreview ? (
-          <Suspense fallback={<p className="text-[13px] text-[var(--sf-text-3)]">Loading live preview…</p>}>
-            <LiveArtifactRenderer {...livePreview} />
-          </Suspense>
-        ) : (
-          <p className="text-[13px] text-[var(--sf-text-3)]">Loading live preview…</p>
-        )}
-        {showSourceDetails ? (
-          <details className="mt-4">
-            <summary className="cursor-pointer text-[13px] text-[var(--sf-text-2)]">Program source</summary>
-            <pre className="sf-mono mt-2 whitespace-pre-wrap text-[13px] text-[var(--sf-text-1)]">{program ?? ""}</pre>
-          </details>
-        ) : null}
-      </div>
-    );
-  } else if (preview) {
-    body = <StaticArtifactBody preview={preview} imageUrl={imageUrl} imageAlt={meta.title} />;
-  } else {
-    body = <p className="text-[13px] text-[var(--sf-text-3)]">Loading artifact…</p>;
-  }
 
   return (
     <div className={inlineShell.className} style={inlineShell.style}>

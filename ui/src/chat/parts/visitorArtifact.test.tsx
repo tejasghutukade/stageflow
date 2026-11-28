@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UI_PART_KIND_ARTIFACT_REF, UI_PART_SCHEMA_VERSION } from "../../../../src/artifacts/uiPart.ts";
-import { ChatSandboxProvider } from "../sandboxContext";
+import { ChatSandboxProvider } from "../../redesign/artifacts/sandbox/sandboxOrigin";
 import { registerBuiltinUiParts } from "./builtins";
 import { renderUiPart } from "./registry";
 import type { VisitorArtifactPayload } from "../api";

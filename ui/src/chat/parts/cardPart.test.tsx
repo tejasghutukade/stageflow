@@ -10,8 +10,8 @@ import {
   SHELL_READY_METHOD,
   SHELL_RELAY_METHOD,
 } from "../../redesign/artifacts/liveHtml/hostBridge";
-import { ChatSandboxProvider } from "../sandboxContext";
-import { createHeightGuard } from "./htmlCardFrame";
+import { ChatSandboxProvider } from "../../redesign/artifacts/sandbox/sandboxOrigin";
+import { createHeightGuard } from "../../redesign/artifacts/sandbox/useSandboxBridge";
 import { registerBuiltinUiParts } from "./builtins";
 import { renderUiPart } from "./registry";
 

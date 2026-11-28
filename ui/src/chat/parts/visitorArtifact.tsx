@@ -1,7 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { ArtifactSnapshot } from "../../api/artifacts";
 import type { VisitorArtifactPayload } from "../api";
-import { useChatSandboxOrigins } from "../sandboxContext";
 import type { LiveQuery } from "../../redesign/artifacts/liveData/liveQuery";
 import { previewFromContent } from "../../redesign/artifacts/renderers/previewModel";
 import { ExplanationCard } from "../../redesign/artifacts/renderers/StaticPreview";
@@ -33,12 +32,11 @@ function snapshotsOf(view: VisitorArtifactPayload): ArtifactSnapshot[] {
 }
 
 function VisitorArtifactBody({ view }: { view: VisitorArtifactPayload }) {
-  const { sandboxOrigins } = useChatSandboxOrigins();
   if (view.kind === "live.html") {
     if (!view.text) return <ExplanationCard testId="visitor-artifact-unavailable" title="This artifact is unavailable" body="It could not be shown." />;
     return (
       <Suspense fallback={<p className="text-[13px] text-[var(--sf-text-3)]">Loading…</p>}>
-        <HtmlCardSandbox program={view.text} libraries={view.libraries ?? []} sandboxOrigins={sandboxOrigins} />
+        <HtmlCardSandbox program={view.text} libraries={view.libraries ?? []} />
       </Suspense>
     );
   }

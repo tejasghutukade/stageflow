@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { LuShieldAlert } from "react-icons/lu";
 import {
   approveArtifactOrigins,
@@ -14,9 +14,9 @@ import { SandboxedHtml } from "../renderers/SandboxedHtml";
 import { bindingCacheScope, createBindingCaller, type BindingQuery } from "./bindingCalls";
 import { HTML_LIBRARY_FLAGS } from "../../../../../src/artifacts/library/htmlLibraryFlags.ts";
 import { libraryCspSources, liveHtmlDocumentCsp } from "./cspPolicy";
-import { COLLAPSED_SHELL_HEIGHT_PX, createHostBridge, createNonce, type HostBridge } from "./hostBridge";
-import { readLiveHtmlHostContext } from "./hostContext";
-import { useSandboxOrigin } from "../sandboxOrigin";
+import { COLLAPSED_SHELL_HEIGHT_PX } from "./hostBridge";
+import { useSandboxOrigin } from "../sandbox/sandboxOrigin";
+import { useSandboxBridge } from "../sandbox/useSandboxBridge";
 
 const LINK_NOTE_MS = 5_000;
 
@@ -393,12 +393,7 @@ function LiveHtmlSession(props: LiveHtmlFrameProps & {
   onTimeout: () => void;
   onRestart: () => void;
 }) {
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [phase, setPhase] = useState<"loading" | "live">("loading");
-  const [height, setHeight] = useState<number | null>(null);
   const [linkNote, setLinkNote] = useState(false);
-  const [stoppedReason, setStoppedReason] = useState<{ reason: unknown } | null>(null);
   const linkTimer = useRef<number | null>(null);
   const snapshotsRef = useRef(props.snapshots);
   const settledRef = useRef(props.settled);
@@ -415,11 +410,7 @@ function LiveHtmlSession(props: LiveHtmlFrameProps & {
       () => !settledRef.current || refreshingRef.current,
     );
   }
-  const bridgeRef = useRef<HostBridge | null>(null);
-  const [nonce] = useState(createNonce);
-  const onTimeoutRef = useRef(props.onTimeout);
-  onTimeoutRef.current = props.onTimeout;
-  if (bridgeRef.current === null) {
+  const [setup] = useState(() => {
     const bindings = props.record.live?.bindings ?? [];
     const caller = createBindingCaller({
       bindings,
@@ -440,37 +431,41 @@ function LiveHtmlSession(props: LiveHtmlFrameProps & {
       },
       cacheScope: bindingCacheScope(props.projectRoot, props.ownerKey, props.artifactId, props.version),
     });
-    const libraryRefs = (props.record.live?.libraries ?? []).map((library) => ({ name: library.name, version: library.version }));
-    bridgeRef.current = createHostBridge({
-      sandboxOrigin: props.origin,
-      html: props.html,
-      csp: props.csp,
-      nonce,
-      libraries: libraryRefs,
-      allowEval: (props.record.live?.libraries ?? []).some((library) => library.allowEval === true),
-      readContext: () => readLiveHtmlHostContext(containerRef.current),
-      callBinding: caller,
-      onHeight: (px) => setHeight(px),
-      onLinkBlocked: () => {
-        setLinkNote(true);
-        if (linkTimer.current !== null) window.clearTimeout(linkTimer.current);
-        linkTimer.current = window.setTimeout(() => {
-          linkTimer.current = null;
-          setLinkNote(false);
-        }, LINK_NOTE_MS);
-      },
-      onReady: () => setPhase("live"),
-      onSandboxError: (reason) => {
-        if (linkTimer.current !== null) {
-          window.clearTimeout(linkTimer.current);
-          linkTimer.current = null;
-        }
+    const libraries = props.record.live?.libraries ?? [];
+    return {
+      caller,
+      libraryRefs: libraries.map((library) => ({ name: library.name, version: library.version })),
+      allowEval: libraries.some((library) => library.allowEval === true),
+    };
+  });
+  const frame = useSandboxBridge({
+    origin: props.origin,
+    html: props.html,
+    csp: props.csp,
+    libraries: setup.libraryRefs,
+    allowEval: setup.allowEval,
+    initialHeight: null,
+    callBinding: setup.caller,
+    onTimeout: () => props.onTimeout(),
+    onLinkBlocked: () => {
+      setLinkNote(true);
+      if (linkTimer.current !== null) window.clearTimeout(linkTimer.current);
+      linkTimer.current = window.setTimeout(() => {
+        linkTimer.current = null;
         setLinkNote(false);
-        setHeight(COLLAPSED_SHELL_HEIGHT_PX);
-        setStoppedReason({ reason });
-      },
-    });
-  }
+      }, LINK_NOTE_MS);
+    },
+    onSandboxError: () => {
+      if (linkTimer.current !== null) {
+        window.clearTimeout(linkTimer.current);
+        linkTimer.current = null;
+      }
+      setLinkNote(false);
+    },
+    onBind: () => waitersRef.current?.reset(),
+    onUnbind: () => waitersRef.current?.cancel(),
+  });
+  const { phase, height, stopped: stoppedReason } = frame;
 
   useEffect(() => {
     waitersRef.current?.notify();
@@ -484,40 +479,11 @@ function LiveHtmlSession(props: LiveHtmlFrameProps & {
       const hash = canonicalJson(snap.value === undefined ? null : snap.value);
       next.set(snap.binding_id, hash);
       if (previous && previous.get(snap.binding_id) !== hash) {
-        bridgeRef.current?.notifyBindingUpdated(snap.binding_id);
+        frame.bridge.notifyBindingUpdated(snap.binding_id);
       }
     }
     seenValues.current = next;
-  }, [props.snapshots]);
-
-  useLayoutEffect(() => {
-    const bridge = bridgeRef.current;
-    const iframe = iframeRef.current;
-    if (!bridge || !iframe) return;
-    waitersRef.current?.reset();
-    const epoch = { current: 0 };
-    const token = ++epoch.current;
-    const isCurrent = () => epoch.current === token;
-    const onMessage = (event: MessageEvent) => {
-      const frame = iframe.contentWindow;
-      bridge.onMessage(event, frame, (message, targetOrigin) => {
-        frame?.postMessage(message, targetOrigin);
-      }, isCurrent);
-    };
-    const post = (message: unknown, targetOrigin: string) => {
-      iframe.contentWindow?.postMessage(message, targetOrigin);
-    };
-    bridge.bind(post);
-    window.addEventListener("message", onMessage);
-    bridge.arm(() => onTimeoutRef.current());
-    return () => {
-      epoch.current += 1;
-      waitersRef.current?.cancel();
-      window.removeEventListener("message", onMessage);
-      bridge.bind(null);
-      bridge.disarm();
-    };
-  }, []);
+  }, [props.snapshots, frame.bridge]);
 
   useEffect(() => {
     return () => {
@@ -525,12 +491,10 @@ function LiveHtmlSession(props: LiveHtmlFrameProps & {
     };
   }, []);
 
-  const parent = typeof location === "undefined" ? "" : location.origin;
-  const src = `${props.origin}/shell.html?parent=${encodeURIComponent(parent)}`;
   const stopped = stoppedReason !== null;
   const frameHeight = stopped ? COLLAPSED_SHELL_HEIGHT_PX : height;
   return (
-    <div ref={containerRef} data-testid="live-html-frame" className="flex flex-col gap-3">
+    <div ref={frame.containerRef} data-testid="live-html-frame" className="flex flex-col gap-3">
       {stoppedReason ? (
         <StateCard title="Sandbox stopped" body={sandboxStoppedMessage(stoppedReason.reason)}>
           <button
@@ -554,12 +518,12 @@ function LiveHtmlSession(props: LiveHtmlFrameProps & {
           </div>
         ) : null}
         <iframe
-          ref={iframeRef}
+          ref={frame.iframeRef}
           title="Live HTML artifact"
           sandbox="allow-scripts allow-same-origin"
           referrerPolicy="no-referrer"
           loading="eager"
-          src={src}
+          src={frame.src}
           data-testid="live-html-shell"
           data-collapsed={stopped ? "true" : "false"}
           aria-hidden={stopped ? true : undefined}

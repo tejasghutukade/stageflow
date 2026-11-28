@@ -84,6 +84,10 @@ This same lifecycle supports interactive console use and headless automation: CI
 
 Agents are a second, conversational way to run work beside pipelines. Each lives in `agents/<id>.agent.yaml` in the project (git-tracked), is synced into revisions in the run store, and runs on a Pi session sealed to the tools and approvals its definition grants. One turn-lifecycle module owns every change of a turn, its session and its approval, so a stopped turn cannot leave an approval pending. Channels, schedules, the console, CLI, MCP and the public web chat all enter through the same session and turn path. See [Agents](agents.md).
 
+## Generative UI
+
+Cards in chat, showing and saving artifacts, and publishing are one core module, `src/genui/`. Stages, project agents, public chat visitors and the Guide each describe themselves as a surface (owner, policy, ports) and get the same `present_ui`, `save_card` and `publish_artifact` through a thin adapter. Artifact owner kinds come from one registry in `src/artifacts/owners.ts`. See [Generative UI internals](generative-ui-internals.md).
+
 ## Design decisions
 
 ### Fresh session per stage
@@ -141,6 +145,7 @@ A published `sf` binary runs each stage as compiled `dist/cli.js`. `npm run dev`
 - [CI / headless](ci.md) — JSON output, exit codes, and GitHub Actions
 - [MCP](mcp.md) — tools and run resources
 - [Operator console](operator-console.md) and [Agents](agents.md)
+- [Generative UI internals](generative-ui-internals.md) — the `src/genui` core, surfaces, owner registry and console renderers
 - [MCP servers](mcp-servers.md)
 - [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) — stage agents consuming project MCP servers
 - [Operator console](operator-console.md) — runtime inspection and gate handling

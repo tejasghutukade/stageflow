@@ -12,7 +12,7 @@ import { artifactDetailMeta } from "../artifactDetailModel";
 import { libraryCspSources, liveHtmlDocumentCsp } from "./cspPolicy";
 import { LiveHtmlFrame, type LiveHtmlFrameProps } from "./LiveHtmlFrame";
 import type { ArtifactOriginView } from "../../../api/artifacts";
-import { setSandboxOriginForTests, useSandboxOrigin } from "../sandboxOrigin";
+import { setSandboxOriginForTests, useSandboxOrigin } from "../sandbox/sandboxOrigin";
 import { resetLiveQueryCacheForTests } from "../liveData/queryCache";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -216,6 +216,22 @@ describe("LiveHtmlFrame", () => {
       vi.advanceTimersByTime(5_000);
     });
     expect(container?.textContent).not.toContain("A link in this artifact was blocked");
+  });
+
+  it("stops a page that grows with its own frame, as cards do", async () => {
+    setSandboxOriginForTests(ORIGIN);
+    await render(createElement(LiveHtmlFrame, props()));
+    const { iframe, win, post } = shell();
+    emit(win, ready());
+    const load = post.mock.calls.find((call) => (call[0] as { method?: string }).method === "sf/sandbox-load")?.[0] as { params: { nonce: string } };
+    for (const height of [280, 360, 440, 520, 600, 680]) {
+      emit(win, {
+        jsonrpc: "2.0",
+        method: "sf/sandbox-relay",
+        params: { nonce: load.params.nonce, message: { jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height } } },
+      });
+    }
+    expect(iframe.style.height).toBe("360px");
   });
 
   it("shows a sandbox error and recreates the frame on retry and on html change", async () => {

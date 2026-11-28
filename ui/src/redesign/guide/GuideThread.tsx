@@ -4,7 +4,7 @@ import { LuArrowDown, LuArrowUp, LuFile, LuPaperclip, LuSquare, LuTriangleAlert,
 import { ModelPicker } from "../../components/ModelPicker";
 import { friendlyMessage } from "../../chat/errors";
 import { UiMessageParts, uiPartsFromMetadata } from "../../chat/MessageParts";
-import { ConsoleSandboxProvider } from "../artifacts/ConsoleSandboxProvider";
+import { ConsoleSandboxProvider } from "../artifacts/sandbox/sandboxOrigin";
 import { registerBuiltinUiParts } from "../../chat/parts/builtins";
 
 registerBuiltinUiParts();
