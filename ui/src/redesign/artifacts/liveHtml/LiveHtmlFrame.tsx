@@ -479,7 +479,7 @@ function LiveHtmlSession(props: LiveHtmlFrameProps & {
       const hash = canonicalJson(snap.value === undefined ? null : snap.value);
       next.set(snap.binding_id, hash);
       if (previous && previous.get(snap.binding_id) !== hash) {
-        frame.bridge.notifyBindingUpdated(snap.binding_id);
+        frame.notifyBindingUpdated(snap.binding_id);
       }
     }
     seenValues.current = next;

@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - An HTML card or one-off `live.html` program whose manifest carries a `title` takes that title instead of being refused with `artifact.invalid_shape`.
 - In artifacts mode, a one-off `live.html` program is shown as a session artifact instead of failing validation.
+- The resize-loop guard no longer clips a live HTML artifact that grows on refresh: it locks only on equal increases that arrive right after the previous resize, and new binding data unlocks it.
 
 ## [0.68.0] - 2026-11-26
 

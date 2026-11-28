@@ -699,6 +699,24 @@ describe("sandbox shell", () => {
     expect(loop(300)).toBe(300);
   });
 
+  it("the shell lets slow equal growth through and unlocks after new binding data", () => {
+    const context = vm.createContext({ TextEncoder, URLSearchParams }) as {
+      __sfCreateHeightGuard: (now?: () => number) => ((height: number) => number) & { reset(): void };
+    };
+    vm.runInContext(shellScript(["http://127.0.0.1:1"]), context);
+    let at = 0;
+    const slow = context.__sfCreateHeightGuard(() => at);
+    expect([280, 360, 440, 520, 600].map((height) => {
+      at += 1_000;
+      return slow(height);
+    })).toEqual([280, 360, 440, 520, 600]);
+    const loop = context.__sfCreateHeightGuard(() => at);
+    expect([280, 360, 440, 520, 760].map((height) => loop(height))).toEqual([280, 360, 440, 360, 360]);
+    loop.reset();
+    expect(loop(760)).toBe(760);
+    expect(shellScript(["http://127.0.0.1:1"])).toContain('if (message.method === "ui/notifications/binding-updated") heightGuard.reset();');
+  });
+
   it("createLoadGuard keeps the first nested load and tears the frame down on the second", () => {
     const guard = createLoadGuard();
     expect(guard.onLoad()).toBe("keep");

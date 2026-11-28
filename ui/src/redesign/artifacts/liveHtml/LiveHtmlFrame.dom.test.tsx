@@ -234,6 +234,27 @@ describe("LiveHtmlFrame", () => {
     expect(iframe.style.height).toBe("360px");
   });
 
+  it("lets a locked page grow again once a binding has new data", async () => {
+    setSandboxOriginForTests(ORIGIN);
+    await render(createElement(LiveHtmlFrame, props()));
+    const { iframe, win, post } = shell();
+    emit(win, ready());
+    const load = post.mock.calls.find((call) => (call[0] as { method?: string }).method === "sf/sandbox-load")?.[0] as { params: { nonce: string } };
+    const size = (height: number) =>
+      emit(win, {
+        jsonrpc: "2.0",
+        method: "sf/sandbox-relay",
+        params: { nonce: load.params.nonce, message: { jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height } } },
+      });
+    for (const height of [280, 360, 440, 520]) size(height);
+    expect(iframe.style.height).toBe("360px");
+    await act(async () => {
+      root?.render(createElement(LiveHtmlFrame, props({ snapshots: [snap({ weeks: 24 })] })));
+    });
+    size(760);
+    expect(iframe.style.height).toBe("760px");
+  });
+
   it("shows a sandbox error and recreates the frame on retry and on html change", async () => {
     vi.useFakeTimers();
     setSandboxOriginForTests(ORIGIN);

@@ -1137,17 +1137,25 @@ function isIpv4(host) {
 function endsWith(value, suffix) {
   return value.length >= suffix.length && value.slice(value.length - suffix.length) === suffix;
 }
-// A page sized to its own frame (min-height: 100vh plus padding) grows by the same step on every resize.
-// Three equal increases in a row are that loop: hold the height one step above where it started.
-function createHeightGuard() {
+// A page sized to its own frame (min-height: 100vh plus padding) grows by the same step on every resize and reports
+// it right away. Three equal increases in a row, each within LOOP_WINDOW_MS of the report before, are that loop: hold
+// the height one step above where it started. Slower equal growth is real content. reset() unlocks after new data.
+var LOOP_WINDOW_MS = 250;
+function createHeightGuard(now) {
+  var clock = typeof now === "function" ? now : Date.now;
   var current = null;
   var start = null;
   var deltas = [];
   var locked = null;
-  return function (height) {
+  var lastAt = null;
+  function guard(height) {
+    var at = clock();
+    var quick = lastAt !== null && at - lastAt <= LOOP_WINDOW_MS;
+    lastAt = at;
     if (locked !== null) return height < locked ? height : locked;
     if (current !== null && height > current) {
       var delta = height - current;
+      if (!quick) deltas = [];
       if (!deltas.length) start = current;
       deltas.push(delta);
       var n = deltas.length;
@@ -1161,7 +1169,15 @@ function createHeightGuard() {
     }
     current = height;
     return height;
+  }
+  guard.reset = function () {
+    current = null;
+    start = null;
+    deltas = [];
+    locked = null;
+    lastAt = null;
   };
+  return guard;
 }
 function createLoadGuard() {
   var seen = 0;
@@ -1267,6 +1283,7 @@ function startShell() {
         nestedFlightCount -= 1;
       }
     }
+    if (message.method === "ui/notifications/binding-updated") heightGuard.reset();
     if (frame.contentWindow) frame.contentWindow.postMessage(message, "*");
   }
   function onNested(data) {

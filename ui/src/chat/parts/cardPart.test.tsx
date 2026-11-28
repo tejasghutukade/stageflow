@@ -174,4 +174,19 @@ describe("height guard", () => {
     expect([280, 360, 440, 520, 600].map(loop)).toEqual([280, 360, 440, 360, null]);
     expect(loop(300)).toBe(300);
   });
+
+  it("does not lock on equal growth that arrives slowly, and unlocks on reset", () => {
+    let at = 0;
+    const slow = createHeightGuard(() => at);
+    const heights = [280, 360, 440, 520, 600].map((height) => {
+      at += 1_000;
+      return slow(height);
+    });
+    expect(heights).toEqual([280, 360, 440, 520, 600]);
+    const loop = createHeightGuard(() => at);
+    expect([280, 360, 440, 520].map((height) => loop(height))).toEqual([280, 360, 440, 360]);
+    expect(loop(760)).toBeNull();
+    loop.reset();
+    expect(loop(760)).toBe(760);
+  });
 });
