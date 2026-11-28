@@ -88,6 +88,22 @@ describe("loadHostConfig", () => {
     );
   });
 
+  it("accepts STAGEFLOW_TELEMETRY as a known env key", () => {
+    const home = tempHome();
+    expect(() =>
+      loadHostConfig({
+        homeDir: home,
+        env: { STAGEFLOW_TELEMETRY: "1" },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      loadHostConfig({
+        homeDir: home,
+        env: { STAGEFLOW_TELEMETRY: "0" },
+      }),
+    ).not.toThrow();
+  });
+
   it("accepts STAGEFLOW_SECRET_REGISTRY as a known env key", () => {
     const home = tempHome();
     expect(() =>

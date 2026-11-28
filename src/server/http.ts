@@ -221,6 +221,7 @@ import { resolveHostInfo } from "./hostInfo.js";
 import { consoleOriginsFor, htmlCardsReachable } from "./sandboxPolicy.js";
 import { attachSandboxShutdown, startSandboxListener } from "./sandboxListener.js";
 import { handleChannelRoutes } from "./channelRoutes.js";
+import { handleTelemetryRoutes } from "./telemetryRoutes.js";
 import { handleBrowserProfileRoutes } from "./browserProfileRoutes.js";
 import { handleEvalInternalRoutes, isEvalInternalPath, type EvalServices } from "./evalInternalRoutes.js";
 import { handleMemoryRoutes } from "./memoryRoutes.js";
@@ -753,6 +754,9 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
         if (pathname.startsWith("/api/a2a/")) {
           if (!boot.a2aManagement) { json(res, 503, { code: "a2a_unavailable", error: "A2A management is unavailable" }); return true; }
           if (await handleA2aRoutes(req, method, pathname, boot.a2aManagement, res, json)) return true;
+        }
+        if (pathname === "/api/telemetry" || pathname === "/api/telemetry/reset-id") {
+          if (await handleTelemetryRoutes(req, method, pathname, res, json)) return true;
         }
         if (pathname === "/api/connections" || pathname.startsWith("/api/connections/")) {
           if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: method !== "GET" })) return true;

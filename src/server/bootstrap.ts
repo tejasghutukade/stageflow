@@ -1,3 +1,4 @@
+import "../telemetry/installEnvSnapshot.js";
 import "../artifacts/library/telemetryEnv.js";
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
