@@ -47,6 +47,14 @@ describe("present_ui prompt", () => {
     expect(markdown).not.toContain("Syntax: one statement per line");
     const html = agentPresentUiPrompt({ ui: { present: true, persistence: "artifacts", kinds: ["live.html"], functions: [] } })!;
     expect(html).toContain("Live HTML artifacts");
+    expect(html).toContain("Kinds you may show by key: live.html");
+    expect(html).toContain("One-off programs: none while HTML cards are unavailable on this Host");
+    expect(html).toContain("A one-off live.html program is refused while the HTML sandbox is unreachable");
+    const reachable = agentPresentUiPrompt(
+      { ui: { present: true, persistence: "artifacts", kinds: ["live.declarative", "live.html"], functions: [] } },
+      { htmlCardsAvailable: true },
+    )!;
+    expect(reachable).toContain("One-off programs: live.declarative, live.html");
   });
 
   it("includes HTML card guidance only when a sandbox is available", () => {

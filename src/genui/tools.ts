@@ -64,9 +64,11 @@ function presentDescription(policy: SurfacePolicy): string {
     return "Draw a generative card in this conversation (charts, tables, markdown, and the other kinds the playbook lists). Pass program, manifest (with kind) and a title. The card shows only what the program contains. To change a card, call again with the full updated program.";
   }
   const kinds = policy.kinds.join(", ");
+  const oneOff = inlineKinds(policy);
+  const oneOffKinds = oneOff.length > 0 ? oneOff.join(", ") : "none while HTML cards are unavailable";
   return policy.canShowSaved
-    ? `Show an artifact from this project in the conversation. Kinds: ${kinds}. Pass key, or program and manifest for a one-off. Pass version only to pin one version. The result is a ui part. A missing key, a key from another project, or an invalid program is refused.`
-    : `Draw a card in this conversation. Kinds: ${kinds}. Pass program, manifest (with kind) and a title. The card shows only what the program contains. To change a card, call again with the full updated program. An invalid program is refused with the reason.`;
+    ? `Show an artifact from this project in the conversation. Kinds: ${kinds}. Pass key, or program and manifest for a one-off (${oneOffKinds}). Pass version only to pin one version. The result is a ui part. A missing key, a key from another project, or an invalid program is refused.`
+    : `Draw a card in this conversation. Kinds: ${oneOffKinds}. Pass program, manifest (with kind) and a title. The card shows only what the program contains. To change a card, call again with the full updated program. An invalid program is refused with the reason.`;
 }
 
 async function presentProgram(surface: Surface, input: { title?: string; program: string; manifest: unknown }, slot: number): Promise<PresentArtifactResult> {

@@ -42,12 +42,17 @@ type PresentPromptPolicy = Pick<SurfacePolicy, "canPresent" | "kinds" | "htmlCar
 export function genUiPresentPrompt(policy: PresentPromptPolicy, options: { saveRuleInPlaybook?: boolean } = {}): string | undefined {
   if (!policy.canPresent) return undefined;
   const conversation = policy.cardsInConversation;
-  const listed = conversation ? inlineKinds(policy) : policy.kinds;
+  const oneOff = inlineKinds(policy);
+  const listed = conversation ? oneOff : policy.kinds;
   const kinds = listed.length > 0 ? listed.join(", ") : "none while HTML cards are unavailable on this Host";
+  const oneOffKinds = oneOff.length > 0 ? oneOff.join(", ") : "none while HTML cards are unavailable on this Host";
   const mode = conversation ? "card" : "artifact";
   const sections = conversation
     ? ["# Drawing cards in chat", "", `${AGENT_PRESENT_CARD_SENTENCE} Kinds you may draw: ${kinds}.`]
-    : ["# Showing artifacts in chat", "", `${AGENT_PRESENT_UI_SENTENCE} Kinds you may present: ${kinds}.`];
+    : ["# Showing artifacts in chat", "", `${AGENT_PRESENT_UI_SENTENCE} Kinds you may show by key: ${kinds}. One-off programs: ${oneOffKinds}.`];
+  if (!conversation && policy.kinds.includes("live.html") && !oneOff.includes("live.html")) {
+    sections.push("", "A one-off live.html program is refused while the HTML sandbox is unreachable. Show a saved live.html artifact by key.");
+  }
   if (conversation && policy.canSave === true && options.saveRuleInPlaybook !== true) {
     sections.push("", `${SAVE_CARD_SENTENCE} A card can be saved once it has been shown, in a later message.`);
   }
@@ -60,7 +65,7 @@ export function genUiPresentPrompt(policy: PresentPromptPolicy, options: { saveR
         "When a chart type is not quite right, still draw the closest chart or a row of Stat values; do not reply that a component is unavailable.",
       );
   }
-  if (listed.includes("live.html")) {
+  if ((conversation ? oneOff : policy.kinds).includes("live.html")) {
     sections.push("", genUiKind("live.html")!.promptSection!(mode));
   }
   return sections.join("\n");
