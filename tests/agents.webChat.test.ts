@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
+import { PRESENT_UI_TOOL_NAME } from "../src/genui/index.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { loadControlTokens } from "../src/server/controlToken.js";
 import { startUiServer } from "../src/server/http.js";
@@ -134,18 +135,93 @@ describe("public web chat", () => {
     expect(await limited.json()).toMatchObject({ code: "web_chat.rate_limited", retryAfterSec: expect.any(Number) });
   });
 
-  it("requires setup for legacy published tools instead of letting approval bypass consumer authorization", async () => {
+  it("says which limit ended a conversation so the page can explain it", async () => {
+    const host = await startHost();
+    const { slug } = await liveAgent(host, { limits: { max_turns: 1 } });
+    const { thread } = (await (await host.pub(slug, "/threads", { method: "POST", visitor: VISITOR })).json()) as { thread: { id: string } };
+    await (await host.pub(slug, `/threads/${thread.id}/messages`, { method: "POST", visitor: VISITOR, body: { text: "one" } })).text();
+    const refused = await host.pub(slug, `/threads/${thread.id}/messages`, { method: "POST", visitor: VISITOR, body: { text: "two" } });
+    const last = (await host.frames(refused)).at(-1);
+    expect(last).toMatchObject({ type: "error", code: "web_chat.limit_reached", limit: "turns" });
+    expect(JSON.stringify(last)).not.toContain("max_turns");
+  });
+
+  it("opens for an agent with tools and shows a note when visitors cannot use them", async () => {
+    const host = await startHost();
+    const { slug, detail } = await liveAgent(host, { tools: { mcp: { web: ["fetch"] } }, approvals: { ask_first: ["web.fetch"] } });
+    expect((await host.pub(slug, "")).status).toBe(200);
+    expect(detail.agent.webChatNote).toContain("Visitors can chat but can't use this agent's tools");
+    const response = await host.pub(slug, "/threads", { method: "POST", visitor: VISITOR });
+    expect(response.status).toBe(201);
+  });
+
+  it("opens for an agent that only draws cards kept in the conversation and sends the card to the visitor", async () => {
+    const card = {
+      v: 1,
+      kind: "card",
+      title: "Regional sales",
+      format: "live.declarative",
+      program: 'root = Card([CardHeader("Regional sales", "This week")])',
+      library: { name: "stageflow", version: "1.0.0" },
+      fallback: { text: "Regional sales", url: "" },
+    };
     const backend = scriptedBackend(async (_messages, ctx) => {
-      const result = await ctx.tool("web.fetch", { url: "https://secret.example/token" });
-      return result.ran ? "all done" : "skipped";
+      const result = await ctx.tool(PRESENT_UI_TOOL_NAME, { title: card.title, program: card.program, manifest: { kind: "live.declarative" } }, () =>
+        JSON.stringify({ type: "ui", ui: card }),
+      );
+      return result.ran ? "Here it is." : "skipped";
     });
     const host = await startHost(backend);
-    const { slug } = await liveAgent(host, { tools: { mcp: { web: ["fetch"] } }, approvals: { ask_first: ["web.fetch"] } });
-    const response = await host.pub(slug, "/threads", { method: "POST", visitor: VISITOR });
-    expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({ code: "identity.setup_required" });
-    expect(backend.calls).toBe(0);
-    expect((await host.admin("GET", "/api/agents/approvals")).body.approvals).toEqual([]);
+    const { slug, detail } = await liveAgent(host, { ui: { present: true } });
+    expect(detail.agent.webChatNote).toBeNull();
+    expect((await host.pub(slug, "")).status).toBe(200);
+    const { thread } = (await (await host.pub(slug, "/threads", { method: "POST", visitor: VISITOR })).json()) as { thread: { id: string } };
+    const stream = await host.frames(await host.pub(slug, `/threads/${thread.id}/messages`, { method: "POST", visitor: VISITOR, body: { text: "show sales" } }));
+    expect(stream.at(-1)).toMatchObject({ type: "done", message: { text: "Here it is.", parts: [card] } });
+    const history = await (await host.pub(slug, `/threads/${thread.id}`, { visitor: VISITOR })).json();
+    expect(history.messages.at(-1)).toMatchObject({ role: "assistant", parts: [card] });
+  });
+
+  it("advertises sandbox origins and returns an HTML card to visitors", async () => {
+    const card = {
+      v: 1,
+      kind: "card",
+      title: "Pie chart",
+      format: "live.html",
+      program: "<p>North 120</p>",
+      fallback: { text: "Pie chart", url: "" },
+    };
+    const backend = scriptedBackend(async (_messages, ctx) => {
+      const result = await ctx.tool(
+        PRESENT_UI_TOOL_NAME,
+        { title: card.title, program: card.program, manifest: { kind: "live.html", format: "html" } },
+        () => JSON.stringify({ type: "ui", ui: card }),
+      );
+      return result.ran ? "Chart." : "skipped";
+    });
+    const host = await startHost(backend);
+    const { slug } = await liveAgent(host, { ui: { present: true, kinds: ["live.html"] } });
+    const info = (await (await host.pub(slug, "")).json()) as { agent: { sandboxOrigins?: string[] } };
+    expect(info.agent.sandboxOrigins?.some((origin) => /^http:\/\/(127\.0\.0\.1|localhost):/.test(origin))).toBe(true);
+    const { thread } = (await (await host.pub(slug, "/threads", { method: "POST", visitor: VISITOR })).json()) as { thread: { id: string } };
+    const stream = await host.frames(
+      await host.pub(slug, `/threads/${thread.id}/messages`, { method: "POST", visitor: VISITOR, body: { text: "pie" } }),
+    );
+    expect(stream.at(-1)).toMatchObject({ type: "done", message: { parts: [card] } });
+  });
+
+  it("still opens when cards are saved as artifacts and notes when visitors cannot use tools", async () => {
+    const host = await startHost();
+    const { slug, detail } = await liveAgent(host, { ui: { present: true, persistence: "artifacts" } });
+    expect((await host.pub(slug, "")).status).toBe(200);
+    expect(detail.agent.webChatNote).toContain("Visitors can chat but can't use this agent's tools");
+    const tools = await host.admin("POST", "/api/agents/helper/save", {
+      baseRevision: detail.agent.revision,
+      definition: { ...detail.definition, ui: { present: false }, tools: { ...detail.definition.tools, stageflow: { groups: ["artifacts.write"], tools: [] } } },
+    });
+    expect(tools.status).toBe(200);
+    const after = (await host.admin("GET", "/api/agents/helper")).body;
+    expect(after.agent.webChatNote).toContain("Visitors can chat but can't use this agent's tools");
   });
 
   it("rotates the link: the old one stops working", async () => {

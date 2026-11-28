@@ -1,0 +1,34 @@
+id: sales_by_week
+name: Sales by week
+description: Demo weekly sales rows for one region. Values drift every minute so a refresh visibly changes them.
+kind: tool
+tool_name: sales_by_week
+tool_description: Read demo weekly sales (week, revenue, orders) for a region.
+timeout_ms: 5000
+input_schema:
+  type: object
+  properties:
+    region:
+      type: string
+      enum: [all, north, south, west]
+    weeks:
+      type: integer
+      minimum: 1
+      maximum: 26
+  required: [region, weeks]
+  additionalProperties: false
+source: |
+  export const access = { artifacts: "none", env: [], network: [] };
+  export default function execute(context) {
+    const { region, weeks } = context.input;
+    const scale = { all: 1, north: 0.45, south: 0.3, west: 0.25 }[region] ?? 1;
+    const tick = Math.floor(Date.now() / 60000) % 10;
+    const rows = [];
+    for (let i = 1; i <= weeks; i += 1) {
+      const wave = 1 + 0.25 * Math.sin(i / 2) + (tick * 0.01);
+      const revenue = Math.round(48000 * scale * wave + i * 900 * scale);
+      rows.push({ week: "W" + i, revenue, orders: Math.round(revenue / 82) });
+    }
+    const total = rows.reduce((sum, row) => sum + row.revenue, 0);
+    return { region, rows, total, generated_at: new Date().toISOString() };
+  }

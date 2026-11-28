@@ -1,8 +1,9 @@
+import { assistantMessageTextForChannel } from "../../channels/renderUiPart.js";
 import type { ContactInfo } from "../../channels/types.js";
 import type { ConsumerAuthorization } from "../../identity/authorization.js";
 import { isAgentError } from "../errors.js";
 import { ReplyDelivery } from "./delivery.js";
-import { SlidingWindowLimiter } from "../webChat/rateLimit.js";
+import { SlidingWindowLimiter } from "../../util/slidingWindowLimiter.js";
 import type { AgentChatController } from "../chatTurn.js";
 import type { AgentService } from "../service.js";
 import type { AgentInboundMessage } from "./port.js";
@@ -279,7 +280,7 @@ export class AgentInboundRouter {
         connectionId: message.connectionId,
         provider: message.provider,
         replyTo: message.replyTo,
-        text: reply.text.slice(0, MAX_REPLY_CHARS),
+        text: assistantMessageTextForChannel(reply, message.provider, { consoleAccess: false }).slice(0, MAX_REPLY_CHARS),
       });
     } catch (error) {
       if (isAgentError(error) && error.code === "agent.limit_reached" && message.replyTo) {

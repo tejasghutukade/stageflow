@@ -83,6 +83,46 @@ export function resolveArtifactsPanelSelection(
   return { selected: diskPaths[0] ?? null, missingClaim: null };
 }
 
+/** Console link for a published artifact; names the run's project unless it is the workspace. */
+export function publishedArtifactHref(key: string, projectRoot?: string): string {
+  const base = `#/artifacts/${key}`;
+  if (projectRoot === undefined || projectRoot === "" || projectRoot === "workspace") return base;
+  return `${base}?${new URLSearchParams({ project_root: projectRoot })}`;
+}
+
+function PublishedList({
+  label,
+  projectRoot,
+  published,
+}: {
+  label: string;
+  projectRoot?: string | undefined;
+  published: NonNullable<StageSnapshot["published_artifacts"]>;
+}) {
+  return (
+    <div className="px-6 py-4" data-testid="run-published-artifacts">
+      <h3 className="pb-2 text-[11px] uppercase tracking-[0.88px] text-[#8b8f98]">
+        Published artifacts · {label}
+      </h3>
+      <ul className="flex flex-col gap-1">
+        {published.map((item) => (
+          <li key={`${item.key}@${item.version}`}>
+            <a
+              className="flex items-baseline gap-3 py-1 text-[13px] text-[var(--sf-text-1)] hover:underline"
+              href={publishedArtifactHref(item.key, projectRoot)}
+            >
+              <span>{item.title}</span>
+              <span className="font-['Geist_Mono',monospace] text-[11px] text-[#8b8f98]">
+                {item.kind} · v{item.version}
+              </span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export function RunArtifactsPanel({
   runId,
   run,
@@ -112,6 +152,11 @@ export function RunArtifactsPanel({
   }, [stage.stage_id, paths.join("|"), initialPath]);
 
   const label = stageCloneLabel(run, stage.stage_id);
+  const published = stage.published_artifacts ?? [];
+
+  if (paths.length === 0 && published.length > 0) {
+    return <PublishedList label={label} projectRoot={run.project_root} published={published} />;
+  }
 
   if (paths.length === 0) {
     if (missingClaim) {
@@ -163,6 +208,11 @@ export function RunArtifactsPanel({
             );
           })}
         </ul>
+        {published.length > 0 ? (
+          <div className="border-t border-t-[#ffffff12]">
+            <PublishedList label={label} projectRoot={run.project_root} published={published} />
+          </div>
+        ) : null}
       </div>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {selected ? (

@@ -89,7 +89,7 @@ Warnings do not block save. They do predict a session that will fail or a link t
 | `agent.guardrail_blocked` | A `block_patterns` expression matched the finished reply. The reply is not stored and not sent. Fix the pattern (JavaScript, no flags) or the instructions that produced the match |
 | `agent.delegate_not_allowed` | The callee is not in `sub_agents` |
 | `agent.delegate_depth_exceeded` | Raise `sub_agent_depth` (max 5) or flatten the call |
-| `agent.limit_reached` | The session hit `session_minutes`, `max_turns`, or `cost_usd`. Start a new session, or raise the limit the user agreed to. On web chat the code is `web_chat.limit_reached` |
+| `agent.limit_reached` | The session hit `session_minutes` (idle time), `max_turns`, or `cost_usd`. Start a new session, or raise the limit the user agreed to. On web chat the code is `web_chat.limit_reached` |
 | `agent.model_timeout` | The model sent nothing for 180 seconds (`STAGEFLOW_AGENT_STALL_SECONDS`). Retry. A stuck provider will fail the same way |
 | `agent.backend_unavailable` | Pi could not start: claude backend, missing skill, missing MCP tool metadata, or no provider credentials. `sf providers status`, then the warning that matches |
 | `agent.backend_failed` | The turn failed outside the mapped agent errors. Read the session and run `sf providers status` |
@@ -109,7 +109,7 @@ Channel send failures use `CHANNEL_*` codes from `GET /api/connections/meta`. Th
 
 ## Web chat and channels
 
-Public chat returns `identity.setup_required` when the agent has any tool, project context, a memory, a skill, a sub-agent, or a backend other than `pi`. Validation stays green. Set `web_chat.enabled: false`, or remove every tool and keep the agent tool-less.
+Public chat links open while the agent is enabled. Visitors only chat until `web_chat.public_tools: true`. With `public_tools`, identity-only tools (builtin file and shell tools, `browser`, and Stageflow tools that run code, change the Host's setup or reach other conversations) and sub-agents that have them are withheld from visitors; the agent warns `agent.public_tools_identity_only` with the names.
 
 A hand-written public agent with no slug warns `agent.web_chat_slug_missing` and the path `/chat/…` does not exist until a Host save mints the slug.
 

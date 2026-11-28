@@ -259,6 +259,18 @@ event:
 
 Unknown extra keys are dropped on load with no finding. Keep to the table above.
 
+## Published artifacts
+
+When a deliverable should outlive the run, appear on the **Artifacts** page, keep versions, or be readable by a granted agent across sessions, opt the stage in and call `publish_artifact` instead of relying on envelope indexing alone.
+
+```yaml
+artifacts:
+  publish: true
+  expect: [weekly-report]
+```
+
+Use `write_stage_artifact` first; pass the returned path as `publish_artifact` `path` (inside the attempt `artifacts/` directory). Kinds: `static.markdown`, `static.table`, `static.text`, `static.image`, `static.html`. Content cap 5 MiB. See [artifacts.md](artifacts.md).
+
 ## A2A publication
 
 Publishing lets another agent call this pipeline. The publication lives in `a2a.yaml`, not in the pipeline file. Creating callers is `stageflow-operate`. Do not run `sf a2a publication create` until the user agrees: it exposes the pipeline.

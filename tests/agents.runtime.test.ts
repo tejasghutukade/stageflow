@@ -181,11 +181,27 @@ describe("limits", () => {
       costly: { limits: { cost_usd: 0.0005 } },
     });
     const chat = new AgentChatController({ service, backend: scriptedBackend() });
+    const kinds: Record<string, string> = { turns: "turns", timed: "minutes", costly: "cost" };
     for (const agentId of ["turns", "timed", "costly"]) {
       const first = await chat.send({ projectRoot: project, agentId, text: "one" });
       if (agentId === "timed") clock.advance(6 * 60_000);
-      await expect(chat.send({ projectRoot: project, agentId, sessionId: first.session.id, text: "two" })).rejects.toMatchObject({ code: "agent.limit_reached" });
+      await expect(chat.send({ projectRoot: project, agentId, sessionId: first.session.id, text: "two" })).rejects.toMatchObject({ code: "agent.limit_reached", limit: kinds[agentId] });
     }
+  });
+
+  it("keeps an active conversation past session_minutes until it has been idle", async () => {
+    const { service, project, clock } = await setup({ active: { limits: { session_minutes: 5 } } });
+    const chat = new AgentChatController({ service, backend: scriptedBackend() });
+    const first = await chat.send({ projectRoot: project, agentId: "active", text: "one" });
+    clock.advance(4 * 60_000);
+    await chat.send({ projectRoot: project, agentId: "active", sessionId: first.session.id, text: "two" });
+    clock.advance(4 * 60_000);
+    await chat.send({ projectRoot: project, agentId: "active", sessionId: first.session.id, text: "three" });
+    clock.advance(6 * 60_000);
+    await expect(chat.send({ projectRoot: project, agentId: "active", sessionId: first.session.id, text: "four" })).rejects.toMatchObject({
+      code: "agent.limit_reached",
+      limit: "minutes",
+    });
   });
 });
 

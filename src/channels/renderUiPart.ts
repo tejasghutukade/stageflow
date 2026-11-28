@@ -1,0 +1,110 @@
+import {
+  parseUiPart,
+  UI_PART_KIND_APPROVAL,
+  UI_PART_KIND_ARTIFACT_REF,
+  UI_PART_KIND_CARD,
+  UI_PART_KIND_ERROR,
+  UI_PART_KIND_FORM,
+  type UiPart,
+  type UiPartArtifactRef,
+} from "../artifacts/uiPart.js";
+import { approvalChannelFallback } from "../artifacts/uiPartApproval.js";
+import { formChannelFallback } from "../artifacts/uiPartForm.js";
+import type { ChannelUiCapability } from "./types.js";
+import { channelUiCapabilityForProvider } from "./uiCapability.js";
+
+export type RenderUiPartForChannelOptions = {
+  /** When false, `link` (and `image` without a snapshot) show fallback text only. */
+  consoleAccess?: boolean;
+  /** Optional snapshot URL when capability is `image`. Not produced yet. */
+  snapshotUrl?: string | null;
+};
+
+function artifactRefChannelText(part: Extract<UiPart, { kind: typeof UI_PART_KIND_ARTIFACT_REF }>, capability: ChannelUiCapability, options: RenderUiPartForChannelOptions): string {
+  switch (capability) {
+    case "interactive":
+      return part.fallback.text;
+    case "image": {
+      const body = artifactRefChannelText(part, "link", options);
+      const snapshot = options.snapshotUrl?.trim();
+      return snapshot ? `${body}\n${snapshot}` : body;
+    }
+    case "link":
+      if (options.consoleAccess === false) return part.fallback.text;
+      return `${part.title}\n${part.fallback.url}`;
+    default: {
+      const exhaustive: never = capability;
+      return exhaustive;
+    }
+  }
+}
+
+function interactiveChannelText(part: UiPart, options: RenderUiPartForChannelOptions): string {
+  const consoleAccess = options.consoleAccess !== false;
+  if (part.kind === UI_PART_KIND_FORM) return formChannelFallback(part, consoleAccess);
+  if (part.kind === UI_PART_KIND_APPROVAL) return approvalChannelFallback(part, consoleAccess);
+  return part.fallback.text;
+}
+
+export function renderUiPartForChannel(
+  part: UiPart,
+  capability: ChannelUiCapability,
+  options: RenderUiPartForChannelOptions = {},
+): string {
+  if (part.kind === UI_PART_KIND_ERROR || part.kind === UI_PART_KIND_CARD) return part.fallback.text;
+  if (part.kind === UI_PART_KIND_ARTIFACT_REF) return artifactRefChannelText(part, capability, options);
+  if (capability === "interactive") return interactiveChannelText(part, options);
+  if (capability === "image") {
+    const body = renderUiPartForChannel(part, "link", options);
+    const snapshot = options.snapshotUrl?.trim();
+    return snapshot ? `${body}\n${snapshot}` : body;
+  }
+  if (part.kind === UI_PART_KIND_FORM) return formChannelFallback(part, options.consoleAccess !== false);
+  return approvalChannelFallback(part, options.consoleAccess !== false);
+}
+
+export function renderUnknownUiPartForChannel(
+  part: unknown,
+  capability: ChannelUiCapability,
+  options?: RenderUiPartForChannelOptions,
+): string {
+  const parsed = parseUiPart(part);
+  if (!parsed.ok) return "";
+  return renderUiPartForChannel(parsed.part, capability, options);
+}
+
+export function assistantMessageTextForChannel(
+  message: { text: string; parts?: readonly unknown[] },
+  providerId: string,
+  options: RenderUiPartForChannelOptions = {},
+): string {
+  const capability = channelUiCapabilityForProvider(providerId);
+  const extras = (message.parts ?? [])
+    .map((part) => renderUnknownUiPartForChannel(part, capability, options))
+    .filter((line) => line.length > 0);
+  return [message.text.trim(), ...extras].filter((chunk) => chunk.length > 0).join("\n\n");
+}
+
+/** Protected web-chat visitors have no console token; summarize ui in plain text. Cards are left out: they render from the message. */
+export function webChatVisitorAssistantText(message: { text: string; parts?: readonly unknown[] }): string {
+  const parts = (message.parts ?? []).filter((part) => parseUiPart(part).ok && (part as { kind?: unknown }).kind !== UI_PART_KIND_CARD);
+  return assistantMessageTextForChannel({ ...message, parts }, "slack", { consoleAccess: false });
+}
+
+/** Parts a web-chat visitor can see. Cards carry their program. An artifact ref is kept only when `keepArtifact` says it belongs to this conversation, and its console URL is cleared. */
+export function webChatVisitorParts(
+  parts: readonly UiPart[] | undefined,
+  options?: { keepArtifact?: (part: UiPartArtifactRef) => boolean },
+): UiPart[] {
+  const kept: UiPart[] = [];
+  for (const part of parts ?? []) {
+    if (part.kind === UI_PART_KIND_CARD) {
+      kept.push(part);
+      continue;
+    }
+    if (part.kind === UI_PART_KIND_ARTIFACT_REF && options?.keepArtifact?.(part)) {
+      kept.push({ ...part, fallback: { text: part.fallback.text, url: "" } });
+    }
+  }
+  return kept;
+}

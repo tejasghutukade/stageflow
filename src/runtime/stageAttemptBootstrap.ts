@@ -1,3 +1,13 @@
+import { catalogRootsForArtifacts } from "../artifacts/projectScope.js";
+import {
+  listPublishedIdsForAttempt,
+  publishSessionArtifact,
+  SessionPublishError,
+  workerPublishArtifact,
+  workerPublishedIds,
+  type SessionPublishContext,
+} from "../artifacts/sessionPublish.js";
+import { sqliteConnectionFromStore } from "../runstore/createStore.js";
 import { emailHostFor, stageEmail, workerStageEmail, validateStageEmailAccounts } from "../email/host.js";
 import { ChannelError } from "../channels/errors.js";
 import { channelHostFor, stageChannels, validateStageChannelConnections, workerStageChannels } from "../channels/host.js";
@@ -767,6 +777,37 @@ export async function openStageAttempt(
   );
 
   const meta = await input.store.readRunMeta(input.runId);
+  const publishOptIn = input.stage.artifacts?.publish === true;
+  const publishContext: SessionPublishContext | undefined = publishOptIn
+    ? {
+        owner: { kind: "stage", pipeline: meta.pipeline_id, stage: input.stage.id },
+        ...(input.factoryCwd !== undefined ? { projectRoot: input.factoryCwd } : {}),
+        source: { runId: input.runId, stageId, attempt },
+      }
+    : undefined;
+  let publishArtifact: StageRunInput["publishArtifact"];
+  let publishedArtifactIds: StageRunInput["publishedArtifactIds"];
+  if (publishContext) {
+    if (process.env.SF_STAGE_WORKER === "1") {
+      publishArtifact = workerPublishArtifact;
+      publishedArtifactIds = workerPublishedIds;
+    } else {
+      const db = sqliteConnectionFromStore(input.store);
+      const roots = db ? await catalogRootsForArtifacts(input.store) : [];
+      publishArtifact = (body) => {
+        if (!db) {
+          return Promise.reject(new SessionPublishError("artifact.invalid_shape", "artifact publish is not available"));
+        }
+        return publishSessionArtifact({ db, roots }, publishContext, body);
+      };
+      publishedArtifactIds = async () => {
+        if (!db) {
+          throw new SessionPublishError("artifact.invalid_shape", "published artifacts cannot be verified");
+        }
+        return listPublishedIdsForAttempt(db, { runId: input.runId, stageId, attempt });
+      };
+    }
+  }
   const bindingKind =
     input.bindingKind ?? bindingKindFromMeta(meta);
   const trustWorkspaceConfig = resolveTrustWorkspaceConfig(
@@ -836,6 +877,8 @@ export async function openStageAttempt(
       ...(completionContract !== undefined ? { completionContract } : {}),
       ...(repairContext !== undefined ? { repairContext } : {}),
       readQaTrail,
+      ...(publishArtifact !== undefined ? { publishArtifact } : {}),
+      ...(publishedArtifactIds !== undefined ? { publishedArtifactIds } : {}),
       ...(input.stage.timeout_ms !== undefined
         ? { timeoutMs: input.stage.timeout_ms }
         : {}),

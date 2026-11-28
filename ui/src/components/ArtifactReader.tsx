@@ -3,6 +3,9 @@ import { CodeBlock } from "@astryxdesign/core/CodeBlock";
 import { Markdown } from "@astryxdesign/core/Markdown";
 import { fetchRunArtifact } from "../api";
 import { authorizationHeaders } from "../api/controlToken";
+import { SandboxedHtml } from "../redesign/artifacts/renderers/SandboxedHtml";
+import { TextPreview } from "../redesign/artifacts/renderers/StaticPreview";
+import { isHtmlPreviewPath } from "../redesign/artifacts/renderers/htmlSandbox";
 
 export type ArtifactReaderProps = {
   runId: string;
@@ -66,11 +69,12 @@ export function formatByteSize(bytes: number): string {
   return `${(kb / 1024).toFixed(1)} MB`;
 }
 
-function ArtifactReaderBody({
+export function ArtifactReaderBody({
   load,
   mode,
   markdown,
   image,
+  html,
   imageSrc,
   path,
 }: {
@@ -78,6 +82,7 @@ function ArtifactReaderBody({
   mode: ViewMode;
   markdown: boolean;
   image: boolean;
+  html: boolean;
   imageSrc: string | null;
   path: string;
 }) {
@@ -119,6 +124,15 @@ function ArtifactReaderBody({
     );
   }
 
+  if (mode === "rendered" && html) {
+    return (
+      <SandboxedHtml
+        text={load.content}
+        source={<TextPreview text={load.content} note={null} />}
+      />
+    );
+  }
+
   return (
     <CodeBlock
       code={load.content}
@@ -140,15 +154,16 @@ export function ArtifactReader({
 }: ArtifactReaderProps) {
   const markdown = isMarkdown(path);
   const image = isImageArtifactPath(path);
+  const html = isHtmlPreviewPath(path);
   const [mode, setMode] = useState<ViewMode>(
-    markdown || image ? "rendered" : "raw",
+    markdown || image || html ? "rendered" : "raw",
   );
   const [load, setLoad] = useState<LoadState>({ status: "loading" });
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
 
   useEffect(() => {
-    setMode(isMarkdown(path) || isImageArtifactPath(path) ? "rendered" : "raw");
+    setMode(isMarkdown(path) || isImageArtifactPath(path) || isHtmlPreviewPath(path) ? "rendered" : "raw");
   }, [path]);
 
   useEffect(() => {
@@ -251,6 +266,7 @@ export function ArtifactReader({
             mode={mode}
             markdown={markdown}
             image={image}
+            html={html}
             imageSrc={imageSrc}
             path={path}
           />
@@ -282,9 +298,9 @@ export function ArtifactReader({
           <div className="seg">
             <button
               data-active={mode === "rendered" ? "true" : undefined}
-              disabled={!markdown && !image}
+              disabled={!markdown && !image && !html}
               onClick={() => {
-                if (markdown || image) setMode("rendered");
+                if (markdown || image || html) setMode("rendered");
               }}
             >
               Rendered
@@ -337,6 +353,7 @@ export function ArtifactReader({
               mode={mode}
               markdown={markdown}
               image={image}
+              html={html}
               imageSrc={imageSrc}
               path={path}
             />

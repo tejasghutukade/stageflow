@@ -3,6 +3,9 @@ import { LuChevronRight, LuPlus, LuSearch, LuTrash2, LuTriangleAlert } from "rea
 import { FunctionApiError, functionsApi, type FunctionSummary, type FunctionUsage } from "../../api/functions";
 import { functionNewPath, functionPath, navigate } from "../../routes";
 import { showToast } from "../../toast";
+import { getSurfaceScope, setSurfaceScope } from "../../api/projectScope";
+import { OtherProjectsNote } from "../shell/OtherProjectsNote";
+import { useHiddenInOtherProjects } from "../shell/useHiddenInOtherProjects";
 import { Dialog } from "../agents/editor/Dialogs";
 import { clampCursor, isCursorKey, moveCursor, shouldHandleCursorKey } from "../agents/listCursor";
 import { MONO, NOWRAP, PAGE_BG } from "../agents/agentsTokens";
@@ -234,6 +237,19 @@ export function FunctionsDirectoryPage({
   const [usages, setUsages] = useState<FunctionUsage[] | null>(null);
   const [cursor, setCursor] = useState(-1);
   const rowRefs = useRef<(HTMLAnchorElement | null)[]>([]);
+  const [scope, setScope] = useState<string | undefined>(() => getSurfaceScope("functions"));
+  const { hidden, roots } = useHiddenInOtherProjects({
+    enabled: !loading && !seeded,
+    visible: rows,
+    load: functionsApi.listIn,
+    keyOf: (row) => `${row.id}\u0000${row.updatedAt}`,
+    scope,
+  });
+  const switchScope = (root: string | undefined) => {
+    setSurfaceScope("functions", root);
+    setScope(root);
+    setLoading(true);
+  };
 
   useEffect(() => {
     if (seeded) return;
@@ -254,7 +270,7 @@ export function FunctionsDirectoryPage({
     return () => {
       live = false;
     };
-  }, [seeded]);
+  }, [seeded, scope]);
 
   const counts = useMemo(() => kindCounts(rows), [rows]);
   const visible = useMemo(() => searchFunctions(filterFunctions(rows, kind), query), [rows, kind, query]);
@@ -322,6 +338,12 @@ export function FunctionsDirectoryPage({
             <span className="text-[var(--sf-text-2)]">{error}</span>
           </Callout>
         ) : null}
+        <OtherProjectsNote
+          hidden={hidden}
+          scopeLabel={scope === undefined ? undefined : (roots.find((r) => r.project_root === scope)?.label ?? scope)}
+          onSwitch={switchScope}
+          onReset={() => switchScope(undefined)}
+        />
         {loading ? <p className="text-[13px] text-[var(--sf-text-3)]">Loading functions…</p> : null}
         {!loading && !error && rows.length === 0 ? <EmptyState /> : null}
         {!loading && rows.length > 0 ? (

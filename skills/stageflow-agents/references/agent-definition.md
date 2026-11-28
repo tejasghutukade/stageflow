@@ -41,6 +41,7 @@ Every field of `agents/<id>.agent.yaml`, as the Host validates it. Unknown keys 
 | `execution` | `trusted-local` (default) or `sandbox` | `sandbox` is not installed: warning `agent.sandbox_unavailable`, sessions fail. Do not set it |
 | `model` | object | [model](#model) |
 | `tools` | object | [tools](#tools) |
+| `ui` | object | [ui](#ui) |
 | `approvals` | object | [approvals](#approvals) |
 | `sub_agents` | list of agent ids, `[]` | [sub_agents](#sub_agents-guardrails-evals-observability) |
 | `sub_agent_depth` | integer 1 to 5, `1` | |
@@ -76,6 +77,17 @@ The older `channels: [{ connection_id }]` list still loads as `channel`; more th
 | `stageflow.tools` | list of tool names, `[]` | Single Stageflow tools. Unknown `agent.stageflow_tool_unknown`; `get_started`, `answer_gate`, `decide_feedback_loop`, `decide_agent_action` are operator-only |
 
 Grant ids (used in `approvals.ask_first`): builtin tool name (`write`, `bash`), `<server>.<tool>` for MCP, `stageflow.<tool>` for Stageflow tools, `agent:<id>` for sub-agents. Groups and tool lists: [tools-and-approvals.md](tools-and-approvals.md).
+
+## ui
+
+| Field | Type, default | Notes |
+|---|---|---|
+| `present` | boolean, `false` | Grants `present_ui`. Off until set |
+| `persistence` | `conversation` or `artifacts`, `conversation` | `conversation`: display-only cards stored in the chat message (visitors on a public link always get them). `artifacts`: cards saved as session artifacts, plus keys, live data and buttons (public visitors get them only with `web_chat.public_tools`) |
+| `kinds` | list, filled per mode | Empty while present gets `live.declarative`, `static.markdown`, and `live.html` (`conversation`) or every kind below (`artifacts`). `static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`, `live.declarative`, `live.html`. Unknown `agent.ui_kind_unknown`. Duplicate `agent.ui_kind_duplicate`. Other than the three card kinds with `conversation`: `agent.ui_kind_needs_artifacts`. `live.html` cards are offered only while chat readers can reach the HTML sandbox (otherwise `ui.kind_not_granted`) |
+| `functions` | list of function ids, `[]` | Only with `artifacts` (`agent.ui_functions_need_artifacts`). Ids a card may call for live data. Invalid `agent.ui_function_invalid`. Duplicate `agent.ui_function_duplicate`. A binding query for any other id is `agent.ui_function_not_granted` |
+
+Kinds or functions while `present` is false is `agent.ui_present_required`. With `conversation` and the `save_artifact` grant the agent also gets `save_card` (see [tools-and-approvals.md](tools-and-approvals.md)).
 
 ## approvals
 
@@ -116,7 +128,7 @@ List of memory ids (`^[a-z][a-z0-9_-]{0,63}$`, no duplicates). Each must already
 | Field | Type, default | Notes |
 |---|---|---|
 | `enabled` | boolean, `false` in a file | A create through MCP, REST or the console that leaves out `web_chat` gets `{ enabled: true }` and a public link. Always write the block |
-| `access` | `public` (default) or `authenticated` | `public` requires a tool-less agent; `authenticated` requires consumer identity. See [channels-and-identity.md](channels-and-identity.md) |
+| `access` | `public` (default) or `authenticated` | `public`: anyone with the link chats; tools only with `public_tools: true`, never identity-only ones. `authenticated` requires consumer identity. See [channels-and-identity.md](channels-and-identity.md) |
 | `slug` | 16 to 32 `[a-z0-9]` | The link `/chat/<slug>`; it is the credential. Minted by the Host on a save through MCP, REST or the console when web chat is on and no slug is set. A hand-written file without one warns `agent.web_chat_slug_missing` and has no link. `slug: ""` in a save rotates the link. A save that leaves `web_chat` out keeps the current block |
 | `rate_limit_per_minute` | 1 to 120, `10` | Per visitor; new conversations get twice that; per IP address three times |
 | `max_message_chars` | 1 to 20000, `4000` | |
@@ -137,7 +149,7 @@ Checked when a turn starts; a running turn is not cut short. All refuse with `ag
 
 | Field | Type, default | Refuses a new turn when |
 |---|---|---|
-| `session_minutes` | 1 to 1440, `10` | The session is that old |
+| `session_minutes` | 1 to 1440, `10` | The session has been idle that long (no messages; waiting on an approval is not idle) |
 | `max_turns` | 1 to 1000, `40` | The session has that many turns |
 | `cost_usd` | number > 0 or `null` (default, no cap) | The session's turns cost that much. With `always_on`, the last 24 hours |
 | `long_context` | `summarize` (default) or `truncate` | When a rebuilt session's history exceeds 60,000 characters: one-line digest of dropped messages, or drop them |

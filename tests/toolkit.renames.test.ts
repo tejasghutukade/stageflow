@@ -24,8 +24,8 @@ describe("tool rename table", () => {
     }
   });
 
-  it("defines exactly 57 consolidated tools", () => {
-    expect(distinctNewToolNames().length).toBe(57);
+  it("defines exactly 63 consolidated tools", () => {
+    expect(distinctNewToolNames().length).toBe(63);
   });
 
   it("gives every absorbed old tool the same risk and operatorOnly on each new tool", () => {
@@ -129,7 +129,7 @@ describe("describeToolkit catalog", () => {
     for (const group of catalog.groups) {
       const expected = Object.entries(TOOL_META)
         .filter(([, meta]) => meta.groups.includes(group.id as ToolGroupId))
-        .map(([name]) => name)
+        .map(([name]) => (name === "save_artifact" ? "publish_artifact" : name))
         .sort();
       expect(group.tools.map((tool) => tool.name).sort()).toEqual(expected);
       expect(group.operatorOnly).toBe(TOOL_GROUPS.find((entry) => entry.id === group.id)?.operatorOnly === true);

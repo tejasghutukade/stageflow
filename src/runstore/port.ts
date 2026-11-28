@@ -35,6 +35,7 @@ import type {
 } from "../evals/storeTypes.js";
 import type { SuggestionStatus } from "../evals/triage/constants.js";
 import type { SuggestionInput, SuggestionRow } from "../evals/triage/types.js";
+import type { ArtifactExpiredReason } from "../artifacts/record.js";
 
 export type { ConfigOriginRecord };
 
@@ -536,6 +537,20 @@ export type ListRunsFilter = {
   origin?: RunOrigin | "any";
 };
 
+/** Light rows for run_stats. Inclusive window on created_at. Eval-origin runs are omitted. */
+export type RunStatRow = {
+  pipeline_id: string;
+  status: RunStatus;
+  created_at: string;
+};
+
+export type ListRunStatsFilter = {
+  since: string;
+  until: string;
+  status?: RunStatus;
+  pipeline?: string;
+};
+
 /**
  * Persistence port for pipeline run state.
  * Call sites should prefer CreatedRun.workspaceDir from createRun over
@@ -589,6 +604,34 @@ export interface RunStore {
   ): Promise<void>;
   /** Record that SLIM reclaim completed for this run (R18 idempotency gate). */
   setSlimmedAt(runId: string, slimmedAt: string): Promise<void>;
+  /**
+   * Expire every indexed artifact of a run. A missing run updates nothing.
+   * Published rows are left alone. A second call does not change expired_at.
+   */
+  markIndexedArtifactsExpired(
+    runId: string,
+    reason: ArtifactExpiredReason,
+    now: string,
+  ): Promise<void>;
+  /**
+   * Before slim deletes oversized files, expire indexed rows whose contained
+   * file is larger than maxBytes. Returns the keys marked in this call.
+   * Files that are still present stay available.
+   */
+  markSlimmedIndexedArtifacts(runId: string, maxBytes: number, now: string): Promise<string[]>;
+  /**
+   * If slim did not remove the files, clear run_slimmed on keys from this
+   * attempt whose files are still in the attempt artifacts directory.
+   */
+  restorePresentSlimmedIndexedArtifacts(runId: string, keys: readonly string[]): Promise<void>;
+  /**
+   * Mark up to `limit` available indexed artifacts whose contained file is
+   * missing, or whose run row is gone. Resumes after the previous batch and
+   * wraps to the first key after the end. Default batch is
+   * INDEXED_ARTIFACT_REPAIR_BATCH. A missing run row is run_deleted; a
+   * finished run with no file is file_missing. Running runs are left alone.
+   */
+  repairMissingIndexedArtifacts(now: string, limit?: number): Promise<void>;
   /** Hard-delete every run-scoped row. Throws `Run not found: …` when missing. */
   deleteRun(runId: string): Promise<void>;
   readRunMeta(runId: string): Promise<RunMeta>;
@@ -666,6 +709,8 @@ export interface RunStore {
     attempt?: number,
   ): Promise<StageLogEvent[]>;
   listRuns(filter?: ListRunsFilter): Promise<RunSummary[]>;
+  /** Status, pipeline and created_at only. No stages. Eval-origin runs are omitted. */
+  listRunStatRows(filter: ListRunStatsFilter): Promise<RunStatRow[]>;
   /** One light row per run created at or after `since` (ISO), newest first, with summed stage cost. No stages are loaded. */
   listRunOverviewRows(since: string): Promise<OverviewRunRow[]>;
   createEvalRun(input: CreateEvalRunInput): Promise<EvalRunRow>;

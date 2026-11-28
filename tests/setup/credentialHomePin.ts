@@ -4,6 +4,10 @@ import path from "node:path";
 
 const realEnv = process.env;
 
+realEnv.OPENUI_TELEMETRY_DISABLED = "1";
+realEnv.DO_NOT_TRACK = "1";
+delete realEnv.OPENUI_RUNTIME_TELEMETRY_ENABLED;
+
 // Without a pinned home, host-level files such as connections.yaml would be read from the
 // developer's real ~/.stageflow. Each test file gets its own empty one.
 if (!realEnv.STAGEFLOW_HOME?.trim()) {

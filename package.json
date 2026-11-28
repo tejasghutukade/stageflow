@@ -1,6 +1,6 @@
 {
   "name": "stageflow",
-  "version": "0.67.0",
+  "version": "0.69.0",
   "description": "Stageflow — CLI pipeline runtime for configurable stages on Pi",
   "type": "module",
   "main": "./dist/index.js",
@@ -50,7 +50,7 @@
     "ui"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/vendor-artifact-libs.mjs",
     "test": "vitest run",
     "test:pack": "vitest run --config vitest.pack.config.ts",
     "test:watch": "vitest",
@@ -60,6 +60,7 @@
     "ui:dev": "npm run dev -w ui",
     "ui:build": "npm run build -w ui && npm run copy:ui-dist",
     "ui:test": "npm run test -w ui",
+    "ui:budget": "node ui/scripts/check-live-chunk-budget.mjs",
     "ui:astryx": "npm run astryx -w ui",
     "copy:ui-dist": "tsx scripts/copy-ui-dist.ts",
     "verify:pack": "tsx scripts/verify-pack.ts",
@@ -78,6 +79,11 @@
     "@types/node": "^26.2.0",
     "@types/nodemailer": "^8.0.2",
     "@types/semver": "^7.8.0",
+    "chart.js": "4.6.2",
+    "d3": "7.9.2",
+    "echarts": "6.1.0",
+    "leaflet": "1.9.4",
+    "mermaid": "12.3.0",
     "tsx": "^4.23.11",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
@@ -91,6 +97,7 @@
     "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
+    "@openuidev/lang-core": "1.2.0",
     "agentmail": "0.5.54",
     "better-sqlite3": "^13.0.3",
     "croner": "^10.0.1",

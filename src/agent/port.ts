@@ -12,6 +12,7 @@ import type { StageChannels } from "../channels/host.js";
 import type { StageMemory } from "../memory/access.js";
 import type { QaExchange } from "../hitl/qaTrail.js";
 import type { StageUsage } from "../types/usage.js";
+import type { SessionPublishBody, SessionPublishSuccess } from "../artifacts/sessionPublish.js";
 
 /** Opaque to runtime; adapters interpret. */
 export type StageResumeToken = string;
@@ -105,6 +106,10 @@ export type StageRunInput = {
   repairContext?: StageRepairContext;
   /** Live attempt-scoped QA trail; read at emit execute time, not bootstrap time. */
   readQaTrail?: () => QaExchange[] | Promise<QaExchange[]>;
+  /** Host publish for an opted-in stage. The worker uses IPC; in-process runs call the store. */
+  publishArtifact?: (body: SessionPublishBody) => Promise<SessionPublishSuccess>;
+  /** Ids published by this run, stage, and attempt. Used when `artifacts.expect` is set. */
+  publishedArtifactIds?: () => Promise<readonly string[]>;
   /** Optional: record the provider-resolved model after resolveCliModel. */
   onResolvedModel?: (info: {
     stageId: string;

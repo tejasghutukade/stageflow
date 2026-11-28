@@ -23,6 +23,35 @@ describe("scrubbing", () => {
     for (const key of ["session", "x-csrf-token", "api_key", "jwt", "Cookie"]) expect(SECRET_KEY_RE.test(key)).toBe(true);
     expect(SECRET_KEY_RE.test("incident_id")).toBe(false);
   });
+
+  it("redacts PEM private key blocks and leaves the words PRIVATE KEY alone", () => {
+    const body = "MIIBogIBAAJBALFakeKeyMaterialForTestsOnly1234567890";
+    const block = (label: string, ending = true) =>
+      [`-----BEGIN ${label}-----`, body, ...(ending ? [`-----END ${label}-----`] : [])].join("\n");
+    const inline = scrubSecrets(`before\n${block("RSA PRIVATE KEY")}\nafter`);
+    expect(inline).toBe("before\n[redacted]\nafter");
+    expect(inline).not.toContain(body);
+    expect(inline).not.toContain("BEGIN");
+    const fromFile = scrubSecrets(block("OPENSSH PRIVATE KEY"));
+    expect(fromFile).toBe("[redacted]");
+    const encoded = Buffer.from(block("PRIVATE KEY"), "utf8").toString("utf8");
+    expect(scrubSecrets(encoded)).toBe("[redacted]");
+    const truncated = scrubSecrets(`keep\n${block("EC PRIVATE KEY", false)}\nstill inside`);
+    expect(truncated).toBe("keep\n[redacted]");
+    expect(truncated).not.toContain(body);
+    expect(truncated).not.toContain("still inside");
+    const crlf = scrubSecrets(`-----BEGIN ENCRYPTED PRIVATE KEY-----\r\n${body}\r\n-----END ENCRYPTED PRIVATE KEY-----`);
+    expect(crlf).toBe("[redacted]");
+    expect(crlf).not.toContain(body);
+    const two = scrubSecrets(`a\n${block("RSA PRIVATE KEY")}\nb\n${block("EC PRIVATE KEY")}\nc`);
+    expect(two).toBe("a\n[redacted]\nb\n[redacted]\nc");
+    expect(two).not.toContain(body);
+    const prose = "store the PRIVATE KEY in the vault";
+    expect(scrubSecrets(prose)).toBe(prose);
+    const publicKey = `-----BEGIN PUBLIC KEY-----\n${body}\n-----END PUBLIC KEY-----`;
+    expect(scrubSecrets(publicKey)).toContain(body);
+    expect(scrubSecrets(publicKey)).toContain("BEGIN PUBLIC KEY");
+  });
 });
 
 describe("working_state uses the same scrubber", () => {

@@ -71,12 +71,13 @@ export function scriptedBackend(
   reply: (messages: Array<{ role: string; text: string }>, ctx: ScriptContext) => string | Promise<string> = (messages) => `echo: ${messages.at(-1)!.text}`,
   usage = { inputTokens: 10, outputTokens: 5, costUsd: 0.001 },
   extras: Partial<Pick<ConversationBackend, "judge">> = {},
-): ConversationBackend & { calls: number; toolOutputs: string[] } {
+): ConversationBackend & { calls: number; toolOutputs: string[]; requestedToolRuns: number } {
   let seq = 0;
   const backend = {
     id: "pi" as const,
     calls: 0,
     toolOutputs: [] as string[],
+    requestedToolRuns: 0,
     ...extras,
     async complete(input: Parameters<ConversationBackend["complete"]>[0]) {
       backend.calls += 1;
@@ -97,6 +98,13 @@ export function scriptedBackend(
           return { ran: true, output };
         },
       };
+      if (input.requestedTool) {
+        const requested = input.requestedTool;
+        await ctx.tool(requested.tool, requested.input, () => {
+          backend.requestedToolRuns += 1;
+          return `ran ${requested.tool}`;
+        });
+      }
       const text = await reply(input.messages, ctx);
       const middle = Math.ceil(text.length / 2);
       input.onDelta(text.slice(0, middle));

@@ -1,15 +1,20 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentDefinition } from "../../config/loadAgent.js";
 import { assertConsumerWebChatPublication } from "../consumerSafety.js";
+import { grantedStageflowTools } from "../../toolkit/meta.js";
 import type { AgentChatController } from "../chatTurn.js";
-import { isAgentError } from "../errors.js";
+import { isAgentError, type AgentLimitKind } from "../errors.js";
 import type { AgentService } from "../service.js";
-import type { AgentSession } from "../store.js";
+import type { AgentMessage, AgentSession } from "../store.js";
 import { BodyError, readJsonBody, writeFrame } from "../ndjson.js";
-import { SlidingWindowLimiter } from "./rateLimit.js";
+import { SlidingWindowLimiter } from "../../util/slidingWindowLimiter.js";
 import type { ConsumerAuthorization } from "../../identity/authorization.js";
 import { ConsumerAccessError } from "../../identity/types.js";
+import { webChatVisitorAssistantText, webChatVisitorParts } from "../../channels/renderUiPart.js";
 import type { StepUpOutcome } from "../../identity/stepUp.js";
+import type { UiPartArtifactRef } from "../../artifacts/uiPart.js";
+import { UI_PART_KIND_ARTIFACT_REF } from "../../artifacts/uiPart.js";
+import { readVisitorArtifact, sessionArtifactVisible, type VisitorArtifactView } from "./visitorArtifacts.js";
 
 const SOURCE = "web_public";
 const MAX_THREADS = 50;
@@ -25,6 +30,12 @@ export type PublicChatOptions = {
   projectRoot: string;
   /** Extra origins allowed to call the API from a browser (a page hosted elsewhere). Same-origin always works. */
   allowedOrigins?: string[];
+  /** Advertised sandbox origins when the listener is up (for HTML cards and live HTML artifacts). */
+  sandboxOrigins?: () => readonly string[];
+  /** Session-artifact lookup. Absent means visitors see no artifact refs and the read route answers 404. */
+  artifacts?: {
+    db: import("better-sqlite3").Database;
+  };
   now?: () => number;
   logError?: (message: string) => void;
 };
@@ -45,11 +56,24 @@ const FRIENDLY: Record<string, { status: number; message: string }> = {
   "web_chat.failed": { status: 500, message: "Something went wrong. Please try again." },
 };
 
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function isLoopbackName(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "[::1]" || hostname === "::1" || /^127(\.\d{1,3}){3}$/.test(hostname);
+}
+
 class WebChatError extends Error {
   constructor(
     readonly code: string,
     readonly retryAfterSec?: number,
     message?: string,
+    readonly limit?: AgentLimitKind,
   ) {
     super(message ?? FRIENDLY[code]?.message ?? code);
   }
@@ -61,6 +85,7 @@ function errorFrame(error: WebChatError): Record<string, unknown> {
     code: error.code,
     message: error.message,
     ...(error.retryAfterSec !== undefined ? { retryAfterSec: error.retryAfterSec } : {}),
+    ...(error.limit !== undefined ? { limit: error.limit } : {}),
   };
 }
 
@@ -68,7 +93,7 @@ function toWebChatError(error: unknown): WebChatError {
   if (error instanceof ConsumerAccessError) return new WebChatError(error.code);
   if (error instanceof WebChatError) return error;
   if (isAgentError(error)) {
-    if (error.code === "agent.limit_reached") return new WebChatError("web_chat.limit_reached");
+    if (error.code === "agent.limit_reached") return new WebChatError("web_chat.limit_reached", undefined, undefined, error.limit);
     if (error.code === "agent.session_busy") return new WebChatError("web_chat.busy");
     if (error.code === "agent.disabled" || error.code === "agent.not_found" || error.code === "agent.archived") {
       return new WebChatError("web_chat.unavailable");
@@ -142,14 +167,24 @@ export class PublicWebChat {
         res.setHeader("Set-Cookie", oidcCookie(slug, "", 0));
         return this.json(res, 201, { token: admitted.token, tokenType: "Bearer", expiresIn: Math.max(0, Math.floor((admitted.expiresAt - this.now()) / 1000)) });
       }
+      const artifactRoute = threads === "threads" && parts.length >= 5 && parts[3] === "artifacts";
       const shapeOk =
-        parts.length === 1 || (threads === "threads" && (parts.length === 2 || parts.length === 3 || (parts.length === 4 && messages === "messages")));
+        parts.length === 1 ||
+        artifactRoute ||
+        (threads === "threads" && (parts.length === 2 || parts.length === 3 || (parts.length === 4 && messages === "messages")));
       if (!shapeOk) throw new WebChatError("web_chat.unavailable");
       const target = await this.resolve(slug);
 
       if (parts.length === 1) {
         if (method !== "GET") throw new WebChatError("web_chat.invalid");
-        return this.json(res, 200, { agent: { name: target.definition.name, greeting: target.definition.greeting ?? null } });
+        const sandboxOrigins = this.sandboxOriginsForAgent(target.definition, req);
+        return this.json(res, 200, {
+          agent: {
+            name: target.definition.name,
+            greeting: target.definition.greeting ?? null,
+            ...(sandboxOrigins ? { sandboxOrigins } : {}),
+          },
+        });
       }
       if (method === "POST") this.assertOrigin(req);
       const protectedChat = target.definition.web_chat.access === "authenticated";
@@ -157,6 +192,16 @@ export class PublicWebChat {
       if (parts.length === 2) return await this.collection(req, res, method, target, visitor);
       const session = this.ownedSession(target, visitor, decodeURIComponent(threadId!));
       if (protectedChat) await this.validateProtectedSession(target, visitor, session);
+      if (artifactRoute) {
+        if (method !== "GET") throw new WebChatError("web_chat.invalid");
+        let ref = "";
+        try {
+          ref = decodeURIComponent(parts.slice(4).join("/"));
+        } catch {
+          throw new WebChatError("web_chat.unavailable");
+        }
+        return await this.artifact(req, res, target, session, ref);
+      }
       if (parts.length === 4) {
         if (method !== "POST") throw new WebChatError("web_chat.invalid");
         return await this.send(req, res, target, visitor, session);
@@ -167,7 +212,7 @@ export class PublicWebChat {
       return this.json(res, 200, {
         thread: this.threadView(detail.session),
         status: detail.session.status === "running" || detail.session.status === "waiting" ? detail.session.status : "open",
-        messages: detail.messages.map((message) => ({ id: message.id, role: message.role, text: message.text, createdAt: message.createdAt })),
+        messages: detail.messages.map((message) => this.messageView(message, session, target)),
       });
     } catch (error) {
       const failure = toWebChatError(error);
@@ -261,6 +306,62 @@ export class PublicWebChat {
     return { id: session.id, title: session.title ?? "New chat", updatedAt: session.updatedAt };
   }
 
+  private messageView(
+    message: AgentMessage,
+    session: AgentSession,
+    target: Resolved,
+  ): { id: string; role: AgentMessage["role"]; text: string; createdAt: string; parts?: AgentMessage["parts"] } {
+    let text = message.text;
+    let parts = message.parts;
+    if (message.role === "assistant" && message.parts?.length) {
+      const summarized = message.parts.filter((part) => part.kind !== UI_PART_KIND_ARTIFACT_REF);
+      text = webChatVisitorAssistantText({ ...message, parts: summarized });
+      const allow = this.visitorSeesArtifacts(target);
+      parts = webChatVisitorParts(message.parts, {
+        keepArtifact: (part) => allow && this.artifactVisible(session.id, part),
+      });
+    }
+    return {
+      id: message.id,
+      role: message.role,
+      text,
+      createdAt: message.createdAt,
+      ...(parts?.length ? { parts } : {}),
+    };
+  }
+
+  private visitorSeesArtifacts(target: Resolved): boolean {
+    if (target.definition.web_chat.access === "authenticated") return true;
+    return target.definition.web_chat.public_tools === true;
+  }
+
+  private artifactVisible(sessionId: string, part: UiPartArtifactRef): boolean {
+    const db = this.options.artifacts?.db;
+    if (!db) return false;
+    return sessionArtifactVisible(db, sessionId, part, new Date(this.now()).toISOString());
+  }
+
+  private async artifact(req: IncomingMessage, res: ServerResponse, target: Resolved, session: AgentSession, ref: string): Promise<boolean> {
+    if (!this.visitorSeesArtifacts(target)) throw new WebChatError("web_chat.unavailable");
+    const db = this.options.artifacts?.db;
+    if (!db) throw new WebChatError("web_chat.unavailable");
+    const versionParam = new URL(req.url ?? "/", "http://local").searchParams.get("version");
+    let version: number | undefined;
+    if (versionParam !== null) {
+      if (!/^[1-9]\d*$/.test(versionParam)) throw new WebChatError("web_chat.unavailable");
+      version = Number(versionParam);
+      if (!Number.isSafeInteger(version)) throw new WebChatError("web_chat.unavailable");
+    }
+    let view: VisitorArtifactView | null;
+    try {
+      view = await readVisitorArtifact(db, session.id, ref, version, new Date(this.now()).toISOString());
+    } catch {
+      view = null;
+    }
+    if (!view) throw new WebChatError("web_chat.unavailable");
+    return this.json(res, 200, view);
+  }
+
   private ownedSession(target: Resolved, visitor: string, threadId: string): AgentSession {
     const found = this.options.service.listSessionsForRef(this.options.projectRoot, target.agentId, this.source(target), visitor, 500).find((session) => session.id === threadId);
     if (!found) throw new WebChatError("web_chat.unavailable");
@@ -317,13 +418,19 @@ export class PublicWebChat {
         source: SOURCE,
         ...(target.definition.web_chat.access === "authenticated" ? { consumerSessionId: visitor } : {}),
         onDelta: (delta) => write({ type: "delta", text: delta }),
+        onUiPreview: (preview) =>
+          write({
+            type: "ui_preview",
+            phase: preview.phase,
+            ...(preview.phase === "error" ? { message: preview.message } : {}),
+          }),
       });
       finished = true;
       if (target.definition.web_chat.access === "authenticated") await this.validateProtectedSession(target, visitor, session);
       const reply = [...detail.messages].reverse().find((message) => message.role === "assistant");
       write(
         reply
-          ? { type: "done", message: { id: reply.id, role: "assistant", text: reply.text, createdAt: reply.createdAt } }
+          ? { type: "done", message: this.messageView(reply, session, target) }
           : { type: "done", message: null },
       );
       await writes;
@@ -395,6 +502,19 @@ export class PublicWebChat {
         try { return (await this.options.service.get(this.options.projectRoot, id)).definition; } catch { return null; }
       },
     });
+  }
+
+  /** Sandbox origins for an agent that may draw HTML. Loopback ones only help a visitor on this machine. */
+  private sandboxOriginsForAgent(definition: AgentDefinition, req: IncomingMessage): string[] | undefined {
+    const drawsHtml = definition.ui.present && definition.ui.kinds.includes("live.html");
+    const visitorsGetTools = definition.web_chat.public_tools || definition.web_chat.access === "authenticated";
+    const visitorsSeeHtml = definition.ui.persistence !== "artifacts" || visitorsGetTools;
+    // An agent that publishes artifacts with save_artifact may publish live HTML even without ui.present.
+    const publishesArtifacts = visitorsGetTools && grantedStageflowTools(definition.tools.stageflow).includes("save_artifact");
+    if (!((drawsHtml && visitorsSeeHtml) || publishesArtifacts)) return undefined;
+    const localVisitor = isLoopbackName(hostOf(`http://${req.headers.host ?? ""}`));
+    const origins = (this.options.sandboxOrigins?.() ?? []).filter((origin) => localVisitor || !isLoopbackName(hostOf(origin)));
+    return origins.length > 0 ? origins : undefined;
   }
 
   private visitorOf(req: IncomingMessage): string {

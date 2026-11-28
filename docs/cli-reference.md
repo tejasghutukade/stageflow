@@ -121,9 +121,11 @@ sf run --task examples/hello-world/my-task.task.yaml \
   --json --include stages > sf-run.json
 ```
 
-Each `stages[]` item is a `StageProjection` (snake_case): `stage_id`, `status`, `envelope`, `artifacts`, and optional `last_at`, `pending_prompt`. That `--include stages` schema is unchanged for diamond runs — it does not add `pipeline_track` or join-input fields. The multi-edge graph (a diamond join has two inbound `pipeline_track` edges; `blocked_by` lists unresolved parents) is on `sf runs show --json`, MCP `get_run`, and `sf export-run`.
+Each `stages[]` item is a `StageProjection` (snake_case): `stage_id`, `status`, `envelope`, `artifacts`, and optional `last_at`, `pending_prompt`. When a stage published artifacts during the run, the item also has `published_artifacts`: an array of `{ key, version, kind, title }`. The field is absent when that stage published nothing, including every stage that did not opt in with `artifacts.publish: true`. `sf runs show --json` uses the same addition on each stage. Exit codes are unchanged. That `--include stages` schema is otherwise unchanged for diamond runs — it does not add `pipeline_track` or join-input fields. The multi-edge graph (a diamond join has two inbound `pipeline_track` edges; `blocked_by` lists unresolved parents) is on `sf runs show --json`, MCP `get_run`, and `sf export-run`.
 
 `--include stages` without `--json` exits `1`. See [CI / headless](ci.md#including-stage-projections).
+
+`sf run`, `sf runs` and `sf artifact` check the Host on the configured port before they start. If that Host reports a different `home_id` than this process, they print a warning on stderr that names both homes and points at `docker exec <container> sf …` or the Host's MCP endpoint, then continue. Runs started here will not appear in that Host's console. Set `STAGEFLOW_NO_HOST_HOME_WARNING=1` to silence it. stdout, `--json` output and exit codes are unchanged.
 
 ## `sf run-stage` {#sf-run-stage}
 
@@ -638,7 +640,7 @@ Output is UTF-8 JSON (not a `.tgz`). Does not take `--json`.
 Consistent live snapshot of the durable store (`VACUUM INTO`), written under `$STAGEFLOW_HOME/backups/` by default. Default archives include provider credentials (mode `0600`) and must be treated as secrets. See [Docker and self-hosting](docker.md).
 
 ```bash
-sf backup [--out <file>] [--db-only] [--no-credentials] [--include-a2a-artifacts] [--json]
+sf backup [--out <file>] [--db-only] [--no-credentials] [--no-artifacts] [--include-a2a-artifacts] [--json]
 ```
 
 | Flag | Description |
@@ -646,6 +648,7 @@ sf backup [--out <file>] [--db-only] [--no-credentials] [--include-a2a-artifacts
 | `--out` | Destination path (refuses `$STAGEFLOW_HOME/worktrees/` and `runs/`) |
 | `--db-only` | Bare DB snapshot instead of tar.gz |
 | `--no-credentials` | Omit `agent/auth.json` |
+| `--no-artifacts` | Omit published artifact bytes under `artifacts/` (default includes them) |
 | `--include-a2a-artifacts` | Include A2A artifact bytes |
 | `--json` | Print metadata JSON |
 
@@ -687,6 +690,10 @@ sf restore <file> [--force] [--json]
 
 HTTP: `POST /api/restore` with `{ "backup": "<name>" }` (drive) → `202` then drain; boot applies before opening the store.
 
+A backup that contains published artifact bytes is staged beside the data directory and checked before it replaces `artifacts/`. The database is copied first. The previous `artifacts/` tree is then renamed aside, the staged tree is renamed into place, and the aside copy is deleted. If that swap fails, or if taking the store lock fails, the staged `.artifacts-incoming-<stamp>` directory is removed and the previous tree and the previous `state.db` are put back. Restore then reports `restore_failed` or `restore_store_busy`. A backup with no artifact bytes (`--no-artifacts`, `--db-only`, or an older archive) leaves the current `artifacts/` tree in place. `sf restore --json` then includes `warnings: [{ "code": "artifacts_not_in_backup", "message": "..." }]`, and the same integrity check lists rows whose content is missing. A directory member, or any member that cannot be written as a file because the name already exists, is `restore_bad_member`. A device, FIFO, character, or block member is `restore_unsafe_member`. This path reads the whole decompressed tar into memory (the same `readFileSync` pattern as before). The practical limit is 1.5 GiB of decompressed member bytes; past that, restore fails with `restore_failed` and does not load the archive.
+
+Restoring onto a build whose SQLite cannot create FTS5 does not crash the Host. Search logs once and uses the text scan until a later start can create the table; body text is indexed again as the repair pass runs. See [Search](artifacts.md#search).
+
 An archive restore verifies every file against the manifest's size and SHA-256 and every entry against the allowed names before it touches anything. Files the archive carries are placed in the data directory, and a file that already exists is moved aside as `<name>.pre-restore-<ISO>`; files the archive does not carry stay as they are. Secret files are restored only when the archive contains them (`--include-secrets` when it was made). A symbolic link is restored only when it stays inside the data directory; others are skipped and listed. An archive from a newer Stageflow minor version is refused, and `--force` does not change that; a different major version is refused unless `--force` is given. It stops early when the staging area lacks room. The store is replaced last; if anything fails while the files are being put in place, every file moved or placed so far is put back, and the old store stays where it was.
 
 ## `sf export`
@@ -699,9 +706,144 @@ sf export --all [--status <status>] [--since <iso>] [--pipeline <id-or-path>] [-
 
 HTTP: `GET /api/export` (**read** scope) with the same query filters.
 
-## `sf artifact read`
+## `sf artifact`
 
-Read a run workspace artifact as UTF-8 text (same path rules as MCP `run_files` with `view: artifact`).
+List, show, publish, promote, refresh, query, and delete artifacts in the artifact index, or read a run workspace file as UTF-8 text.
+
+Like other store verbs, `list` and `show` open `$STAGEFLOW_HOME` SQLite directly. `publish`, `delete`, `origins`, `approve-origins`, and `revoke-origins` do the same. When the database is missing or its schema is behind this binary, they start the Host to apply migrations, then open again (same as `sf runs list` and `sf artifact read`).
+
+### `sf artifact list`
+
+```bash
+sf artifact list [--q <text>] [--kind <kind>] [--owner <pipeline:stage|agent:id>] [--tag <tag>]
+  [--status <available|expired>] [--live] [--scope <project|session>] [--sort <updated|title|size>] [--order <asc|desc>]
+  [--project-root <wire id or path>] [--limit <n>] [--json]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--q` | Passed to the index search (`q`). Matches title, description, tags, summary, owner, and extracted text (Markdown, text, CSV, JSON; first 64 KiB). HTML, images, and live snapshots are not searched. See [Search](artifacts.md#search). |
+| `--kind` | Passed to the index (`kind`). A value without a dot matches that prefix (`static` matches `static.markdown`). |
+| `--owner` | Passed to the index. `pipeline:stage` or `stage:<pipeline>:<stage>` for a stage, `agent:<id>`, or `guide` for cards the Guide saved. |
+| `--tag` | Passed to the index (`tag`). |
+| `--status` | Passed to the index: `available` or `expired`. |
+| `--live` | Passed as `live=true`: only artifacts whose kind starts with `live.`. |
+| `--scope` | `project` (default) omits session artifacts. `session` lists only those. |
+| `--sort` | Passed to the index: `updated` (default), `title`, or `size`. |
+| `--order` | Passed to the index: `asc` or `desc`. Default is `desc`, except `title`, which defaults to `asc`. |
+| `--project-root` | Catalog wire id or absolute path; passed through to the index query. |
+| `--limit` | Max rows (`1`–`100`, default `50`). |
+| `--json` | Print `{ "artifacts": […], "next_cursor": string \| null }` (same field names as `GET /api/artifacts`). With `--q`, the page also includes `match_count`, and `next_cursor` continues the ranked search. |
+
+Human output is a compact table: `KEY`, `KIND`, `TITLE`, `OWNER`, `RUN` (the same short run id the console uses, so a timestamp-prefixed id is not cut to `2026-11-`), `STATUS` (blank, `expired`, or `LIVE` / `LIVE/fresh` / `LIVE/stale` / `LIVE/error` / `LIVE/refreshing`), `UPDATED` (UTC). Newest first. Empty index: `No artifacts.`
+
+**Exit codes:** `0` success; `1` usage error, invalid query, or store unavailable.
+
+### `sf artifact show <key>`
+
+```bash
+sf artifact show <ownerKey>/<id> [--project-root <wire id or path>] [--json]
+```
+
+`key` is the same form as in list output and the REST route: `stage:<pipeline>:<stage>/<id>`, `agent:<id>/<id>`, or `guide/<id>` (no project prefix). When the same owner and id exist in several projects, pass `--project-root` to disambiguate.
+
+**Exit codes:** `0` success; `1` not found (`artifact.not_found`), ambiguous owner/id across projects (`artifact.ambiguous`, project roots listed on stderr), invalid key, or other error.
+
+Human output is one field per line: `key`, `title`, `kind`, `status`, `owner`, `source` (run, stage, attempt), `updated`, and `expires` or `expired` (reason and time). A live artifact also prints `live` (`LIVE` or `LIVE/<status>`), `last refreshed`, `last error`, `bindings` (`id`, function, `read-only`), and `refresh` (the policy, or `-`). With `--json`, stdout is the artifact record object, including `live` when the kind is `live.declarative` or `live.html`, or `{ "error", "code" }` (and `project_roots` when ambiguous) on failure. `--json` is unchanged by the human summary.
+
+### `sf artifact promote <key>`
+
+```bash
+sf artifact promote <ownerKey>/<id> [--project-root <wire id or path>] [--json]
+```
+
+Clears `expires_at` and sets `scope` to `project`. The artifact then appears on the default list. A key that is not a session artifact is `artifact.not_session`. An expired session artifact is `artifact.expired`.
+
+**Exit codes:** `0` success; `1` not found, not a session artifact, expired, or store unavailable.
+
+### `sf artifact publish` {#sf-artifact-publish}
+
+Copy a static file into the keep-class artifact store. Same caps and version rules as [Publishing](artifacts.md#publishing).
+
+```bash
+sf artifact publish --owner <pipeline:stage|agent:id> --id <id> --kind <kind> --title <title>
+  [--description <text>] [--tag <tag>]... [--summary <text>] [--manifest <file>]
+  [--project-root <wire id or path>] (--file <path> | --stdin) [--json]
+```
+
+`--owner` is `pipeline:stage` (or `stage:<pipeline>:<stage>`) or `agent:<id>`. Pass exactly one of `--file` or `--stdin`. `--tag` may be repeated. The recorded source is `console`. `--kind live.declarative` stores the program from `--file` or `--stdin` and the JSON object in `--manifest` (`format`, `library`, `bindings`, optional `refresh`). `--kind live.html` stores the HTML document from `--file` or `--stdin` and the JSON object in `--manifest` (`format` `html`, `csp`, `bindings`, optional `refresh`). `--manifest` is required for both live kinds. A document that references an origin the manifest does not declare exits 1 with `artifact.html_csp_violation`.
+
+Human output is `Published <key> version <N>` or `Unchanged <key> version <N>`. `--json` prints `{ "key", "version", "project_root", "url", "unchanged" }`.
+
+**Exit codes:** `0` success; `1` validation error, ambiguous project, or store unavailable. With `--json`, stdout is `{ "error", "code" }` and `issues` when the body was rejected.
+
+### `sf artifact refresh <key>`
+
+```bash
+sf artifact refresh <ownerKey>/<id> [--binding <id>]... [--if-stale] [--project-root <wire id or path>] [--json]
+```
+
+Runs the live bindings now, or only the ids passed with `--binding` (repeat the flag). `--if-stale` runs a binding only when its snapshot is missing, failed, or older than the effective TTL (the manifest `ttl_seconds`, or 300 seconds when that field is omitted). A fresh snapshot is reused: the function is not called, no invocation row is written, and `last_refreshed_at` stays as it was. Same path as the refresh route. The command runs in its own process, so function-executor limits, the variant cache, the rate-limit windows, and in-flight coalescing apply to that process and are not shared with the Host. Human output is `status`, `last refreshed`, `last error`, one line per snapshot (`<id>: ok` or a status), and one line per binding error. `--json` prints `{ "status", "snapshots", "last_refreshed_at", "last_error_code", "errors" }`. Each snapshot may include `source`: `executed` when this refresh stored it, `cache` when the snapshot was already stored. A full executor queue or a full refresh queue adds `retry_after_seconds`.
+
+**Exit codes:** `0` when every requested binding succeeded; `1` when a binding failed (stdout is still that JSON object with `--json`), or for `artifact.not_found`, `artifact.ambiguous`, `artifact.not_live`, `artifact.content_unavailable`, an unknown binding id, or another error (`{ "error", "code" }` with `--json`).
+
+### `sf artifact query <key>`
+
+```bash
+sf artifact query <ownerKey>/<id> --binding <id> [--args <json>] [--if-stale|--no-if-stale] [--project-root <wire id or path>] [--json]
+```
+
+Runs one live binding with viewer arguments. The manifest `args` are the defaults. `--args` is a JSON object shallow-merged over them. Omitted `--args` uses the defaults and is the same as `sf artifact refresh` for that binding. Omitted staleness reuses a snapshot that is still inside the TTL. `--no-if-stale` runs the function again. Same path as `POST /api/artifacts/<ownerKey>/<id>/query`. The command runs in its own process, so its cache, rate limits, and in-flight coalescing are not shared with the Host. See [Live artifacts: interaction](artifacts.md#live-artifacts-interaction).
+
+`--json` prints `{ "binding_id", "args_hash", "snapshot", "errors" }`. `snapshot` is `{ "value", "fetched_at", "duration_ms", "status", "error_code", "source" }` or `null`. `source` is `cache` or `executed`. A refused execution adds `retry_after_seconds`. Human output prints the binding, the args hash, the source, and the status. It does not print the argument values or the snapshot value.
+
+**Exit codes:** `0` when the query has no binding error; `1` when it does (stdout is still that JSON object with `--json`), or for `artifact.not_found`, `artifact.ambiguous`, `artifact.not_live`, `artifact.content_unavailable`, an unknown binding, invalid arguments, or another error (`{ "error", "code" }` with `--json`).
+
+List human output puts `LIVE`, `LIVE/fresh`, `LIVE/stale`, `LIVE/error`, or `LIVE/refreshing` in the `STATUS` column. An expired indexed row still shows `expired`.
+
+### `sf artifact origins <key>`
+
+```bash
+sf artifact origins <ownerKey>/<id> [--project-root <wire id or path>] [--json]
+```
+
+Prints the origins a live HTML artifact has requested, the sha256 of that set, and whether an operator has approved it. Human output groups connect, resource, and base origins. `--json` prints `{ "key", "origins" }`. `origins` is `{ "connect", "resource", "base", "hash", "approved", "approved_at" }`. A static or declarative artifact is `artifact.invalid_shape`.
+
+**Exit codes:** `0` when the record was read; `1` for `artifact.not_found`, `artifact.ambiguous`, `artifact.invalid_shape`, or another error (`{ "error", "code" }` with `--json`).
+
+### `sf artifact approve-origins <key>`
+
+```bash
+sf artifact approve-origins <ownerKey>/<id> [--hash <sha256>] [--yes] [--project-root <wire id or path>] [--json]
+```
+
+Approves the current origin set. The command prints the origins and asks for confirmation. `--yes` skips the question. With no terminal and no `--yes`, it exits `1` and does not approve (`artifact.confirmation_required`). Inside a stage or agent session (the process environment has a stage-session marker such as `SF_STAGE_WORKER=1` or `STAGEFLOW_RUN_WORKSPACE`), it exits `1` and does not approve, and `--yes` does not override that. The message is `approval is an operator action: refused inside a stage or agent session` (`artifact.operator_only`). `--hash` must be the current set. A different hash is `artifact.origins_mismatch` and the JSON error includes `current_hash`. An empty set is `artifact.invalid_shape` (`no origins to approve`). `--json` on success prints `{ "origins", "approved": true, "approved_at" }`.
+
+**Exit codes:** `0` approved; `1` refused, mismatched, not found, ambiguous, or other error.
+
+### `sf artifact revoke-origins <key>`
+
+```bash
+sf artifact revoke-origins <ownerKey>/<id> [--hash <sha256>] [--project-root <wire id or path>] [--json]
+```
+
+Deletes one approval when `--hash` is set, or every approval for the artifact when it is omitted. The same session-environment refusal as `approve-origins` applies, including when the command would otherwise succeed. `--json` prints `{ "revoked", "origins" }`.
+
+**Exit codes:** `0` when the artifact was found; `1` for a session refusal, `artifact.not_found`, `artifact.ambiguous`, or another error.
+
+### `sf artifact delete <key>` {#sf-artifact-delete}
+
+```bash
+sf artifact delete <ownerKey>/<id> [--project-root <wire id or path>] [--yes] [--json]
+```
+
+Deletes a published artifact and every version. Without `--yes`, a terminal asks for confirmation. With no terminal and no `--yes`, the command exits `1` and does not delete. `--json` errors are `{ "error", "code" }` (`artifact.confirmation_required`, `artifact.not_deletable`, `artifact.not_found`, `artifact.ambiguous`).
+
+**Exit codes:** `0` deleted; `1` refused, not found, indexed, ambiguous, or other error.
+
+### `sf artifact read`
+
+Read a run workspace artifact as UTF-8 text (same path rules as MCP `run_files` with `view: artifact`). Does not use the artifact index.
 
 ```bash
 sf artifact read --run <runId> --path <relPath> [--out <file>]
@@ -947,7 +1089,7 @@ Exit `0` whether or not the engine is installed. `sf eval engine install` exits 
 sf doctor [--json] [--pipeline <path>] [--strict]
 ```
 
-Operator preflight: shared `/readyz` checks (store, home, migrations, git), plus bash, Node, credentials presence/source, TLS CA path existence, free disk, and `.mcp.json` commands on PATH. With `--pipeline`, also diffs that pipeline's `requires:` / `secrets:` / stage MCP against the toolchain manifest and curated stage env (same check as MCP `validate` with `preflight: true` / `start_run`). With `--pipeline`, stages that declare [`channels:`](channels.md) also get a live check of each connection (it never sends a message); a failure is `channel_check_failed` with the connection and reason. `--strict` treats `unknown_version` as failure. Exits non-zero when any check is `fail`.
+Operator preflight: shared `/readyz` checks (store, home, migrations, git), plus bash, Node, credentials presence/source, TLS CA path existence, free disk, and `.mcp.json` commands on PATH. The published artifact store check reports every drift class it finds (hash mismatch, missing content, orphan directory, stale staging), each with a count and up to five example paths, and prints the store size in B, KiB, MiB, or GiB. A separate line, `search index: N artifacts pending`, is the number of artifacts whose body text is not indexed yet. With `--pipeline`, also diffs that pipeline's `requires:` / `secrets:` / stage MCP against the toolchain manifest and curated stage env (same check as MCP `validate` with `preflight: true` / `start_run`). With `--pipeline`, stages that declare [`channels:`](channels.md) also get a live check of each connection (it never sends a message); a failure is `channel_check_failed` with the connection and reason. `--strict` treats `unknown_version` as failure. Exits non-zero when any check is `fail`.
 
 **Never use `sf doctor` as a container `HEALTHCHECK`.** Use `GET /livez` for liveness; doctor is a human/CI preflight tool.
 

@@ -35,6 +35,8 @@ The gate runs one call at a time per turn.
 | Skills in `tools.skills` | Loaded into the session. A skill that is not installed fails the session with `agent.backend_unavailable`. |
 | Sub-agents in `sub_agents` | One tool per agent, `agent_<id>`, grant id `agent:<id>`. |
 | Stageflow tools in `tools.stageflow` | Named `stageflow_<tool>`, grant id `stageflow.<tool>`. |
+| `ui.present` | `present_ui`. Read-only. Places an artifact reference in the reply, or saves `program` and `manifest` as a session artifact. Eval sessions stub it. |
+| `ui.present` with `persistence: conversation`, plus `save_artifact` | `save_card`. Saves a card already drawn in the session as an artifact owned by the agent and puts its reference in the reply. Eval sessions stub it. |
 
 ### MCP servers
 
@@ -49,7 +51,7 @@ An agent can be given Stageflow's own tools (the ones in [MCP tools](mcp.md#tool
 | Group | Tools | Notes |
 |-------|-------|-------|
 | `discover` | `list_catalog` with `kind: skills`, `list_catalog` with `kind: pipelines`, `list_catalog` with `kind: tasks`, `list_catalog` with `kind: models`, `list_catalog` with `kind: providers`, `list_catalog` with `kind: health`, `validate` (catalog paths, `draft`, `preflight: true`, and the rest), `read_pipeline` with `view: dag`, `list_catalog` with `kind: mcp_servers` (read), `probe_project_mcp` (external) | `get_started` is operator-only. |
-| `runs.read` | `get_run` (omit `runId`), `get_run`, `get_run` with `view: export`, `get_stage` with `view: events`, `log`, `envelope`, or `verification`, `run_files` with `view: artifact`, `changes`, `diff`, or `file`, `wait_run` | All read. |
+| `runs.read` | `get_run` (omit `runId`), `get_run`, `get_run` with `view: export`, `run_stats`, `get_stage` with `view: events`, `log`, `envelope`, or `verification`, `run_files` with `view: artifact`, `changes`, `diff`, or `file`, `wait_run` | All read. `run_stats` counts by status over `created_at` (`day`, `week`, or `pipeline`). |
 | `runs.control` | `start_run`, `start_run` with `stage`, `start_run` with `from_run`, `stage_action` with `action: retry`, `resume`, `recover`, or `stop_recovery` | Write. |
 | `runs.cleanup` | `cancel_run`, `abandon_stage`, `delete_runs`, `delete_runs` with `gc: true` | Destructive. |
 | `gates.read` | `list_waiting` with `detail: full` or `summary` | Read. |
@@ -68,6 +70,10 @@ An agent can be given Stageflow's own tools (the ones in [MCP tools](mcp.md#tool
 | `connections.cleanup` | `remove_connection` | Destructive. |
 | `memories` | `get_memory` with `list: true` (read), `get_memory`, `save_memory` with `mode: create`, `mode: update`, or `card: true` (write) | |
 | `memories.cleanup` | `delete_memory_card` | Destructive. |
+| `artifacts.read` | `stageflow_get_artifact` with `list: true`, `stageflow_get_artifact` with `view: record`, `versions`, `content`, or `data` | Read. Ask-first id `stageflow.get_artifact`. The model calls `stageflow_get_artifact`. Reading is project-wide. `view: data` returns current snapshots for `live.declarative` and `artifact.not_live` for a static artifact. |
+| `artifacts.write` | `publish_artifact` | Write. Ask-first id `publish_artifact`. The model calls `publish_artifact`. The session tool is bound to this agent and to this session's project. The Host MCP tool `save_artifact` is not given to the agent, because that tool lets the caller choose an owner. |
+| `artifacts.cleanup` | `stageflow_delete_artifact` | Destructive. Ask-first id `stageflow.delete_artifact`. The model calls `stageflow_delete_artifact`. An agent can delete only an artifact it owns in the session's project. Another owner's key, or a `project_root` other than that project, is `artifact.not_found` and nothing is deleted. Omitting `project_root` still deletes only in the session's project. |
+| `artifacts.refresh` | `stageflow_refresh_artifact` | External. Ask-first id `stageflow.refresh_artifact`. The model calls `stageflow_refresh_artifact`. An agent can refresh only a live artifact it owns in the session's project. Another owner's key, or a `project_root` other than that project, is `artifact.not_found` and nothing runs. |
 
 Rules:
 
@@ -90,6 +96,14 @@ Agent definitions and Stageflow state are never writable through a tool that nam
 Relative paths resolve against the project root. This is a check on arguments, not a sandbox.
 
 **`bash` is not path-confined.** The runtime sees a command string, not what it does, so an agent granted `bash` can still change agent files and Stageflow state. The editor warns (`agent.shell_not_path_confined`). So that a person reads each command first, **every `bash` call is ask-first**, whether or not `bash` is in `approvals.ask_first`. Do not grant `bash` to an agent that must stay confined.
+
+**`publish_artifact` reads a `path` only from a file the agent could already read.** The path is relative to the project root. An absolute path, a `..` segment, a symlink, an `*.agent.yaml` file under `agents/`, and anything under `$STAGEFLOW_HOME` outside the project are refused before the bytes are read. The file size is checked with `lstat` first. Over 5 MiB is `artifact.too_large` and the file is not read. `content` and `content_base64` are the other ways to pass bytes. For every kind except `static.image`, the bytes are checked as UTF-8 and scrubbed with the same secret scrubber as a stage publish, whether they came from `content`, `content_base64`, or `path`. Bytes that are not valid UTF-8 are `artifact.invalid_shape`. Image bytes are stored unchanged. An error from the tool does not include the secret.
+
+An agent that holds `artifacts.write` gets a short section in its system prompt (kinds, the id rule, the size cap, that publishing the same id again creates a new version, that the artifact is owned by this agent, and that the prompt does not list other agents' artifacts). An agent that holds `artifacts.read` gets one sentence naming `stageflow_get_artifact`. An agent that holds `artifacts.cleanup` gets one sentence naming `stageflow_delete_artifact`. An agent that holds `artifacts.refresh` gets one sentence naming `stageflow_refresh_artifact`. An agent with none of those grants keeps the same system prompt and the same tool list. Compaction does not rewrite that section; it lives only in the system prompt.
+
+### Artifacts in an eval session
+
+An eval session (`source: eval`) that publishes stores the row with `hidden = 1` under `eval:agent:<id>/<artifact id>`. It does not replace a visible artifact with the same id. List, search, MCP, and the console omit it. `publish_artifact` is class `write`, `stageflow.delete_artifact` is class `destructive`, and `stageflow.refresh_artifact` is class `external`, so the default `read_only` policy stubs them and writes nothing. `stageflow.get_artifact` is read and runs. Under `real`, those tools follow the same rules as other tools of those classes. `stageflow.refresh_artifact` runs under `real` unless ask-first records `would_ask_first`. An eval session under `real` can delete a visible artifact owned by that agent, because `real` runs the real tools. No approval row is created for an eval session. A sub-agent does not inherit the caller's artifact grants; it uses its own definition.
 
 ## Asking first
 
@@ -117,10 +131,10 @@ Limits are read from the session's pinned revision and checked **when a turn sta
 | Limit | Refuses a new turn when |
 |-------|--------------------------|
 | `max_turns` | The session already has that many turns. |
-| `session_minutes` | The session is that old. |
+| `session_minutes` | The session has been idle (no messages, and no turn waiting on an approval) for that many minutes. |
 | `cost_usd` | The thread has cost that much, including sessions it rolled from. |
 
-All refuse with `agent.limit_reached` (409). With `always_on: true`, `max_turns` and `session_minutes` do not apply, and `cost_usd` counts the cost of the last 24 hours instead. On a web chat a limit shows as `web_chat.limit_reached`. A channel thread rolls onto a new session when it reaches its turn or time limit. Its cost limit counts the thread's spend over the last 24 hours, across rollovers, so a rollover does not reset it. Once that 24-hour spend is under the limit again, the thread continues on a new session. While a thread is past `cost_usd` it stays on the same session, and the sender is told the cost limit was reached. A session that is not always-on is also refused once it alone has spent `cost_usd`.
+All refuse with `agent.limit_reached` (409). With `always_on: true`, `max_turns` and `session_minutes` do not apply, and `cost_usd` counts the cost of the last 24 hours instead. On a web chat a limit shows as `web_chat.limit_reached`. A channel thread rolls onto a new session when it reaches its turn or idle limit. Its cost limit counts the thread's spend over the last 24 hours, across rollovers, so a rollover does not reset it. Once that 24-hour spend is under the limit again, the thread continues on a new session. While a thread is past `cost_usd` it stays on the same session, and the sender is told the cost limit was reached. A session that is not always-on is also refused once it alone has spent `cost_usd`.
 
 ### Long conversations
 

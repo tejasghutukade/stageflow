@@ -29,6 +29,7 @@ export const TELEGRAM_META: ProviderMeta = {
       botToken: env:TELEGRAM_BOT_TOKEN
 `,
   stageExample: '    to: "123456789"',
+  ui: "link",
 };
 
 const configSchema = z.object({ botUsername: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{4,31}$/).optional() }).strict();

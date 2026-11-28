@@ -1,0 +1,4 @@
+id: showcase
+goal: Publish a showcase of static and live artifacts so the console renderers can be reviewed
+context: Demo for the artifacts page. Uses the two read-only demo functions in functions/.
+input: {}

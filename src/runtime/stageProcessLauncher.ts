@@ -51,6 +51,20 @@ import {
 import { resolveStageFunctionGrants } from "./stageFunctionChecks.js";
 import { classifyParentHostLogin, serveStageMcpCall, serveStageMcpList } from "./stageMcpHost.js";
 import { isStageMcpMessage, stageMcpCallBody } from "./stageMcpWorker.js";
+import { catalogRootsForArtifacts } from "../artifacts/projectScope.js";
+import {
+  SessionPublishError,
+  artifactWorkerFault,
+  assertWorkerPublishInput,
+  decodeWorkerPublishBytes,
+  isArtifactWorkerMessage,
+  listPublishedIdsForAttempt,
+  publishSessionArtifact,
+  type ArtifactWorkerPublishInput,
+  type SessionPublishContext,
+} from "../artifacts/sessionPublish.js";
+import { createRunStore, sqliteConnectionFromStore } from "../runstore/createStore.js";
+import type { RunStore } from "../runstore/port.js";
 
 export type StageLaunchInput = {
   runId: string;
@@ -78,6 +92,8 @@ export type StageLaunchInput = {
   model?: string;
   routeFunction?: { id: string; grants: import("../config/loadFunction.js").FunctionGrant[] };
   completion?: import("../types/completion.js").CompletionContract;
+  /** Catalog pipeline id. The worker cannot choose the artifact owner. */
+  pipelineId?: string;
 };
 
 export type StageLaunchResult =
@@ -269,6 +285,14 @@ export class StageProcessLauncher {
   private resolvedFunctionInvoker: StageFunctionHost | undefined;
   private readonly functionCalls = new Map<ChildProcess, Set<string>>();
   private readonly mcpCalls = new Map<ChildProcess, Map<string, AbortController>>();
+  private artifactStore: RunStore | undefined;
+
+  private artifactHostStore(): RunStore {
+    if (!this.artifactStore) {
+      this.artifactStore = createRunStore({ rootDir: globalStageflowHome() });
+    }
+    return this.artifactStore;
+  }
 
   constructor(options: StageProcessLauncherOptions = {}) {
     this.env = options.env ?? process.env;
@@ -747,6 +771,66 @@ export class StageProcessLauncher {
           })().finally(() => {
             this.mcpCalls.get(child)?.delete(requestId);
           });
+          return;
+        }
+        if (!settled && isArtifactWorkerMessage(message)) {
+          void (async () => {
+            if (typeof request.requestId !== "string" || request.requestId.length === 0 || request.requestId.length > 100) return;
+            let response: object;
+            try {
+              const stage = input.stage;
+              if (!stage || stage.artifacts?.publish !== true || settled) {
+                throw new SessionPublishError("artifact.invalid_shape", "publish is not enabled");
+              }
+              if (!input.pipelineId) {
+                throw new SessionPublishError("artifact.invalid_shape", "pipeline id is not available");
+              }
+              const store = this.artifactHostStore();
+              const db = sqliteConnectionFromStore(store);
+              if (!db) throw new SessionPublishError("artifact.invalid_shape", "artifact publish is not available");
+              const context: SessionPublishContext = {
+                owner: { kind: "stage", pipeline: input.pipelineId, stage: stage.id },
+                projectRoot: input.factoryCwd ?? input.rootDir,
+                source: {
+                  runId: input.runId,
+                  stageId: input.stageId,
+                  attempt: input.attempt ?? 1,
+                },
+              };
+              if (request.type === "artifact.expect") {
+                response = {
+                  ids: listPublishedIdsForAttempt(db, {
+                    runId: input.runId,
+                    stageId: input.stageId,
+                    attempt: input.attempt ?? 1,
+                  }),
+                };
+              } else {
+                assertWorkerPublishInput(request.input);
+                const wire = request.input as ArtifactWorkerPublishInput;
+                const result = await publishSessionArtifact(
+                  { db, roots: await catalogRootsForArtifacts(store) },
+                  context,
+                  {
+                    id: wire.id,
+                    kind: wire.kind,
+                    title: wire.title,
+                    description: wire.description,
+                    tags: wire.tags,
+                    summary: wire.summary,
+                    bytes: decodeWorkerPublishBytes(wire.content_base64),
+                    ...(wire.manifest !== undefined ? { manifest: wire.manifest } : {}),
+                  },
+                );
+                response = { result };
+              }
+            } catch (error) {
+              response = { error: artifactWorkerFault(error) };
+            }
+            if (child.connected && !settled) {
+              child.send({ type: "artifact.response", requestId: request.requestId, ...response });
+            }
+          })();
           return;
         }
         if (!settled && request?.type === "channel.send") {

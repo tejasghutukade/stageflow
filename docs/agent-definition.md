@@ -50,12 +50,51 @@ If you create an agent without an `id`, one is made from the name (lowercase, ot
 | `tools.mcp` | map: server name → list of tool names | `{}` | Names match `^[A-Za-z0-9_.-]{1,64}$`. Each list needs at least one tool; `"*"` allows every tool of the server. `stageflow` is reserved. |
 | `tools.skills` | list of skill names | `[]` | Skills must be installed, or a session fails to start. |
 | `tools.browser` | boolean | `false` | Stored but not wired to anything yet. |
-| `tools.stageflow.groups` | list of group ids | `[]` | See [Stageflow tools](agent-runtime.md#stageflow-tools). |
+| `tools.stageflow.groups` | list of group ids | `[]` | See [Stageflow tools](agent-runtime.md#stageflow-tools). Artifact groups: `artifacts.read` (ask-first id `stageflow.get_artifact`, model tool `stageflow_get_artifact`), `artifacts.write` (ask-first id `publish_artifact`, model tool `publish_artifact`), `artifacts.cleanup` (ask-first id `stageflow.delete_artifact`, model tool `stageflow_delete_artifact`), `artifacts.refresh` (ask-first id `stageflow.refresh_artifact`, model tool `stageflow_refresh_artifact`). Refresh runs only an artifact this agent owns in the session's project. |
 | `tools.stageflow.tools` | list of tool names | `[]` | Single Stageflow tools on top of the groups. |
 
 The console shows one checkbox per tool and stores the compact form: a full group as the group, a partial one as single tools.
 
 Operator-only Stageflow tools (`gates.decide` and `get_started`) cannot be granted: `agent.stageflow_operator_only`.
+
+### `ui`
+
+Off unless `present` is true. This is the grant for `present_ui`, the tool an agent uses to draw a card in its reply. One setting, `persistence`, decides where cards live and what they can do:
+
+| `persistence` | Where a card lives | What a card can do | Public chat page |
+|---------------|--------------------|--------------------|------------------|
+| `conversation` (default) | Inside the chat message. Nothing is written to the artifact store; the card is deleted with the conversation. | Show what the agent writes into it: layouts, tables, numbers, markdown. No live data, no buttons, no existing artifacts. | Opens. Visitors see the cards. |
+| `artifacts` | Saved as a session artifact (kept 30 days unless promoted). | Also show existing artifacts by key, load live data from `ui.functions`, run buttons, and use every presentable kind. | Does not open (the agent counts as having tools). |
+
+The smallest setup is:
+
+```yaml
+ui:
+  present: true
+```
+
+That draws `live.declarative`, `static.markdown`, and (when the Host runs the sandbox listener) `live.html` cards kept in the conversation. To change a card, ask the agent: it calls `present_ui` again with the whole updated program, and the new card appears in its reply. Earlier cards stay as they were. A program that does not parse comes back on the tool result so the model can fix it; chat shows a skeleton while the call streams and a short error card if it gives up.
+
+**Saving a card.** An agent with cards kept in the conversation that also holds `artifacts.write` (`tools.stageflow` grants `save_artifact`) gets `save_card`, the same tool the [Guide](console-guide.md) uses. Ask it to keep a card and it saves one it already drew as an artifact owned by the agent (key `agent:<id>/card_<hash>`, the session's project), without drawing it again. With no `card_id` it saves the latest card; `card_id` may be the card's title (any case) to pick an earlier one. Saving the same card again returns the artifact it already made, and a card is found once its reply has ended, so a card can be saved in a later message (in the same reply the call is `ui.card_not_found`). The saved program is scrubbed the same way `publish_artifact` scrubs content, so a secret pattern in the card does not land in the artifact. The conversation itself still keeps the program the agent wrote. The reply shows the saved artifact with a link to Artifacts. An anonymous visitor on a public link gets `save_card` only when `web_chat.public_tools` is on, like `publish_artifact`; a visitor's save is a session artifact of that conversation (30 days unless promoted) that other visitors cannot see. `save_card` can be listed in `approvals.ask_first`. Eval sessions stub it. Agents with `persistence: artifacts`, or without the write grant, do not get it.
+
+For live data and buttons:
+
+```yaml
+ui:
+  present: true
+  persistence: artifacts
+  kinds: [static.markdown, live.declarative]
+  functions: [weekly_sales]
+```
+
+| Field | Type | Default | Rules |
+|-------|------|---------|-------|
+| `ui.present` | boolean | `false` | The model can call `present_ui` only when this is true. Kinds or functions with it off is `agent.ui_present_required`. |
+| `ui.persistence` | `conversation` or `artifacts` | `conversation` | See the table above. |
+| `ui.kinds` | list of artifact kinds | conversation card kinds, or every presentable kind with `artifacts` | Filled in when `present` is true and the list is empty. Each must be `static.markdown`, `static.image`, `static.table`, `static.text`, `static.html`, `live.declarative`, or `live.html` (`agent.ui_kind_unknown`). With `conversation`, only `live.declarative`, `static.markdown`, and `live.html` (`agent.ui_kind_needs_artifacts` for other kinds). No duplicates (`agent.ui_kind_duplicate`). A call for another kind is refused (`ui.kind_not_granted`). |
+| `ui.functions` | list of function ids | `[]` | Only with `persistence: artifacts` (`agent.ui_functions_need_artifacts`). Function ids a card may call for live data. Each id matches `^[a-z][a-z0-9_-]{0,63}$` (`agent.ui_function_invalid`). No duplicates (`agent.ui_function_duplicate`). A binding query whose function is not listed is `agent.ui_function_not_granted`. |
+
+When `live.declarative` or `live.html` is in `ui.kinds`, the agent's prompt carries that kind's vocabulary, syntax and an example, so it can write a program without reading the docs. A reply holds at most four cards, counting calls made in parallel; failed attempts do not count. A card without a title takes the manifest's `title`, then a markdown card's first heading, then "Card". While people reading the chat cannot reach the HTML sandbox, a `live.html` card or one-off program is refused (`ui.kind_not_granted`); a saved `live.html` artifact can still be shown by key with `artifacts`. A card kept in the conversation is at most 64 KB and refuses bindings and actions (`ui.card_display_only`) and artifact keys (`ui.key_needs_artifacts`). With `artifacts`, a key from another project is refused (`ui.cross_project`), a missing key is `artifact.not_found`, and a deleted or expired artifact renders as an unavailable card. Email, Telegram, iMessage and Slack get a card's plain-text fallback (a markdown card sends its text). Eval sessions stub `present_ui` and `save_card` and do not run them.
 
 ### `approvals`
 
@@ -69,7 +108,7 @@ Operator-only Stageflow tools (`gates.decide` and `get_started`) cannot be grant
 
 At least one approver must be allowed, so `operators: false` with no `channel_ids` is an error (`approvals.approvers`). Because `channel_ids` is reserved, `operators: false` leaves nobody able to decide: do not use it.
 
-Tool ids in `ask_first`: a builtin name (`edit`, `bash`), `stageflow.<tool>`, `<server>.<tool>` for an MCP tool, or `agent:<id>` for a sub-agent. How asking works is in [Agent runtime](agent-runtime.md#asking-first).
+Tool ids in `ask_first`: a builtin name (`edit`, `bash`), `stageflow.<tool>`, `publish_artifact` when `artifacts.write` is granted, `<server>.<tool>` for an MCP tool, or `agent:<id>` for a sub-agent. `artifacts.read` grants the ask-first id `stageflow.get_artifact`; the model calls `stageflow_get_artifact`. `artifacts.cleanup` grants the ask-first id `stageflow.delete_artifact`; the model calls `stageflow_delete_artifact`. `artifacts.refresh` grants the ask-first id `stageflow.refresh_artifact`; the model calls `stageflow_refresh_artifact`, and only for an artifact this agent owns in the session's project. `artifacts.write` grants the ask-first id `publish_artifact`, which is also the name the model calls. `save_artifact` is the operator MCP tool and is not an agent ask-first id. How asking works is in [Agent runtime](agent-runtime.md#asking-first).
 
 ### `sub_agents`
 
@@ -138,7 +177,8 @@ web_chat:
 | Field | Type | Default | Rules |
 |-------|------|---------|-------|
 | `web_chat.enabled` | boolean | `false` in a hand-written file | A new agent created through the console, API, CLI or MCP starts with it on. |
-| `web_chat.access` | `public` or `authenticated` | `public` | Public chat is tool-less and has no shared private context. Authenticated chat needs identity turned on and a consumer-safe agent; see [Protect an agent's chat with customer sign-in](guides-agents-protected-chat.md) and [Consumer identity](consumer-identity.md) and restrictions. |
+| `web_chat.access` | `public` or `authenticated` | `public` | Anyone with a public link can chat without signing in. With `public_tools: false` (default), visitors only chat and see conversation cards; with `public_tools: true`, they get the agent's tools except identity-only ones (builtin file/shell tools and browser). Authenticated chat needs identity turned on and a consumer-safe agent; see [Protect an agent's chat with customer sign-in](guides-agents-protected-chat.md) and [Consumer identity](consumer-identity.md). |
+| `web_chat.public_tools` | boolean | `false` | When `access` is `public`, lets anonymous visitors use the agent's tools, except identity-only ones: builtin `read`, `grep`, `find`, `ls`, `write`, `edit`, `bash` and `browser` (they act on your machine and saved logins), and Stageflow tools that run code (writing pipelines, stages and tasks, `import_task`, functions, evals, `probe_project_mcp`), change the Host's setup (agents, connections, triggers, eval writes, deleting or cancelling runs) or reach other agents and conversations (`agent_chat`, `stop_agent_session`, `get_agent_session`). Those are withheld from visitors (a sub-agent that has one is withheld too) and keep working in the console and on authenticated links; saving warns `agent.public_tools_identity_only` with the names. For visitors, `get_artifact` reads project artifacts and their own conversation's session artifacts only. |
 | `web_chat.slug` | string | made on save | 16–32 lowercase letters or digits. The link grants access to public chat, not protected identity. An enabled block with no slug gets a random one when saved through the console, API, CLI or MCP; a hand-written file shows the warning `agent.web_chat_slug_missing` until then. Saving with `slug: ""` rotates the link. |
 | `web_chat.rate_limit_per_minute` | integer | `10` | 1–120 messages per visitor per minute. |
 | `web_chat.max_message_chars` | integer | `4000` | 1–20,000. |
@@ -166,7 +206,7 @@ See [Schedules](agents.md#schedules) for when it fires.
 
 | Field | Type | Default | Rules |
 |-------|------|---------|-------|
-| `limits.session_minutes` | integer | `10` | 1–1,440. A session older than this refuses a new turn. |
+| `limits.session_minutes` | integer | `10` | 1–1,440. Refuses a new turn after this many minutes with no messages. Waiting on an approval does not count as idle. |
 | `limits.max_turns` | integer | `40` | 1–1,000. |
 | `limits.cost_usd` | number or `null` | `null` | Above 0. A session that has spent this much refuses a new turn. |
 | `limits.long_context` | `summarize` \| `truncate` | `summarize` | How a replayed transcript is cut down. |

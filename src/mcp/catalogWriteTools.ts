@@ -1,5 +1,3 @@
-import { realpath } from "node:fs/promises";
-import path from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import {
@@ -9,6 +7,7 @@ import {
 } from "../config/importTask.js";
 import type { McpToolDeps } from "./deps.js";
 import { textResult } from "./toolResults.js";
+import { catching, projectFields, resolveWriteTarget } from "./writeTarget.js";
 
 type CatalogWriteDeps = McpToolDeps & {
   issueFetch?: IssueFetch;
@@ -18,7 +17,7 @@ const projectRootField = z
   .string()
   .optional()
   .describe(
-    "Catalog project root. When omitted, the server project root is used, then the process cwd.",
+    "Catalog project root. When omitted, the Host workspace is used.",
   );
 
 function rejected(result: {
@@ -36,20 +35,12 @@ function rejected(result: {
   );
 }
 
-async function projectRootOf(
-  deps: CatalogWriteDeps,
-  projectRoot: string | undefined,
-): Promise<string> {
-  const resolved = path.resolve(projectRoot ?? deps.projectRoot ?? deps.cwd);
-  return realpath(resolved).catch(() => resolved);
-}
-
 export function registerCatalogWriteTools(server: McpServer, deps: CatalogWriteDeps): void {
   server.registerTool(
     "import_task",
     {
       description:
-        "Import a GitHub issue as a standalone catalog task file. The issue title becomes the goal and the task id.",
+        "Import a GitHub issue as a standalone catalog task file.",
       inputSchema: z.object({
         project_root: projectRootField,
         repo: z.string().describe("GitHub owner/repo"),
@@ -57,16 +48,14 @@ export function registerCatalogWriteTools(server: McpServer, deps: CatalogWriteD
         directory: z.string().describe("Directory relative to the project root, e.g. tasks"),
       }),
     },
-    async ({ project_root, ...body }) => {
-      const parsed = parseImportTaskBody(body);
-      if ("ok" in parsed) return rejected(parsed);
-      const result = await importTaskFromIssue(
-        await projectRootOf(deps, project_root),
-        parsed,
-        deps.issueFetch,
-      );
-      if (!result.ok) return rejected(result);
-      return textResult({ task: result.task });
-    },
+    async ({ project_root, ...body }) =>
+      catching(async () => {
+        const parsed = parseImportTaskBody(body);
+        if ("ok" in parsed) return rejected(parsed);
+        const target = await resolveWriteTarget(deps, project_root);
+        const result = await importTaskFromIssue(target.path, parsed, deps.issueFetch);
+        if (!result.ok) return rejected(result);
+        return textResult({ task: result.task, ...projectFields(target) });
+      }),
   );
 }

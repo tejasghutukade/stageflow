@@ -373,7 +373,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "run_eval",
-    "Run an eval: executes every case of the eval's dataset through its target (a stage, or an agent held as a conversation; repeats times each) and grades the results. This calls models and may cost real money (stage calls plus judge calls for rubric graders), bounded by max_cost_usd. Agent runs call the agent's model, a simulator model that plays the user (simulated cases) and the judge, and can cost much more than stage runs. Agent tools are read-only by default: write, shell and unlisted tools are stubbed and recorded, never executed. An eval with conversation.tools: real needs allow_real_tools true on top of allow_real_tools in the eval file, else it fails EVAL_REAL_TOOLS_NOT_CONFIRMED. A stage eval skips signed-in console MCP servers unless allow_host_login is true; stdio servers and HTTP servers with a resolved Authorization header still run. allow_host_login is the consent for that host path. allow_real_tools is the consent for an agent eval to act on the project. Only one eval run is active per host; a second start fails EVAL_RUN_ACTIVE. With wait false (default) it returns { eval_run_id } immediately and the run continues in the background: poll get_eval_run. With wait true it blocks up to timeout_ms (default 600000, max 1800000) and returns the finished run detail, or { eval_run_id, status: \"timeout\" } if still running (the run keeps going; cancel_eval_run stops it). An invalid eval returns an error result with findings.",
+    "Run an eval: every dataset case through its target (a stage, or an agent held as a conversation; repeats times each). This calls models and may cost real money (stage calls plus judge calls for rubric graders), bounded by max_cost_usd. Agent runs call the agent's model, a simulator model that plays the user, and the judge, and can cost much more than stage runs. Agent tools are read-only by default: write, shell, and unlisted tools are stubbed and recorded, never executed. conversation.tools: real also needs allow_real_tools true on top of allow_real_tools in the eval file, else EVAL_REAL_TOOLS_NOT_CONFIRMED. Stage evals skip signed-in console MCP unless allow_host_login is true; stdio servers and HTTP servers with Authorization still run. allow_host_login is the host-path consent; allow_real_tools is the consent to act on the project. One eval run per host; a second start fails EVAL_RUN_ACTIVE. wait false (default) returns { eval_run_id } (poll get_eval_run). wait true blocks up to timeout_ms (default 600000, max 1800000) and returns the run detail, or { eval_run_id, status: \"timeout\" } (the run keeps going; cancel_eval_run stops it). An invalid eval returns an error result with findings.",
     runEvalFlatSchema,
     async (input) => {
       const evalRunManager = manager();
@@ -497,7 +497,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "sort_eval_failures",
-    "Sort the failed and errored results of a finished eval run into suggested buckets (agent_wrong, grader_wrong, case_wrong, unclear) and failure types, each with a confidence. This sends each failed result's case, output and grader reasons to an external classifier: TypeSafe Jev (about $0.04 per million input tokens; needs a TypeSafe key) or the run's judge model (a model call per result, real cost). It is manual only and never runs on its own. Nothing is tagged: suggestions are reviewed and accepted by the author in the console or API. Eval sessions of the run stay hidden. classifier auto uses jev when a key exists, else judge, else fails EVAL_CLASSIFIER_UNAVAILABLE. By default results that already have a suggestion are skipped (only_unsorted). Fails EVAL_RUN_ACTIVE while the run is running.",
+    "Sort failed and errored results into buckets (agent_wrong, grader_wrong, case_wrong, unclear) and failure types, each with a confidence. Sends case, output, and grader reasons to an external classifier: TypeSafe Jev (about $0.04 per million input tokens; needs a TypeSafe key) or the judge model (one call per result). Manual only. Nothing is tagged until accepted. Eval sessions stay hidden. classifier auto: jev if a key exists, else judge, else EVAL_CLASSIFIER_UNAVAILABLE. only_unsorted (default) skips existing suggestions. Fails EVAL_RUN_ACTIVE while the run is running.",
     z.object({
       eval_run_id: z.string(),
       classifier: z.enum(["auto", "jev", "judge"]).optional().describe("Default auto"),
@@ -548,12 +548,12 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "calibrate_eval_grader",
-    "Check a rubric or goal_reached grader's judge against the author's own Pass/Fail labels: re-judges the stored outputs of every result labeled for that grader (no stage or agent runs) and returns the number of labels, agreement, Cohen's kappa, pass and fail recall, confusion counts and the results where the judge disagreed. This calls the judge model once per label (three times with stability true) and may cost real money, bounded by max_cost_usd (default 1). It sends the labeled outputs to the judge model's provider. split dev or held_out measures a fixed 70/30 split of the labels. Fails EVAL_CALIBRATION_NO_LABELS when nothing is labeled and EVAL_RUN_ACTIVE while a run or try is active.",
+    "Check a rubric or goal_reached judge against Pass/Fail labels. Re-judges stored outputs labeled for that grader (no stage or agent runs). Returns label count, agreement, Cohen's kappa, pass and fail recall, confusion counts, and disagreements. One judge call per label (three when stability is true). May cost real money, bounded by max_cost_usd (default 1). Sends outputs to the judge provider. split dev or held_out is a fixed 70/30 split. Fails EVAL_CALIBRATION_NO_LABELS when nothing is labeled and EVAL_RUN_ACTIVE while a run or try is active.",
     z.object({
       eval_id: z.string(),
       grader_id: z.string(),
       split: z.enum(["all", "dev", "held_out"]).optional().describe("Default all"),
-      stability: z.boolean().optional().describe("Judge each output three times and report how often the verdict splits (about 3x the cost)"),
+      stability: z.boolean().optional().describe("Judge each label three times"),
       max_cost_usd: z.number().positive().optional().describe("Cost cap in USD (default 1)"),
       project_root: projectRootField,
     }),
@@ -581,7 +581,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "cancel_eval_run",
-    "Cancel an eval run in progress and return its detail once it has stopped (waits up to 5 seconds). Stops spending; completed results are kept. A run that already finished is returned unchanged.",
+    "Cancel an eval run in progress and return its detail once it has stopped (waits up to 5 seconds). A run that already finished is returned unchanged.",
     z.object({ eval_run_id: z.string() }),
     async ({ eval_run_id }) => {
       const evalRunManager = manager();
@@ -595,7 +595,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "compare_eval_runs",
-    "Compare two eval runs of the same eval: per-grader and per-case differences, regressions and improvements, cost delta. a is the baseline, b the candidate. Read-only, free. Fails 400 when the runs are not comparable.",
+    "Compare two eval runs of the same eval. a is the baseline, b the candidate. Read-only, free. Fails 400 when the runs are not comparable.",
     z.object({ a: z.string(), b: z.string() }),
     async ({ a, b }) => {
       manager();
@@ -612,7 +612,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
     "save_eval",
     {
       description:
-        "mode create writes a new eval from definition, or source sample installs the packaged sample. mode update replaces an eval with definition or yaml and base_hash. Does not call a model.",
+        "mode create writes a new eval from definition, or source sample installs the packaged sample. mode update replaces an eval with definition or yaml and base_hash.",
       inputSchema: saveEvalFlatSchema,
     },
     async (raw) => {
@@ -732,7 +732,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
     "save_dataset",
     {
       description:
-        "mode create writes a new dataset (cases or source sample, runs, sessions). mode update with action append, replace, ops, or convert edits an existing dataset. Does not call a model.",
+        "mode create writes a new dataset (cases or source sample, runs, sessions). mode update with action append, replace, ops, or convert edits an existing dataset.",
       inputSchema: saveDatasetFlatSchema,
     },
     async (raw) => {
@@ -837,7 +837,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
 
   tool(
     "try_eval_case",
-    "Run one case of an eval and return its grade. Pass exactly one of eval_id or definition, and exactly one of case_id or case. dataset_cases stand in for the dataset file. This calls the target model once and may cost real money, bounded by the eval's max_cost_usd; graders that need a judge call the judge too. Agent tools stay read-only unless the eval file sets conversation.tools real and allow_real_tools is true. A stage try skips signed-in console MCP servers unless allow_host_login is true; stdio servers and HTTP servers with a resolved Authorization header still run. Nothing is saved as an eval run, and no eval session is returned.",
+    "Run one case and return its grade. Exactly one of eval_id or definition, and exactly one of case_id or case. dataset_cases replace the dataset file. Calls the target model once and may cost real money, bounded by max_cost_usd; judge graders call the judge too. A simulator plays the user for an agent case. Agent tools stay read-only unless conversation.tools is real and allow_real_tools is true. Stage tries skip signed-in console MCP unless allow_host_login is true; stdio servers and HTTP servers with a resolved Authorization header still run. Nothing is saved, and no eval session is returned.",
     tryEvalCaseFlatSchema,
     async (input) => {
       const { eval_id, definition, case_id, case: caseInput, dataset_cases, allow_real_tools, allow_host_login, project_root } =
@@ -877,7 +877,7 @@ export function registerEvalTools(server: McpServer, deps: McpToolDeps): void {
     "review_eval_results",
     {
       description:
-        "action label sets pass, fail, note, or tags on one repeat; action accept writes tags from suggestions; action dismiss dismisses suggestions. Does not call a model.",
+        "action label sets pass, fail, note, or tags on one repeat; action accept writes tags from suggestions; action dismiss dismisses suggestions.",
       inputSchema: reviewEvalResultsFlatSchema,
     },
     async (raw) => {

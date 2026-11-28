@@ -162,7 +162,9 @@ When it failed, `ok` is `false` and `code` and `message` say why (see the [resul
 
 `GET /api/functions/<id>/revisions` returns `{ "revisions": [ ... ] }`, oldest first, each with `revision`, `source` (`console`, `file` or `api`), `author`, `summary`, `sourceHash`, `contractVersion` and `createdAt`. `GET /api/functions/<id>/revisions/<n>` returns that revision with its full definition and YAML. A revision that does not exist is `404 function.revision_not_found`.
 
-`GET /api/functions/<id>/invocations` returns `{ "invocations": [ ... ] }`, newest first. Each row has `id`, `revision`, `sourceHash`, `kind` (`test`, `verification`, `route` or `tool`), `status`, `durationMs`, `code` and `createdAt`. Inputs and results are not stored.
+`GET /api/functions/<id>/invocations` returns `{ "invocations": [ ... ] }`, newest first. The list defaults to 200 rows. `limit` is an optional query parameter, an integer from 1 to 1,000. A missing or empty `limit` uses 200. Anything else is `422` `function.invalid`. Each row has `id`, `revision`, `sourceHash`, `kind` (`test`, `verification`, `route`, `tool`, or `artifact`), `status`, `durationMs`, `code` and `createdAt`. Inputs and results are not stored. `artifact` is a live-artifact refresh or a binding query. The invocation table has no column for the artifact key, the binding id, or the args hash, so a query does not store them. The history row stores a code, never the arguments, the snapshot, a request URL, or a secret. Refresh runs the revision it checked. Output that fails `output_schema` is `invalid_output`. The artifact snapshot stores the return value after pattern and key-name scrubbing, which does not remove every secret a function might return.
+
+The retention sweep deletes invocation rows older than 30 days, or rows beyond the newest 50,000, whichever set is larger, and at most 5,000 rows per sweep. A failure is logged and the sweep continues. `STAGEFLOW_FUNCTION_HISTORY_DAYS` (integer 1–3650) and `STAGEFLOW_FUNCTION_HISTORY_MAX_ROWS` (integer 1–1000000) override those bounds. See [Environment variables](environment-variables.md).
 
 ## Errors
 

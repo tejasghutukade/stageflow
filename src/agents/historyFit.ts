@@ -1,5 +1,25 @@
+import {
+  UI_PART_KIND_APPROVAL,
+  UI_PART_KIND_ARTIFACT_REF,
+  UI_PART_KIND_FORM,
+  type UiPart,
+} from "../artifacts/uiPart.js";
 import type { AgentDefinition } from "../config/loadAgent.js";
+import { messageReplayText } from "../genui/replay.js";
 import type { ConversationMessage } from "./runtime/types.js";
+
+function uiPartLabel(part: UiPart): string {
+  switch (part.kind) {
+    case UI_PART_KIND_ARTIFACT_REF:
+      return part.key;
+    case UI_PART_KIND_FORM:
+      return `form:${part.id}`;
+    case UI_PART_KIND_APPROVAL:
+      return `approval:${part.approvalId}`;
+    default:
+      return "ui";
+  }
+}
 
 /** Characters of replayed history a restarted session is given (about 15k tokens). */
 export const HISTORY_CHAR_BUDGET = 60_000;
@@ -14,18 +34,25 @@ export function fitHistory(
   policy: AgentDefinition["limits"]["long_context"],
   budget: number = HISTORY_CHAR_BUDGET,
 ): ConversationMessage[] {
-  const total = messages.reduce((sum, m) => sum + m.text.length, 0);
+  const total = messages.reduce((sum, m) => sum + messageReplayText(m).length, 0);
   if (total <= budget || messages.length <= 1) return [...messages];
   const kept: ConversationMessage[] = [];
   let used = 0;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i]!;
-    if (kept.length > 0 && used + message.text.length > budget) break;
+    const chars = messageReplayText(message).length;
+    if (kept.length > 0 && used + chars > budget) break;
     kept.unshift(message);
-    used += message.text.length;
+    used += chars;
   }
   const dropped = messages.slice(0, messages.length - kept.length);
   if (policy === "truncate" || dropped.length === 0) return kept;
-  const digest = dropped.map((m) => `- ${m.role}: ${m.text.replace(/\s+/g, " ").trim().slice(0, 160)}`).join("\n");
+  const digest = dropped
+    .map((m) => {
+      const keys = m.parts?.map((part) => uiPartLabel(part)).join(", ");
+      const ui = keys ? ` [ui ${keys}]` : "";
+      return `- ${m.role}: ${m.text.replace(/\s+/g, " ").trim().slice(0, 160)}${ui}`;
+    })
+    .join("\n");
   return [{ role: "assistant", text: `Earlier in this conversation (condensed):\n${digest}` }, ...kept];
 }

@@ -355,6 +355,31 @@ describe("agent/models.json", () => {
   });
 });
 
+describe("published artifacts in archives", () => {
+  it("includes version directories, excludes staging, and works when artifacts/ is absent", async () => {
+    const { home, store } = await makeHome();
+    const keyHash = "abc123";
+    put(home, `artifacts/${keyHash}/v1/body.md`, "hello");
+    put(home, `artifacts/${keyHash}/v1/manifest.json`, "{}");
+    mkdirSync(path.join(home, "artifacts", keyHash, ".staging-deadbeef"), { recursive: true });
+    writeFileSync(path.join(home, "artifacts", keyHash, ".staging-deadbeef", "partial.md"), "partial");
+    const withArtifacts = await buildArchive({ store: { snapshotInto: store.snapshotInto.bind(store), ...noRuns }, homeDir: home });
+    const names = listing(withArtifacts.path);
+    expect(names).toContain(`artifacts/${keyHash}/v1/body.md`);
+    expect(names).not.toContain(`artifacts/${keyHash}/.staging-deadbeef/partial.md`);
+    const manifest = manifestOf(extract(withArtifacts.path));
+    expect(manifest.files.some((file) => file.path.startsWith("artifacts/"))).toBe(true);
+    expect(manifest.left_out.some((item) => item.path.includes(".staging-"))).toBe(true);
+
+    const bare = await makeHome();
+    const bareArchive = await buildArchive({
+      store: { snapshotInto: bare.store.snapshotInto.bind(bare.store), ...noRuns },
+      homeDir: bare.home,
+    });
+    expect(listing(bareArchive.path).some((name) => name.startsWith("artifacts/"))).toBe(false);
+  });
+});
+
 describe("the archive inventory and docs/data-directory.md", () => {
   it("has a rule for every path the layout table documents", () => {
     const doc = readFileSync(path.join(import.meta.dirname, "..", "docs", "data-directory.md"), "utf8");

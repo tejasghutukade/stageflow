@@ -18,7 +18,7 @@ schedule:
 ## How it works
 
 - While the Host runs, a tick (default every 30 s, `STAGEFLOW_AGENT_SCHEDULE_TICK_INTERVAL_MS`; `0` turns the scheduler off) starts a turn for every **enabled** agent whose next run is due.
-- Each run is a **new session** with source `schedule`. Its limits (`max_turns`, `session_minutes`, `cost_usd`) apply as usual, and tools that ask first wait for a person like any other turn.
+- Each run is a **new session** with source `schedule`. Its limits (`max_turns`, idle `session_minutes`, `cost_usd`) apply as usual, and tools that ask first wait for a person like any other turn.
 - The **first tick after you save or enable** a schedule only records the next run; it does not fire.
 - If the Host was down past a due time, the agent fires **once** on the next tick, not once per missed occurrence.
 - Editing a schedule to fire sooner takes effect on the next tick. A disabled agent never fires.

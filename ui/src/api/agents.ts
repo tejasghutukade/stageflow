@@ -1,3 +1,4 @@
+import { withSurfaceScope } from "./projectScope";
 import { authorizationHeaders, notifyControlTokenRequired } from "./controlToken";
 
 /** Wire types for `/api/agents` — mirror src/config/loadAgent.ts and src/agents/{service,store}.ts. */
@@ -10,6 +11,7 @@ export type CaptureMode = "off" | "metadata" | "full";
 export type WebChatConfig = {
   access: "public" | "authenticated";
   enabled: boolean;
+  public_tools?: boolean;
   slug?: string;
   rate_limit_per_minute: number;
   max_message_chars: number;
@@ -25,7 +27,8 @@ export type AgentDefinition = {
   project_context: boolean;
   execution: "trusted-local" | "sandbox";
   model: { backend: "pi" | "claude"; id?: string; thinking: ThinkingLevel };
-  tools: { builtin: BuiltinToolGroup[]; builtin_tools: string[]; mcp: Record<string, string[]>; skills: string[]; browser: boolean; stageflow: { groups: string[]; tools: string[] } };
+  tools: { builtin: BuiltinToolGroup[]; builtin_tools: string[]; mcp: Record<string, string[]>; skills: string[]; browser: boolean; stageflow: { groups: string[]; tools: string[] }; functions?: Array<{ id: string; grants?: unknown[] }> };
+  ui: { present: boolean; persistence?: "conversation" | "artifacts"; kinds: string[]; functions: string[] };
   approvals: {
     ask_first: string[];
     approvers: { operators: boolean; channel_ids: string[] };
@@ -83,6 +86,8 @@ export type AgentSummary = {
   updatedAt: string;
   /** Path form `/chat/<slug>` once web chat has a slug; the console prefixes the address it is opened from. */
   webChatUrl?: string | null;
+  /** What anonymous visitors can do on the public link, or null. */
+  webChatNote?: string | null;
 };
 
 export type AgentDetail = {
@@ -141,6 +146,7 @@ export type AgentMessage = {
   role: "user" | "assistant";
   author: string | null;
   text: string;
+  parts?: import("../../../src/artifacts/uiPart.ts").UiPart[];
   createdAt: string;
 };
 
@@ -265,8 +271,8 @@ export class AgentApiError extends Error {
   }
 }
 
-async function request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+async function request<T>(path: string, method = "GET", body?: unknown, scoped = true): Promise<T> {
+  const res = await fetch(scoped ? withSurfaceScope(path, "agents") : path, {
     method,
     headers: { "Content-Type": "application/json", ...authorizationHeaders() },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -285,6 +291,8 @@ const agentUrl = (id: string, tail = "") => `/api/agents/${enc(id)}${tail}`;
 
 export const agentsApi = {
   list: () => request<{ agents: AgentSummary[] }>("/api/agents").then((body) => body.agents),
+  listIn: (projectRoot: string) =>
+    request<{ agents: AgentSummary[] }>(`/api/agents?${new URLSearchParams({ project_root: projectRoot })}`).then((body) => body.agents),
   get: (id: string) => request<AgentDetail>(agentUrl(id)),
   validate: (definition: unknown) => request<AgentValidation>("/api/agents/validate", "POST", { definition }),
   /** Send a reply that failed or whose outcome was unknown again. */
@@ -328,18 +336,23 @@ export const agentsApi = {
     return request<SessionPage>(`/api/agents/sessions${qs ? `?${qs}` : ""}`);
   },
   session: (id: string, sessionId: string) => request<AgentSessionDetail>(agentUrl(id, `/sessions/${enc(sessionId)}`)),
+  uiEvent: (
+    id: string,
+    sessionId: string,
+    body: { id: string; key: string; version?: number; kind: "query" | "message" | "tool"; action: string; args?: Record<string, unknown> },
+  ) => request<Record<string, unknown>>(agentUrl(id, `/sessions/${enc(sessionId)}/ui-events`), "POST", body),
   decide: (id: string, sessionId: string, decision: "approve" | "deny") =>
     request<{ approval: AgentApproval; session: AgentSessionDetail }>(
       agentUrl(id, `/sessions/${enc(sessionId)}/approval/${decision}`),
       "POST",
     ),
   pendingApprovals: () =>
-    request<{ approvals: Array<AgentApproval & { agentId: string }> }>("/api/agents/approvals").then(
+    request<{ approvals: Array<AgentApproval & { agentId: string }> }>("/api/agents/approvals", "GET", undefined, false).then(
       (body) => body.approvals,
     ),
   /** Download the session's traces as OTLP/JSON. */
   async exportOtlp(id: string, sessionId: string): Promise<Blob> {
-    const res = await fetch(agentUrl(id, `/sessions/${enc(sessionId)}/otlp`), { headers: authorizationHeaders() });
+    const res = await fetch(withSurfaceScope(agentUrl(id, `/sessions/${enc(sessionId)}/otlp`), "agents"), { headers: authorizationHeaders() });
     if (res.status === 401) notifyControlTokenRequired();
     if (!res.ok) throw new AgentApiError(`http_${res.status}`, res.status, "Export failed");
     return res.blob();
@@ -354,9 +367,14 @@ export const agentsApi = {
 export async function streamAgentChat(
   id: string,
   input: { message: string; sessionId?: string },
-  handlers: { onDelta?: (text: string) => void; onSession?: (sessionId: string) => void; signal?: AbortSignal } = {},
+  handlers: {
+    onDelta?: (text: string) => void;
+    onSession?: (sessionId: string) => void;
+    onUiPreview?: (preview: { phase: "skeleton" | "error"; message?: string }) => void;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<AgentSessionDetail> {
-  const res = await fetch(agentUrl(id, "/chat"), {
+  const res = await fetch(withSurfaceScope(agentUrl(id, "/chat"), "agents"), {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/x-ndjson", ...authorizationHeaders() },
     body: JSON.stringify({ ...input, stream: true }),
@@ -387,8 +405,12 @@ export async function streamAgentChat(
         session?: AgentSessionDetail;
         code?: string;
         message?: string;
+        phase?: "skeleton" | "error";
       };
       if (frame.type === "delta" && frame.text) handlers.onDelta?.(frame.text);
+      else if (frame.type === "ui_preview" && (frame.phase === "skeleton" || frame.phase === "error")) {
+        handlers.onUiPreview?.({ phase: frame.phase, ...(frame.message ? { message: frame.message } : {}) });
+      }
       else if (frame.type === "session" && frame.sessionId) handlers.onSession?.(frame.sessionId);
       else if (frame.type === "done" && frame.session) return frame.session;
       else if (frame.type === "error") {

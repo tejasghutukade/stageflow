@@ -96,6 +96,10 @@ Related docs: [evals.md](docs/evals.md), [envelopes.md](docs/envelopes.md), [hit
 
 Read [docs/functions.md](docs/functions.md) before changing function authoring, execution, access or attachments. The field reference is [YAML catalog: Functions](docs/yaml-catalog.md#functions), the REST routes are in [docs/function-api.md](docs/function-api.md), and the MCP tools are in [docs/mcp.md](docs/mcp.md#function-tools). The design spec `docs/specs/reusable-functions.md` is not in the repository; it may exist in a maintainer's local checkout, so ask for it if you need its requirement ids. Where merged code differs from it, the code and the user docs win. Record a contract change in the user docs in the same change.
 
+### Working against a running Host
+
+When asked to create or run a pipeline while a Host (often the Docker console) is already up, follow **[docs/working-against-a-host.md](docs/working-against-a-host.md)**: find the Host and its `home_id` from `GET /livez`, never run a bare `sf run` on the machine against a container Host (`docker exec` or MCP instead), write into `workspace` through the Host unless the user asks for a separate project, run through the Host, and confirm the pipeline, task, run and published artifacts appear in the Host's API before saying done. Never change `project_root` or workspace settings to make something show up.
+
 ### CLI / runtime work
 
 - JSON output and exit codes are part of the public contract — see `docs/ci.md` and `tests/cli.*.test.ts`
@@ -135,6 +139,23 @@ Rules every change must keep:
 - **A leaked tool call ends the stage with a clear provider error** (`LEAKED_TOOL_CALL_ERROR`), not `missing emit_stage_envelope`.
 - **No test calls a real model.** The harness's real-model runs are manual and capped (`--max-cost-usd`).
 
+### Generative UI
+
+Cards in chat (`present_ui`), showing a saved artifact, `save_card` and `publish_artifact` for stages, project agents, public chat visitors and the Guide. Code: `src/genui/` (kinds, validation, surfaces, budget, prompts, tool specs, adapters), `src/artifacts/owners.ts` (owner registry), the callers `src/tools/publishArtifact.ts`, `src/agents/runtime/piRuntime.ts`, `src/guide/presentUi.ts`, `src/guide/saveCard.ts`, and the console `ui/src/chat/parts/` (`formatRegistry.tsx`, `formats.tsx`, `cardPart.tsx`, `htmlCardFrame.tsx`) and `ui/src/redesign/artifacts/sandbox/`. Contributor docs: **[docs/generative-ui-internals.md](docs/generative-ui-internals.md)**; user docs: [docs/artifacts.md](docs/artifacts.md). Read the internals page before changing any of it.
+
+Rules every change must keep:
+
+- **`src/genui/` owns the behaviour.** It imports nothing from `src/agents/`, `src/guide/`, `src/operatorAgent/`, `src/tools/` or `src/mcp/` (it may use `src/artifacts/` and `src/config/` types). `src/guide/` never imports `src/agents/` generative UI code.
+- **Card and publish validation go through the kind registry** (`src/genui/kinds.ts`, `validate.ts`). One validator per kind; card-only rules are `mode: "card"`. Limits live on the kind entry. Error codes are public.
+- **Each tool is defined once** (`presentUiSpec`, `saveCardSpec`, `publishArtifactSpec` in `tools.ts`). Adapters (`adapters/pi.ts`, `adapters/operator.ts`) map results and contain no business logic.
+- **A new caller builds a `Surface`; it does not copy present, save or publish logic.** Differences between callers are `SurfacePolicy` values, `Surface` fields (`owner`, `hiddenArtifacts`) or port implementations; `src/genui` never branches on owner kind. The HTML-cards signal goes only into the policy. The `ui.persistence` default is decided only by `uiKeepsCardsInConversation`.
+- **One budget.** `TurnBudget` reserves a slot before any await and releases it on failure; rate-limit keys come only from `surfaceKey`.
+- **One prompt composer.** Generative UI prompt text comes from `src/genui/prompt.ts`. Caller-only rules stay in the caller's playbook.
+- **`save_card` is one operation** (`save.ts`) over a `CardSource` port. A visitor's saved card stays in that visitor's conversation (session scope).
+- **Owner-kind behaviour comes from `src/artifacts/owners.ts`.** Do not add `owner_kind` switches elsewhere; adding an owner kind is one descriptor plus the union member. No schema change.
+- **Console: one sandbox frame core** (`useSandboxBridge`, height guard on every frame), **one sandbox-origin hook** (`useSandboxOrigin`, providers `ChatSandboxProvider` and `ConsoleSandboxProvider`), **one format registry** (`registerFormatRenderer`) for the card body and the artifact view. Heavy renderers stay behind `lazy` imports and `npm run ui:budget` must pass.
+- **The conformance suite must pass** (`tests/genui.conformance.test.ts`), and a new surface or card kind is added to it.
+
 ### Tests
 
 - Tests live in `tests/*.test.ts`
@@ -143,7 +164,7 @@ Rules every change must keep:
 
 ## UI work
 
-Operator console code lives in **`ui/`**. Read **[ui/AGENTS.md](ui/AGENTS.md)** for UI-specific rules (Astryx workflow, chrome exception, UX docs, component map). Do not duplicate that file here.
+Operator console code lives in **`ui/`**. Read **[ui/AGENTS.md](ui/AGENTS.md)** for UI-specific rules (redesign design system and tokens, how much Astryx is left, legacy chrome exception, UX docs, component map). Do not duplicate that file here.
 
 ### Connections (communication channels and tools)
 

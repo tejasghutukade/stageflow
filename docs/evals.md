@@ -796,7 +796,7 @@ Not built for **agent evals**:
 - **A `groundedness` grader**, and a revision picker in the run dialog (a run uses the agent's current revision).
 - **A shipped simulated sample.** The sample is script mode; the README shows how to make it simulated.
 - **Editing the agent from the eval screens**, beyond what evals already do for their own files.
-- **Real tools on an internal agent.** With `STAGEFLOW_SHOW_INTERNAL_AGENTS=1`, the agent picker can target the console's built-in agents (Workshop author, agent author, Guide) as `target: { kind: internal_agent, profile }`. The eval tool gate stubs every write, send and delete, and `conversation.tools: real` is rejected (`eval.internal_agent_real_tools`). Reads, `show_ui`, `confirm_action` and the Guide knowledge tools do run. See [Agents: Internal agents](agents.md#internal-agents).
+- **Real tools on an internal agent.** With `STAGEFLOW_SHOW_INTERNAL_AGENTS=1`, the agent picker can target the console's built-in agents (Workshop author, agent author, Guide) as `target: { kind: internal_agent, profile }`. The eval tool gate stubs every write, send and delete, and `conversation.tools: real` is rejected (`eval.internal_agent_real_tools`). Reads, `show_ui`, `present_ui`, `confirm_action` and the Guide knowledge tools do run. `save_card` is stubbed because it publishes an artifact. See [Agents: Internal agents](agents.md#internal-agents).
 
 ## See also
 

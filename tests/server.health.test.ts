@@ -129,6 +129,8 @@ describe("health surfaces", () => {
         }),
       );
       expect(body.providers).toEqual(body.boot_providers);
+      expect(body.sandbox_origin).toBeNull();
+      expect(body.sandbox_origins).toEqual([]);
       expect(Array.isArray(body.catalog_roots)).toBe(true);
       const roots = body.catalog_roots as Array<Record<string, unknown>>;
       expect(roots.length).toBeGreaterThan(0);

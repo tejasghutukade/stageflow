@@ -7,9 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.69.0] - 2026-11-28
+
+### Added
+- Agents **save_card**: an agent with `ui.present`, `ui.persistence: conversation` and `artifacts.write` (`save_artifact`) gets the same `save_card` the Guide uses. It saves a card already drawn in the session (latest, by title, or by id) as an artifact owned by the agent, returns the same artifact when the same card is saved again, and shows the saved artifact in the reply. The stored program is scrubbed the same way `publish_artifact` scrubs content. Anonymous visitors on a public link get it only with `web_chat.public_tools`, and their saves are session artifacts of that conversation. Eval sessions stub it. Not-found is `ui.card_not_found` (the Guide keeps `guide.card_not_found`).
+
 ### Changed
 - The catalog default model with OpenRouter connected is `openrouter/anthropic/claude-sonnet-5.5` (was `openrouter/nvidia/nemotron-3.5-lightning:free`). `sf init` with only OpenRouter configured uses the same id.
 - A new `$STAGEFLOW_HOME/workspace` manifest no longer lists a `catalog.triggers` root (triggers start empty). Shipped `docker-compose.yml` no longer auto-registers the in-image `triggers-readiness` catalog.
+- `present_ui` behaves the same for agents and the Guide: a card or one-off program without a title takes the manifest's `title`, then a markdown heading, then "Card" (artifacts mode used "Chat"); a missing `manifest.kind` is `artifact.invalid_shape`; a `live.html` card or one-off program is refused (`ui.kind_not_granted`) while chat readers cannot reach the HTML sandbox; parallel calls count toward the four-card reply cap; the Guide answers an artifact key with `ui.key_needs_artifacts`.
+- Generative UI is one core module, `src/genui/`, used by stages, project agents, public chat visitors and the Guide: one validator per card kind shared by `present_ui` and `publish_artifact`, each tool defined once, one per-reply card budget and per-minute limit, one prompt composer, one `save_card`, and an owner registry (`src/artifacts/owners.ts`) for artifact owner kinds. The console's HTML cards and live HTML artifacts share one sandbox frame, which now also stops the resize loop on the artifact page. Contributor docs: [Generative UI internals](docs/generative-ui-internals.md).
+
+### Fixed
+- An HTML card or one-off `live.html` program whose manifest carries a `title` takes that title instead of being refused with `artifact.invalid_shape`.
+- In artifacts mode, a one-off `live.html` program is shown as a session artifact instead of failing validation.
+- The resize-loop guard no longer clips a live HTML artifact that grows on refresh: it locks only on equal increases that arrive right after the previous resize, and new binding data unlocks it.
+
+## [0.68.0] - 2026-11-26
+
+### Added
+- Live card library: `PieChart` (pie and donut), `AreaChart`, `ScatterChart`, `RadarChart`, and `HorizontalBarChart`; prompts tell agents to use the closest chart when the ideal type is not listed.
+- HTML cards: with `ui.persistence: conversation` (default), agents may draw `live.html` cards in chat — a self-contained HTML document with optional vendored libraries, validated like live HTML but display-only (no bindings, no external origins). Public and protected web chat render them in the sandbox; `GET /api/public/chat/<slug>` advertises `sandboxOrigins` when the listener is up. `STAGEFLOW_SANDBOX_PUBLIC_ORIGIN` (an `https` origin on a host separate from the console and chat; otherwise ignored with a startup warning) points visitors at the sandbox through a reverse proxy. Agents are offered HTML cards only when visitors can reach a sandbox, and agents saved with the earlier default card pair get them too. The console's agent sessions and guide render HTML cards through the console's sandbox.
+- Guide **present_ui**: the built-in Guide (`#/guide`) can draw the same conversation cards as project agents (declarative charts, markdown, HTML when the sandbox is reachable). Cards stay in the thread file for replay after a Host restart. See [Guide (console chat)](docs/console-guide.md).
+- **run_stats**: read-only counts of runs by status, grouped by day, week, or pipeline over `created_at`. Agents with `runs.read` get it. Empty day and week buckets are included so a chart has no gaps.
+- Guide **save_card**: saves a card already drawn in the Guide thread as a project artifact owned by the Guide (new owner `guide`, key `guide/<id>`), copying the program stored in the thread (secrets redacted); saving the same card again returns the same artifact. The chat shows the artifact and a link to Artifacts.
+- Cards kept in the conversation: `ui: { present: true }` now draws display-only cards (`live.declarative`, `static.markdown`, or `live.html` when the sandbox is available) whose program is stored in the chat message, not the artifact store, and deleted with the conversation. Ask the agent to change a card and it draws an updated one. `ui.persistence: artifacts` keeps the old behaviour: cards saved as session artifacts, artifact keys, live data from `ui.functions` and buttons. Kinds default per mode, so `present: true` is enough.
+- Public chat shows cards. An agent whose only extra is cards kept in the conversation may have a public chat link, and visitors (including protected web chat) see the cards. Channels get a card's plain-text fallback.
+- Public chat links always open while the agent is enabled. **Visitors can use this agent's tools** (`web_chat.public_tools`) lets owners offer tools to anonymous visitors. Identity-only tools are withheld from visitors with a warning that names them: builtin file and shell tools, `browser`, and Stageflow tools that run code, change the Host's setup or reach other agents' conversations; for visitors `get_artifact` reads only project artifacts and their own session's; the form confirmation lists what visitors get and can set a $1 cost cap.
+- Public chat shows artifacts published in that conversation when visitors can use the agent's tools (and on authenticated chat). The page loads them from `GET /api/public/chat/<slug>/threads/<id>/artifacts/<id or key>` and renders static, declarative, and live HTML inline. Live HTML stays in the sandbox. Artifacts from other conversations, project artifacts only referenced by key, and expired or deleted artifacts are not available. Live data is the stored snapshot.
+- Chat generative UI: an agent granted `ui.present` with `ui.persistence: artifacts` can place an artifact in a console chat with `present_ui`, by key or as a one-off program saved as a session artifact that expires after 30 days unless promoted (`sf artifact promote`, MCP `promote_artifact`, or the chat button). The default artifact list leaves session artifacts out; `--scope session` and the Session tab show them.
+- Chat actions: `POST /api/agents/:id/sessions/:sid/ui-events` lets a rendered part re-query a granted read-only binding, send a declared message, or request a tool call that waits on the usual approval. Forms and approval cards are also chat part kinds.
+- Channel capabilities: every channel provider declares how it shows UI parts. Email, Slack, Telegram and iMessage replies carry the part's plain-text summary, never a console URL.
+- Artifacts: the console, `sf artifact`, the MCP `artifacts` toolset and the run page list, publish, version, search and expire artifacts a stage or agent publishes. Static kinds render in the console; `live.declarative` programs render from a manifest and bind read-only functions with viewer arguments, refresh and snapshots; `live.html` runs in a second-origin sandbox with vendored Chart.js, D3, ECharts, Leaflet and Mermaid and a host bridge (`window.stageflow`), with per-origin approval.
+- The run page's Artifacts tab lists the artifacts a stage published, each linking to its Artifacts page entry with its project. `GET /api/runs/<id>`, `sf run --json --include stages` and `sf runs show --json` carry `published_artifacts` per stage.
+- `examples/ui-showcase/`: a catalog with every artifact kind, a seed script that needs no model, and a pipeline that has a model generate five of them.
+- [Working against a running Host](docs/working-against-a-host.md): a checklist for agents that create and run work on a Host that is already up (find it and its `home_id`, write into `workspace`, run through the Host, confirm it is visible), with matching skill references and an `AGENTS.md` section.
+- `sf run`, `sf runs` and `sf artifact` warn on stderr when the running Host uses a different home than the process (opt out with `STAGEFLOW_NO_HOST_HOME_WARNING`).
+- MCP write tools return the project and a console link for what they wrote, and `read_pipeline` stays readable on read-only roots.
+
+### Changed
+- Public chat no longer closes when an agent has tools. Visitors chat without tools until the owner turns on **Visitors can use this agent's tools**; the agent page shows a short note when tools are withheld (`webChatNote`).
+- The Artifacts page opens on All projects. The Agents, Functions and Catalog skills pages show how many items sit in other projects and let you switch; a project switch applies to that page only and clears when you leave.
+- MCP write tools default to the `workspace` project instead of requiring a root.
+- Agent `get_artifact` is pinned to the session's project. Artifact project identity is compared in one helper, so the symbolic `workspace` id and an absolute catalog path match.
+
+### Fixed
+- Live HTML in Docker reaches the sandbox listener when `STAGEFLOW_SANDBOX_PORT` is set and the port is published on `127.0.0.1`, without an in-container forwarder.
+- The console build (`npm run ui:build`, the Docker image) no longer type-checks the server: small modules keep node-only code out of the UI type graph.
+- Live artifact refresh and queries match the stored project by wire id; snapshots are dropped when a binding's function changes; a vendored library read error no longer fails the page; record sync ignores stale responses.
+- Scope switches on the Agents and Catalog pages cancel in-flight loads that would overwrite the new view.
+- The public chat page no longer goes blank as soon as a reply starts streaming (React "maximum update depth"): message selectors return stable values.
+- A conversation that hits a limit says which one (`limit`: `turns`, `minutes`, `cost` on `web_chat.limit_reached`) and offers **Start a new chat**. `limits.session_minutes` now counts idle minutes since the last message (it used to count from the session's start, which cut off active conversations); the form calls it "Close after idle", and "Messages per session" replaces "Model turns per session".
+- Markdown cards and artifacts on the public chat page get their headings, lists and spacing (the page loads the design-system styles the first time one is shown).
+- An artifact presented without a title takes the manifest title or the markdown's first heading instead of "Chat"; a `present_ui` call without `manifest.kind` says which kinds the agent may use.
+- An HTML card or live HTML page that sizes itself to its frame (`min-height: 100vh` plus padding) no longer grows to the 4000px limit and shows up blank: the sandbox shell and the chat card stop that resize loop, and the prompt tells agents not to size cards to the viewport.
+- The public chat page keeps the open conversation in the address (`?c=<id>`), so a refresh or the back button returns to it instead of a new chat.
 
 ## [0.67.0] - 2026-11-16
 

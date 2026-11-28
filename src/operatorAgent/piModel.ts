@@ -611,7 +611,7 @@ export function createPiOperatorAgentModel(
     const handle = await openPiSession({
       cwd,
       agentDir,
-      systemPrompt: profile.playbook,
+      systemPrompt: profile.resolvePlaybook?.() ?? profile.playbook,
       toolNames,
       customTools,
       modelId: modelId ?? resolveModelId(),
@@ -780,6 +780,8 @@ export type LiveWorkshopOperatorHostOptions = WorkshopAuthorProfileOptions &
   PiOperatorAgentModelOptions & {
     /** When set, Guide can call the Stageflow catalog. Without it, Guide only talks. */
     guideDeps?: McpToolDeps;
+    /** Same signal as agent chat HTML cards: offer live.html only when visitors can reach the sandbox. */
+    guideHtmlCardsAvailable?: boolean | (() => boolean);
   };
 
 export function createLiveWorkshopOperatorHost(
@@ -798,6 +800,7 @@ export function createLiveWorkshopOperatorHost(
     retriever,
     projectRoot,
     guideDeps,
+    guideHtmlCardsAvailable,
   } = options;
 
   return createOperatorAgentHost(
@@ -818,7 +821,7 @@ export function createLiveWorkshopOperatorHost(
         ...(projectRoot !== undefined ? { projectRoot } : {}),
       }),
       createAgentAuthorProfile(),
-      createStageflowGuideProfile(guideDeps),
+      createStageflowGuideProfile(guideDeps, { htmlCardsAvailable: guideHtmlCardsAvailable }),
     ],
   );
 }

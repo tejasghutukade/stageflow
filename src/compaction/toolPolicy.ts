@@ -1,5 +1,5 @@
 import { classifyTool } from "../agents/toolRisk.js";
-import { ASK_OPERATOR_TOOL_NAME, EMIT_STAGE_ENVELOPE_TOOL_NAME, WRITE_STAGE_ARTIFACT_TOOL_NAME } from "../tools/stageToolNames.js";
+import { ASK_OPERATOR_TOOL_NAME, EMIT_STAGE_ENVELOPE_TOOL_NAME, PUBLISH_ARTIFACT_TOOL_NAME, WRITE_STAGE_ARTIFACT_TOOL_NAME } from "../tools/stageToolNames.js";
 import { WORKING_STATE_TOOL_NAME } from "./types.js";
 
 export type ClearingClass = "clearable" | "keep";
@@ -8,6 +8,7 @@ const ALWAYS_KEEP = new Set([
   ASK_OPERATOR_TOOL_NAME,
   EMIT_STAGE_ENVELOPE_TOOL_NAME,
   WRITE_STAGE_ARTIFACT_TOOL_NAME,
+  PUBLISH_ARTIFACT_TOOL_NAME,
   "write",
   "edit",
   WORKING_STATE_TOOL_NAME,

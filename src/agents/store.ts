@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type Database from "better-sqlite3";
+import { parseUiPart, type UiPart } from "../artifacts/uiPart.js";
 import { agentDefinitionSchema, type AgentDefinition, type AgentIssue } from "../config/loadAgent.js";
 
 /**
@@ -81,6 +82,8 @@ export type AgentMessage = {
   role: "user" | "assistant";
   author: string | null;
   text: string;
+  /** Structured ui parts. Absent when the message is only text. */
+  parts?: UiPart[];
   createdAt: string;
 };
 
@@ -248,7 +251,25 @@ function toSession(row: Row): AgentSession {
   };
 }
 
+function partsFromRow(raw: unknown): UiPart[] | undefined {
+  if (typeof raw !== "string" || raw.length === 0) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(parsed)) return undefined;
+  const parts: UiPart[] = [];
+  for (const item of parsed) {
+    const part = parseUiPart(item);
+    if (part.ok) parts.push(part.part);
+  }
+  return parts.length > 0 ? parts : undefined;
+}
+
 function toMessage(row: Row): AgentMessage {
+  const parts = partsFromRow(row.parts_json);
   return {
     id: str(row.message_id),
     sessionId: str(row.session_id),
@@ -257,6 +278,7 @@ function toMessage(row: Row): AgentMessage {
     role: str(row.role) as AgentMessage["role"],
     author: strOrNull(row.author),
     text: str(row.text),
+    ...(parts ? { parts } : {}),
     createdAt: str(row.created_at),
   };
 }
@@ -700,6 +722,11 @@ export class AgentStore {
     return (this.db.prepare(`SELECT * FROM agent_sessions WHERE ${clauses.join(" AND ")} ORDER BY created_at, session_id`).all(...params) as Row[]).map(toSession);
   }
 
+  /** The store connection, for session-scoped artifact rows. */
+  sqlite(): Database.Database {
+    return this.db;
+  }
+
   /** Delete eval sessions; messages, turns, spans, scores and approvals go with them. Never touches other sessions. */
   deleteSessions(sessionIds: string[]): void {
     this.transaction(() => {
@@ -723,10 +750,20 @@ export class AgentStore {
     );
     this.db
       .prepare(
-        `INSERT INTO agent_messages (message_id, session_id, seq, turn_id, role, author, text, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO agent_messages (message_id, session_id, seq, turn_id, role, author, text, parts_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(message.id, message.sessionId, seq, message.turnId, message.role, message.author, message.text, message.createdAt);
+      .run(
+        message.id,
+        message.sessionId,
+        seq,
+        message.turnId,
+        message.role,
+        message.author,
+        message.text,
+        message.parts && message.parts.length > 0 ? JSON.stringify(message.parts) : null,
+        message.createdAt,
+      );
     return { ...message, seq };
   }
 

@@ -192,6 +192,16 @@ A function starts with nothing. Anything it needs is declared, then granted.
 
 When you change a function's access, existing attachments are not updated for you. They keep the grants they had until you grant the new access: `sf validate` reports `function.under_granted`, and the console shows **Access changed** with a **Review** button on the attachment.
 
+### Bindable from a live artifact
+
+A live artifact can name a tool function in its manifest. The Host runs that function on refresh, with the grants on the owner's attachment and the function's own limits, and stores the result as a snapshot. The function is bindable only when all of these hold:
+
+- It is `kind: tool`.
+- The artifact owner holds it: a stage lists it under `tools.functions`, or an agent lists it under `tools.functions`. Refresh passes that attachment's `grants` and no other capability. `grants: []` grants nothing. The owner-check failures (no manifest, pipeline missing or excluded, stage or agent missing, a `uses:` file that does not parse, a duplicate pipeline id) are in [Live artifacts](artifacts.md#live-artifacts).
+- Its declared access is read-only. Every `access.network` entry is `effect: read`, and any `methods` are only `GET` or `HEAD`. A function with no network access is bindable. A function with `effect: action`, a method other than `GET` or `HEAD`, or write access to artifacts, the workspace, or files is not (`artifact.binding_not_read_only`). The check does not see side effects behind a `GET`. A credential that calls an endpoint which changes something is the author's responsibility. Env access and file read access are bindable, and the return value is stored after pattern and key-name scrubbing only: string leaves are pattern-scrubbed; property names matching `secret`, `token`, `passw`, `pwd`, `api_key` / `api-key`, `auth`, `credential`, `bearer`, `cookie`, `private`, `session`, `sid`, `csrf`, `xsrf`, `jwt`, or `signature` (case-insensitive substrings) have the entire value replaced by `[redacted]`, including arrays and objects. Do not bind a function that returns secrets.
+
+The check reads one revision and the executor runs that revision. Arguments must match `input_schema`. A return value must match `output_schema` when the function declares one (`invalid_output`). See [Live artifacts](artifacts.md#live-artifacts).
+
 Only tools can write files or call an API action. A verification or routing function that asks for either is rejected when you save.
 
 ## Attaching a function

@@ -7,6 +7,7 @@ import {
   type RunSummary,
   type TaskListing,
 } from "../api";
+import { fetchArtifacts } from "../api/artifacts";
 import { runTaskLabel } from "../catalog/displayCatalogPath";
 import { relativeTime, runShortId } from "../catalogJoin";
 import { useRunCatalog } from "../catalog/useRunCatalog";
@@ -18,7 +19,13 @@ import {
   PALETTE_SCRIM_PT,
 } from "./overlay/overlayScrimClasses";
 import { useOverlayChrome } from "./overlay/useOverlayChrome";
-import { buildPaletteIndex, groupPaletteItems } from "./palette/buildPaletteIndex";
+import {
+  buildPaletteIndex,
+  groupPaletteItems,
+  reducePaletteArtifactSearch,
+  type PaletteArtifactHit,
+  type PaletteArtifactSearchState,
+} from "./palette/buildPaletteIndex";
 import { PaletteStatusPill } from "./palette/PaletteStatusPill";
 import type { PaletteGroup, PaletteItem } from "./palette/types";
 import { runDisplayStatus } from "../status/runStatus";
@@ -26,12 +33,14 @@ import { statusSignalFromRun, runStatusPillLabel } from "./statusSignal";
 import {
   LuHand,
   LuInbox,
+  LuFileText,
   LuPlay,
   LuRotateCcw,
   LuSearch,
   LuSettings,
   LuWorkflow,
 } from "react-icons/lu";
+import { artifactDetailPath } from "../routes";
 
 export type CommandPaletteProps = {
   open: boolean;
@@ -45,10 +54,11 @@ const GROUP_LABEL: Record<PaletteGroup, string> = {
   actions: "Actions",
   runs: "Runs",
   pipelines: "Pipelines",
+  artifacts: "Artifacts",
   navigation: "Navigation",
 };
 
-const TYPE_FILTERS = ["all", "actions", "runs", "pipelines", "navigation"] as const;
+const TYPE_FILTERS = ["all", "actions", "runs", "pipelines", "artifacts", "navigation"] as const;
 type PaletteTypeFilter = (typeof TYPE_FILTERS)[number];
 
 const TYPE_FILTER_LABEL: Record<PaletteTypeFilter, string> = {
@@ -56,6 +66,7 @@ const TYPE_FILTER_LABEL: Record<PaletteTypeFilter, string> = {
   actions: "Actions",
   runs: "Runs",
   pipelines: "Pipelines",
+  artifacts: "Artifacts",
   navigation: "Navigation",
 };
 
@@ -91,6 +102,8 @@ export function CommandPalette({
   const [typeFilter, setTypeFilter] = useState<PaletteTypeFilter>("all");
   const [tasks, setTasks] = useState<TaskListing[]>([]);
   const [pipelines, setPipelines] = useState<PipelineListing[]>([]);
+  const [artifactHits, setArtifactHits] = useState<PaletteArtifactHit[]>([]);
+  const artifactSearch = useRef<PaletteArtifactSearchState>({ generation: 0, hits: [] });
   const inputRef = useRef<HTMLInputElement>(null);
 
   useOverlayChrome(open);
@@ -114,6 +127,66 @@ export function CommandPalette({
     });
   }, [open]);
 
+  useEffect(() => {
+    if (!open) {
+      artifactSearch.current = { generation: 0, hits: [] };
+      setArtifactHits([]);
+      return;
+    }
+    const next = reducePaletteArtifactSearch(artifactSearch.current, { type: "query" });
+    artifactSearch.current = next;
+    setArtifactHits(next.hits);
+    const q = query.trim();
+    if (q.length < 2) return;
+    const generation = next.generation;
+    const controller = new AbortController();
+    const handle = window.setTimeout(() => {
+      void fetchArtifacts(undefined, { q, limit: 5 }, { signal: controller.signal })
+        .then((page) => {
+          const hits = page.artifacts.map((record) => {
+            const ownerKey =
+              record.owner.kind === "guide"
+                ? "guide"
+                : record.owner.kind === "agent"
+                  ? `agent:${record.owner.agent}`
+                  : `stage:${record.owner.pipeline}:${record.owner.stage}`;
+            const context =
+              record.owner.kind === "guide"
+                ? "Guide"
+                : record.owner.kind === "agent"
+                  ? record.owner.agent
+                  : `${record.owner.pipeline} / ${record.owner.stage}`;
+            return {
+              title: record.title,
+              context,
+              path: artifactDetailPath(ownerKey, record.id, record.project.id),
+            };
+          });
+          const applied = reducePaletteArtifactSearch(artifactSearch.current, {
+            type: "result",
+            generation,
+            hits,
+          });
+          if (applied === artifactSearch.current) return;
+          artifactSearch.current = applied;
+          setArtifactHits(applied.hits);
+        })
+        .catch(() => {
+          const applied = reducePaletteArtifactSearch(artifactSearch.current, {
+            type: "error",
+            generation,
+          });
+          if (applied === artifactSearch.current) return;
+          artifactSearch.current = applied;
+          setArtifactHits(applied.hits);
+        });
+    }, 200);
+    return () => {
+      window.clearTimeout(handle);
+      controller.abort();
+    };
+  }, [open, query]);
+
   const waiting = inboxWaitingView(snapshot);
   const broken = bucketViews(snapshot).broken;
 
@@ -124,6 +197,7 @@ export function CommandPalette({
         tasks,
         pipelines,
         query,
+        artifactHits,
         ctx: {
           firstWaitingRunId: waiting[0]?.run_id,
           firstBrokenRunId: broken[0]?.run_id,
@@ -141,6 +215,7 @@ export function CommandPalette({
       snapshot,
       tasks,
       pipelines,
+      artifactHits,
       query,
       waiting,
       broken,
@@ -243,7 +318,7 @@ export function CommandPalette({
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search runs, pipelines, actions…"
+            placeholder="Search runs, pipelines, artifacts…"
             aria-autocomplete="list"
             className="min-w-0 flex-1 border-none bg-transparent font-sans text-[15px] text-[var(--sf-text-1)] outline-none placeholder:text-[var(--sf-text-3)]"
           />
@@ -433,6 +508,21 @@ function renderPaletteRow({
         <span className="shrink-0 font-['Geist_Mono',monospace] text-xs text-[var(--sf-text-3)]">
           {pipelineRow.stages.length} stages
         </span>
+      </>
+    );
+  }
+  if (item.group === "artifacts") {
+    return (
+      <>
+        <LuFileText className="size-4 shrink-0 text-[var(--sf-text-2)]" aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate font-sans text-[13px] text-[var(--sf-text-1)]">
+          {item.label}
+        </span>
+        {item.context ? (
+          <span className="shrink-0 truncate font-['Geist_Mono',monospace] text-xs text-[var(--sf-text-3)]">
+            {item.context}
+          </span>
+        ) : null}
       </>
     );
   }

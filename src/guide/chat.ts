@@ -11,7 +11,10 @@ import {
 import { redactString } from "../logging/redact.js";
 import { buildWorkshopChatPrompt, parseWorkshopChatAttachments } from "../workshop/chatAttachments.js";
 import { resolveWorkshopModel } from "../workshop/modelSettings.js";
-import { advanceGuideTurn } from "../operatorAgent/profiles/guideConfirm.js";
+import { advanceGuideTurn, guideContextOf } from "../operatorAgent/profiles/guideConfirm.js";
+import { toolPartsReplayText } from "../genui/replay.js";
+import { GUIDE_PRESENT_UI_TOOL_NAMES } from "./presentUi.js";
+import { GUIDE_SAVE_CARD_TOOL_NAMES } from "./saveCard.js";
 import { GUIDE_UI_TOOL_NAMES } from "./showUi.js";
 import {
   guideTitleFrom,
@@ -38,7 +41,11 @@ export class GuideError extends Error {
 
 export const GUIDE_TOOL_RESULT_MAX_BYTES = 20_000;
 const GUIDE_TOOL_ERROR_MAX_CHARS = 300;
-const GUIDE_KEPT_RESULT_TOOLS: ReadonlySet<string> = new Set(GUIDE_UI_TOOL_NAMES);
+const GUIDE_KEPT_RESULT_TOOLS: ReadonlySet<string> = new Set([
+  ...GUIDE_UI_TOOL_NAMES,
+  ...GUIDE_PRESENT_UI_TOOL_NAMES,
+  ...GUIDE_SAVE_CARD_TOOL_NAMES,
+]);
 const SECRET_KEY = /secret|password|passwd|token|api_?key/i;
 
 export type GuideToolFrame = {
@@ -106,8 +113,14 @@ async function openGuideSession(
     context: { kind: "stageflow_guide" },
   });
   sessions.set(record.id, session);
+  session.setContext({ ...guideContextOf(session.getContext()), threadId: record.id });
   if (record.messages.length > 0) {
-    await session.prepareRestart?.(record.messages.map((message) => ({ role: message.role, text: message.text })));
+    await session.prepareRestart?.(
+      record.messages.map((message) => ({
+        role: message.role,
+        text: message.role === "assistant" ? toolPartsReplayText(message) : message.text,
+      })),
+    );
   }
   return session;
 }
@@ -184,7 +197,7 @@ export async function* streamGuideTurn(input: {
     if (turnAbort.signal.aborted) onAbort();
     const prompt = buildWorkshopChatPrompt(text || "Please look at the attached files.", attachments, null);
     const modelId = resolveWorkshopModel({ sessionOverride: sessionModel });
-    session.setContext(advanceGuideTurn(session.getContext()));
+    session.setContext({ ...advanceGuideTurn(session.getContext()), threadId: record.id });
     const finished = session
       .send(prompt, {
         modelId,

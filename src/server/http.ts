@@ -135,6 +135,7 @@ import {
 } from "../config/installSkillRequest.js";
 import { validateCatalog } from "../config/validateCatalog.js";
 import type { CatalogRoot } from "../config/resolveCatalogRoots.js";
+import { isHtmlContentPath, STATIC_HTML_CONTENT_SECURITY_POLICY } from "../artifacts/content.js";
 import {
   artifactMediaType,
   classifyArtifactContent,
@@ -164,6 +165,7 @@ import {
   runDetailWithRedactedManifest,
 } from "../runstore/exportRunPayload.js";
 import { buildDebugBundle } from "../runstore/debugBundle.js";
+import { publishedArtifactsForRun } from "../artifacts/sessionPublish.js";
 import { parseShutdownGraceMs } from "./shutdown.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
@@ -216,10 +218,13 @@ import { isListableExtension, listCatalogFiles } from "../config/listCatalogFile
 import { handleA2aRoutes } from "./a2aRoutes.js";
 import { createArchiveSlot, handleArchiveRoutes, type ArchiveSlot } from "./archiveRoutes.js";
 import { resolveHostInfo } from "./hostInfo.js";
+import { consoleOriginsFor, htmlCardsReachable } from "./sandboxPolicy.js";
+import { attachSandboxShutdown, startSandboxListener } from "./sandboxListener.js";
 import { handleChannelRoutes } from "./channelRoutes.js";
 import { handleBrowserProfileRoutes } from "./browserProfileRoutes.js";
 import { handleEvalInternalRoutes, isEvalInternalPath, type EvalServices } from "./evalInternalRoutes.js";
 import { handleMemoryRoutes } from "./memoryRoutes.js";
+import { handleArtifactRoutes } from "./artifactRoutes.js";
 import { EmailTriggers } from "../email/triggers.js";
 import {
   bootstrapStageflowHost,
@@ -280,6 +285,25 @@ function draftCatalogRootWire(root: CatalogRoot): {
     root_kind: root.kind,
     read_only: root.read_only,
   };
+}
+
+/** Adds the artifacts each stage published (not the files its envelope lists) so the run page can link them. */
+function withPublishedStageArtifacts<T extends { stages?: Array<{ stage_id: string }> }>(store: RunStore, runId: string, detail: T): T {
+  const db = sqliteConnectionFromStore(store);
+  if (!db || !Array.isArray(detail.stages)) return detail;
+  try {
+    const grouped = publishedArtifactsForRun(db, runId);
+    if (grouped.size === 0) return detail;
+    return {
+      ...detail,
+      stages: detail.stages.map((stage) => {
+        const published = grouped.get(stage.stage_id);
+        return published && published.length > 0 ? { ...stage, published_artifacts: published } : stage;
+      }),
+    };
+  } catch {
+    return detail;
+  }
 }
 
 export type UiServerOptions = {
@@ -474,6 +498,8 @@ export type OperatorRouteDeps = {
   channels?: ChannelService;
   /** Host memories. Guide and MCP use the same host the console does. */
   memories?: MemoryHost;
+  /** Filled as the sandbox listener starts; Guide reads cardsReachable for HTML cards. */
+  sandboxAdvertised?: { origins: string[]; cardsReachable: boolean };
 };
 
 /**
@@ -534,6 +560,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
     resolveAgentPort({
       cwd,
       projectRoot: cwd,
+      guideHtmlCardsAvailable: () => deps.sandboxAdvertised?.cardsReachable === true,
       guideDeps: {
         manager,
         store,
@@ -719,6 +746,9 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           if (!assertAllowedHttpAccess({ entries: [] }, req, res, { requireOrigin: method !== "GET" })) return true;
           if (!boot.memories) { json(res, 503, { code: "memory.unavailable" }); return true; }
           if (await handleMemoryRoutes(req, method, pathname, boot.memories, res, json)) return true;
+        }
+        if (pathname === "/api/artifacts" || pathname.startsWith("/api/artifacts/")) {
+          if (await handleArtifactRoutes(req, method, pathname, url, store, res, json)) return true;
         }
         if (pathname.startsWith("/api/a2a/")) {
           if (!boot.a2aManagement) { json(res, 503, { code: "a2a_unavailable", error: "A2A management is unavailable" }); return true; }
@@ -969,7 +999,17 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
               res.end(bytes);
             } else {
               const content = await readRunArtifact(store, runId, artifactPath);
-              textPlain(res, 200, content);
+              if (isHtmlContentPath(artifactPath)) {
+                res.writeHead(200, {
+                  "Content-Type": "text/plain; charset=utf-8",
+                  "Content-Length": Buffer.byteLength(content),
+                  "X-Content-Type-Options": "nosniff",
+                  "Content-Security-Policy": STATIC_HTML_CONTENT_SECURITY_POLICY,
+                });
+                res.end(content);
+              } else {
+                textPlain(res, 200, content);
+              }
             }
           } catch (err) {
             const mapped = mapStoreLookupError(err, { policy: "artifact" });
@@ -1136,7 +1176,7 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           if (rest && !rest.includes("/")) {
             try {
               const detail = await store.readRun(decodeURIComponent(rest));
-              json(res, 200, runDetailWithRedactedManifest(detail));
+              json(res, 200, withPublishedStageArtifacts(store, decodeURIComponent(rest), runDetailWithRedactedManifest(detail)));
             } catch (err) {
               const mapped = mapStoreLookupError(err, { policy: "run" });
               json(res, 404, { error: mapped.error });
@@ -1354,6 +1394,8 @@ export function createOperatorRoutes(deps: OperatorRouteDeps): OperatorRoutes {
           });
           json(res, 202, {
             runId: result.runId,
+            project_root: wireRoot.project_root,
+            project_path: wireRoot.path,
             ...(result.queued === true
               ? {
                   queued: true,
@@ -3967,6 +4009,7 @@ export async function startUiServer(
           ...(boot.evalServices ? { evalServices: boot.evalServices } : {}),
           ...(boot.channels ? { channels: boot.channels } : {}),
           ...(boot.memories ? { memories: boot.memories } : {}),
+          ...(boot.sandboxAdvertised ? { sandboxAdvertised: boot.sandboxAdvertised } : {}),
           ...(options.agentConversationBackend
             ? { agentConversationBackend: options.agentConversationBackend }
             : {}),
@@ -3983,9 +4026,30 @@ export async function startUiServer(
     ...(boot.boundPort !== undefined ? { bound: boot.boundPort } : {}),
   });
   boot.setEvalCallbackBase?.(envelope.url);
+  const sandbox = await startSandboxListener({
+    consoleOrigins: consoleOriginsFor({
+      listenHost: host,
+      port: envelope.port,
+      allowedHosts,
+      publicUrl: resolveHostInfo().publicUrl,
+      publicChatUrl: resolveHostInfo().publicChatUrl,
+    }),
+    hostPort: envelope.port,
+    listenHost: host,
+  });
+  boot.sandboxOrigin = sandbox.origin;
+  boot.sandboxOrigins = sandbox.origins;
+  if (boot.sandboxAdvertised) {
+    boot.sandboxAdvertised.origins = [...sandbox.origins];
+    boot.sandboxAdvertised.cardsReachable = htmlCardsReachable(sandbox.origins, resolveHostInfo().publicUrl, resolveHostInfo().publicChatUrl);
+  }
+  attachSandboxShutdown(envelope.server, sandbox);
   const closeServer = envelope.server.close.bind(envelope.server);
   envelope.server.close = ((callback?: (error?: Error) => void) => closeServer(error => {
-    void (boot.email?.stop() ?? Promise.resolve()).then(() => callback?.(error), () => callback?.(error ?? new Error("Email host shutdown failed")));
+    void Promise.all([
+      boot.email?.stop() ?? Promise.resolve(),
+      sandbox.close(),
+    ]).then(() => callback?.(error), () => callback?.(error ?? new Error("Host shutdown failed")));
   })) as typeof envelope.server.close;
   shutdown = installShutdownController({
     server: envelope.server,

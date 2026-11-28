@@ -1,3 +1,4 @@
+import { withSurfaceScope } from "./projectScope";
 import { authorizationHeaders, notifyControlTokenRequired } from "./controlToken";
 
 export type FunctionKind = "verification" | "routing" | "tool";
@@ -135,7 +136,7 @@ export class FunctionApiError extends Error {
 }
 
 async function request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(withSurfaceScope(path, "functions"), {
     method,
     headers: { "Content-Type": "application/json", ...authorizationHeaders() },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -167,6 +168,8 @@ const functionUrl = (id: string, tail = "") => `/api/functions/${enc(id)}${tail}
 
 export const functionsApi = {
   list: () => request<{ functions: FunctionSummary[] }>("/api/functions").then((body) => body.functions),
+  listIn: (projectRoot: string) =>
+    request<{ functions: FunctionSummary[] }>(`/api/functions?${new URLSearchParams({ project_root: projectRoot })}`).then((body) => body.functions),
   get: (id: string) => request<FunctionDetail>(functionUrl(id)),
   create: (definition: unknown) => request<FunctionDetail>("/api/functions", "POST", { definition }),
   save: (id: string, input: { baseRevision: number; definition: unknown; summary?: string }) =>

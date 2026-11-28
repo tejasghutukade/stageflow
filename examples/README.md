@@ -8,6 +8,8 @@ Upgrading older YAML: [`sf migrate-yaml`](../docs/cli-reference.md#sf-migrate-ya
 
 [Clone Chain](../docs/yaml-catalog.md#clone-chain) (one Clone Instance per Clone Array element) is documented in the YAML catalog. Walkthrough: [`feature-loop/`](feature-loop/). Canonical shapes: [`tests/fixtures/pipelines/clone-chain-*.pipeline.yaml`](../tests/fixtures/pipelines/).
 
+A stage can opt in to published artifacts with an `artifacts: { publish: true }` block on the stage body. The fixture shape is [`tests/fixtures/pipelines/publish-note.pipeline.yaml`](../tests/fixtures/pipelines/publish-note.pipeline.yaml). See [Stage artifacts](../docs/yaml-catalog.md#stage-artifacts).
+
 ## Featured example: Archify on PR
 
 **[`archify-on-pr/`](archify-on-pr/)** is the flagship CI dogfood walkthrough. It shows what configurable stages look like in production:
@@ -30,6 +32,8 @@ More CI-focused examples will follow this pattern (prepare context → run pipel
 | [generic-fan-in](generic-fan-in/) | Dummy diamond join; inspect keyed parent envelopes | `sf ui`, then `sf run` |
 | [stage-mcp](stage-mcp/) | Stage MCP via project `.mcp.json` and a local echo fixture | `sf validate`, then `sf run` from git root |
 | [playwright-mcp](playwright-mcp/) | One stage: open a page and save a PNG screenshot (Playwright MCP) | `sf validate`, then `sf run` from git root |
+| [artifacts](artifacts/) | One stage: `artifacts.publish`, `publish_artifact`, Markdown + CSV, CLI and console index | [README](artifacts/README.md), `sf validate`, then `sf run` |
+| [ui-showcase](ui-showcase/) | Every artifact kind: static, `live.declarative`, `live.html`; seed without a model or generate with one | [README](ui-showcase/README.md), `seed.sh` or `sf run` |
 | [browser-session](browser-session/) | Saved browser login: check, human login only when logged out, then work; local fixture site | [README](browser-session/README.md), then `sf run` |
 | [context7-mcp](context7-mcp/) | Three stages: resolve a library, fetch docs, write a brief (Context7 MCP) | `sf validate`, then `sf run` from git root |
 | [feedback-loop](feedback-loop/) | Source-owned review loop (`continue` / `send_back`) | `sf validate`, then `sf run` |

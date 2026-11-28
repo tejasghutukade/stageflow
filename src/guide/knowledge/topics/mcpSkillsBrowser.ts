@@ -4,7 +4,7 @@ export const mcpSkillsBrowserTopic: GuideKnowledgeTopic = {
   id: "mcp_skills_browser",
   title: "MCP servers, skills and browser sessions",
   summary:
-    "Giving stages and agents extra tools: project MCP servers (.mcp.json and console servers, secrets, OAuth), skills (binding and install), and browser sessions (profiles, login check, human login stage, limits).",
+    "Giving stages and agents extra tools: project MCP servers (.mcp.json and console servers, secrets, OAuth), skills (binding and install), browser sessions (profiles, login check, human login stage, limits), and working against an already-running Host (find it, pick the project, verify the work is visible).",
   body: `# MCP servers, skills and browser sessions
 
 ## MCP servers
@@ -29,6 +29,18 @@ A server is stdio (\`command\`, \`args\`, \`env\`, \`cwd\`) or http (\`url\`, \`
 - Stage: \`mcp: [linear]\` on the pipeline entry (or the stage file) plus \`secrets: [LINEAR_TOKEN]\` if needed. \`validate\` checks names and that stdio commands are on PATH; connect failures and unset variables fail at run time. Default connect timeout 30 s. Large tool results are written to an artifact file and the model sees a preview. MCP elicitation (a server asking the user a question) is not supported.
 - Agent: \`tools.mcp: { linear: ["*"] }\` or a list of tool names. Grant id \`<server>.<tool>\`, usable in \`approvals.ask_first\`. Servers start lazily per session. An unknown server only warns (\`agent.mcp_server_unknown\`).
 - Tools: \`list_catalog\` with \`kind: mcp_servers\` (read), \`probe_project_mcp\` (connects to the server). There is no tool to add or remove a project MCP server or set an MCP secret; that is done in Settings → Project MCP.
+
+## Working against a running Host
+
+When asked to create or run work while a Host is already up (often a Docker console), the work can land where the console is not looking. Follow this order:
+
+1. **Find the Host.** \`GET <base-url>/livez\` (no token) returns \`home_id\` with \`version\`. Reach the Host's state through MCP tools or the HTTP API. For a container Host use \`docker exec <container> sf …\`. A bare \`sf run\` on the machine uses a different data directory and never shows in the console.
+2. **Pick the project on purpose.** Default to \`workspace\`. Write through the Host (\`write_pipeline\`, \`write_task\`, \`write_stage\`) and pass the workspace \`project_root\` from \`get_started\`. Create a separate project only if the user asks; register it (\`POST /api/projects\`) and name it to the user.
+3. **Run through the Host** (\`start_run\`), passing \`project_root\` when it is not \`workspace\`.
+4. **Done means visible.** Confirm the pipeline and task in \`GET /api/pipelines\` and \`GET /api/tasks\`, and the run and its \`published_artifacts\` in \`GET /api/runs/<id>\`. Give console links and name the project.
+5. **Never edit \`project_root\` or workspace settings to make something appear.** Find out whether the files are in another project, the CLI used another home, or an id was compared with a path, and say so.
+
+Full text: docs/working-against-a-host.md.
 
 ## Skills
 

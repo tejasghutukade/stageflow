@@ -17,6 +17,20 @@ import {
   LuUserCheck,
 } from "react-icons/lu";
 import { contactLines } from "../model/channelContact";
+import { defaultPresentKinds, PRESENTABLE_ARTIFACT_KINDS, type UiPersistence } from "../../../../../src/genui/kindsList.ts";
+
+const UI_PERSISTENCE_CHOICES: Array<{ value: UiPersistence; label: string; note: string }> = [
+  {
+    value: "conversation",
+    label: "Keep cards in the conversation (recommended)",
+    note: "Each card is stored inside its chat message and deleted with the conversation. It shows only what the agent writes into it, so it is safe on the public chat page. Ask the agent to change a card and it draws an updated one.",
+  },
+  {
+    value: "artifacts",
+    label: "Save cards as artifacts",
+    note: "Each card is also saved as an artifact (kept 30 days unless you promote it). The agent can show existing artifacts and cards can load live data or run buttons. Visitors on the public link do not see console artifacts until you turn on \"Visitors can use tools\".",
+  },
+];
 import { agentsApi, type AgentDefinition, type ChannelContact, type AgentIssue, type AgentRevisionMeta, type BuiltinToolGroup, type ChannelListenerState } from "../../../api/agents";
 import { fetchMemories, type MemorySummary } from "../../../api";
 import { MONO, NOWRAP } from "../agentsTokens";
@@ -51,6 +65,8 @@ import { PermissionTree } from "./PermissionTree";
 import { BUILTIN_PERMISSION_GROUPS, grantedToolIds, operatorOnlyToolNames, stageflowPermissionGroups } from "../model/permissions";
 import { AgentFunctionTools } from "../../functions/AgentFunctionTools";
 import { readAgentFunctions, type FunctionAttachmentDraft } from "../../functions/functionAttachments";
+import { ConfirmDialog } from "../editor/Dialogs";
+import { applyAskFirst, identityOnlyToolLabels, sideEffectingGrantIds, visitorToolLines, wildcardMcpServers } from "../model/publicTools";
 
 const STREAMED_PROVIDERS = ["agentmail", "imessage"];
 
@@ -267,8 +283,22 @@ export function AgentDefinitionForm({
   const rotating = Boolean(savedSlug) && !webChat.slug;
   const setTools = (tools: AgentDefinition["tools"]) => update?.({ ...def, tools });
   const [openGroups, setOpenGroups] = useState<string[]>([]);
-  const stageflow = def.tools.stageflow ?? { groups: [], tools: [] };
+  const [confirmPublicTools, setConfirmPublicTools] = useState(false);
   const catalog = options.stageflow;
+  const visitorLines = visitorToolLines(def);
+  const identityLines = identityOnlyToolLabels(def, catalog);
+  const wildcardServers = wildcardMcpServers(def);
+  const sideEffecting = sideEffectingGrantIds(def, catalog);
+  const willSetCostCap = def.limits.cost_usd === null;
+  const enablePublicTools = (askFirst?: string[]) => {
+    if (!update) return;
+    const nextWeb = { ...webChat, public_tools: true };
+    const withAsk = askFirst?.length ? applyAskFirst({ ...def, web_chat: nextWeb }, askFirst) : { ...def, web_chat: nextWeb };
+    const limits = willSetCostCap ? { ...withAsk.limits, cost_usd: 1 } : withAsk.limits;
+    update({ ...withAsk, limits });
+    setConfirmPublicTools(false);
+  };
+  const stageflow = def.tools.stageflow ?? { groups: [], tools: [] };
   const setStageflow = (next: { groups: string[]; tools: string[] }, askAdd: string[] = []) => {
     const ask = [...new Set([...def.approvals.ask_first, ...askAdd])];
     update?.({ ...def, tools: { ...def.tools, stageflow: next }, approvals: { ...def.approvals, ask_first: ask } });
@@ -512,6 +542,105 @@ export function AgentDefinitionForm({
             </span>
           ) : null}
           <FieldMessages {...at("tools.stageflow")} />
+        </div>
+
+        <div className="flex flex-col gap-2 rounded-lg border border-[var(--sf-hairline)] px-3.5 py-3" data-testid="present-ui">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-col gap-1">
+              <span className="text-xs font-medium leading-[1.33333] text-[var(--sf-text-2)]">Cards in chat</span>
+              <span className="text-xs leading-[1.33333] text-[var(--sf-text-3)]">
+                {def.ui.present
+                  ? "On. The agent can draw cards (layouts, tables, numbers, markdown) in its replies with present_ui."
+                  : "Off. The agent replies with text only."}
+              </span>
+            </div>
+            <Toggle
+              on={def.ui.present}
+              label="Cards in chat"
+              onChange={
+                update
+                  ? (present) => {
+                      const persistence = def.ui.persistence ?? "conversation";
+                      update({
+                        ...def,
+                        ui: {
+                          present,
+                          persistence,
+                          kinds: present ? (def.ui.kinds.length > 0 ? def.ui.kinds : defaultPresentKinds(persistence)) : [],
+                          functions: present && persistence === "artifacts" ? def.ui.functions : [],
+                        },
+                      });
+                    }
+                  : undefined
+              }
+            />
+          </div>
+          {def.ui.present ? (
+            <>
+              <div role="radiogroup" aria-label="Where cards are kept" className="flex flex-col gap-1.5">
+                {UI_PERSISTENCE_CHOICES.map((choice) => {
+                  const selected = (def.ui.persistence ?? "conversation") === choice.value;
+                  return (
+                    <label key={choice.value} className="flex items-start gap-2 text-xs leading-[1.4] text-[var(--sf-text-2)]">
+                      <input
+                        type="radio"
+                        name="ui-persistence"
+                        className="mt-0.5"
+                        checked={selected}
+                        disabled={!update}
+                        onChange={() =>
+                          update?.({
+                            ...def,
+                            ui: {
+                              ...def.ui,
+                              persistence: choice.value,
+                              kinds: defaultPresentKinds(choice.value),
+                              functions: choice.value === "artifacts" ? def.ui.functions : [],
+                            },
+                          })
+                        }
+                      />
+                      <span className="flex flex-col gap-0.5">
+                        <span className="font-medium text-[var(--sf-text-1)]">{choice.label}</span>
+                        <span className="text-[var(--sf-text-3)]">{choice.note}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              {def.ui.persistence === "artifacts" ? (
+                <>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                    {PRESENTABLE_ARTIFACT_KINDS.map((kind) => (
+                      <label key={kind} className="flex items-center gap-1.5 text-xs text-[var(--sf-text-2)]">
+                        <input
+                          type="checkbox"
+                          checked={def.ui.kinds.includes(kind)}
+                          disabled={!update}
+                          onChange={(event) => {
+                            const kinds = event.target.checked ? [...def.ui.kinds, kind] : def.ui.kinds.filter((item) => item !== kind);
+                            update?.({ ...def, ui: { ...def.ui, kinds } });
+                          }}
+                        />
+                        {kind}
+                      </label>
+                    ))}
+                  </div>
+                  <ChipListField
+                    values={def.ui.functions}
+                    onChange={update ? (functions) => update({ ...def, ui: { ...def.ui, functions } }) : undefined}
+                    placeholder="Function id"
+                    ariaLabel="Functions a card may load live data from"
+                  />
+                  <Note>Functions a card may call for live data. Only read-only functions are accepted.</Note>
+                </>
+              ) : null}
+              <FieldMessages {...at("ui.kinds")} />
+              <FieldMessages {...at("ui.present")} />
+              <FieldMessages {...at("ui.functions")} />
+              <FieldMessages {...at("ui.persistence")} />
+            </>
+          ) : null}
         </div>
 
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -858,7 +987,7 @@ export function AgentDefinitionForm({
                   {changed(webChat.enabled, saved?.web_chat?.enabled ?? false) ? <ChangedDot /> : null}
                 </span>
                 <span className="text-xs leading-[1.33333] text-[var(--sf-text-3)]">
-                  Anyone with the link can chat with this agent. Visitors stay anonymous and can only chat.
+                  Anyone with the link can chat and see conversation cards without signing in. By default visitors cannot use tools; turn that on below when you are ready. The link works only while this agent is enabled and reachable from outside (by default the Host listens on 127.0.0.1).
                 </span>
               </div>
             </div>
@@ -898,9 +1027,78 @@ export function AgentDefinitionForm({
               )}
               {webChatUrl && !rotating && update ? <Note>Rotating replaces the link when you save; the old one stops working.</Note> : null}
               <Note>The page only opens while the agent is enabled.</Note>
+              {webChat.access === "public" ? (
+                <div className="flex items-center justify-between gap-4 border-t border-[var(--sf-hairline)] pt-3" data-testid="web-chat-public-tools">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[13px] font-medium leading-normal text-[var(--sf-text-1)]">Visitors can use this agent&apos;s tools</span>
+                    <span className="text-xs leading-[1.33333] text-[var(--sf-text-3)]">
+                      Off: chat and conversation cards only. On: visitors get the tools you granted, except file, shell and browser tools.
+                    </span>
+                  </div>
+                  <Toggle
+                    on={Boolean(webChat.public_tools)}
+                    label="Visitors can use this agent's tools"
+                    onChange={
+                      update
+                        ? (on) => {
+                            if (!on) setWebChat({ public_tools: false });
+                            else setConfirmPublicTools(true);
+                          }
+                        : undefined
+                    }
+                  />
+                </div>
+              ) : null}
             </div>
           ) : null}
         </ListGroup>
+        {confirmPublicTools ? (
+          <ConfirmDialog
+            title="Let visitors use this agent's tools?"
+            confirmLabel="Turn on for visitors"
+            onClose={() => setConfirmPublicTools(false)}
+            onConfirm={() => enablePublicTools()}
+          >
+            {visitorLines.length > 0 ? (
+              <div>
+                <p className="font-medium text-[var(--sf-text-1)]">Visitors will be able to use:</p>
+                <ul className="mt-1 list-disc pl-4">
+                  {visitorLines.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <p>No extra tools are granted; visitors can still chat and use conversation cards.</p>
+            )}
+            {identityLines.length > 0 ? (
+              <p className="mt-2">
+                Visitors won&apos;t get these, because they act on your computer or the Host, or reach other conversations:{" "}
+                {identityLines.join(", ")}. They keep working in the console and on a signed-in link.
+              </p>
+            ) : null}
+            {willSetCostCap ? <p className="mt-2">A cost cap of $1 per conversation will be set. You can change or clear it under Limits.</p> : null}
+            <p className="mt-2">The link is only reachable from outside your network if the Host is (by default it listens on 127.0.0.1).</p>
+            {sideEffecting.length > 0 ? (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <span>Tools that change or delete things:</span>
+                <span className={MONO}>{sideEffecting.join(", ")}</span>
+                <button
+                  type="button"
+                  className="text-[var(--sf-running)] underline"
+                  onClick={() => enablePublicTools(sideEffecting)}
+                >
+                  Add to Ask first
+                </button>
+              </div>
+            ) : null}
+            {wildcardServers.length > 0 ? (
+              <p className="mt-2">
+                {wildcardServers.join(", ")} {wildcardServers.length === 1 ? "is" : "are"} granted every tool. To ask first for one of them, list it by name under Approvals.
+              </p>
+            ) : null}
+          </ConfirmDialog>
+        ) : null}
         {webChat.enabled ? (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <Field
@@ -1066,24 +1264,24 @@ export function AgentDefinitionForm({
         <Section id="limits">
           <SectionHeading>Limits</SectionHeading>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <Field label="Time per session" changed={changed(def.limits.session_minutes, saved?.limits.session_minutes)} hint="Agent work time. Waiting on people doesn't count.">
+            <Field label="Close after idle" changed={changed(def.limits.session_minutes, saved?.limits.session_minutes)} hint="Minutes with no messages before the conversation closes. Waiting for an approval doesn't count.">
               <NumberField
                 value={def.limits.session_minutes}
                 min={1}
                 max={1440}
                 suffix="min"
-                ariaLabel="Time per session"
+                ariaLabel="Close after idle"
                 changed={changed(def.limits.session_minutes, saved?.limits.session_minutes)}
                 onChange={update ? (value) => update({ ...def, limits: { ...def.limits, session_minutes: value ?? 0 } }) : undefined}
               />
               <FieldMessages {...at("limits.session_minutes")} />
             </Field>
-            <Field label="Model turns per session" changed={changed(def.limits.max_turns, saved?.limits.max_turns)}>
+            <Field label="Messages per session" changed={changed(def.limits.max_turns, saved?.limits.max_turns)} hint="Each message and the agent's reply count as one.">
               <NumberField
                 value={def.limits.max_turns}
                 min={1}
                 max={1000}
-                ariaLabel="Model turns per session"
+                ariaLabel="Messages per session"
                 changed={changed(def.limits.max_turns, saved?.limits.max_turns)}
                 onChange={update ? (value) => update({ ...def, limits: { ...def.limits, max_turns: value ?? 0 } }) : undefined}
               />

@@ -18,7 +18,7 @@ sf ui
 sf ui --port 9000
 ```
 
-On start, Stageflow prints the console URL and MCP endpoint, then opens your default browser. A local open carries a one-time code that expires in 60 seconds. The page exchanges that code for the control token and removes the fragment. The token itself is not put in the URL. The token is printed on first start; later starts reuse it and print the file path. If the console still asks you to paste a token, it is in the Host's `control-token` file (`~/.stageflow` by default, `/data` in Docker). If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`. The process runs until you stop it (Ctrl+C). In Docker the console is the container's published port; see [Docker](docker.md).
+On start, Stageflow prints the console URL and MCP endpoint, then opens your default browser. A local open carries a one-time code that expires in 60 seconds. The page exchanges that code for the control token and removes the fragment. The token itself is not put in the URL. The token is printed on first start; later starts reuse it and print the file path. If the console still asks you to paste a token, it is in the Host's `control-token` file (`~/.stageflow` by default, `/data` in Docker). If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`. The process runs until you stop it (Ctrl+C). In Docker the console is the container's published port; see [Docker](docker.md). The same process listens on a second loopback port for the live-HTML shell when that listener can bind. `GET /api/health` reports it as `sandbox_origin`, or `null` when it is off. See [Live HTML artifacts: the sandbox origin](artifacts.md#live-html-sandbox).
 
 ## One page per area
 
@@ -27,6 +27,7 @@ On start, Stageflow prints the console URL and MCP endpoint, then opens your def
 | Overview: needs-you, live runs, health, run trends | [Overview](console-overview.md) |
 | Inbox: gates and agent approvals waiting on you | [Inbox](console-inbox.md) |
 | Pipeline runs, run detail, Start a run | [Runs](console-runs.md) |
+| Artifacts: indexed deliverables | [Artifacts](console-artifacts.md) |
 | Pipelines, editor, Tasks, Catalog, Triggers, Workshop | [Pipelines, tasks and catalog](console-pipelines-catalog.md) |
 | Agents, Agent sessions, run inspector | [Agents in the console](console-agents.md) |
 | Functions: sandboxed JavaScript for checks, routing and tools | [Functions in the console](console-functions.md) |
@@ -46,6 +47,7 @@ On start, Stageflow prints the console URL and MCP endpoint, then opens your def
 | (pinned) | **Overview** | `#/overview` | Control center: what needs you, what is running, health and run trends |
 | (pinned) | **Inbox** | `#/inbox` | Triage home. The badge counts pipeline gates and agent approvals that wait on you |
 | Activity | **Pipeline runs** | `#/runs` | All pipeline runs; the badge counts runs in flight |
+| Activity | **Artifacts** | `#/artifacts` | Indexed deliverables for the active project. See [Artifacts](console-artifacts.md) |
 | Activity | **Agent sessions** | `#/agent-sessions` | Every agent's sessions in one list; the badge counts sessions in flight |
 | Build | **Pipelines** | `#/pipelines` | Browse pipeline files; open one in the editor |
 | Build | **Agents** | `#/agents` | Agent directory, create, edit, detail |
@@ -62,14 +64,15 @@ Below the groups, **Pinned pipelines** lists pipelines you pinned. The Workshop 
 
 ### Command palette
 
-**⌘K** (Ctrl+K) opens the palette from any page; **Esc** closes it. Type to filter, **↑/↓** to move, **Enter** to run. **Tab** cycles the result type (All, Actions, Runs, Pipelines, Navigation); **Shift+Tab** cycles the other way. Option, Command, or Shift with an arrow, and Home or End, stay in the search text.
+**⌘K** (Ctrl+K) opens the palette from any page; **Esc** closes it. Type to filter, **↑/↓** to move, **Enter** to run. **Tab** cycles the result type (All, Actions, Runs, Pipelines, Artifacts, Navigation); **Shift+Tab** cycles the other way. Option, Command, or Shift with an arrow, and Home or End, stay in the search text. The Artifacts type lists search hits once the query is at least two characters.
 
 | Group | Entries |
 |-------|---------|
 | Actions | **Start a run**; **Answer next gate** (when a run waits on you); **Retry failed stage** (when a run failed) |
 | Runs | Recent runs, with status |
 | Pipelines | Every pipeline, by id |
-| Navigation | Overview, Inbox, Pipeline runs, Agent sessions, Agents, Pipelines, Workshop, Tasks, Catalog, Triggers, Settings |
+| Artifacts | Top five artifact matches for the current query (two or more characters). Choosing one opens the artifact. The group clears as soon as the query changes. A slow or failed lookup leaves this group empty. |
+| Navigation | Overview, Inbox, Pipeline runs, Artifacts, Agent sessions, Agents, Pipelines, Workshop, Tasks, Catalog, Triggers, Settings |
 
 ### Keyboard shortcuts
 
@@ -107,10 +110,11 @@ Hash-based routing (`ui/src/routes.ts`). A hash that matches no route falls back
 | `#/overview` | [Overview](console-overview.md) |
 | `#/inbox`, `#/inbox?tab=failed`, `?tab=done_today` | [Inbox](console-inbox.md). `#/today` opens it |
 | `#/runs` | Pipeline runs (All / Needs you / Running / Failed / Succeeded) |
+| `#/artifacts` | [Artifacts](console-artifacts.md): indexed deliverables for the active project |
 | `#/runs/<runId>` | Run detail |
 | `#/runs/<runId>/stages/<stageId>` | Run detail with that stage selected |
 | `#/runs/<runId>/stages/<stageId>/envelope` | Envelope inspector for a stage |
-| `#/runs/<runId>/artifacts?path=…` | Artifact viewer |
+| `#/runs/<runId>/artifacts?path=…` | Artifact viewer. `.html` and `.htm` open in the static HTML preview (scripts and network disabled). Other files are unchanged. See [Artifacts](console-artifacts.md#static-html) |
 | `#/new` | Start a run |
 | `#/pipelines` | Pipeline list |
 | `#/pipelines/<id>` | Opens that pipeline in the editor |

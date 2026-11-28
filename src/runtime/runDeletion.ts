@@ -1,5 +1,7 @@
 import { rm } from "node:fs/promises";
 import type { A2aStore } from "../a2a/store.js";
+import type { ArtifactExpiredReason } from "../artifacts/record.js";
+import { logArtifactIndexFailure } from "../runstore/artifactRetention.js";
 import type { RunStore } from "../runstore/port.js";
 import { reclaimWorkspaceBinding } from "./repositoryMaterialize.js";
 
@@ -11,7 +13,14 @@ export async function deleteRunEverywhere(
   store: RunStore,
   a2aStore: A2aStore,
   runId: string,
+  reason: Extract<ArtifactExpiredReason, "run_purged" | "run_deleted"> = "run_deleted",
 ): Promise<void> {
+  try {
+    await store.markIndexedArtifactsExpired(runId, reason, new Date().toISOString());
+  } catch (err) {
+    logArtifactIndexFailure(`deleteRunEverywhere ${runId}`, err);
+  }
+
   try {
     await a2aStore.deleteByRunId(runId);
   } catch (err) {

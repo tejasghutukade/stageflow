@@ -18,8 +18,14 @@ const EXTRA_SECRET_RES: RegExp[] = [
   /[?&](?:token|key|api_?key|access_token|auth|signature|sig)=[^\s&"']+/gi,
 ];
 
+/** A PEM block whose label contains PRIVATE KEY, through its END line or the end of the text. */
+const PEM_PRIVATE_KEY_BLOCK =
+  /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----|$)/g;
+
 export function scrubSecrets(text: string): string {
-  let out = redactString(text);
+  PEM_PRIVATE_KEY_BLOCK.lastIndex = 0;
+  let out = text.replace(PEM_PRIVATE_KEY_BLOCK, "[redacted]");
+  out = redactString(out);
   for (const re of EXTRA_SECRET_RES) {
     re.lastIndex = 0;
     out = out.replace(re, "[redacted]");

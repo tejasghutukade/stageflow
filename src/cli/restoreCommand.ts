@@ -96,6 +96,18 @@ export async function runRestoreCommand(
     if (parsed.json) {
       out.log(JSON.stringify({ ok: true, ...result }));
     } else {
+      if (result.warnings && result.warnings.length > 0) {
+        for (const warning of result.warnings) {
+          out.error(`warning: ${warning.message}`);
+        }
+      }
+      if (result.published_artifact_integrity && result.published_artifact_integrity.length > 0) {
+        for (const finding of result.published_artifact_integrity) {
+          out.error(
+            `published artifact integrity: ${finding.code} ${finding.path} (key=${finding.key} v${finding.version})${finding.detail ? ` — ${finding.detail}` : ""}`,
+          );
+        }
+      }
       out.log(
         `Restored schema_version=${result.schema_version}` +
           (result.kind === "archive"

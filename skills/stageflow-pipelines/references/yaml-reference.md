@@ -13,6 +13,7 @@ Exact keys, where each one may sit, and what the loader does with it. Every rule
 - [verify items](#verify-items)
 - [on_verify_fail](#on_verify_fail)
 - [gate_kinds](#gate_kinds)
+- [artifacts](#artifacts)
 - [Model, agent, independence, timeout](#model-agent-independence-timeout)
 - [Task file](#task-file)
 - [Include fragments](#include-fragments)
@@ -94,6 +95,7 @@ A stage entry in `stages:` is either inline (wiring and body together) or a `use
 | `requires` | `[{ tool, version? }]`. |
 | `browser` | Browser profile and login check. |
 | `channels` | One channel. Body only. |
+| `artifacts` | `{ publish: boolean, expect?: ids }`. Body only. See [artifacts.md](artifacts.md). |
 | `email` | `[{ accountId, operations }]` for console-configured email accounts. |
 
 A stage file may also carry `id` and `agent`. The stage `agent` does not select the backend. A value of `claude` can still reject run start when the process is root (`claude_as_root`), even if the pipeline backend is `pi`.
@@ -198,6 +200,23 @@ Use `repair` for work that is safe to redo (edits, tests, documents). Use `manua
 ## gate_kinds
 
 `confirm`, `free_text`, `artifact_backed`, `multi_question`. Omitted or `[]` means the stage has no `ask_operator` tool. Anything else is `stage.invalid_gate_kinds`.
+
+## artifacts
+
+Body only. Opts the stage into `publish_artifact` and an extra system-prompt section.
+
+```yaml
+artifacts:
+  publish: true
+  expect: [weekly-report]
+```
+
+| Key | Rule |
+|---|---|
+| `publish` | `true` registers the tool. Omitted or `false`: unchanged behavior. |
+| `expect` | Optional list of ids the attempt must publish before success emit. Max 20 unique slugs matching `^[a-z][a-z0-9_-]{0,63}$`. Requires `publish: true` (`stage.invalid_artifacts` otherwise). |
+
+Publishing is separate from the envelope `artifacts` string list (indexing) and from function `access.artifacts`. Full rules: [artifacts.md](artifacts.md).
 
 ## Model, agent, independence, timeout
 

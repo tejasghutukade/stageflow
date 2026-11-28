@@ -21,6 +21,10 @@ import { InternalAgentsSection } from "./InternalAgentsSection";
 import { clampCursor, isCursorKey, moveCursor, shouldHandleCursorKey } from "./listCursor";
 import { MONO, NOWRAP, PAGE_BG } from "./agentsTokens";
 import { PageHeader as ShellPageHeader } from "../shell/PageHeader";
+import { getSurfaceScope, setSurfaceScope } from "../../api/projectScope";
+import { createLatestGuard } from "../shell/latestOnly";
+import { OtherProjectsNote } from "../shell/OtherProjectsNote";
+import { useHiddenInOtherProjects } from "../shell/useHiddenInOtherProjects";
 import { Button, PageFooter } from "./ui";
 
 const GRID =
@@ -315,8 +319,22 @@ export function AgentsDirectoryPage({ onNewAgent }: { onNewAgent: () => void }) 
   const [accessFor, setAccessFor] = useState<string | null>(null);
   const [providers, setProviders] = useState<Record<string, string>>({});
   const rowRefs = useRef<(HTMLAnchorElement | null)[]>([]);
+  const [scope, setScope] = useState<string | undefined>(() => getSurfaceScope("agents"));
+  const { hidden, roots } = useHiddenInOtherProjects({
+    enabled: !loading,
+    visible: agents,
+    load: agentsApi.listIn,
+    keyOf: (agent) => `${agent.id}\u0000${agent.updatedAt}`,
+    scope,
+  });
+  const switchScope = (root: string | undefined) => {
+    setSurfaceScope("agents", root);
+    setScope(root);
+  };
 
+  const loadGuard = useRef(createLatestGuard()).current;
   const load = useCallback(async () => {
+    const isCurrent = loadGuard();
     setLoading(true);
     try {
       const [list, approvals, authorDrafts] = await Promise.all([
@@ -324,20 +342,22 @@ export function AgentsDirectoryPage({ onNewAgent }: { onNewAgent: () => void }) 
         agentsApi.pendingApprovals().catch(() => []),
         listAuthorDrafts().catch(() => ({ drafts: [] })),
       ]);
+      if (!isCurrent()) return;
       setAgents(list);
       setPending(approvals.length);
       setDrafts(authorDrafts.drafts);
       setError(null);
     } catch (err) {
+      if (!isCurrent()) return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, []);
+  }, [loadGuard]);
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, scope]);
 
   // Connection id -> provider label ("iMessage", "Email"...), so a channel agent reads as what it is.
   useEffect(() => {
@@ -403,6 +423,13 @@ export function AgentsDirectoryPage({ onNewAgent }: { onNewAgent: () => void }) 
         <p className="text-[13px] leading-normal text-[var(--sf-text-2)]">
           Agents defined in this project. Each one runs sealed, with only the tools and approvals you give it.
         </p>
+
+        <OtherProjectsNote
+          hidden={hidden}
+          scopeLabel={scope === undefined ? undefined : (roots.find((r) => r.project_root === scope)?.label ?? scope)}
+          onSwitch={switchScope}
+          onReset={() => switchScope(undefined)}
+        />
 
         <DraftsSection drafts={drafts} />
 

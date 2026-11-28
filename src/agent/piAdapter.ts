@@ -164,7 +164,10 @@ import {
 export { STAGEFLOW_PATH_DENIED };
 import { createPiSettingsManager } from "./piSettings.js";
 import { createSessionContextWiring } from "../compaction/sessionWiring.js";
-import { ASK_OPERATOR_TOOL_NAME } from "../tools/stageToolNames.js";
+import { ASK_OPERATOR_TOOL_NAME, PUBLISH_ARTIFACT_TOOL_NAME } from "../tools/stageToolNames.js";
+import { bindableFunctionsFromAttachments } from "../artifacts/bindable.js";
+import { createPublishArtifactTool } from "../tools/publishArtifact.js";
+import { genUiPublishPrompt } from "../genui/prompt.js";
 import { WORKING_STATE_GUIDANCE } from "../compaction/workingState.js";
 import { inProcessBrowserEnv, sandboxBrowserEnv } from "../runtime/sandboxContainer.js";
 export { createSealedResourceLoader } from "./piSessionFactory.js";
@@ -219,6 +222,7 @@ export function resolveStageToolNames(
   artifactToolName?: string,
   askOperatorToolName = ASK_OPERATOR_TOOL_NAME,
   gateKinds?: StageGateKind[],
+  publishArtifact = false,
 ): string[] {
   const tools = [
     "read",
@@ -235,6 +239,9 @@ export function resolveStageToolNames(
   }
   if (artifactToolName) {
     tools.push(artifactToolName);
+  }
+  if (publishArtifact) {
+    tools.push(PUBLISH_ARTIFACT_TOOL_NAME);
   }
   return tools;
 }
@@ -866,7 +873,7 @@ export function composeStagePiSystemPrompt(
   artifactToolName?: string,
   checkoutContext?: string,
 ): string {
-  return [
+  const parts = [
     input.stage.system_prompt,
     ...(checkoutContext !== undefined && checkoutContext !== "" ? ["", checkoutContext] : []),
     "",
@@ -875,7 +882,18 @@ export function composeStagePiSystemPrompt(
     "",
     "# Stage assignment",
     buildUserPrompt(input, emitToolName, emitHintOverride, artifactToolName),
-  ].join("\n");
+  ];
+  if (input.stage.artifacts?.publish === true) {
+    parts.push(
+      "",
+      genUiPublishPrompt({
+        publisher: "stage",
+        ...(input.stage.artifacts.expect ? { expect: input.stage.artifacts.expect } : {}),
+        functions: bindableFunctionsFromAttachments(functionCatalogRoot(input), input.stage.tools?.functions ?? []),
+      }),
+    );
+  }
+  return parts.join("\n");
 }
 
 export function composeStagePiKickoffPrompt(input: StageRunInput): string {
@@ -1323,6 +1341,12 @@ async function prepareStageSessionWiring(
         stageId: runtimeStageId(input),
         attempt: roots.attempt ?? 1,
       },
+      ...(input.stage.artifacts?.expect !== undefined
+        ? {
+            expectedArtifactIds: input.stage.artifacts.expect,
+            readPublishedArtifactIds: input.publishedArtifactIds,
+          }
+        : {}),
     },
     input.feedbackLoopEmitContext,
   );
@@ -1355,6 +1379,22 @@ async function prepareStageSessionWiring(
     ...artifactDef,
     constrainedSampling: { type: "json_schema", strict: "prefer" },
   });
+
+  const publishOptIn = input.stage.artifacts?.publish === true && input.publishArtifact !== undefined;
+  const publishDef = publishOptIn
+    ? createPublishArtifactTool({
+        runWorkspaceDir: roots.runWorkspaceDir,
+        stageId: runtimeStageId(input),
+        attempt: roots.attempt ?? 1,
+        publish: input.publishArtifact!,
+      })
+    : undefined;
+  const publishTool = publishDef
+    ? defineTool({
+        ...publishDef,
+        constrainedSampling: { type: "json_schema", strict: "prefer" },
+      })
+    : undefined;
 
   if (input.stage.skill !== undefined && input.skillFilePath === undefined) {
     return {
@@ -1451,6 +1491,7 @@ async function prepareStageSessionWiring(
             emitDef.name,
             artifactDef.name,
             askDef?.name ?? ASK_OPERATOR_TOOL_NAME,
+            ...(publishDef !== undefined ? [publishDef.name] : []),
           ]),
         }),
       },
@@ -1525,11 +1566,13 @@ async function prepareStageSessionWiring(
     const customTools: StageSessionWiring["customTools"] = askTool
       ? [emitTool, askTool, artifactTool]
       : [emitTool, artifactTool];
+    if (publishTool) customTools.push(publishTool);
     const tools = resolveStageToolNames(
       emitDef.name,
       artifactDef.name,
       askDef?.name ?? ASK_OPERATOR_TOOL_NAME,
       gateKinds,
+      publishTool !== undefined,
     );
     tools.push(...contextWiring.toolNames);
     if (attached.extensionFactories !== undefined) {

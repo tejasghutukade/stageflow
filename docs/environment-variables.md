@@ -14,6 +14,10 @@ Every variable the Host and CLI read, in one place. Details live in the page eac
 | `STAGEFLOW_CREDENTIAL_HOME` | Where provider auth and `channel-secrets.json` live (default `~/.stageflow`) |
 | `STAGEFLOW_CONNECTIONS_FILE` | Overrides the `connections.yaml` location. See [Channels](channels.md#connectionsyaml) |
 | `STAGEFLOW_BIND` | Listen address for `sf ui` / `sf mcp` |
+| `STAGEFLOW_SANDBOX_PORT` | Pinned port for the live-HTML shell. An integer from 1024 to 65535. Loopback consoles bind that port on loopback; in Docker or on a non-loopback console bind it listens on `0.0.0.0` inside the process so a published `127.0.0.1` mapping can reach it. If that port is taken, the shell stays off. Unset on loopback: the Host tries the next 20 ports after the console port; unset in Docker or on a non-loopback bind leaves the shell off. See [Live HTML artifacts: the sandbox origin](artifacts.md#live-html-sandbox) |
+| `STAGEFLOW_SANDBOX_PUBLIC_ORIGIN` | The `https` origin (no path, query or userinfo) where visitors reach the sandbox listener through your proxy, for HTML cards and live HTML on a public deployment. Its host must differ from `STAGEFLOW_PUBLIC_URL` and `STAGEFLOW_PUBLIC_CHAT_URL`; otherwise it is ignored and the Host logs `sandbox.public_origin_ignored`. See [Live HTML artifacts: the sandbox origin](artifacts.md#live-html-sandbox). |
+| `STAGEFLOW_SANDBOX_DISABLED` | `1` does not start the live-HTML shell. The console then uses the scriptless preview |
+| `STAGEFLOW_ARTIFACT_ALLOW_EVAL_LIBS` | `1` allows a live HTML manifest to select a vendored library whose `needsEval` flag is set, and only when that entry also sets `allowEval: true`. Unset or any other value rejects the publish. The sandbox shell also refuses `'unsafe-eval'` unless this is set when the shell is served. See [Live HTML artifacts: libraries](artifacts.md#live-html-libraries) |
 | `STAGEFLOW_ALLOW_UNAUTHENTICATED_BIND` | `1` is an explicit opt-in to start a non-loopback bind with no control token. Leave unset otherwise; the Host then generates one |
 | `STAGEFLOW_ALLOWED_HOSTS` | Extra Host/Origin names accepted (loopback always allowed; `*` rejected). Needed for any public hostname, including webhook and web chat URLs. A Host bound (`STAGEFLOW_BIND`) to one non-loopback IP also accepts that IP on its own port, so its own calls, such as the eval engine's callback, are not refused |
 | `STAGEFLOW_CONTROL_TOKEN`, `_FILE` | Drive-scoped bearer token (32+ chars). Unset at Host start reuses `$STAGEFLOW_HOME/control-token` (mode 0600, owned by this user, not a symlink) or mints one and writes it after listen. `Control token:` is printed on first start, including Docker logs. Later starts print the file path only. The CLI reads that file when the variable is unset; a stage worker does not |
@@ -63,6 +67,9 @@ Every variable the Host and CLI read, in one place. Details live in the page eac
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY` | Judge key for rubric graders when the credential file has no `api_key` entry for that provider. See [Evals: Judge models](evals.md#judge-models) |
 | `STAGEFLOW_GC_INTERVAL_MS` | Garbage-collection interval (default 1 h, `0` disables) |
 | `STAGEFLOW_BARE_CACHE_TTL_MS`, `STAGEFLOW_SLIM_ARTIFACT_MAX_BYTES`, `STAGEFLOW_SLIM_*`, `STAGEFLOW_PURGE_*` | Retention knobs |
+| `STAGEFLOW_ARTIFACT_VERSIONS_KEEP` | How many published versions to keep (default 10, integer 1–1000), plus any pinned version. See [Artifacts](artifacts.md#publishing) |
+| `STAGEFLOW_FUNCTION_HISTORY_DAYS` | How many days of function invocation rows to keep (default 30, integer 1–3650). The retention sweep also drops rows beyond `STAGEFLOW_FUNCTION_HISTORY_MAX_ROWS`. See [Functions](function-api.md#revisions-and-invocations) |
+| `STAGEFLOW_FUNCTION_HISTORY_MAX_ROWS` | How many newest function invocation rows to keep (default 50000, integer 1–1000000). Each sweep deletes at most 5000 rows. See [Functions](function-api.md#revisions-and-invocations) |
 | `STAGEFLOW_DISK_WARN_BYTES`, `STAGEFLOW_MIN_FREE_DISK_BYTES` | Free-disk warning and admission floor (bytes or `N%`) |
 | `STAGEFLOW_SQLITE_BUSY_TIMEOUT_MS`, `STAGEFLOW_SQLITE_SYNCHRONOUS`, `STAGEFLOW_SQLITE_WAL_AUTOCHECKPOINT` | SQLite pragmas |
 | `STAGEFLOW_ALLOW_NETWORK_STORE` | Escape hatch to boot on NFS/CIFS (unsupported) |
@@ -100,6 +107,10 @@ Every variable the Host and CLI read, in one place. Details live in the page eac
 ## Set by the Host, not by you
 
 Stages receive `STAGEFLOW_CHECKOUT`, `STAGEFLOW_RUN_WORKSPACE`, `STAGEFLOW_REPOSITORY`, `STAGEFLOW_REF`, `STAGEFLOW_BASE_SHA`, `STAGEFLOW_RUN_BRANCH` and `STAGEFLOW_STAGE_ARTIFACTS_DIR`. Do not set these on the Host.
+
+## OpenUI telemetry
+
+Stageflow forces `OPENUI_TELEMETRY_DISABLED=1` and `DO_NOT_TRACK=1` in the CLI and the Host before it loads `@openuidev/lang-core`. It deletes `OPENUI_RUNTIME_TELEMETRY_ENABLED` if that variable is set. There is no Stageflow setting that turns this telemetry on. The package's install script is not on the `allowScripts` allowlist, so `npm install` does not run it.
 
 ## Docker
 

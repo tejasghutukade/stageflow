@@ -37,10 +37,12 @@ import {
 import type { McpToolDeps } from "./deps.js";
 import { projectRun } from "../projection/projectRun.js";
 import { textResult } from "./toolResults.js";
+import { runConsoleUrl } from "./writeTarget.js";
 import { listCatalogFlatSchema, validateFlatSchema } from "../toolkit/catalogToolModes.js";
 import {
   envelopeRefField,
   getRunFlatSchema,
+  runStatsFlatSchema,
   inlinePipelineSchema,
   startRunFlatSchema,
   taskFileSchema,
@@ -53,6 +55,7 @@ import { listProjectMcpCatalog } from "../config/resolveStageMcpServers.js";
 import { runValidateKind } from "./validateMcpKinds.js";
 import { buildRunExportPayload } from "../runstore/exportRunPayload.js";
 import { redactRunManifestForRead } from "../runstore/runManifest.js";
+import { collectRunStats } from "../runstore/runStats.js";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { runSkillsDir } from "../runtime/runSkills.js";
 import { listSkillsWithOrigin } from "../config/listSkills.js";
@@ -82,7 +85,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "list_catalog",
     {
       description:
-        "List pipelines, tasks, skills, models, MCP servers, providers, or host health. Pick kind; optional project_root or runId (skills only).",
+        "List pipelines, tasks, skills, models, MCP servers, providers, or host health. kind required. Optional project_root, or runId for skills.",
       inputSchema: listCatalogFlatSchema,
     },
     async (args) => {
@@ -247,7 +250,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "start_run",
     {
       description:
-        "Start a pipeline run. Accepted params: pipeline (catalog-relative path or inline { id, stages: [...] } — stages are YAML stage bodies, no uses: refs), task_path XOR task (inline task may include repository/ref or checkout; repository XOR checkout with code task.binding_conflict), project_root, checkout (catalog-relative; prefer this name; absolute → absolute_path_not_allowed), checkout_override (alias of checkout), skip_gates, git_sha, ci_pr_url, ci_job_url, skills (name → { relativePath: utf-8 contents }; requires SKILL.md; materialised under runs/<runId>/skills/, never the worktree). Returns { runId } or { runId, queued: true, queuePosition }. Errors: busy_capacity, busy_checkout, insufficient_disk, start.token_rejected, skills_*, inline_pipeline_too_large, catalog path-contract codes.",
+        "Start a pipeline run. pipeline: catalog-relative path or inline { id, stages: [...] } (YAML bodies, no uses: refs). task_path XOR task (inline task may set repository/ref or checkout; repository XOR checkout is task.binding_conflict). project_root, checkout (catalog-relative; prefer this name; absolute is absolute_path_not_allowed), checkout_override (alias of checkout), skip_gates, git_sha, ci_pr_url, ci_job_url, skills (name → { relativePath: utf-8 contents }; requires SKILL.md; under runs/<runId>/skills/, never the worktree). Returns { runId } or { runId, queued: true, queuePosition }. Errors: busy_capacity, busy_checkout, insufficient_disk, start.token_rejected, skills_*, inline_pipeline_too_large, catalog path-contract codes.",
       inputSchema: startRunFlatSchema,
     },
     async (args) => {
@@ -546,6 +549,9 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
       });
       return textResult({
         runId: result.runId,
+        project_root: wireRoot.project_root,
+        project_path: wireRoot.path,
+        console_url: runConsoleUrl(deps, result.runId),
         ...(result.queued === true
           ? {
               queued: true,
@@ -563,7 +569,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "get_run",
     {
       description:
-        "List runs without runId; poll one run with runId; view: export returns the full export payload. Stage detail lives in get_stage.",
+        "List runs without runId; poll one run with runId; view: export returns the full export payload.",
       inputSchema: getRunFlatSchema,
     },
     async ({ runId, view, status, since, pipeline, caller_id }) => {
@@ -589,11 +595,30 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         return textResult({
           ...projectRun(detail),
           run_manifest: redactRunManifestForRead(detail.run_manifest),
+          console_url: runConsoleUrl(deps, runId),
         });
       } catch (err) {
         const mapped = mapStoreLookupError(err, { policy: "run" });
         return textResult({ error: mapped.error, status: mapped.status }, true);
       }
+    },
+  );
+
+  server.registerTool(
+    "run_stats",
+    {
+      description:
+        "Count runs by status. group_by is day, week, or pipeline. Buckets use created_at. since defaults to 30 days before until; until defaults to now. timezone is an IANA name (default UTC). Day and week buckets include zeros. Eval runs are left out. A long window or many pipelines is capped.",
+      inputSchema: runStatsFlatSchema,
+    },
+    async (args) => {
+      const parsed = runStatsFlatSchema.safeParse(args);
+      if (!parsed.success) {
+        return textResult({ error: parsed.error.issues[0]?.message ?? "Invalid arguments", status: 400 }, true);
+      }
+      const result = await collectRunStats(store, parsed.data);
+      if (!result.ok) return textResult({ error: result.message, status: 400 }, true);
+      return textResult(result.value);
     },
   );
 

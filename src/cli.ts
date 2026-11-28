@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import "./artifacts/library/telemetryEnv.js";
 import { spawn } from "node:child_process";
 import { A2A_USAGE, runA2aCommand } from "./cli/a2aCommand.js";
 import { realpathSync } from "node:fs";
@@ -71,6 +72,7 @@ import {
   resolveClientBearerToken,
   type EnsuredHostControlToken,
 } from "./server/controlToken.js";
+import { warnIfHostUsesOtherHome } from "./cli/hostHomeWarning.js";
 import { readStageflowHomeId } from "./diagnostics/checks.js";
 import { mintConsoleLoginCode } from "./server/consoleLoginCode.js";
 import {
@@ -136,6 +138,13 @@ const USAGE = `Usage:
   sf starters list|install [--json]
   sf graph --pipeline <path> [--json]
   sf migrate-yaml [path] [--root <path>] [--write] [--json] [--force]
+  sf artifact list [--q <text>] [--kind <kind>] [--owner <pipeline:stage|agent:id>] [--tag <tag>] [--status <available|expired>] [--live] [--sort <updated|title|size>] [--order <asc|desc>] [--project-root <wire id or path>] [--limit <n>] [--json]
+  sf artifact show <key> [--project-root <wire id or path>] [--json]
+  sf artifact publish --owner <pipeline:stage|agent:id> --id <id> --kind <kind> --title <title> [--description <text>] [--tag <tag>]... [--summary <text>] [--project-root <wire id or path>] (--file <path> | --stdin) [--json]
+  sf artifact delete <key> [--project-root <wire id or path>] [--yes] [--json]
+  sf artifact origins <key> [--project-root <wire id or path>] [--json]
+  sf artifact approve-origins <key> [--hash <h>] [--yes] [--project-root <wire id or path>] [--json]
+  sf artifact revoke-origins <key> [--hash <h>] [--project-root <wire id or path>] [--json]
   sf artifact read --run <runId> --path <relPath> [--out <file>]
   sf envelope get --run <runId> --stage <stageId> [--json] [--from <sf-run.json>] [--detect-stage <id>] [--format envelope|handoff]
   sf export-run --run <runId> [--from <sf-run.json>] [--out <file>]
@@ -556,6 +565,8 @@ export async function main(argv: string[]): Promise<number> {
     }
 
     const ctx = await resolveStageflowContext(process.cwd());
+
+    await warnIfHostUsesOtherHome(parsed.command);
 
     if (parsed.command === "a2a") {
       return runA2aCommand(argv.slice(3), { cwd: ctx.invocationCwd, projectRoot: ctx.projectRoot });

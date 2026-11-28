@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { BodyError, readJsonBody } from "../agents/ndjson.js";
+import { FUNCTION_INVOCATION_LIST_DEFAULT, FUNCTION_INVOCATION_LIST_MAX } from "../functions/history.js";
 import type { FunctionInvoker, FunctionTestInput, FunctionTestMocks } from "../functions/invoke.js";
 import { FunctionError, isFunctionError, type FunctionService } from "../functions/service.js";
 
@@ -33,6 +34,21 @@ async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> 
 function requireInt(value: unknown, name: string): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
     throw new FunctionError("function.invalid", `${name} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function invocationLimit(req: IncomingMessage): number {
+  const parsed = new URL(req.url ?? "/", "http://127.0.0.1");
+  const raw = parsed.searchParams.get("limit");
+  if (raw === null || raw.trim() === "") return FUNCTION_INVOCATION_LIST_DEFAULT;
+  const text = raw.trim();
+  if (!/^\d+$/.test(text)) {
+    throw new FunctionError("function.invalid", `limit must be an integer from 1 to ${FUNCTION_INVOCATION_LIST_MAX}`);
+  }
+  const value = Number(text);
+  if (value < 1 || value > FUNCTION_INVOCATION_LIST_MAX) {
+    throw new FunctionError("function.invalid", `limit must be an integer from 1 to ${FUNCTION_INVOCATION_LIST_MAX}`);
   }
   return value;
 }
@@ -145,7 +161,7 @@ const routes: Array<{ method: string; pattern: RegExp; handle: (ctx: Ctx) => Pro
         ctx.json(ctx.res, 503, { code: "function.store_unavailable" });
         return;
       }
-      ctx.json(ctx.res, 200, { invocations: invoker.list(ctx.projectRoot, ctx.params[0]!) });
+      ctx.json(ctx.res, 200, { invocations: invoker.list(ctx.projectRoot, ctx.params[0]!, invocationLimit(ctx.req)) });
     },
   },
 ];

@@ -25,7 +25,9 @@ import {
   resolveMinFreeDiskFloor,
 } from "../runstore/diskUsage.js";
 import type { RunStore } from "../runstore/port.js";
+import { artifactSearchDoctorCheck, publishedArtifactStoreDoctorCheck } from "../diagnostics/artifactStoreCheck.js";
 import { runStoreIntegrityCheck } from "../runstore/sqlite/applyStorePragmas.js";
+import Database from "better-sqlite3";
 
 export type DoctorCheckStatus = "pass" | "warn" | "fail" | "skipped";
 
@@ -34,6 +36,7 @@ export type DoctorCheck = {
   status: DoctorCheckStatus;
   message: string;
   code?: string;
+  issues?: Array<{ code: string; count: number; examples: string[] }>;
 };
 
 export type DoctorResult = {
@@ -439,6 +442,25 @@ export async function runDoctorChecks(options?: {
     });
     checks.push(...mapReadyzChecks(readyz, home));
     checks.push(storeIntegrityDoctorCheck(store));
+    const sqliteConnection = (
+      store as { connection?: Database.Database }
+    ).connection;
+    if (sqliteConnection !== undefined && typeof sqliteConnection.prepare === "function") {
+      const artifact = await publishedArtifactStoreDoctorCheck(sqliteConnection, home);
+      checks.push({
+        id: artifact.id,
+        status: artifact.status,
+        message: artifact.message,
+        ...(artifact.code !== undefined ? { code: artifact.code } : {}),
+        ...(artifact.issues !== undefined ? { issues: artifact.issues } : {}),
+      });
+      const search = artifactSearchDoctorCheck(sqliteConnection);
+      checks.push({
+        id: search.id,
+        status: search.status,
+        message: search.message,
+      });
+    }
     checks.push(await gitDoctorCheck(readyz.checks.git_present));
   }
 

@@ -16,6 +16,7 @@ const NAV_ITEMS: PaletteNavDef[] = [
   { id: "overview", label: "Overview", path: "/overview" },
   { id: "inbox", label: "Inbox", path: "/inbox" },
   { id: "runs", label: "Pipeline runs", path: "/runs" },
+  { id: "artifacts", label: "Artifacts", path: "/artifacts" },
   { id: "agent-sessions", label: "Agent sessions", path: "/agent-sessions" },
   { id: "agents", label: "Agents", path: "/agents" },
   { id: "pipelines", label: "Pipelines", path: "/pipelines" },
@@ -179,12 +180,56 @@ function navRows(query: string, onNavigate: (path: string) => void): PaletteItem
   }).filter((row) => row.score > 0 || !query);
 }
 
+export type PaletteArtifactHit = {
+  title: string;
+  context: string;
+  path: string;
+};
+
+export type PaletteArtifactSearchState = {
+  generation: number;
+  hits: PaletteArtifactHit[];
+};
+
+export function reducePaletteArtifactSearch(
+  state: PaletteArtifactSearchState,
+  event:
+    | { type: "query" }
+    | { type: "result"; generation: number; hits: readonly PaletteArtifactHit[] }
+    | { type: "error"; generation: number },
+): PaletteArtifactSearchState {
+  if (event.type === "query") {
+    return { generation: state.generation + 1, hits: [] };
+  }
+  if (event.generation !== state.generation) return state;
+  if (event.type === "error") return { generation: state.generation, hits: [] };
+  return { generation: state.generation, hits: event.hits.slice(0, 5) };
+}
+
+function artifactRows(
+  hits: readonly PaletteArtifactHit[],
+  query: string,
+  onNavigate: (path: string) => void,
+): PaletteItem[] {
+  if (normQuery(query).length < 2) return [];
+  return hits.slice(0, 5).map((hit) => ({
+    id: `artifact-${hit.path}`,
+    group: "artifacts" as const,
+    label: hit.title,
+    context: hit.context,
+    keywords: `${hit.title} ${hit.context}`,
+    score: 60,
+    run: () => onNavigate(hit.path),
+  }));
+}
+
 export type BuildPaletteIndexInput = {
   snapshot: CatalogSnapshot;
   tasks: TaskListing[];
   pipelines: PipelineListing[];
   query: string;
   ctx: PaletteActionContext;
+  artifactHits?: readonly PaletteArtifactHit[];
 };
 
 export function buildPaletteIndex(input: BuildPaletteIndexInput): PaletteItem[] {
@@ -200,6 +245,7 @@ export function buildPaletteIndex(input: BuildPaletteIndexInput): PaletteItem[] 
   const pipelines = pipelineRows(input.pipelines, query, input.ctx.onNavigate);
   const navigation = navRows(query, input.ctx.onNavigate);
 
+  const artifacts = artifactRows(input.artifactHits ?? [], query, input.ctx.onNavigate);
   const all = [...actions, ...runs, ...pipelines, ...navigation];
   all.sort((a, b) => b.score - a.score);
   if (!query) {
@@ -207,11 +253,11 @@ export function buildPaletteIndex(input: BuildPaletteIndexInput): PaletteItem[] 
     const byGroup = (g: PaletteGroup) => all.filter((i) => i.group === g);
     return groupOrder.flatMap((g) => byGroup(g).slice(0, g === "actions" ? 6 : g === "navigation" ? 8 : 5));
   }
-  return all.filter((i) => i.score > 0).slice(0, 40);
+  return [...all.filter((i) => i.score > 0).slice(0, 40), ...artifacts];
 }
 
 export function groupPaletteItems(items: PaletteItem[]): { group: PaletteGroup; items: PaletteItem[] }[] {
-  const order: PaletteGroup[] = ["actions", "runs", "pipelines", "navigation"];
+  const order: PaletteGroup[] = ["actions", "runs", "pipelines", "artifacts", "navigation"];
   return order
     .map((group) => ({
       group,

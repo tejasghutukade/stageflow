@@ -10,7 +10,7 @@ import {
 import { ensureGlobalService } from "../server/ensureGlobalService.js";
 
 export const BACKUP_USAGE = `Usage:
-  sf backup [--out <file>] [--db-only] [--no-credentials] [--include-a2a-artifacts] [--json]
+  sf backup [--out <file>] [--db-only] [--no-credentials] [--no-artifacts] [--include-a2a-artifacts] [--json]
 
 Creates a consistent snapshot of the Stageflow store. Default archives include
 provider credentials (mode 0600) and must be treated as secrets.
@@ -31,6 +31,7 @@ type ParsedBackupArgs = {
   outPath?: string;
   dbOnly: boolean;
   noCredentials: boolean;
+  noArtifacts: boolean;
   includeA2aArtifacts: boolean;
   json: boolean;
 };
@@ -40,6 +41,7 @@ function parseBackupArgs(args: string[]): ParsedBackupArgs {
   let outPath: string | undefined;
   let dbOnly = false;
   let noCredentials = false;
+  let noArtifacts = false;
   let includeA2aArtifacts = false;
   let json = false;
 
@@ -57,6 +59,8 @@ function parseBackupArgs(args: string[]): ParsedBackupArgs {
       dbOnly = true;
     } else if (arg === "--no-credentials") {
       noCredentials = true;
+    } else if (arg === "--no-artifacts") {
+      noArtifacts = true;
     } else if (arg === "--include-a2a-artifacts") {
       includeA2aArtifacts = true;
     } else if (arg === "--json") {
@@ -68,7 +72,7 @@ function parseBackupArgs(args: string[]): ParsedBackupArgs {
     }
   }
 
-  return { help, outPath, dbOnly, noCredentials, includeA2aArtifacts, json };
+  return { help, outPath, dbOnly, noCredentials, noArtifacts, includeA2aArtifacts, json };
 }
 
 export async function runBackupCommand(
@@ -115,6 +119,7 @@ export async function runBackupCommand(
         defaultBackupOutPath(home, new Date(), parsed.dbOnly),
       dbOnly: parsed.dbOnly,
       noCredentials: parsed.noCredentials,
+      noArtifacts: parsed.noArtifacts,
       includeA2aArtifacts: parsed.includeA2aArtifacts,
     });
 

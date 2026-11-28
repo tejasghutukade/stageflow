@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createChatModelAdapter, createThreadListAdapter, titleFrom, toThreadMessages } from "./adapters";
 import { ChatApiError, createChatApi, type ChatApi } from "./api";
-import { DEFAULT_API_BASE, readChatConfig } from "./config";
-import { friendlyMessage, needsNewConversation } from "./errors";
+import { DEFAULT_API_BASE, readChatConfig, threadIdFromUrl, urlWithThread } from "./config";
+import { friendlyMessage, loadErrorMessage, needsNewConversation } from "./errors";
 import { readFrames, toFrame, type ChatFrame } from "./ndjson";
 import { getVisitorId, newVisitorId, resetVisitorMemoForTests } from "./visitor";
 
@@ -58,6 +58,18 @@ describe("NDJSON frames", () => {
       retryAfterSec: 12,
     });
     expect(toFrame({ type: "error" })).toEqual({ type: "error", code: "web_chat.failed", message: "" });
+  });
+});
+
+describe("load errors", () => {
+  it("says what is wrong instead of blaming the connection", () => {
+    expect(loadErrorMessage(null).title).toBe("We couldn't reach this chat");
+    expect(loadErrorMessage("identity.setup_required")).toEqual({
+      title: "This chat isn't open to the public yet",
+      body: expect.stringContaining("open it in the Stageflow console"),
+    });
+    expect(loadErrorMessage("identity.verification_required").title).toBe("Sign in to use this chat");
+    expect(loadErrorMessage("web_chat.failed").body).not.toContain("connection");
   });
 });
 
@@ -145,10 +157,42 @@ describe("chat api", () => {
     expect((init.headers as Record<string, string>)["x-visitor-id"]).toBe("visitor-visitor-1234");
   });
 
+  it("maps history parts onto ui so a reloaded thread keeps its artifacts", async () => {
+    const part = {
+      v: 1,
+      kind: "artifact-ref",
+      key: "agent:helper/weekly",
+      title: "Weekly",
+      fallback: { text: "Weekly", url: "http://127.0.0.1:3847/#/artifacts/agent%3Ahelper/weekly" },
+    };
+    const fetchImpl = vi.fn(async () =>
+      response(200, {
+        thread: { id: "t1", title: "Hi", updatedAt: "2026-10-16T00:00:00.000Z" },
+        messages: [
+          { id: "m1", role: "user", text: "hi" },
+          { id: "m2", role: "assistant", text: "here", parts: [part, { v: 9, kind: "future" }] },
+        ],
+      }),
+    );
+    const api = createChatApi({ apiBase: "/p", slug: "s", visitorId: "visitor-visitor-1234", fetchImpl: fetchImpl as unknown as typeof fetch });
+    const detail = await api.getThread("t1");
+    expect(detail.messages[0]).not.toHaveProperty("ui");
+    expect(detail.messages[1]).not.toHaveProperty("parts");
+    expect(detail.messages[1]?.ui).toEqual([part]);
+  });
+
   it("turns a JSON error into a ChatApiError with retry-after", async () => {
     const fetchImpl = vi.fn(async () => response(429, { code: "web_chat.rate_limited", message: "x", retryAfterSec: 9 }));
     const api = createChatApi({ apiBase: "/p", slug: "s", visitorId: "visitor-visitor-1234", fetchImpl: fetchImpl as unknown as typeof fetch });
     await expect(api.getThread("t1")).rejects.toMatchObject({ code: "web_chat.rate_limited", status: 429, retryAfterSec: 9 });
+  });
+
+  it("keeps the sandbox origins the Host sends for HTML cards", async () => {
+    const body = { agent: { name: "Demo", greeting: null, sandboxOrigins: ["http://localhost:3848", 7, "http://127.0.0.1:3848"] } };
+    const api = createChatApi({ apiBase: "/p", slug: "s", visitorId: "visitor-visitor-1234", fetchImpl: (async () => response(200, body)) as unknown as typeof fetch });
+    expect(await api.info()).toEqual({ name: "Demo", greeting: null, sandboxOrigins: ["http://localhost:3848", "http://127.0.0.1:3848"] });
+    const plain = createChatApi({ apiBase: "/p", slug: "s", visitorId: "visitor-visitor-1234", fetchImpl: (async () => response(200, { agent: { name: "Demo" } })) as unknown as typeof fetch });
+    expect(await plain.info()).toEqual({ name: "Demo", greeting: null });
   });
 
   it("treats a bare 404 as unavailable", async () => {
@@ -231,6 +275,28 @@ describe("chat model adapter", () => {
     expect(update!.status.error.friendly).toBe("This conversation has reached its limit. Start a new one.");
   });
 
+  it("says which limit ended the conversation when the Host sends it", async () => {
+    const adapter = createChatModelAdapter(
+      fakeApi(async function* () {
+        throw new ChatApiError("web_chat.limit_reached", 409, "x", undefined, "minutes");
+      }),
+      async () => "t1",
+    );
+    const [update] = await drain(adapter.run(runOptions("hi")));
+    expect(update!.status.error).toMatchObject({ limit: "minutes", friendly: "This conversation closed after being idle. Start a new chat to keep going." });
+    expect(toFrame({ type: "error", code: "web_chat.limit_reached", message: "", limit: "turns" })).toMatchObject({ limit: "turns" });
+    expect(toFrame({ type: "error", code: "web_chat.limit_reached", message: "", limit: "bogus" })).not.toHaveProperty("limit");
+    expect(friendlyMessage("web_chat.limit_reached", undefined, "cost")).toContain("usage limit");
+  });
+
+  it("keeps the open conversation in the address", () => {
+    expect(threadIdFromUrl("http://h/chat/abc?c=ses_1")).toBe("ses_1");
+    expect(threadIdFromUrl("http://h/chat/abc?c=")).toBeUndefined();
+    expect(threadIdFromUrl("http://h/chat/abc")).toBeUndefined();
+    expect(urlWithThread("http://h/chat/abc?x=1#top", "ses_2")).toBe("/chat/abc?x=1&c=ses_2#top");
+    expect(urlWithThread("http://h/chat/abc?c=ses_2", undefined)).toBe("/chat/abc");
+  });
+
   it("stays quiet when the visitor stops the reply", async () => {
     const controller = new AbortController();
     const adapter = createChatModelAdapter(
@@ -278,5 +344,25 @@ describe("thread list adapter", () => {
     ]);
     expect(user).toMatchObject({ id: "a", role: "user", content: [{ type: "text", text: "hi" }] });
     expect(assistant).toMatchObject({ id: "b", role: "assistant", status: { type: "complete" } });
+  });
+
+  it("keeps a ui part on reload instead of flattening it into the text", () => {
+    const ui = {
+      v: 1 as const,
+      kind: "artifact-ref" as const,
+      key: "agent:helper/weekly",
+      title: "Weekly",
+      fallback: { text: "Weekly", url: "http://127.0.0.1:3847/#/artifacts/x" },
+    };
+    const frame = toFrame({
+      type: "done",
+      message: { id: "m1", role: "assistant", text: "Shown", createdAt: "2026-10-16T00:00:00.000Z", parts: [ui, { kind: "nope" }] },
+    });
+    expect(frame).toMatchObject({ type: "done", message: { text: "Shown", ui: [ui] } });
+    const [assistant] = toThreadMessages([
+      { id: "b", role: "assistant", text: "Shown", createdAt: "2026-10-16T00:00:01.000Z", ui: [ui] },
+    ]);
+    expect(assistant?.content).toEqual([{ type: "text", text: "Shown" }]);
+    expect(assistant?.metadata).toEqual({ custom: { uiParts: [ui] } });
   });
 });

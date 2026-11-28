@@ -1,0 +1,5 @@
+root = Stack([intro, board, legend], "column", "l")
+data = Query("service_health", {}, {services: []})
+intro = Callout("info", "Service health", "One service changes state every minute. Use Refresh now to see it change.")
+board = Card([CardHeader("Services", "latency in ms"), Table([Col("Service", data.services.name), Col("Status", data.services.status), Col("Latency", data.services.latency_ms, "number"), Col("Uptime %", data.services.uptime, "number")])])
+legend = Stack([StatusPill("ok", "ok"), StatusPill("needs", "degraded"), StatusPill("fail", "down"), StatusPill("running", "checking"), StatusPill("neutral", "unknown")], "row", "s", "center", "start", true)

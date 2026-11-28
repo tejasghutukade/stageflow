@@ -6,6 +6,7 @@ import { projectWaitingGates } from "../runread/waitingGates.js";
 import { completeCliRun } from "./runCommand.js";
 import { cliProgressColor } from "./runProgress.js";
 import { formatRunListLine, formatRunShow, formatWaitingEntry } from "./runShow.js";
+import { withPublishedArtifacts } from "./runOutput.js";
 import { reportCliRun, writeQueuedAdmissionLine, type CliRunReportIo } from "./runOutput.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import {
@@ -520,7 +521,10 @@ export async function runRunsCommand(
         const detail = await getStore().readRun(runId);
         const projection = projectRun(detail);
         if (parsed.json) {
-          printJson(out, projection);
+          printJson(out, {
+            ...projection,
+            stages: withPublishedArtifacts(getStore(), runId, projection.stages),
+          });
         } else {
           out.log(
             formatRunShow(detail, {

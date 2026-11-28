@@ -1,4 +1,4 @@
-export type PaletteGroup = "actions" | "runs" | "pipelines" | "navigation";
+export type PaletteGroup = "actions" | "runs" | "pipelines" | "artifacts" | "navigation";
 
 export type PaletteItem = {
   id: string;

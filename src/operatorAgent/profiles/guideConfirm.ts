@@ -23,6 +23,7 @@ export type GuideSessionContext = {
   kind: "stageflow_guide";
   turn: number;
   confirmations: Confirmation[];
+  threadId?: string;
 };
 
 export function guideContextOf(value: unknown): GuideSessionContext {
@@ -32,6 +33,7 @@ export function guideContextOf(value: unknown): GuideSessionContext {
       kind: "stageflow_guide",
       turn: typeof v.turn === "number" ? v.turn : 0,
       confirmations: Array.isArray(v.confirmations) ? v.confirmations : [],
+      ...(typeof v.threadId === "string" && v.threadId ? { threadId: v.threadId } : {}),
     };
   }
   return { kind: "stageflow_guide", turn: 0, confirmations: [] };

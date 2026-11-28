@@ -13,6 +13,7 @@ import type { FunctionService } from "../functions/service.js";
 import { getFunctionFlatSchema, saveFunctionFlatSchema } from "../toolkit/agentFunctionToolModes.js";
 import type { McpToolDeps } from "./deps.js";
 import { textResult } from "./toolResults.js";
+import { consoleUrl, targetForPath, withProject } from "./writeTarget.js";
 
 const functionId = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
 const projectRootField = z.string().optional();
@@ -117,27 +118,47 @@ export function registerFunctionTools(server: McpServer, deps: McpToolDeps): voi
       const value = parsed.data;
       try {
         const project = await writeRoot(value.project_root);
+        const target = await targetForPath(deps, project);
         if (value.mode === "create") {
           if (value.copy_from !== undefined) {
             return call(async () =>
-              service().duplicate(
-                project,
-                value.copy_from!,
-                { id: value.id!, ...(value.format ? { format: value.format } : {}) },
-                MCP_ACTOR,
+              withProject(
+                await service().duplicate(
+                  project,
+                  value.copy_from!,
+                  { id: value.id!, ...(value.format ? { format: value.format } : {}) },
+                  MCP_ACTOR,
+                ),
+                target,
+                { console_url: consoleUrl(deps, `/functions/${encodeURIComponent(value.id!)}`) },
               ),
             );
           }
-          return call(async () =>
-            service().create(project, value.definition!, MCP_ACTOR, value.format ? { format: value.format } : {}),
-          );
+          return call(async () => {
+            const created = await service().create(
+              project,
+              value.definition!,
+              MCP_ACTOR,
+              value.format ? { format: value.format } : {},
+            );
+            const id = (value.definition as { id?: unknown } | undefined)?.id;
+            return withProject(
+              created,
+              target,
+              typeof id === "string" ? { console_url: consoleUrl(deps, `/functions/${encodeURIComponent(id)}`) } : {},
+            );
+          });
         }
         return call(async () =>
-          service().save(
-            project,
-            value.id!,
-            { baseRevision: value.baseRevision!, definition: value.definition!, summary: value.summary ?? null },
-            MCP_ACTOR,
+          withProject(
+            await service().save(
+              project,
+              value.id!,
+              { baseRevision: value.baseRevision!, definition: value.definition!, summary: value.summary ?? null },
+              MCP_ACTOR,
+            ),
+            target,
+            { console_url: consoleUrl(deps, `/functions/${encodeURIComponent(value.id!)}`) },
           ),
         );
       } catch (error) {
@@ -153,7 +174,7 @@ export function registerFunctionTools(server: McpServer, deps: McpToolDeps): voi
     "test_function",
     {
       description:
-        "Test a function with the production executor. real is the only way to use real files, environment, or APIs. A guest execution failure returns a tool result with isError false and a body that includes ok false and a diagnostic code.",
+        "Test a function with the production executor. real is required for real files, environment, or APIs. A guest failure is isError false with ok false and a diagnostic code.",
       inputSchema: z.object({
         id: functionId,
         source: z.string().optional(),

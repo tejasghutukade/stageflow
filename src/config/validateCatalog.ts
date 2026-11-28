@@ -91,6 +91,7 @@ export type ValidationFindingCode =
   | "stage.invalid_channels"
   | "stage.channel_unavailable"
   | "stage.invalid_browser"
+  | "stage.invalid_artifacts"
   | "stage.invalid_secrets"
   | "stage.unknown_secret"
   | "stage.denied_secret"

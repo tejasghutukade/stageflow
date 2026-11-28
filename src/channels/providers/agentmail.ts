@@ -30,6 +30,7 @@ export const AGENTMAIL_META: ProviderMeta = {
       apiKey: env:AGENTMAIL_API_KEY
 `,
   stageExample: "    to: [oncall@acme.com]",
+  ui: "link",
 };
 
 const address = z.string().min(3).max(320).regex(/^[^\s@<>,;]+@[^\s@<>,;]+$/);

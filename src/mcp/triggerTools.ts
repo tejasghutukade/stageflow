@@ -111,7 +111,7 @@ export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void
     "fire_trigger",
     {
       description:
-        "Fire a catalog trigger by id: resolves its pipeline/task refs and starts a run through the same RunManager.startRun path as start_run. Returns { runId } or { runId, queued: true, queuePosition }. Fails not_found (404) for an unknown id, or 409 when the trigger is disabled.",
+        "Fire a catalog trigger by id. Resolves pipeline and task refs and starts a run the same way as start_run. Unknown id is not_found (404). A disabled trigger is 409.",
       inputSchema: z.object({
         id: z.string(),
         project_root: z

@@ -33,6 +33,11 @@ Clients branch on `code`, never on `message`. Other statuses: `405 agent.method_
 | `agent.disabled` | 409 | The agent is disabled (new sessions, turns and approving are refused; denying still works) |
 | `agent.conflict` | 409 | `baseRevision` is not the current revision: someone saved in between |
 | `agent.session_busy` | 409 | A turn is already running in that session |
+| `agent.session_eval_readonly` | 403 | The session is an eval session. Chat actions are refused |
+| `agent.ui_function_not_granted` | 403 | The binding's function is not in `ui.functions` |
+| `agent.ui_action_unknown` | 422 | The action or binding is not declared on the artifact |
+| `agent.ui_args_invalid` | 422 | Viewer arguments do not match the binding schema |
+| `agent.ui_artifact_not_found` | 404 | The artifact is missing, hidden, expired, or in another project |
 | `agent.limit_reached` | 409 | The session hit `session_minutes`, `max_turns` or `cost_usd` |
 | `agent.model_timeout` | 504 | The model did not answer in time |
 | `agent.approval_forbidden` | 403 | The caller is not an allowed approver |
@@ -76,6 +81,7 @@ Saves from these routes are recorded as revision source `console`.
 | `GET /api/agents/sessions` | | Sessions of every agent in the project. Query: `agent`, plus the filters below |
 | `GET /api/agents/:id/sessions` | | `{ sessions, nextCursor, stats }` for one agent |
 | `GET /api/agents/:id/sessions/:sid` | | `{ session, messages, turns, spans, approvals, pendingApproval, evalScores, deliveries }` |
+| `POST /api/agents/:id/sessions/:sid/ui-events` | `{ id, key, version?, kind, action, args? }` | One chat action. See [Chat actions](#chat-actions) |
 | `GET /api/agents/:id/sessions/:sid/otlp` | | The session's traces as OTLP/JSON, sent as a download (`<sid>.otlp.json`) |
 | `GET /api/agents/approvals` | | `{ approvals: [approval + agentId] }`: every pending approval in the project |
 | `POST /api/agents/:id/sessions/:sid/approval/approve`, `.../deny` | | `{ approval, session }`. Decided as an operator. Approving a disabled agent is `agent.disabled`; denying always works |
@@ -90,6 +96,22 @@ Session list query: `status` (`open`, `running`, `waiting`, `held`, `closed`; an
 | `POST /api/agents/:id/chat/stop` | `{ sessionId }` | `{ stopped: boolean }`. `false` when nothing was running. The session stays open |
 
 Without streaming the call waits for the whole turn and answers `200` with the session (same shape as the session `GET`). With `"stream": true` or `Accept: application/x-ndjson` the reply is [NDJSON](#ndjson-frames). The turn is attributed to the console. If the client disconnects mid-stream, the turn is stopped.
+
+### Chat actions
+
+`POST /api/agents/:id/sessions/:sid/ui-events` is the only path from a rendered chat part back into the session. It uses the same control token and project as the other agent routes. The body is `{ "id", "key", "version"?, "kind", "action", "args"? }`. `id` is 1–80 characters of letters, digits, `_` and `-`. The same `id` on the same session returns the first result with `duplicate: true` and does not run again. A failed event is forgotten, so retrying it with the same `id` runs it again. The record of handled ids lives in Host memory, so a restart forgets it. `key` is `<ownerKey>/<id>`. `version`, when set, must be the current version.
+
+`kind` is one of three:
+
+| `kind` | `action` | What runs |
+|--------|----------|-----------|
+| `query` | a binding id | The read-only binding, with viewer `args`, through the same query path as `POST /api/artifacts/.../query`. The function must be listed in the session agent's `ui.functions` (`agent.ui_function_not_granted` otherwise). Arguments are checked against that function's input schema |
+| `message` | an action id | The manifest action's `template`, with `{{name}}` filled from arguments, is stored as a user message and starts a normal turn |
+| `tool` | an action id | The same visible user message, then a turn that calls the action's `tool` with its `input`. The call goes through the tool gate and approvals. Nothing runs before an ask-first approval is granted |
+
+When `key` is `_ui/form/<form id>`, `kind` must be `message`, `action` must be `submit`, and `args.text` is the filled submit template (up to 4000 characters). That path does not load an artifact. Approval cards in chat do not use this route; they call the approval approve/deny endpoints.
+
+Only bindings and `actions` declared on the live manifest are accepted (`agent.ui_action_unknown`). Eval sessions are refused (`agent.session_eval_readonly`). A query answer is the binding query body plus `id`, `duplicate`, and `kind`. A message or tool answer is `{ id, duplicate, kind, text, session }`. The tool request stays open while the turn waits on approval; `GET` the session to see `pendingApproval`.
 
 ### Channel status and delivery
 
@@ -141,7 +163,7 @@ A stream that ends with neither `done` nor `error` was cut off (the CLI reports 
 
 ## Public web chat API
 
-The anonymous chat page (`/chat/<slug>`, served from the Host) uses these routes for tool-less public agents without shared private context. The link slug is the public-access credential; there is no control token. They are only live while the agent is enabled and `web_chat.enabled` is true. Each visitor sends a stable id the page keeps in the browser as the `X-Visitor-Id` header (16–64 characters of `A–Z a–z 0–9 _ -`); conversations are scoped to it. Authenticated agents instead require verified admission and a bearer on every thread request. Their embedded API, unsupported paths and migration limits are documented in [Consumer identity](consumer-identity.md); the built-in chat page has no sign-in flow.
+The anonymous chat page (`/chat/<slug>`, served from the Host) uses these routes for public agents (visitors get tools only with `web_chat.public_tools`). The link slug is the public-access credential; there is no control token. They are only live while the agent is enabled and `web_chat.enabled` is true. Each visitor sends a stable id the page keeps in the browser as the `X-Visitor-Id` header (16–64 characters of `A–Z a–z 0–9 _ -`); conversations are scoped to it. Authenticated agents instead require verified admission and a bearer on every thread request. Their embedded API, unsupported paths and migration limits are documented in [Consumer identity](consumer-identity.md); the built-in chat page has no sign-in flow.
 
 | Method and path | Response |
 |-----------------|----------|
@@ -150,6 +172,7 @@ The anonymous chat page (`/chat/<slug>`, served from the Host) uses these routes
 | `POST /api/public/chat/:slug/threads` | `201 { thread }`. At most 50 threads per visitor |
 | `GET /api/public/chat/:slug/threads/:tid` | `{ thread, status, messages: [{ id, role, text, createdAt }] }`. `status` is `open`, `running` or `waiting` |
 | `POST /api/public/chat/:slug/threads/:tid/messages` | Body `{ text }`. NDJSON reply stream |
+| `GET /api/public/chat/:slug/threads/:tid/artifacts/:ref` | Optional `version`. Artifact published in this thread: `{ kind, title, version, text }` plus libraries or stored snapshots when the artifact has them. `404` `web_chat.unavailable` otherwise. Anonymous visitors need `public_tools` |
 
 Message stream frames: `{ "type": "delta", "text" }`, `{ "type": "waiting" }` (an operator has to approve something; it never says what), `{ "type": "done", "message": { id, role, text, createdAt } | null }` and `{ "type": "error", "code", "message", "retryAfterSec"? }`. Nothing here returns tool payloads, traces or another visitor's data.
 

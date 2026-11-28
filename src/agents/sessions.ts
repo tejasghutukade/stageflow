@@ -7,14 +7,26 @@ import type { EvalConsumerRegistry } from "../evals/consumer/evalConsumerRegistr
 import { EVAL_SESSION_SOURCE, isEvalSession, type EvalSessionOverrides } from "./evalSession.js";
 import { guardedStream } from "./guardrails.js";
 import { fitHistory } from "./historyFit.js";
+import { uiErrorPart, UI_PART_KIND_ERROR } from "../artifacts/uiPart.js";
+import { isPresentedUiPart, uiPartsFromToolOutput } from "../genui/parts.js";
+import { uiKeepsCardsInConversation } from "../genui/kindsList.js";
+import { PRESENT_UI_TOOL_NAME } from "../genui/tools.js";
 import type { OtlpSink } from "./otlpSink.js";
 import { isToolGranted, requiresAskFirst } from "./policy.js";
-import type { ConversationBackend, GateDecision, RuntimeUsage, ToolCall, TurnHooks } from "./runtime/types.js";
+import type { ConversationBackend, ConversationMessage, GateDecision, RuntimeUsage, ToolCall, TurnHooks } from "./runtime/types.js";
 import type { AgentService, AgentSessionDetail } from "./service.js";
 import { scrubSecrets } from "../compaction/scrub.js";
 import { WORKING_STATE_TOOL_NAME } from "../compaction/types.js";
 import { prepareSpan, type SpanKind } from "./trace.js";
-import { allowConsumerToolCall, isAuthenticatedChannelSource, isChannelConsumerTurn, loadConsumerSubAgents, requireChannelConsumerTurn } from "./consumerSafety.js";
+import {
+  allowConsumerToolCall,
+  isAuthenticatedChannelSource,
+  isChannelConsumerTurn,
+  isIdentityOnlyGrantId,
+  loadAnonymousPublicSubAgents,
+  loadConsumerSubAgents,
+  requireChannelConsumerTurn,
+} from "./consumerSafety.js";
 import { channelSenderFact } from "./communications/senderFact.js";
 import type { ConsumerAuthorization } from "../identity/authorization.js";
 import { ConsumerStepUpRequired } from "../identity/stepUp.js";
@@ -37,9 +49,12 @@ export type SendTurnInput = {
   /** Overrides for a new eval session (needs `source: "eval"`). */
   eval?: EvalSessionOverrides;
   onDelta?: (text: string) => void;
+  onUiPreview?: (preview: import("../artifacts/inlinePreview.js").InlinePreview) => void;
   onSessionOpened?: (sessionId: string) => void;
   /** Retry this earlier, interrupted turn: its user message is reused, not asked again. */
   resumeTurnId?: string;
+  /** Chat action: gate this tool call on the turn before the model runs anything else. */
+  requestedTool?: ToolCall;
 };
 
 export type ConversationOptions = {
@@ -207,6 +222,8 @@ export class AgentConversation {
     const channelConsumer = isChannelConsumerTurn(active.session.source, definition, input.consumerSessionId);
     const consumer = active.session.source === "web_consumer" || scheduleService || channelConsumer;
     const external = consumer || active.session.source === "web" || active.session.source === "web_public";
+    const anonymousPublic = active.session.source === "web_public" && !consumer && definition.web_chat.access === "public";
+    const visitorTools = anonymousPublic && definition.web_chat.public_tools;
     if (definition.web_chat.access === "authenticated" && !consumer && !["console", "cli", "mcp"].includes(active.session.source)) {
       throw new ConsumerAccessError("identity.verification_required");
     }
@@ -214,10 +231,25 @@ export class AgentConversation {
       && (!input.consumerSessionId || input.consumerSessionId.length === 0)) {
       throw new ConsumerAccessError("identity.verification_required");
     }
-    const safeSubAgents = external ? await loadConsumerSubAgents(definition, async (id) => {
+    const loadSub = async (id: string) => {
       try { return (await service.get(input.projectRoot, id)).definition; } catch { return null; }
-    }) : null;
-    if (external && (!safeSubAgents || (!consumer && definition.sub_agents.length > 0))) throw new ConsumerAccessError("identity.setup_required");
+    };
+    const safeSubAgents = consumer
+      ? await loadConsumerSubAgents(definition, loadSub)
+      : visitorTools
+        ? await loadAnonymousPublicSubAgents(definition, loadSub)
+        : external && !anonymousPublic
+          ? await loadConsumerSubAgents(definition, loadSub)
+          : null;
+    if (consumer && external && safeSubAgents === null) {
+      throw new ConsumerAccessError("identity.setup_required");
+    }
+    if (visitorTools && definition.sub_agents.length > 0 && safeSubAgents === null) {
+      throw new ConsumerAccessError("identity.setup_required");
+    }
+    if (external && !consumer && !anonymousPublic && definition.sub_agents.length > 0) {
+      throw new ConsumerAccessError("identity.setup_required");
+    }
     const consumerAuth = this.options.consumerAuthorization;
     const assertDelivery = async () => {
       if (consumer) {
@@ -273,6 +305,27 @@ export class AgentConversation {
       }
       const checkConsumer = async (): Promise<GateDecision> => {
         if (!external) return { allow: true };
+        if (call.tool === PRESENT_UI_TOOL_NAME) {
+          // A card kept in the conversation only shows what the agent wrote, so anyone the agent talks to may see one.
+          // Artifact persistence publishes into the visitor's own session; anonymous visitors get that only with public tools.
+          if (uiKeepsCardsInConversation(definition.ui) || consumer || (anonymousPublic && visitorTools)) return { allow: true };
+          return { allow: false, reason: "identity.verification_required" };
+        }
+        if (anonymousPublic) {
+          if (!visitorTools) {
+            return { allow: false, reason: "This agent's tools are not available on the public chat page." };
+          }
+          if (isIdentityOnlyGrantId(definition, call.tool) || call.tool === "browser") {
+            return { allow: false, reason: `${call.tool} is not available to visitors on a public link.` };
+          }
+          if (call.tool.startsWith("agent:")) {
+            if (!safeSubAgents?.includes(call.tool.slice("agent:".length))) {
+              return { allow: false, reason: "This sub-agent is not available to visitors on a public link." };
+            }
+            return { allow: true };
+          }
+          return { allow: true };
+        }
         if (!consumer) return { allow: false, reason: "identity.verification_required" };
         try {
           await assertDelivery();
@@ -333,6 +386,7 @@ export class AgentConversation {
       return { allow: false, reason: `Approval for ${call.tool} timed out and the action was skipped. Continue without it.` };
     };
 
+    const uiParts: NonNullable<ConversationMessage["parts"]> = [];
     const hooks: TurnHooks = {
       gate: (call) => {
         const next = gateChain.then(() => gateOne(call));
@@ -343,6 +397,22 @@ export class AgentConversation {
         toolStarts.set(call.id, new Date());
       },
       toolFinished: (call, result) => {
+        if (result.ok) {
+          for (let index = uiParts.length - 1; index >= 0; index -= 1) {
+            if (uiParts[index]?.kind === UI_PART_KIND_ERROR) uiParts.splice(index, 1);
+          }
+          uiParts.push(...uiPartsFromToolOutput(call.tool, result.output));
+        } else if (call.tool === PRESENT_UI_TOOL_NAME) {
+          let message = "That could not be shown.";
+          try {
+            const parsed = JSON.parse(result.output) as { message?: unknown };
+            if (typeof parsed.message === "string" && parsed.message.trim()) message = parsed.message;
+          } catch {
+            message = result.output.trim() || message;
+          }
+          uiParts.push(uiErrorPart(message));
+          input.onUiPreview?.({ phase: "error", message: uiErrorPart(message).message });
+        }
         if (active.session.source === EVAL_SESSION_SOURCE) this.options.evalGates?.get(sessionId)?.observeFinished(call, result);
         const isAgent = call.tool.startsWith("agent:");
         record({
@@ -380,7 +450,8 @@ export class AgentConversation {
         });
       },
       delegate: async (agentId, message, callId) => {
-        if (external && !consumer) throw new ConsumerAccessError("identity.not_available");
+        if (external && !consumer && !visitorTools) throw new ConsumerAccessError("identity.not_available");
+        if (visitorTools && !safeSubAgents?.includes(agentId)) throw new ConsumerAccessError("identity.not_available");
         if (consumer) return this.delegateConsumer(input, sessionId, definition, active.session.agentId, controller, agentId, message, callId, childSessions);
         assertDelegateAllowed(definition, agentId, this.depth);
         const child = new AgentConversation(this.options, this.depth + 1, controller.signal);
@@ -413,7 +484,11 @@ export class AgentConversation {
     try {
       await assertDelivery();
       if (consumer && controller.signal.aborted) throw new ConsumerAccessError("identity.not_available");
-      const transcript = [...active.history, active.userMessage].map((m) => ({ role: m.role, text: m.text }));
+      const transcript = [...active.history, active.userMessage].map((m) => ({
+        role: m.role,
+        text: m.text,
+        ...(m.parts?.length ? { parts: m.parts } : {}),
+      }));
       const senderFact = channelSenderFact(active.session);
       result = await backend.complete({
         sessionId,
@@ -422,9 +497,13 @@ export class AgentConversation {
         messages: [...fitHistory(transcript.slice(0, -1), definition.limits.long_context), transcript.at(-1)!],
         signal: controller.signal,
         onDelta: (text) => stream.push(text),
+        ...(input.onUiPreview ? { onUiPreview: input.onUiPreview } : {}),
         hooks,
+        ...(input.requestedTool ? { requestedTool: input.requestedTool } : {}),
         ...(senderFact ? { senderFact } : {}),
         ...(consumer && safeSubAgents ? { consumerSafeSubAgents: safeSubAgents } : {}),
+        ...(visitorTools && safeSubAgents ? { anonymousPublicSafeSubAgents: safeSubAgents } : {}),
+        ...(visitorTools ? { anonymousPublicTools: true } : {}),
         ...(evalConsumer
           ? {
               consumerTools: evalConsumer.auth.tools(sessionId, evalConsumer.consumerSessionId, input.agentId)
@@ -434,23 +513,23 @@ export class AgentConversation {
                   execute: async (args: Record<string, unknown>, signal: AbortSignal) => tool.execute(args, signal),
                 })),
             }
-          : external
+          : consumer
             ? {
-                consumerTools: consumer
-                  ? consumerAuth!.tools(sessionId, input.consumerSessionId!, input.agentId)
-                      .filter((tool) => isToolGranted(definition, tool.grantId))
-                      .map((tool) => ({
-                        ...tool,
-                        execute: async (args: Record<string, unknown>, signal: AbortSignal) => {
-                          await assertDelivery();
-                          const output = await tool.execute(args, signal);
-                          await assertDelivery();
-                          return output;
-                        },
-                      }))
-                  : [],
+                consumerTools: consumerAuth!.tools(sessionId, input.consumerSessionId!, input.agentId)
+                  .filter((tool) => isToolGranted(definition, tool.grantId))
+                  .map((tool) => ({
+                    ...tool,
+                    execute: async (args: Record<string, unknown>, signal: AbortSignal) => {
+                      await assertDelivery();
+                      const output = await tool.execute(args, signal);
+                      await assertDelivery();
+                      return output;
+                    },
+                  })),
               }
-            : {}),
+            : external && !visitorTools
+              ? { consumerTools: [] as const }
+              : {}),
       });
       await assertDelivery();
     } catch (error) {
@@ -515,7 +594,14 @@ export class AgentConversation {
     const detail = await service.completeTurn(input.projectRoot, turn.id, {
       status: failed ? "failed" : cancelled ? "cancelled" : "succeeded",
       ...(failed ? { errorCode: stopReason!.code } : {}),
-      assistantText: failed && stopReason?.code === "identity.step_up_required" ? stopReason.message : result.text,
+      ...(result.text.length > 0 || uiParts.length > 0 ? { assistantText: failed && stopReason?.code === "identity.step_up_required" ? stopReason.message : result.text } : {}),
+      ...(uiParts.length > 0
+        ? {
+            assistantParts: uiParts.some(isPresentedUiPart)
+              ? uiParts.filter(isPresentedUiPart)
+              : uiParts.filter((part) => part.kind === UI_PART_KIND_ERROR).slice(-1),
+          }
+        : {}),
       ...(usage ? { usage, costUsd: usage.costUsd } : {}),
       ...(evalScores.length > 0 ? { evalScores } : {}),
     });

@@ -34,9 +34,9 @@ Select a stage to open its workspace. The center of the workspace has four tabs:
 | **Transcript** | Conversation: system dividers, prompt, thinking, assistant text and tool calls |
 | **Events** | The raw event stream, filterable by kind (tool, message, operator_prompt, ...) |
 | **Envelope** | The handoff envelope: `summary`, `payload`, artifact paths, without reading logs |
-| **Artifacts** | Files the stage produced |
+| **Artifacts** | Files the stage produced, and under **Published artifacts** the artifacts it published to the Artifacts page. Each links to its page with its project, so it opens even when the artifact belongs to another project. The tab count includes both |
 
-`#/runs/<runId>/stages/<stageId>` selects that stage; `.../envelope` opens the envelope; `#/runs/<runId>/artifacts?path=…` opens one artifact. When a stage has an envelope the first Files row is **Handoff envelope**.
+`#/runs/<runId>/stages/<stageId>` selects that stage; `.../envelope` opens the envelope; `#/runs/<runId>/artifacts?path=…` opens one artifact. `.html` and `.htm` files open in the static HTML preview, with scripts and network access disabled. Other files are unchanged. When a stage has an envelope the first Files row is **Handoff envelope**.
 
 ### Stage actions
 

@@ -27,6 +27,8 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Hosted runtime](hosted.md) | Public library contract for embedding one inline pipeline run |
 | [Context and compaction](context-and-compaction.md) | What happens when a stage or agent fills its context window: assignment in the system prompt, tool-output caps, `working_state`, automatic compaction, cost and visibility |
 | [Envelopes](envelopes.md) | Stage handoff contract (`emit_stage_envelope`, artifacts) |
+| [Artifacts](artifacts.md) | Indexed deliverables: what is recorded, what is left out, and how projects scope the index |
+| [Generative UI internals](generative-ui-internals.md) | For contributors: the `src/genui` core (kinds, validation, surfaces, budgets, prompts, tool specs and adapters), how each caller builds its surface, adding a kind or a caller, the artifact owner registry, the console sandbox frame and renderer registries, the conformance suite |
 | [Verified Stage Execution](verified-stage-execution.md) | After-phase `verify`, evidence, and `on_verify_fail` repair / manual recovery |
 | [Human-in-the-loop](hitl.md) | Gate kinds, operator replies, `--skip-gates`, exit code `2` |
 | [Agents](agents.md) | Project-owned agents (`agents/*.agent.yaml`): overview and where the pieces live |
@@ -58,10 +60,13 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 |-----|-------------------|
 | [Data directory](data-directory.md) | Durable root layout, keep vs disposable, image user, version support |
 | [Docker and self-hosting](docker.md) | Local Compose try (`.env.example`, control token, providers), pull/run, Compose stage sandbox, browser image recipes (`Dockerfile.browser`, `Dockerfile.browser-sandbox`) and container browser host config, backup/restore, provenance, hardened egress (docs-only) |
+| [Working against a running Host](working-against-a-host.md) | Checklist for agents that create and run work on an already-running Host: find the Host and `home_id`, pick the project, run through the Host, verify it is visible |
 | [Operator console](operator-console.md) | Navigation, command palette, keyboard shortcuts and routes |
 | [Console: Overview](console-overview.md) | Control center: what needs you, what is running, system health, run trends |
+| [Console: Guide](console-guide.md) | Built-in Guide chat: show_ui cards and generative present_ui charts |
 | [Console: Inbox](console-inbox.md) | Gates and agent approvals waiting on you, desktop notifications |
 | [Console: Pipeline runs](console-runs.md) | Run list, Start a run, run detail (Timeline, Graph, List; Transcript, Events, Envelope, Artifacts) |
+| [Console: Artifacts](console-artifacts.md) | Artifacts list in the Activity rail: kind, owner, source run |
 | [Console: Pipelines, tasks and catalog](console-pipelines-catalog.md) | Pipeline editor, Tasks, Catalog, Triggers, Workshop |
 | [Console: Evals](console-evals.md) | Evals list, New eval wizard (stage or agent), Datasets and scenarios, Run dialog and live progress, run switcher, results, suggested failure sorting, case drawer and conversation transcript, Compare, Edit eval |
 | [Console: Agents](console-agents.md) | Directory, create and edit, sessions, run inspector |

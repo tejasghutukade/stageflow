@@ -1,0 +1,140 @@
+{
+  "libraries": [
+    {
+      "name": "chartjs",
+      "version": "4.6.2",
+      "displayName": "Chart.js",
+      "globalName": "Chart",
+      "packageName": "chart.js",
+      "licence": "MIT",
+      "needsEval": false,
+      "assets": false,
+      "bytes": 212619,
+      "hint": "new Chart(canvas, {type:\"line\", data:{labels:[], datasets:[{data:[]}]}})",
+      "files": [
+        {
+          "path": "chart.umd.min.js",
+          "kind": "script",
+          "integrity": "sha384-wFIO1nJgUOP2XDesMi2Xqyej8+jLnzOfBrJbdvz7Pp+UI88xOiL08fKFupi2KqR0",
+          "packageFile": "dist/chart.umd.min.js"
+        }
+      ]
+    },
+    {
+      "name": "d3",
+      "version": "7.9.2",
+      "displayName": "D3",
+      "globalName": "d3",
+      "packageName": "d3",
+      "licence": "ISC",
+      "needsEval": false,
+      "assets": false,
+      "bytes": 280622,
+      "hint": "d3.select(node).append(\"svg\")",
+      "files": [
+        {
+          "path": "d3.min.js",
+          "kind": "script",
+          "integrity": "sha384-LxfWGZyh6PaLjBRPf7NWiEYs9Mn0UQ6ZmqbLLZhxlOBBNWF2a2K0Pfc5efkrNnhQ",
+          "packageFile": "dist/d3.min.js"
+        }
+      ]
+    },
+    {
+      "name": "echarts",
+      "version": "6.1.0",
+      "displayName": "ECharts",
+      "globalName": "echarts",
+      "packageName": "echarts",
+      "licence": "Apache-2.0",
+      "needsEval": false,
+      "assets": false,
+      "bytes": 1121883,
+      "hint": "echarts.init(node).setOption({series:[]})",
+      "files": [
+        {
+          "path": "echarts.min.js",
+          "kind": "script",
+          "integrity": "sha384-C2iskrW/uPW46KzOjrvJIQo4YkV8lkD+QS0CrDN18IIPIpT/g2USu8bTP3nvmIAD",
+          "packageFile": "dist/echarts.min.js"
+        }
+      ]
+    },
+    {
+      "name": "leaflet",
+      "version": "1.9.4",
+      "displayName": "Leaflet",
+      "globalName": "L",
+      "packageName": "leaflet",
+      "licence": "BSD-2-Clause",
+      "needsEval": false,
+      "assets": true,
+      "bytes": 168861,
+      "hint": "L.map(node).setView([0,0], 2)",
+      "files": [
+        {
+          "path": "leaflet.js",
+          "kind": "script",
+          "integrity": "sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH",
+          "packageFile": "dist/leaflet.js"
+        },
+        {
+          "path": "leaflet.css",
+          "kind": "style",
+          "integrity": "sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H",
+          "packageFile": "dist/leaflet.css"
+        },
+        {
+          "path": "images/marker-icon.png",
+          "kind": "asset",
+          "integrity": "sha384-wg83fCOXjBtqzFAWhTL9Sd9vmLUNhfEEzfmNUX9zwv2igKlz/YQbdapF4ObdxF+R",
+          "packageFile": "dist/images/marker-icon.png"
+        },
+        {
+          "path": "images/marker-icon-2x.png",
+          "kind": "asset",
+          "integrity": "sha384-bDEa1RhAAKIr/VQnMZ7gUhhXwmKYB4V0g8AsxOvCEPwGxfHCUEzAEMAEEzkjuxiA",
+          "packageFile": "dist/images/marker-icon-2x.png"
+        },
+        {
+          "path": "images/marker-shadow.png",
+          "kind": "asset",
+          "integrity": "sha384-dB8ivfvPGb1MSIzX8oWTakCxmq+VwqP/QL1TX4jT4INR3pM5T4FgF3Gx4mN3NTMq",
+          "packageFile": "dist/images/marker-shadow.png"
+        },
+        {
+          "path": "images/layers.png",
+          "kind": "asset",
+          "integrity": "sha384-80x85ZS+G189o0xL8E8D7BnfhuNss6EwUPHzG7e+qByRD2xnpxikZ6UQU4Re5nNy",
+          "packageFile": "dist/images/layers.png"
+        },
+        {
+          "path": "images/layers-2x.png",
+          "kind": "asset",
+          "integrity": "sha384-+F2ZWK/HTpkV9kN2HnMGCQOTM/cnQJLs770FLOeHznwVWRfDESI8z4JwcGYmy2Au",
+          "packageFile": "dist/images/layers-2x.png"
+        }
+      ]
+    },
+    {
+      "name": "mermaid",
+      "version": "12.3.0",
+      "displayName": "Mermaid",
+      "globalName": "mermaid",
+      "packageName": "mermaid",
+      "licence": "MIT",
+      "needsEval": true,
+      "assets": false,
+      "bytes": 5537838,
+      "hint": "needs allowEval; mermaid.render(\"g\", \"graph TD;A-->B\")",
+      "files": [
+        {
+          "path": "mermaid.min.js",
+          "kind": "script",
+          "integrity": "sha384-HHW54r639fK42Ip0coGF3mz8oSiGn0eEoWNTLs75X7H63pLSDBa0Tqs0RwGmLlXE",
+          "packageFile": "dist/mermaid.min.js"
+        }
+      ]
+    }
+  ]
+}

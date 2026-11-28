@@ -1,4 +1,5 @@
 import { agentsTopic } from "./topics/agents.js";
+import { artifactsTopic } from "./topics/artifacts.js";
 import { bestPracticesTopic } from "./topics/bestPractices.js";
 import { connectionsTopic } from "./topics/connections.js";
 import { consoleMapTopic } from "./topics/consoleMap.js";
@@ -36,6 +37,7 @@ export const GUIDE_KNOWLEDGE_TOPICS: readonly GuideKnowledgeTopic[] = [
   triggersTopic,
   connectionsTopic,
   memoriesTopic,
+  artifactsTopic,
   evalsTopic,
   modelsAndProvidersTopic,
   mcpSkillsBrowserTopic,

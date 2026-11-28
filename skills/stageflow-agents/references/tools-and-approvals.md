@@ -83,7 +83,7 @@ Put every granted tool whose risk is write, destructive, or external into `ask_f
 | Group | Read (no ask-first) | Ask first |
 |---|---|---|
 | `discover` | `list_catalog` with `kind: skills`, `list_catalog` with `kind: pipelines`, `list_catalog` with `kind: tasks`, `list_catalog` with `kind: models`, `list_catalog` with `kind: providers`, `list_catalog` with `kind: health`, `validate` (including `preflight: true`), `read_pipeline` with `view: dag`, `list_catalog` with `kind: mcp_servers` | `probe_project_mcp` (connects out) |
-| `runs.read` | `get_run` (omit `runId`), `get_run`, `get_run` with `view: export`, `get_stage` with `view: events`, `log`, `envelope`, or `verification`, `run_files` with `view: artifact`, `changes`, `diff`, or `file`, `wait_run` | |
+| `runs.read` | `get_run` (omit `runId`), `get_run`, `get_run` with `view: export`, `run_stats`, `get_stage` with `view: events`, `log`, `envelope`, or `verification`, `run_files` with `view: artifact`, `changes`, `diff`, or `file`, `wait_run` | |
 | `runs.control` | | `start_run`, `start_run` with `stage`, `start_run` with `from_run`, `stage_action` with `action: retry`, `resume`, `recover`, or `stop_recovery` |
 | `runs.cleanup` | | `cancel_run`, `abandon_stage`, `delete_runs`, `delete_runs` with `gc: true` |
 | `gates.read` | `list_waiting` with `detail: full` or `summary` | |
@@ -97,12 +97,22 @@ Put every granted tool whose risk is write, destructive, or external into `ask_f
 | `connections.cleanup` | | `remove_connection` |
 | `memories` | `get_memory` with `list: true`, `get_memory` | `save_memory` with `mode: create`, `mode: update`, or `card: true` |
 | `memories.cleanup` | | `delete_memory_card` |
+| `artifacts.read` | `stageflow_get_artifact` with `list: true`, or with `view: record`, `versions`, or `content` | `stageflow.get_artifact` |
+| `artifacts.write` | | `publish_artifact` (session tool; owner is this agent). Not Host MCP `save_artifact`. |
+| `artifacts.cleanup` | | `stageflow.delete_artifact` → `stageflow_delete_artifact` (this agent's rows in this project only) |
+| `artifacts.refresh` | | `stageflow.refresh_artifact` → `stageflow_refresh_artifact` (this agent's live artifacts in this project only) |
 | `evals.read` | `get_eval` with `list: true` or `view: definition` or `calibrations`, `validate` with `kind: eval`, `get_eval_run` (list or `view: export`), `get_eval_results` (table or `case_id`), `compare_eval_runs`, `get_eval_failures` with `view: suggestions` or `sort_status` | |
 | `evals.run` | | `run_eval`, `sort_eval_failures`, `calibrate_eval_grader`, `cancel_eval_run`, `try_eval_case` |
 | `evals.write` | | `save_eval` with `mode: create`, `update`, or `source: sample`, `save_dataset` with `action: create`, `ops`, or `convert`, `review_eval_results` with `action: label`, `accept`, or `dismiss` |
 | `evals.cleanup` | | `delete_eval_run` |
 
 Web chat plus `get_agent_session` (including `list: true`) warns `agent.web_chat_reads_conversations`: the public link's agent can read every agent's sessions. Do not combine them.
+
+**Artifacts.** `publish_artifact` takes the same fields as a stage publish: `id`, `kind`, `title`, optional `description`, `tags`, `summary`, and one of `path`, `content`, or `content_base64`. Agent `path` is project-relative and passes the path guard (no `..`, symlinks, `agents/*.agent.yaml`, or `$STAGEFLOW_HOME` outside the project). Put secrets only in scrubbed content; never publish raw credentials. Listing and deleting: `stageflow-operate` `references/artifacts.md`.
+
+**present_ui.** Separate from the artifact groups. It is granted by `ui.present`, not by `tools.stageflow`, and it is read-only. With `ui.persistence: conversation` (default) it draws a display-only card from `program` and `manifest`; the card lives in the message, so the agent keeps its public chat link. With `ui.persistence: artifacts` it also takes the key `publish_artifact` returned, saves one-offs as session artifacts, and a button in that card can run a declared manifest action: a read-only binding whose function is in `ui.functions`, a user message, or a tool call with the usual ask-first approval. A validation error comes back so the program can be corrected. Eval sessions stub it and block all actions.
+
+**save_card.** An agent with `ui.present`, `ui.persistence: conversation` and `save_artifact` also gets `save_card`: it saves a card it already drew (latest, or by title) as an artifact it owns, and saving the same card again returns that artifact. A card is saved from a later message than the one that drew it. Listable in `ask_first`; eval sessions stub it; for anonymous visitors it follows `web_chat.public_tools` and saves into the visitor's session only.
 
 The live list is `GET /api/agents/stageflow-tools`. There is no CLI for that registry.
 

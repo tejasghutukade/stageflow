@@ -26,6 +26,7 @@ import { z } from "zod";
 import { parseStageSecrets } from "../runtime/stageSecretDecl.js";
 import { parseToolRequires } from "./toolRequires.js";
 import { parseStageBrowser } from "./stageBrowser.js";
+import { parseStageArtifacts } from "./stageArtifacts.js";
 import {
   classifyYamlDocument,
   compileTargetContract,
@@ -560,6 +561,12 @@ function parseStageFields(
   if (!browserOutcome.ok) return browserOutcome;
   if (browserOutcome.value !== undefined) {
     stage.browser = browserOutcome.value;
+  }
+
+  const artifactsOutcome = parseStageArtifacts(raw.artifacts, label, entryId);
+  if (!artifactsOutcome.ok) return artifactsOutcome;
+  if (artifactsOutcome.value !== undefined) {
+    stage.artifacts = artifactsOutcome.value;
   }
 
   const agentField = parseAgentField(raw.agent);

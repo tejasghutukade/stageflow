@@ -15,6 +15,7 @@ import {
   type ResolveCatalogRootsOptions,
 } from "../config/resolveCatalogRoots.js";
 import type { StageflowHostBootstrap } from "./bootstrap.js";
+import { parseSandboxOrigin, parseSandboxPublicOrigin } from "./sandboxPolicy.js";
 import { json } from "./createHttpHost.js";
 import {
   livezBody,
@@ -168,6 +169,11 @@ export async function buildRichHealthPayload(
   );
   const payload: Record<string, unknown> = {
     ...capacity,
+    sandbox_origin: parseSandboxOrigin(boot.sandboxOrigin ?? null),
+    sandbox_origins: (boot.sandboxOrigins ?? []).flatMap((origin) => {
+      const parsed = parseSandboxOrigin(origin) ?? parseSandboxPublicOrigin(origin);
+      return parsed ? [parsed] : [];
+    }),
     capacity: {
       global: {
         activeRunIds: capacity.activeRunIds,

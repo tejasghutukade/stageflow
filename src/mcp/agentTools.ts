@@ -14,6 +14,7 @@ import {
 } from "../toolkit/agentFunctionToolModes.js";
 import type { McpToolDeps } from "./deps.js";
 import { textResult } from "./toolResults.js";
+import { consoleUrl, targetForPath, withProject } from "./writeTarget.js";
 
 const agentId = z.string().regex(AGENT_ID_PATTERN);
 const MCP_ACTOR = { source: "api" as const, author: "mcp" };
@@ -121,20 +122,37 @@ export function registerAgentTools(server: McpServer, deps: McpToolDeps): void {
       const parsed = saveAgentFlatSchema.safeParse(args);
       if (!parsed.success) return schemaError(parsed.error.issues[0]?.message ?? "Invalid arguments");
       const value = parsed.data;
+      const target = await targetForPath(deps, root());
+      const link = (id: unknown) =>
+        typeof id === "string" ? { console_url: consoleUrl(deps, `/agents/${encodeURIComponent(id)}`) } : {};
       if (value.mode === "create") {
-        return call(() => service().create(root(), value.definition!, MCP_ACTOR));
-      }
-      if (value.revision !== undefined) {
-        return call(() =>
-          service().restore(root(), value.id!, { revision: value.revision!, baseRevision: value.baseRevision! }, MCP_ACTOR),
+        return call(async () =>
+          withProject(
+            await service().create(root(), value.definition!, MCP_ACTOR),
+            target,
+            link((value.definition as { id?: unknown } | undefined)?.id),
+          ),
         );
       }
-      return call(() =>
-        service().save(
-          root(),
-          value.id!,
-          { baseRevision: value.baseRevision!, definition: value.definition!, summary: value.summary ?? null },
-          MCP_ACTOR,
+      if (value.revision !== undefined) {
+        return call(async () =>
+          withProject(
+            await service().restore(root(), value.id!, { revision: value.revision!, baseRevision: value.baseRevision! }, MCP_ACTOR),
+            target,
+            link(value.id),
+          ),
+        );
+      }
+      return call(async () =>
+        withProject(
+          await service().save(
+            root(),
+            value.id!,
+            { baseRevision: value.baseRevision!, definition: value.definition!, summary: value.summary ?? null },
+            MCP_ACTOR,
+          ),
+          target,
+          link(value.id),
         ),
       );
     },
@@ -152,7 +170,7 @@ export function registerAgentTools(server: McpServer, deps: McpToolDeps): void {
   server.registerTool(
     "agent_chat",
     {
-      description: "Send one message to an agent and wait for its reply. Omit sessionId to start a new session.",
+      description: "Send one message and wait for the reply. Omit sessionId to start a session.",
       inputSchema: z.object({ id: agentId, message: z.string().min(1), sessionId: z.string().optional() }),
     },
     ({ id, message, sessionId }) =>
@@ -183,7 +201,7 @@ export function registerAgentTools(server: McpServer, deps: McpToolDeps): void {
   server.registerTool(
     "archive_agent",
     {
-      description: "Archive an agent: its definition leaves the project and new sessions are refused. Past sessions are kept.",
+      description: "Archive an agent. New sessions are refused. Past sessions are kept.",
       inputSchema: z.object({ id: agentId }),
     },
     ({ id }) => call(async () => { await service().archive(root(), id); return { archived: true }; }),

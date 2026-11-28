@@ -172,6 +172,8 @@ The Host is machine-global under `$STAGEFLOW_HOME`. Catalog roots are:
 
 There is **no** mandatory `boot` catalog root from Host cwd. Cold Host with an empty registry lists the workspace root only.
 
+Write tools (`write_pipeline`, `write_stage`, `write_task`, `import_task`) write into the Host workspace when `project_root` is omitted, never the Host's working directory. Their results include `project_root` (the wire id) and `project_path`; pipeline writes also include `console_url`. `start_run` returns `project_root`, `project_path` and `console_url`, `get_run` returns `console_url`, and `POST /api/runs` responses include `project_root` and `project_path`. Console run, task, agent and function URLs cannot carry a project, so use the `project_root` field from the result. `read_pipeline` with no `project_root` reads the workspace and, unlike the write tools, still reads a read-only registered root. `save_function` and `save_agent` still write to the Host's own project, not the workspace. Their results include `project_root`, `project_path` and `console_url`; the function and agent console routes take no project, so that link opens the default project's view and `project_root` is the reliable field.
+
 **Path contract (MCP / remote HTTP / A2A sharing the helper):**
 
 - Pipeline/task paths must be **catalog-relative** under a known root (absolute pipeline/task paths → `absolute_path_not_allowed`). Error body keeps `code` + `registered_roots` and explains the remedy: relative under `project_root`; local CLI may pass absolute paths and auto-register.
@@ -190,11 +192,11 @@ There is **no** mandatory `boot` catalog root from Host cwd. Cold Host with an e
 
 ## Tools
 
-The Host exposes **57** MCP tools. The previous 124 per-endpoint names are removed with no aliases. Merged tools pick behavior with flat fields:
+The Host exposes **60** MCP tools. The previous 124 per-endpoint names are removed with no aliases. Merged tools pick behavior with flat fields:
 
 ### Toolsets {#toolsets}
 
-Each tool belongs to one **toolset**. A client that connects to `/mcp` with no `toolsets` query receives only the **core** toolset (17 tools: discover, author pipelines and tasks, start and watch runs, read outputs, wait, answer gates, cancel a runaway run, and decide a feedback-loop wait). Add named toolsets with a `toolsets` query on the MCP URL; **core is always included**.
+Each tool belongs to one **toolset**. A client that connects to `/mcp` with no `toolsets` query receives only the **core** toolset (18 tools: discover, author pipelines and tasks, start and watch runs, read outputs, count runs, wait, answer gates, cancel a runaway run, and decide a feedback-loop wait). Add named toolsets with a `toolsets` query on the MCP URL; **core is always included**.
 
 | Toolset | Role |
 |---------|------|
@@ -207,8 +209,9 @@ Each tool belongs to one **toolset**. A client that connects to `/mcp` with no `
 | `triggers` | Trigger CRUD and fire |
 | `connections` | Host send channels |
 | `memories` | Host memories and cards |
+| `artifacts` | Publish, read and delete artifacts. Off unless the URL asks for it, same as `functions` and `memories` |
 
-**Parse rules.** `toolsets` is comma-separated; names are trimmed and lowercased; duplicates collapse. An empty or missing value means core only. `all` anywhere selects every toolset (all 57 tools). Repeated `toolsets` parameters merge. Any unknown name fails the whole request with HTTP **400** and a JSON-RPC error body `{ "jsonrpc": "2.0", "error": { "code": -32000, "message": "…" }, "id": null }` listing valid names (`core`, the table above, and `all`).
+**Parse rules.** `toolsets` is comma-separated; names are trimmed and lowercased; duplicates collapse. An empty or missing value means core only. `all` anywhere selects every toolset (all 63 tools). Repeated `toolsets` parameters merge. Any unknown name fails the whole request with HTTP **400** and a JSON-RPC error body `{ "jsonrpc": "2.0", "error": { "code": -32000, "message": "…" }, "id": null }` listing valid names (`core`, the table above, and `all`).
 
 **Session binding.** The selection is fixed when a **stateful** session starts at `initialize`. Later requests on that session ignore their query string — sending `?toolsets=all` on a follow-up `tools/list` or `tools/call` does **not** upgrade a core-only session. Open a **new** session (new `initialize` against a URL that includes the toolsets you need), or use the reconnect URL from `get_started`. In **stateless** mode (`sf mcp --mcp-stateless`), each request is parsed again. Toolsets are not permissions: they only change what the external MCP endpoint registers for that session. The toolkit recorder, agent grants, Guide, and eval gates still see the full registry.
 
@@ -216,7 +219,7 @@ Each tool belongs to one **toolset**. A client that connects to `/mcp` with no `
 
 **Console.** Settings → **MCP server** lists toolsets from the same catalog the agent permissions picker uses. Core is always on; check optional toolsets to build the URL and `.cursor/mcp.json` snippet. The URL is not persisted — copy it into the client and reconnect to apply.
 
-The 17 core tool names are: `get_started`, `list_catalog`, `validate`, `read_pipeline`, `write_pipeline`, `write_stage`, `write_task`, `start_run`, `get_run`, `get_stage`, `run_files`, `wait_run`, `stage_action`, `cancel_run`, `list_waiting`, `answer_gate`, `decide_feedback_loop`.
+The 18 core tool names are: `get_started`, `list_catalog`, `validate`, `read_pipeline`, `write_pipeline`, `write_stage`, `write_task`, `start_run`, `get_run`, `run_stats`, `get_stage`, `run_files`, `wait_run`, `stage_action`, `cancel_run`, `list_waiting`, `answer_gate`, `decide_feedback_loop`.
 
 | Field | Role |
 |-------|------|
@@ -299,6 +302,7 @@ Workshop Author profile tools keep names like `write_pipeline` with `mode: creat
 |------|-------|
 | `start_run` | Exactly one of `pipeline`, `stage`, or `from_run` (+ task shapes as before) |
 | `get_run` | Omit `runId` to list; `view: export` to export |
+| `run_stats` | Counts by status. `group_by`: `day` (default), `week`, or `pipeline`. `since` defaults to 30 days before `until`; `until` defaults to now. Optional `pipeline`, `status`, and `timezone` (IANA, default UTC). Buckets use `created_at` and include empty days and weeks. Eval-origin runs are omitted. More than 366 days, 104 weeks, or 50 pipelines is capped (`capped` and `cap_note`). |
 | `get_stage` | `view`: `events`, `log`, `envelope`, `verification` |
 | `run_files` | `view`: `artifact`, `changes`, `diff`, `file` |
 | `wait_run` | Long-poll until terminal or waiting |
@@ -330,6 +334,37 @@ Compose with `wait_run`: when `waiting_kind` is `feedback_loop_decision`, call `
 | `get_memory` | list or `id` |
 | `save_memory` | `mode: create` \| `update`; `card: true` replaces one card |
 | `delete_memory_card` | Destructive |
+
+### Artifact tools {#artifact-tools}
+
+Toolset `artifacts`. A bare `/mcp` session does not load it. Groups: `artifacts.read` (read), `artifacts.write` (write), `artifacts.refresh` (external), `artifacts.cleanup` (destructive).
+
+| Tool | Grant | Parameters and result |
+|------|-------|------------------------|
+| `get_artifact` | `artifacts.read` | `list: true` with `kind`, `owner`, `tag`, `status` (`available` or `expired`), `live`, `scope` (`project` or `session`; the default omits session artifacts), `sort` (`updated`, `title`, `size`), `order`, `project_root`, `limit` (1–100, default 50), `cursor`. Returns `{ artifacts, next_cursor }`. `q` is passed to the same list search as the index (title, description, tags, summary, id, and owner). Or `key` (`<ownerKey>/<id>`) with `view`: `record` (default; optional `version`), `versions`, `content`, `data`. `content` returns text for text kinds, capped at 200 KiB on a character boundary with `truncated` and `size_bytes` (the full size). Images include `base64` only at or under 256 KiB; larger images return `artifact.content_too_large_for_mcp` (use the console or CLI). `data` on `live.declarative` returns `{ status, snapshots, last_refreshed_at, last_error_code, errors, truncated }` and does not run functions. Snapshot JSON is capped at 200 KiB. Over the cap, the largest values are dropped first: those snapshots have `truncated: true`, `value: null`, and `size_bytes`. A static artifact is `artifact.not_live`. An expired artifact is `artifact.content_unavailable`. Hidden artifacts are omitted. |
+| `save_artifact` | `artifacts.write` | Same body as publish: `owner` (`stage` with `pipeline` and `stage`, or `agent` with `agent`), `project_root`, `id`, `kind`, `title`, optional `description`, `tags`, `summary`, and `content` or `content_base64`. `live.declarative` and `live.html` also take `manifest`. Returns `{ key, version, unchanged, project_root, url }`, where `url` opens the artifact in the console with its project. The same bytes keep the version. Source stored is `mcp`. Same size and shape caps as publish. |
+| `refresh_artifact` | `artifacts.refresh` | External. `key`, optional `project_root`, optional `binding_ids` (REST refresh uses `bindingIds`). Runs the live bindings and returns `{ status, snapshots, last_refreshed_at, last_error_code, errors, truncated }`. Snapshots may include `source` (`executed` or `cache`). A full executor queue adds `retry_after_seconds` (30). `ifStale` is a REST and CLI option, not an MCP argument. Snapshot values share the 200 KiB cap; a dropped value is `null` with per-snapshot `truncated: true` and `size_bytes`. A static artifact is `artifact.not_live`. An expired artifact is `artifact.content_unavailable`. |
+| `delete_artifact` | `artifacts.cleanup` | `key`, optional `project_root`. Removes every version. Irreversible. An indexed artifact is `artifact.not_deletable`. |
+| `promote_artifact` | `artifacts.write` | `key`, optional `project_root`. Clears expiry on a session artifact and sets its scope to `project`. An artifact that is not session-scoped is `artifact.not_session`. An expired one is `artifact.expired`. |
+
+There is no tool to approve or revoke declared live HTML origins. That is deliberate: only an operator can approve, from the console or `sf artifact approve-origins`. `save_artifact` can publish a manifest that declares origins. Those origins stay blocked until a person approves them. A publish with declared origins returns a warning that they need approval in the console before they take effect.
+
+Read calls do not write. `project_root` is the catalog wire id, and omitting it when the owner and id exist in more than one project returns `artifact.ambiguous` with `project_roots`.
+
+| Code | When |
+|------|------|
+| `artifact.invalid_id` | id or key is missing, contains `::`, or is not a slug |
+| `artifact.invalid_kind` | kind is not a static kind |
+| `artifact.invalid_shape` | body failed validation (`issues` lists paths) |
+| `artifact.invalid_filter` | `sort`, `order`, `kind`, `tag`, `live`, or `status` is not a list filter |
+| `artifact.too_large` | content is over 5 MiB |
+| `artifact.not_found` | key or version does not exist, including a hidden artifact |
+| `artifact.ambiguous` | owner and id exist in several projects and `project_root` was omitted (`project_roots`) |
+| `artifact.not_deletable` | delete of an indexed artifact |
+| `artifact.not_live` | `view: data` |
+| `artifact.content_too_large_for_mcp` | image content over 256 KiB |
+| `artifact.store_unavailable` | the index database is not open |
+| `invalid_arguments` | the tool arguments failed the input schema |
 
 Full parameter and REST parity for each family remain in [Agent API](agent-api.md), [Evals HTTP API](evals.md#http-api), and [function-api](function-api.md). The rename table in `docs/plans/2026-11-14-1206-refactor-mcp-tool-consolidation-plan.md` lists every old name.
 

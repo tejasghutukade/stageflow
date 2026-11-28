@@ -6,44 +6,47 @@ Project-specific guidance for AI coding agents.
 
 When changing operator-console layout, navigation, HITL reply surfaces, run/stage chrome, triage home, theme, or status presentation — follow the shell, information architecture, HITL kinds, and copy already in this console.
 
-When adding or wiring UI modules for that console — use `ui/src/components/COMPONENT-MAP.md` and prefer skeletons under `ui/src/components/` over inventing parallel patterns.
+When adding or wiring UI modules for that console — for code outside `ui/src/redesign/`, use `ui/src/components/COMPONENT-MAP.md` and prefer skeletons under `ui/src/components/` over inventing parallel patterns. For redesign screens, copy a sibling screen under `ui/src/redesign/`.
 
-When scoping backend/API or screen work — match the screens and components already in `ui/src/`. Production UI is that tree.
+When scoping backend/API or screen work — match the screens and components already in `ui/src/`. Production UI is that tree, and its shell is `ui/src/redesign/`.
 
-<!-- ASTRYX:START -->
-Astryx v0.4.0 · 90+ components
-CLI: run every command as `npx astryx <cmd>` (shown below as `astryx ...`).
+## Design system: the redesign, not Astryx
 
-SETUP (once, in your app entry e.g. main.tsx) — without these, components render unstyled:
-  import "@astryxdesign/core/reset.css";
-  import "@astryxdesign/core/astryx.css";
+The console shell is the **redesign** in `ui/src/redesign/` (always on: `flag.ts` sets `data-redesign="on"`; commit f3a5f514 made it the only shell). It is **not** built on Astryx. Do not start new UI with Astryx, and do not run `astryx build` / `astryx template` for new screens.
 
-WORKFLOW — discover, don't guess. Before writing UI:
-1. `astryx build "<idea>"` — START HERE: returns a kit (closest [page] + [block]s + [component]s). No args = full playbook.
-2. `astryx template <name> [--skeleton]` — scaffold the [page]/[block]s it named, or study their layout. Templates are reference code.
-3. `astryx component <Name>` — props + examples for every component you use.
+What the redesign uses:
 
-RULES:
-- No <div> — components do all layout/spacing, page frame included.
-- Frame first: read `astryx docs layout` before writing any page or screen — page frame, region widths, breakpoint behavior.
-- Dense data = rows (Table, List/Item), never Card-wrapped list items; Card is for standalone widgets. Status = StatusDot/Token; Badge = counts only.
-- Custom styling: component props first; else style/className with tokens — var(--color-*|--spacing-*|--radius-*). No raw hex/px. (No StyleX/Tailwind compiler here — don't use xstyle/utility classes.)
-- Tokens for every value (`astryx docs tokens`). Brand/accent via `astryx theme` — never override --color-* in :root.
-- SELF-CHECK before you finish: re-read the file and replace any raw <div>/<span> layout, imported .css/@apply, or hardcoded value (#hex, 16px) with the component or a token (var(--color-*|--spacing-*|…)). If unsure a component/prop exists, run `astryx component <Name>` / `astryx search "<thing>"`; don't hand-roll CSS.
+- **Tokens:** `--sf-*` CSS variables in `redesign/tokens.css`, scoped to `html[data-redesign="on"]` (ground, panel, raised, text-1/2/3, hairline, needs/running/ok/fail/queued/skipped, `--sf-font-ui`, `--sf-font-mono`). Read that file before choosing a color. Reuse the status tokens for status; do not invent new hues.
+- **Styling:** Tailwind v4 utilities (`redesign/tailwind.css`, layered `theme, base, sf-components, components, utilities`) plus `sf-*` classes in `@layer sf-components` (`.sf-pill`, `.sf-mono`, ...). Native `<div>`, `<span>`, `<button>` are normal here.
+- **Type and icons:** Geist and Geist Mono; icons from `react-icons/lu`.
+- **Shell primitives:** `redesign/shell/` (`AppShell`, `AppRail`, `PageHeader`, `FilterTabs`, `DataTable`/`DataTableRow`, `Inspector`). Read `redesign/shell/README.md`. `PageHeader` owns the bar chrome; do not hand-copy it.
+- **Screens:** one folder per area under `redesign/` (`runs`, `inbox`, `agents`, `evals`, `functions`, `workshop`, ...). Match a sibling screen before adding a new pattern. Raw hex does occur in redesign code today; prefer an `--sf-*` token and do not add new hex.
 
-MORE CLI:
-  search "<query>"   find any component / hook / doc / template / block
-  component --list   90+ components by category
-  template --list    page + block recipes
-  docs <topic>       color, elevation, icons, illustrations, internationalization, layout, migration, motion, principles, shape, spacing, styling, theme, tokens, typography
-  swizzle <Name>     eject component source for deep customization
-  upgrade --apply    run after any @astryxdesign/core bump
-<!-- ASTRYX:END -->
+Astryx is legacy and still partly present. Measured 2026-11-24: 13 of 310 `.tsx` files in `ui/src` import `@astryxdesign/*`; 3 of the 250 in `redesign/` do (`workshop/chat/WorkshopTranscript.tsx`, `memories/MemoryDetailParts.tsx`, `artifacts/renderers/StaticPreview.tsx`, which uses Astryx `Markdown` because the redesign has no markdown renderer yet; replace it when one exists). The rest are older pages and components (`App.tsx`, `StatusLabel.tsx`, `pages/RunDetailPage.tsx`, `liveView/LiveView.tsx`, `workshop/WorkshopChatIsland.tsx`, and in `components/`: `ArtifactReader`, `LogPanel`, `EnvelopeFields`, `FeedbackLoopPanel`, `VerificationHistory`). `main.tsx` still imports the Astryx CSS, and `tokens.css` remaps a few Astryx `--color-*` variables to `--sf-*` so those leftovers follow the redesign.
 
-## Chrome exception (Phase 6)
+Rules for Astryx leftovers:
 
-The operator-console chrome primitives — rail, page-head, zone, block, run-row, fail-row, rrow, pick, theme-pick, gate, track-mini, mini, filters/tab, topbar, capacity, setting, table, drawer, kv, graph-view, gnode, canvas-tools, canvas-hint, work-split, run-page workspace — are ported from the finalized HTML prototype as CSS classes in `ui/src/console.css`, using Astryx design tokens (`var(--color-*)`, `var(--spacing-*)`, `var(--radius-*)`, `var(--font-size-*)`, `var(--shadow-*)`). Native HTML elements (`<div>`, `<span>`, `<nav>`, `<section>`, `<table>`, `<a>`, `<button>`, `<aside>`, `<dl>`) are allowed for those primitives. This overrides the "No `<div>`" and "don't hand-roll CSS" Astryx rules for chrome surfaces.
+- Editing a file that already uses Astryx: keep its Astryx components (`Markdown`, `CodeBlock`, `Token`, `Collapsible`, `Banner`, chat components) unless the task is to migrate it. Do not hand-roll replacements for working ones.
+- New screens and new components: redesign tokens and Tailwind, no new Astryx imports.
+- Before assuming how something is styled, grep the folder you are editing. The directory, not this file's history, is the truth. If you find this section is out of date, update it in the same change.
 
-Astryx atoms remain where they already work: `Markdown`, `CodeBlock`, `Token`, `Collapsible`, `Theme`, and `Banner` (as last resort). Do not replace working Astryx content components with hand-rolled equivalents.
+Check first, every time: is the screen you are changing under `ui/src/redesign/`? `ui/src/components/` and `ui/src/pages/` hold older code, and `components/COMPONENT-MAP.md` describes that older tree. Use it for those files only, not as the pattern for new work.
+
+
+## Project scope: never hide items silently
+
+A Host has several projects (`workspace` plus every registered root), and work an outside agent creates often lands in a project the operator is not looking at. One rule for every console view that lists project-owned items:
+
+- **Default to All projects** when the API can return every project in one call (Pipelines, Tasks, Triggers, Evals, Runs, Artifacts, Catalog stages). Do not send `project_root` unless the operator picked a project. A filter the operator picks is fine; a default that drops other projects is not.
+- **If a view must keep one project by default** because its API is scoped to a single root (Agents, Functions, Catalog skills today), it shows `OtherProjectsNote` (`redesign/shell/`) fed by `useHiddenInOtherProjects`: a visible "N more in other projects" line with one button per project, which switches the view to that project, plus a "Back to the default project" button while switched. Counts come from listing each available catalog root and keeping items the visible list lacks (`countHiddenInOtherProjects`), so the key you pass must identify an item stably across roots.
+- Switching scope in the agents and functions API clients goes through `api/projectScope.ts` (`setSurfaceScope`, applied by `withSurfaceScope`). The scope lives only while the console is on that surface's routes (`#/agents…`, `#/functions…`): a `hashchange` away clears it, so pollers and pickers elsewhere read the default project, and global lists such as pending approvals are never scoped. Catalog skills do not use it: that tab keeps its scope in local state and passes it to `fetchSkills(scope)`.
+- A view that reloads on scope change guards the load with `createLatestGuard` (`redesign/shell/latestOnly.ts`) so a slower earlier request cannot overwrite the latest one.
+- No cheap way to count hidden items (no list-per-root endpoint)? Default the view to All projects instead, or extend the API. Never leave the hiding silent.
+- Links the UI builds to a run or artifact carry the project (`project_root`) when it is not `workspace` (see `publishedArtifactHref`, `artifactDetailPath`).
+- Add a UI test for each view you change (hidden-count or default scope). Host-level views (Memories, Connections, Settings) are not project-scoped and need no note.
+
+## Chrome exception (Phase 6, legacy)
+
+Older run-page chrome primitives (rail, page-head, zone, block, run-row, track-mini, drawer, kv, graph-view, run-page workspace, and similar) are CSS classes in `ui/src/console.css`, written against Astryx tokens (`var(--color-*)`, `var(--spacing-*)`, `var(--radius-*)`). Native HTML elements are allowed there. This applies only to code that still uses `console.css`; new chrome belongs in `redesign/` with `--sf-*` tokens.
 
 `npm run ui:dev` proxies `/api` to `127.0.0.1:3847` and rewrites `Origin` to that host. The Host rejects an Origin whose port does not match `Host`. The dev server needs a running Host and its control token.

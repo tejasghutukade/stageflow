@@ -1,0 +1,3 @@
+Plain text artifact.
+Line two keeps its line breaks.
+    Indented line.

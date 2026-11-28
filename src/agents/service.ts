@@ -25,9 +25,11 @@ import { newWebChatSlug } from "./webChat/slug.js";
 import { ApprovalBroker } from "./approvalBroker.js";
 import { deliveryLedger, scheduleLedger, type DeliveryLedger, type ScheduleLedger } from "./ledgers.js";
 import { TurnLifecycle, type FinishInput } from "./turnLifecycle.js";
+import { purgeSessionArtifacts } from "../artifacts/sessionScope.js";
+import type { UiPart } from "../artifacts/uiPart.js";
 import { AgentError } from "./errors.js";
 import { applyEvalOverrides, EVAL_SESSION_SOURCE, isEvalSession, type EvalSessionOverrides } from "./evalSession.js";
-import { consumerChannelIssues } from "./consumerSafety.js";
+import { consumerChannelIssues, publicChatVisitorNote, publicToolsIdentityIssues } from "./consumerSafety.js";
 import { agentMemoryIssues } from "../memory/agentIssues.js";
 import { diffLines, type DiffLine } from "./lineDiff.js";
 import { exportTurnsToOtlp } from "./otlpExport.js";
@@ -95,6 +97,8 @@ export type AgentSummary = {
   capture: AgentDefinition["observability"]["capture"] | null;
   /** Path of the public chat page (`/chat/<slug>`) while web chat is switched on and has a link. */
   webChatUrl: string | null;
+  /** What anonymous visitors can do on the public link, or null when web chat is off or visitors already have tools. */
+  webChatNote: string | null;
   stats: SessionStats;
   pendingApprovals: number;
   updatedAt: string;
@@ -429,6 +433,7 @@ export class AgentService {
       subAgents: definition?.sub_agents ?? [],
       capture: definition?.observability.capture ?? null,
       webChatUrl: definition?.web_chat.enabled && definition.web_chat.slug ? `/chat/${definition.web_chat.slug}` : null,
+      webChatNote: definition ? publicChatVisitorNote(definition) : null,
       stats: this.store.sessionStats(projectKey, row.agentId, since),
       pendingApprovals: pending.get(row.agentId) ?? 0,
       updatedAt: row.updatedAt,
@@ -523,6 +528,7 @@ export class AgentService {
     const all = new Set<string>(roots.map((session) => session.id));
     for (const root of roots) for (const child of this.store.listChildSessions(root.id)) all.add(child.id);
     const ids = [...all];
+    await purgeSessionArtifacts(this.store.sqlite(), ids);
     this.store.deleteSessions(ids);
     for (const sessionId of ids) this.evalOverrides.delete(sessionId);
     return ids;
@@ -545,6 +551,7 @@ export class AgentService {
       for (const child of this.store.listChildSessions(root.id)) all.add(child.id);
     }
     const ids = [...all];
+    await purgeSessionArtifacts(this.store.sqlite(), ids);
     this.store.deleteSessions(ids);
     for (const sessionId of ids) this.evalOverrides.delete(sessionId);
     return ids.length;
@@ -558,7 +565,7 @@ export class AgentService {
   /* ---------- validation ---------- */
 
   private async warningsFor(projectRoot: string, definition: AgentDefinition): Promise<AgentIssue[]> {
-    const warnings: AgentIssue[] = [...stageflowDefinitionValidation(definition).warnings];
+    const warnings: AgentIssue[] = [...stageflowDefinitionValidation(definition).warnings, ...(await this.publicWebChatIssues(projectRoot, definition))];
     if (definition.web_chat.enabled && !definition.web_chat.slug) {
       warnings.push({ path: "web_chat.slug", code: "agent.web_chat_slug_missing", message: "Web chat has no link yet; save the agent in the console to generate one" });
     }
@@ -734,6 +741,15 @@ export class AgentService {
       code: item.code,
       message: item.message,
     }));
+  }
+
+  private async publicWebChatIssues(projectRoot: string, definition: AgentDefinition): Promise<AgentIssue[]> {
+    const projectKey = agentProjectKey(projectRoot);
+    return publicToolsIdentityIssues(definition, async (id) => {
+      const row = this.store.getDefinition(projectKey, id);
+      if (!row || row.currentRevision === 0) return null;
+      return this.store.getRevision(projectKey, id, row.currentRevision)?.definition ?? null;
+    });
   }
 
   private async channelConsumerPublicationIssues(projectRoot: string, definition: AgentDefinition): Promise<AgentIssue[]> {
@@ -1284,24 +1300,30 @@ export class AgentService {
     return sessionSpend >= limits.cost_usd;
   }
 
-  /** The session ran out of turns or time (never true for always-on agents). */
+  /** The session ran out of turns or has been idle too long (never true for always-on agents). */
   private turnOrTimeLimit(definition: AgentDefinition, session: AgentSession): { kind: "turns" | "minutes"; message: string } | null {
     const { limits } = definition;
     if (limits.always_on) return null;
-    if (this.store.listTurns(session.id).length >= limits.max_turns) {
+    const turns = this.store.listTurns(session.id);
+    if (turns.length >= limits.max_turns) {
       return { kind: "turns", message: `This session reached its limit of ${limits.max_turns} turns.` };
     }
-    const ageMinutes = (this.now().getTime() - Date.parse(session.createdAt)) / 60_000;
-    if (ageMinutes >= limits.session_minutes) {
-      return { kind: "minutes", message: `This session reached its limit of ${limits.session_minutes} minutes.` };
+    if (turns.some((turn) => turn.status === "running" || turn.status === "waiting")) return null;
+    const lastActivityAt =
+      turns.length === 0
+        ? session.createdAt
+        : (turns[turns.length - 1]!.endedAt ?? turns[turns.length - 1]!.startedAt);
+    const idleMinutes = (this.now().getTime() - Date.parse(lastActivityAt)) / 60_000;
+    if (idleMinutes >= limits.session_minutes) {
+      return { kind: "minutes", message: `This session closed after ${limits.session_minutes} idle minutes.` };
     }
     return null;
   }
 
   /**
    * Why a new turn on this session would be refused, or null while it is still inside its limits.
-   * Cost is checked first so the sender is told the limit that actually applies. Always-on sessions skip the time
-   * and turn caps. A channel thread rolls onto a new session at its turn or time limit; its cost limit counts the
+   * Cost is checked first so the sender is told the limit that actually applies. Always-on sessions skip the idle
+   * and turn caps. A channel thread rolls onto a new session at its turn or idle limit; its cost limit counts the
    * whole thread's last 24 hours, so a rollover does not reset it.
    */
   private limitBlockReason(definition: AgentDefinition, session: AgentSession): { kind: "turns" | "minutes" | "cost"; message: string } | null {
@@ -1317,7 +1339,7 @@ export class AgentService {
   /** Session limits (`limits` in the pinned revision) are checked before each new turn. */
   private assertWithinLimits(definition: AgentDefinition, session: AgentSession): void {
     const blocked = this.limitBlockReason(definition, session);
-    if (blocked) throw new AgentError("agent.limit_reached", blocked.message);
+    if (blocked) throw new AgentError("agent.limit_reached", blocked.message, [], blocked.kind);
   }
 
   /**
@@ -1363,6 +1385,7 @@ export class AgentService {
     input: {
       status: FinishInput["status"];
       assistantText?: string;
+      assistantParts?: UiPart[];
       errorCode?: string | null;
       usage?: { inputTokens?: number; outputTokens?: number };
       costUsd?: number | null;
@@ -1377,7 +1400,16 @@ export class AgentService {
       this.lifecycle.finish(turnId, {
         status: input.status,
         errorCode: input.errorCode ?? null,
-        ...(input.assistantText ? { assistant: { id: id("msg"), author: session.agentId, text: input.assistantText } } : {}),
+        ...((input.assistantText && input.assistantText.length > 0) || (input.assistantParts?.length ?? 0) > 0
+          ? {
+              assistant: {
+                id: id("msg"),
+                author: session.agentId,
+                text: input.assistantText ?? "",
+                ...(input.assistantParts && input.assistantParts.length > 0 ? { parts: input.assistantParts } : {}),
+              },
+            }
+          : {}),
         ...(input.usage ? { usage: input.usage } : {}),
         ...(input.costUsd !== undefined ? { costUsd: input.costUsd } : {}),
         ...(input.evalScores ? { evalScores: input.evalScores } : {}),
@@ -1594,7 +1626,7 @@ export class AgentService {
       }
       const definition = existing ? await this.effectiveDefinition(projectRoot, existing) : null;
       const stalePinned = Boolean(definition && stageflowStaleIssues(definition).length > 0);
-      // Roll onto a new session at a turn or time limit, unless the thread is over its cost cap for the last 24 hours.
+      // Roll onto a new session at a turn or idle limit, unless the thread is over its cost cap for the last 24 hours.
       const accountRemapped = Boolean(
         existing &&
           identity?.boundAccountId &&

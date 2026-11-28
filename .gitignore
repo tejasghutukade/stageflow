@@ -95,6 +95,14 @@ CONTEXT.md
 .pi/
 .pi/skills/
 artifacts/
+!/src/artifacts/
+!/src/artifacts/**
+!/ui/src/redesign/artifacts/
+!/ui/src/redesign/artifacts/**
+!/examples/artifacts/
+!/examples/artifacts/**
+!/scripts/artifacts/
+!/scripts/artifacts/**
 naming-candidate-conflicts.json
 sf-differentiation-research.json
 software-factory-naming-research.json
@@ -114,3 +122,5 @@ benchmarks/
 # Demo video project lives in the main checkout only
 /demo-video/
 .compaction-evidence*
+!/tests/fixtures/stages/artifacts/
+!/tests/fixtures/stages/artifacts/**

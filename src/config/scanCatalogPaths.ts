@@ -4,6 +4,39 @@ import type { LoadedManifest } from "../types/stageflowManifest.js";
 
 export type CatalogPathKind = "pipeline" | "task" | "trigger" | "eval" | "dataset";
 
+const TRANSIENT_FS_CODES = new Set([
+  "ENOENT",
+  "EBUSY",
+  "EAGAIN",
+  "EPERM",
+  "EACCES",
+  "EMFILE",
+  "ENFILE",
+  "EIO",
+  "ETIMEDOUT",
+  "EWOULDBLOCK",
+  "UNKNOWN",
+  "EBADF",
+]);
+
+function fsCode(error: unknown): string | undefined {
+  if (error !== null && typeof error === "object" && "code" in error && typeof error.code === "string") return error.code;
+  return undefined;
+}
+
+async function retryTransient<T>(read: () => Promise<T>): Promise<T | undefined> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await read();
+    } catch (error) {
+      const code = fsCode(error);
+      if (code && TRANSIENT_FS_CODES.has(code) && attempt === 0) continue;
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 function normalizeRepoRel(repoRelPath: string): string {
   return repoRelPath.replace(/\\/g, "/").replace(/^\.\/+/, "");
 }
@@ -33,12 +66,8 @@ function matchesPattern(basename: string, pattern: string): boolean {
 
 async function walkDirectory(absDir: string): Promise<string[]> {
   const files: string[] = [];
-  let entries;
-  try {
-    entries = await readdir(absDir, { withFileTypes: true, recursive: true });
-  } catch {
-    return files;
-  }
+  const entries = await retryTransient(() => readdir(absDir, { withFileTypes: true, recursive: true }));
+  if (!entries) return files;
 
   for (const entry of entries) {
     if (!entry.isFile()) continue;
@@ -54,12 +83,8 @@ async function expandCatalogEntry(
   patterns: string[],
 ): Promise<string[]> {
   const absPath = path.join(projectRoot, entry);
-  let entryStat;
-  try {
-    entryStat = await stat(absPath);
-  } catch {
-    return [];
-  }
+  const entryStat = await retryTransient(() => stat(absPath));
+  if (!entryStat) return [];
 
   if (entryStat.isFile()) {
     return [absPath];

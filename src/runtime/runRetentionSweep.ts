@@ -3,6 +3,7 @@ import path from "node:path";
 import type { A2aStore } from "../a2a/store.js";
 import { bareCachePath } from "../git/cache.js";
 import { globalStageflowHome } from "../project/globalHome.js";
+import { logArtifactIndexFailure } from "../runstore/artifactRetention.js";
 import {
   bareCacheTtlFromEnv,
   isTerminalRunStatus,
@@ -17,6 +18,9 @@ import {
   worktreePathForRun,
 } from "./repositoryMaterialize.js";
 import { deleteRunEverywhere } from "./runDeletion.js";
+import { expireDueSessionArtifacts } from "../artifacts/sessionScope.js";
+import { pruneFunctionInvocations } from "../functions/history.js";
+import { sqliteConnectionFromStore } from "../runstore/createStore.js";
 
 // Slot 6: $STAGEFLOW_HOME/cache is shared dependency state — never walk or
 // delete it from slim/purge; health reports it as disk.cache_bytes separately.
@@ -35,6 +39,13 @@ export type RunRetentionSweepOptions = {
   env?: NodeJS.ProcessEnv;
   artifactMaxBytes?: number;
   bareCacheTtlMs?: number;
+  /** Available indexed rows inspected for a missing file. Zero skips the repair pass. */
+  artifactRepairBatch?: number;
+  /**
+   * Replaces the workspace file slim. Return false when the slim did not finish
+   * and oversized files may still be on disk.
+   */
+  slimWorkspace?: (workspaceDir: string, maxBytes: number) => Promise<boolean | void>;
 };
 
 const SLIM_ATTEMPT_FILES = ["pi-session.jsonl", "stream.log"] as const;
@@ -119,15 +130,15 @@ async function slimAttemptDir(
 export async function slimRunWorkspaceArtifacts(
   workspaceDir: string,
   maxBytes: number,
-): Promise<void> {
+): Promise<boolean> {
   const stagesRoot = path.join(workspaceDir, "stages");
-  if (!(await pathExists(stagesRoot))) return;
+  if (!(await pathExists(stagesRoot))) return true;
 
   let stageEntries;
   try {
     stageEntries = await readdir(stagesRoot, { withFileTypes: true });
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return true;
     throw err;
   }
 
@@ -153,6 +164,7 @@ export async function slimRunWorkspaceArtifacts(
     }
     await removeOversizedArtifacts(path.join(stageDir, "artifacts"), maxBytes);
   }
+  return true;
 }
 
 async function slimOneRun(
@@ -160,6 +172,7 @@ async function slimOneRun(
   meta: RunMeta,
   now: Date,
   artifactMaxBytes: number,
+  slimWorkspace?: (workspaceDir: string, maxBytes: number) => Promise<boolean | void>,
 ): Promise<boolean> {
   try {
     await reclaimWorkspaceBinding(meta, { keepRunBranch: true });
@@ -173,14 +186,36 @@ async function slimOneRun(
   }
 
   const workspaceDir = store.getWorkspaceDir(meta.run_id);
+  let marked: string[] = [];
   try {
-    await slimRunWorkspaceArtifacts(workspaceDir, artifactMaxBytes);
+    marked = await store.markSlimmedIndexedArtifacts(
+      meta.run_id,
+      artifactMaxBytes,
+      now.toISOString(),
+    );
+  } catch (err) {
+    logArtifactIndexFailure(`runRetentionSweep slim ${meta.run_id}`, err);
+  }
+  let slimOk = true;
+  try {
+    const result = slimWorkspace
+      ? await slimWorkspace(workspaceDir, artifactMaxBytes)
+      : await slimRunWorkspaceArtifacts(workspaceDir, artifactMaxBytes);
+    if (result === false) slimOk = false;
   } catch (err) {
     console.error(
       `runRetentionSweep: artifact slim failed for ${meta.run_id}: ${
         err instanceof Error ? err.message : String(err)
       }`,
     );
+    slimOk = false;
+  }
+  if (!slimOk) {
+    try {
+      await store.restorePresentSlimmedIndexedArtifacts(meta.run_id, marked);
+    } catch (err) {
+      logArtifactIndexFailure(`runRetentionSweep slim restore ${meta.run_id}`, err);
+    }
     return false;
   }
 
@@ -360,7 +395,7 @@ export async function runRetentionSweep(
     if (decision !== "slim") continue;
     const meta = await metaFor(runId);
     if (execute) {
-      const ok = await slimOneRun(store, meta, now, artifactMaxBytes);
+      const ok = await slimOneRun(store, meta, now, artifactMaxBytes, options.slimWorkspace);
       if (!ok) continue;
       slimmed.push(runId);
       metas.set(runId, {
@@ -376,7 +411,24 @@ export async function runRetentionSweep(
     if (decision !== "purge") continue;
     purged.push(runId);
     if (execute) {
-      await deleteRunEverywhere(store, a2aStore!, runId);
+      try {
+        await deleteRunEverywhere(store, a2aStore!, runId, "run_purged");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!message.startsWith("Run not found:")) throw err;
+        console.error(`runRetentionSweep: purge skipped missing run ${runId}: ${message}`);
+      }
+    }
+  }
+
+  if (execute) {
+    try {
+      await store.repairMissingIndexedArtifacts(
+        now.toISOString(),
+        options.artifactRepairBatch,
+      );
+    } catch (err) {
+      logArtifactIndexFailure("runRetentionSweep repair", err);
     }
   }
 
@@ -388,6 +440,19 @@ export async function runRetentionSweep(
     ttlMs: bareCacheTtlMs,
     execute,
   });
+
+  if (execute) {
+    try {
+      const db = sqliteConnectionFromStore(store);
+      if (db) {
+        pruneFunctionInvocations(db, now, env);
+        expireDueSessionArtifacts(db, now.toISOString());
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`runRetentionSweep: function history prune failed: ${message}`);
+    }
+  }
 
   return { slimmed, purged, bareCachesEvicted };
 }

@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { RunDetail, StageSnapshot } from "../../api";
 import {
+  publishedArtifactHref,
   resolveArtifactsPanelSelection,
   RunArtifactsPanel,
 } from "./RunArtifactsPanel";
@@ -89,6 +90,21 @@ describe("RunArtifactsPanel missing claim UI", () => {
     expect(out).toContain("notes.json");
   });
 
+  it("lists published artifacts with links when the stage has no envelope files", () => {
+    const published = { key: "stage:p:s/report", version: 2, kind: "live.declarative", title: "Weekly report" };
+    const publishedStage = { ...stage, artifacts: [], published_artifacts: [published] };
+    const html = renderToStaticMarkup(
+      createElement(RunArtifactsPanel, {
+        runId: "run-1",
+        run: { ...run, stages: [publishedStage] },
+        stage: publishedStage,
+      }),
+    );
+    expect(text(html)).toContain("Weekly report");
+    expect(text(html)).toContain("live.declarative · v2");
+    expect(html).toContain('href="#/artifacts/stage:p:s/report"');
+  });
+
   it("shows missing when the stage has no disk artifacts at all", () => {
     const emptyStage = { ...stage, artifacts: [] };
     const html = renderToStaticMarkup(
@@ -100,5 +116,26 @@ describe("RunArtifactsPanel missing claim UI", () => {
       }),
     );
     expect(text(html)).toContain("ghost.md is not on disk");
+  });
+
+  it("names the run's project in the published artifact link unless it is the workspace", () => {
+    expect(publishedArtifactHref("stage:p:s/report", "workspace")).toBe("#/artifacts/stage:p:s/report");
+    expect(publishedArtifactHref("stage:p:s/report")).toBe("#/artifacts/stage:p:s/report");
+    expect(publishedArtifactHref("stage:p:s/report", "/repo/demo")).toBe(
+      "#/artifacts/stage:p:s/report?project_root=%2Frepo%2Fdemo",
+    );
+    const publishedStage = {
+      ...stage,
+      artifacts: [],
+      published_artifacts: [{ key: "stage:p:s/report", version: 1, kind: "live.declarative", title: "R" }],
+    } as StageSnapshot;
+    const html = renderToStaticMarkup(
+      createElement(RunArtifactsPanel, {
+        runId: "run-1",
+        run: { ...run, project_root: "/repo/demo", stages: [publishedStage] },
+        stage: publishedStage,
+      }),
+    );
+    expect(html).toContain("project_root=%2Frepo%2Fdemo");
   });
 });

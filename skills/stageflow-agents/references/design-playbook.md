@@ -124,7 +124,7 @@ A limit is checked when a turn starts. A turn already running is not cut short. 
 
 | Field | Default | Use |
 |---|---|---|
-| `session_minutes` | `10` (1–1440) | How old the session may be before the next turn is refused |
+| `session_minutes` | `10` (1–1440) | Minutes with no messages before the next turn is refused (waiting on an approval does not count) |
 | `max_turns` | `40` (1–1000) | How many turns the session may have |
 | `cost_usd` | unset, no cap | A number greater than 0. With `always_on`, the cap is the last 24 hours |
 | `long_context` | `summarize` | When rebuilt history exceeds 60,000 characters: a one-line digest of the dropped messages, or `truncate` to drop them |

@@ -10,6 +10,7 @@ Every Stageflow skill follows this rule. Two ways drive the same Host: the MCP t
 - JSON and exit codes
 - Things only one surface can do
 - Safety on both surfaces
+- Working against a running Host
 
 ## The rule
 
@@ -82,11 +83,27 @@ Use `--json` on `sf run`, `sf run-stage`, `sf runs ...`, `sf validate`, `sf doct
 
 A waiting run is not a failure. Exit 2 means a human must answer: hand off to `stageflow-operate`. A `sf runs wait` that exits 0 does not mean the run finished; check `reason`.
 
+## Artifact index (MCP versus CLI)
+
+Published and indexed artifacts share one API. Add MCP toolset `artifacts` (`?toolsets=artifacts` or `all`); bare `/mcp` does not load it.
+
+| Job | MCP (`artifacts` toolset) | CLI |
+|---|---|---|
+| List or search | `get_artifact` with `list: true`, filters, `q`, `cursor`, `scope` | `sf artifact list` (`--json`, same filters; `--scope session` for chat artifacts) |
+| Keep a session artifact | `promote_artifact` | `sf artifact promote <key>` |
+| Read record or bytes | `get_artifact` with `key`, `view: record`, `versions`, or `content` | `sf artifact show`, or content via REST/console |
+| Publish static file or live program | `save_artifact` (pick `owner`; `--manifest` on the CLI) | `sf artifact publish` (`--manifest` for `live.declarative` and `live.html`) |
+| Refresh a live artifact | `refresh_artifact` | `sf artifact refresh` |
+| Delete published key | `delete_artifact` | `sf artifact delete` |
+| Read a run workspace path | `run_files` with `view: artifact` | `sf artifact read --run --path` |
+
+`sf artifact list` and `show` work host-down when the schema is current. Publish and delete need a Host. Authoring stage `artifacts:` is `stageflow-pipelines`; operating the index is `stageflow-operate`.
+
 ## Things only one surface can do
 
 - CLI only: `sf init`, `sf graph`, `sf migrate-yaml`, `sf backup`, `sf archive`, `sf restore`, `sf doctor`, `sf providers login`, `sf browser login`, `sf eval engine install`.
 - MCP or REST (or the console) only: creating and editing connections, memories, and project registration. There is no `sf connections` command.
-- Both: starting and answering runs, validating, listing the catalog, agents, evals. MCP is richer for live inspection; the CLI is simpler in CI.
+- Both: starting and answering runs, validating, listing the catalog, agents, evals, the artifact index (list/read; publish/delete need Host). MCP is richer for live inspection; the CLI is simpler in CI.
 
 When MCP is the only way (connections, memories), and no Host is up, tell the user to run `sf ui` or `sf mcp`, then connect the harness (`references/host-and-mcp.md`).
 
@@ -95,3 +112,13 @@ When MCP is the only way (connections, memories), and no Host is up, tell the us
 - MCP tool calls carry no confirmation prompt of their own. You are the gate. Ask the user before calling anything that starts a real run, an eval, a trigger, an agent turn that uses real tools, a send, or a delete.
 - Arguments appear in tool logs and chat. Never pass a secret as an argument. For connections, keys are entered in the console or exported by the user; see the skill that owns the task.
 - The CLI inherits your shell environment, including provider keys. Do not echo it, and do not run `env` or `printenv` to debug.
+
+## Working against a running Host
+
+When asked to create or run work while a Host is already up (often a Docker console), the full checklist is `stageflow-operate`, `references/working-against-a-host.md`. In short:
+
+1. Find the Host and its `home_id` with `GET /livez`. Never run a bare `sf run` on the machine against a container Host: use MCP, the API, or `docker exec <container> sf ...`.
+2. Write into `workspace` through the Host (MCP `write_pipeline`, passing the workspace `project_root` from `get_started`). Create a separate project only when the user asks, register it, and name it.
+3. Run through the Host, with `project_root` when it is not `workspace`.
+4. Done means visible: the pipeline, task, run and `published_artifacts` appear in `GET /api/pipelines`, `/api/tasks` and `/api/runs/<id>`. Give console links and name the project.
+5. Never edit `project_root` or workspace settings to make something appear.

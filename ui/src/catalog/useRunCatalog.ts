@@ -8,7 +8,7 @@ import {
 } from "react";
 import { type CatalogState, type RunCatalog } from "./runCatalog";
 
-const RunCatalogContext = createContext<RunCatalog | null>(null);
+export const RunCatalogContext = createContext<RunCatalog | null>(null);
 
 function useCatalog(): RunCatalog {
   const catalog = useContext(RunCatalogContext);

@@ -1,10 +1,25 @@
-export type ChatMessageRecord = { id: string; role: "user" | "assistant"; text: string; createdAt: string };
+import type { InlinePreview } from "../../../src/artifacts/inlinePreviewTypes.ts";
+import { parseUiPart, type UiPart } from "../../../src/artifacts/uiPart.ts";
+import { toLimitKind, type ChatLimitKind } from "./errors";
+
+export type ChatMessageRecord = { id: string; role: "user" | "assistant"; text: string; createdAt: string; ui?: UiPart[] };
+
+export function messageParts(value: unknown): UiPart[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const parts: UiPart[] = [];
+  for (const item of value) {
+    const parsed = parseUiPart(item);
+    if (parsed.ok) parts.push(parsed.part);
+  }
+  return parts.length > 0 ? parts : undefined;
+}
 
 export type ChatFrame =
   | { type: "delta"; text: string }
+  | { type: "ui_preview"; phase: InlinePreview["phase"]; message?: string }
   | { type: "waiting" }
   | { type: "done"; message: ChatMessageRecord }
-  | { type: "error"; code: string; message: string; retryAfterSec?: number };
+  | { type: "error"; code: string; message: string; retryAfterSec?: number; limit?: ChatLimitKind };
 
 /** Validates one decoded line; anything that is not a known frame is dropped. */
 export function toFrame(value: unknown): ChatFrame | null {
@@ -13,11 +28,19 @@ export function toFrame(value: unknown): ChatFrame | null {
   switch (frame.type) {
     case "delta":
       return typeof frame.text === "string" ? { type: "delta", text: frame.text } : null;
+    case "ui_preview":
+      if (frame.phase !== "skeleton" && frame.phase !== "error") return null;
+      return {
+        type: "ui_preview",
+        phase: frame.phase,
+        ...(typeof frame.message === "string" ? { message: frame.message } : {}),
+      };
     case "waiting":
       return { type: "waiting" };
     case "done": {
       const message = frame.message as Record<string, unknown> | undefined;
       if (!message || typeof message.id !== "string" || typeof message.text !== "string") return null;
+      const ui = messageParts(message.parts);
       return {
         type: "done",
         message: {
@@ -25,6 +48,7 @@ export function toFrame(value: unknown): ChatFrame | null {
           role: "assistant",
           text: message.text,
           createdAt: typeof message.createdAt === "string" ? message.createdAt : new Date().toISOString(),
+          ...(ui ? { ui } : {}),
         },
       };
     }
@@ -34,6 +58,7 @@ export function toFrame(value: unknown): ChatFrame | null {
         code: typeof frame.code === "string" ? frame.code : "web_chat.failed",
         message: typeof frame.message === "string" ? frame.message : "",
         ...(typeof frame.retryAfterSec === "number" && Number.isFinite(frame.retryAfterSec) ? { retryAfterSec: frame.retryAfterSec } : {}),
+        ...(toLimitKind(frame.limit) ? { limit: toLimitKind(frame.limit) } : {}),
       };
     default:
       return null;

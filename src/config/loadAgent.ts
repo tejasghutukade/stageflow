@@ -1,5 +1,7 @@
 import { AGENT_ID_PATTERN, isReservedAgentId, RESERVED_AGENT_IDS } from "../agents/agentId.js";
+import { defaultPresentKinds, isConversationCardKind, isPresentableArtifactKind, UI_PERSISTENCE_VALUES, uiKeepsCardsInConversation } from "../genui/kindsList.js";
 import { normalizeEntry, SENDER_ENTRY } from "../agents/communications/allowlist.js";
+import { PRESENT_UI_TOOL_NAME, SAVE_CARD_TOOL_NAME } from "../genui/names.js";
 import { grantedStageflowTools, isOperatorOnlyGroup, isOperatorOnlyTool, isToolGroupId, stageflowGrantId, TOOL_META } from "../toolkit/meta.js";
 import { stageflowDefinitionValidation } from "../toolkit/stageflowToolNames.js";
 import { Cron } from "croner";
@@ -34,6 +36,7 @@ export type AgentCommunicationProvider = "agentmail" | "slack" | "telegram" | "p
 
 const MCP_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
 const TOOL_ID = /^(agent:[a-z][a-z0-9_]{0,63}|[A-Za-z0-9_.-]{1,128})$/;
+const UI_FUNCTION_ID = /^[a-z][a-z0-9_-]{0,63}$/;
 
 const nonEmpty = z.string().trim().min(1, "Required");
 
@@ -109,6 +112,24 @@ const toolsSchema = z
   })
   .prefault({});
 
+const uiSchema = z
+  .strictObject({
+    present: z.boolean().default(false),
+    persistence: z.enum(UI_PERSISTENCE_VALUES).default("conversation"),
+    kinds: z.array(z.string().trim().min(1)).default([]),
+    functions: z.array(z.string().trim().min(1)).default([]),
+  })
+  .prefault({})
+  .transform((ui) => (ui.present && usesDefaultKinds(ui) ? { ...ui, kinds: defaultPresentKinds(ui.persistence) } : ui));
+
+/** Before HTML cards, saving filled conversation kinds with the then-default pair; treat that pair as "the default" so those agents get HTML cards too. */
+const LEGACY_CONVERSATION_DEFAULT = ["live.declarative", "static.markdown"];
+
+function usesDefaultKinds(ui: { persistence: string; kinds: readonly string[] }): boolean {
+  if (ui.kinds.length === 0) return true;
+  return ui.persistence === "conversation" && ui.kinds.length === LEGACY_CONVERSATION_DEFAULT.length && LEGACY_CONVERSATION_DEFAULT.every((kind) => ui.kinds.includes(kind));
+}
+
 const approvalsSchema = z
   .strictObject({
     ask_first: z.array(z.string().regex(TOOL_ID, "Invalid tool id")).default([]),
@@ -150,6 +171,8 @@ const webChatSchema = z
   .strictObject({
     enabled: z.boolean().default(false),
     access: z.enum(["public", "authenticated"]).default("public"),
+    /** When public and true, anonymous visitors may use the agent's tools except identity-only ones. */
+    public_tools: z.boolean().default(false),
     slug: z.string().regex(WEB_CHAT_SLUG_PATTERN, "Use 16 to 32 lowercase letters or digits").optional(),
     rate_limit_per_minute: z.number().int().min(1).max(120).default(10),
     max_message_chars: z.number().int().min(1).max(20_000).default(4_000),
@@ -180,6 +203,8 @@ const agentDefinitionObject = z.strictObject({
   execution: z.enum(["trusted-local", "sandbox"]).default("trusted-local"),
   model: modelSchema,
   tools: toolsSchema,
+  /** Chat UI the agent may place in a conversation. Off until `present` is true. */
+  ui: uiSchema,
   approvals: approvalsSchema,
   sub_agents: z
     .array(z.string().regex(AGENT_ID_PATTERN, "Invalid agent id"))
@@ -230,6 +255,7 @@ export type AgentDefinitionInput = z.input<typeof agentDefinitionObject>;
 
 export type AgentModelConfig = AgentDefinition["model"];
 export type AgentTools = AgentDefinition["tools"];
+export type AgentUiGrant = AgentDefinition["ui"];
 export type AgentApprovals = AgentDefinition["approvals"];
 export type AgentApprovers = AgentApprovals["approvers"];
 export type AgentLimits = AgentDefinition["limits"];
@@ -307,6 +333,55 @@ function semanticIssues(definition: AgentDefinition): AgentIssue[] {
   if ("stageflow" in definition.tools.mcp) {
     issues.push({ path: "tools.mcp.stageflow", code: "agent.mcp_name_reserved", message: "stageflow is reserved for Stageflow's own tools; rename the MCP server" });
   }
+  const seenKinds = new Set<string>();
+  const keptInConversation = definition.ui.persistence === "conversation";
+  definition.ui.kinds.forEach((kind, index) => {
+    if (!isPresentableArtifactKind(kind)) {
+      issues.push({
+        path: `ui.kinds.${index}`,
+        code: "agent.ui_kind_unknown",
+        message: `${kind} is not an artifact kind an agent can present`,
+      });
+    } else if (keptInConversation && !isConversationCardKind(kind)) {
+      issues.push({
+        path: `ui.kinds.${index}`,
+        code: "agent.ui_kind_needs_artifacts",
+        message: `Cards kept in the conversation can be live.declarative, static.markdown, or live.html. Set ui.persistence to artifacts to show ${kind}`,
+      });
+    } else if (seenKinds.has(kind)) {
+      issues.push({ path: `ui.kinds.${index}`, code: "agent.ui_kind_duplicate", message: `${kind} is listed twice` });
+    } else {
+      seenKinds.add(kind);
+    }
+  });
+  const seenFunctions = new Set<string>();
+  definition.ui.functions.forEach((id, index) => {
+    if (!UI_FUNCTION_ID.test(id)) {
+      issues.push({
+        path: `ui.functions.${index}`,
+        code: "agent.ui_function_invalid",
+        message: `${id} is not a function id`,
+      });
+    } else if (seenFunctions.has(id)) {
+      issues.push({ path: `ui.functions.${index}`, code: "agent.ui_function_duplicate", message: `${id} is listed twice` });
+    } else {
+      seenFunctions.add(id);
+    }
+  });
+  if (!definition.ui.present && (definition.ui.kinds.length > 0 || definition.ui.functions.length > 0)) {
+    issues.push({
+      path: "ui.present",
+      code: "agent.ui_present_required",
+      message: "Turn on ui.present before listing kinds or functions",
+    });
+  }
+  if (keptInConversation && definition.ui.functions.length > 0) {
+    issues.push({
+      path: "ui.functions",
+      code: "agent.ui_functions_need_artifacts",
+      message: "Cards kept in the conversation show only what the agent writes into them. Set ui.persistence to artifacts to bind live data from functions",
+    });
+  }
   if (definition.sub_agents.includes(definition.id)) {
     issues.push({
       path: "sub_agents",
@@ -372,6 +447,7 @@ export function serializeAgentDefinition(definition: AgentDefinition): string {
     "execution",
     "model",
     "tools",
+    "ui",
     "approvals",
     "sub_agents",
     "sub_agent_depth",
@@ -421,14 +497,29 @@ export function grantedBuiltinTools(definition: Pick<AgentDefinition, "tools">):
   return BUILTIN_TOOL_IDS.filter((tool) => granted.has(tool));
 }
 
+/** save_card: the agent draws cards kept in the conversation (`ui.present`, `persistence: conversation`) and holds artifacts.write. */
+export function agentHoldsSaveCard(definition: Pick<AgentDefinition, "tools"> & { ui?: AgentDefinition["ui"] }): boolean {
+  return (
+    definition.ui?.present === true &&
+    uiKeepsCardsInConversation(definition.ui) &&
+    grantedStageflowTools(definition.tools.stageflow).includes("save_artifact")
+  );
+}
+
 /** Every tool id the definition grants: builtin tool names, `<server>.<tool>`, and `agent:<id>`. */
-export function grantedToolIds(definition: Pick<AgentDefinition, "tools" | "sub_agents">): Set<string> {
+export function grantedToolIds(definition: Pick<AgentDefinition, "tools" | "sub_agents"> & { ui?: AgentDefinition["ui"] }): Set<string> {
   const ids = new Set<string>();
+  if (definition.ui?.present) ids.add(PRESENT_UI_TOOL_NAME);
+  if (agentHoldsSaveCard(definition)) ids.add(SAVE_CARD_TOOL_NAME);
   for (const tool of grantedBuiltinTools(definition)) ids.add(tool);
   for (const [server, tools] of Object.entries(definition.tools.mcp)) {
     for (const tool of tools) ids.add(`${server}.${tool}`);
   }
-  for (const tool of grantedStageflowTools(definition.tools.stageflow)) ids.add(stageflowGrantId(tool));
+  for (const tool of grantedStageflowTools(definition.tools.stageflow)) {
+    // The operator MCP tool save_artifact takes an owner. An agent session publishes with publish_artifact, bound to itself.
+    if (tool === "save_artifact") ids.add("publish_artifact");
+    else ids.add(stageflowGrantId(tool));
+  }
   for (const attachment of definition.tools.functions ?? []) ids.add(`function.${attachment.id}`);
   for (const agentId of definition.sub_agents) ids.add(`agent:${agentId}`);
   return ids;

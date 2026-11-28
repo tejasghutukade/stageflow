@@ -13,6 +13,7 @@ import { textResult } from "./toolResults.js";
 import { DEFAULT_TIMEOUT_MS, waitRun } from "../runread/waitRun.js";
 
 import { registerAgentTools } from "./agentTools.js";
+import { registerArtifactTools } from "./artifactTools.js";
 import { registerFunctionTools } from "./functionTools.js";
 import { registerCatalogWriteTools } from "./catalogWriteTools.js";
 import { registerConnectionTools } from "./connectionTools.js";
@@ -66,12 +67,13 @@ export function registerMcpTools(
   registerMemoryHostTools(server, deps);
   registerAgentTools(server, deps);
   registerFunctionTools(server, deps);
+  registerArtifactTools(server, deps);
 
   server.registerTool(
     "wait_run",
     {
       description:
-        "Long-poll until a run is waiting for HITL input and/or terminal (succeeded/failed), or until timeout_ms. Default until=any wakes on waiting OR terminal. Abort cancels only this wait (not the run). Optional notifications/progress when the client supplies _meta.progressToken. Compose: wait_run → answer_gate → wait_run.",
+        "Long-poll until a run is waiting for HITL and/or terminal (succeeded/failed), or timeout_ms. until=any (default) wakes on waiting or terminal. Abort cancels this wait, not the run. notifications/progress when _meta.progressToken is set.",
       inputSchema: z.object({
         runId: z.string(),
         timeout_ms: z

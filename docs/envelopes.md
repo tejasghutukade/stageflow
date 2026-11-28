@@ -35,7 +35,7 @@ type FeedbackLoopAction =
 |-------|----------|-------------|
 | `status` | yes | `"success"` advances the pipeline. Catalog wiring is `route` on the source, not inbound `needs`. `"failure"` skip-cascades single-parent successors whose `on` does not include `failed`. Including `failed` in `on:` opts that edge out of cascade; it does not launch that successor — launch still requires a succeeded parent. A [generic fan-in](yaml-catalog.md#generic-fan-in) Join stays pending if any parent failed, even when that parent's `on` includes `failed`; the run fails. Skipped siblings do not block a Join that has a succeeded parent |
 | `summary` | yes | Non-empty human-readable summary |
-| `artifacts` | yes | Array of run-relative artifact paths (may be empty `[]`) |
+| `artifacts` | yes | Array of run-relative artifact paths (may be empty `[]`). This list is not the stage `artifacts:` block and not function `access.artifacts`. A stage that opts in can also publish titled artifacts; see [Stage artifacts](yaml-catalog.md#stage-artifacts). |
 | `payload` | no | Structured data for downstream stages; required on success (`io.output.schema` is required on every stage body) |
 | `fork_choice` | no* | Immediate successor ids to run; required on success when the stage has a `fork` field |
 | `feedback_loop` | no† | Continue or send-back decision; required on success when the stage declares a `{ type: loop }` route entry |

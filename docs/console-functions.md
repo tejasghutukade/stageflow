@@ -26,6 +26,8 @@ One row per function. Click a row, or move with **↑ / ↓** and press **Enter*
 
 Filter chips: **All**, **Verification**, **Routing**, **Tool**, each with a count. The search box matches the name, the id and the description. **Clear filters** appears when nothing matches.
 
+The console never hides another project's items silently. When the page shows one project, a line above the list says how many more are in other projects and offers one button per project to switch to it. A project you picked shows **Showing only <project>** with a **Back to the default project** button. The choice applies to this page only and clears when you leave the Agents, Functions or Catalog pages.
+
 Hover a row to show its delete icon. **Delete** asks first. If a pipeline, reusable stage or agent still uses the function, the dialog lists those places instead and does not delete anything.
 
 With no functions yet, the page lists the three kinds, what each is for, and links that open the editor with that kind selected.

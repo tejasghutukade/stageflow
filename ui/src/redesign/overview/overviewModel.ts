@@ -481,6 +481,12 @@ export function formatBytes(bytes: number): string {
 export function runStoreLine(health: CapacityHealth | null): string | null {
   const disk = health?.disk;
   if (!disk) return null;
-  const used = disk.runs_bytes + disk.state_db_bytes + disk.worktrees_bytes + disk.repos_bytes + disk.a2a_artifacts_bytes;
+  const used =
+    disk.runs_bytes +
+    disk.state_db_bytes +
+    disk.worktrees_bytes +
+    disk.repos_bytes +
+    disk.a2a_artifacts_bytes +
+    (disk.artifacts_bytes ?? 0);
   return `${formatBytes(used)} · ${formatBytes(disk.free_bytes)} free`;
 }

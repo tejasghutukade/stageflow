@@ -1,4 +1,6 @@
+import { publishedArtifactsForRun } from "../artifacts/sessionPublish.js";
 import { projectRun } from "../projection/projectRun.js";
+import { sqliteConnectionFromStore } from "../runstore/createStore.js";
 import type { RunStore } from "../runstore/port.js";
 import type { PipelineRunResult } from "../runtime/pipelineRunner.js";
 import type { BusyCode, StartRunResult } from "../runtime/runManager.js";
@@ -181,6 +183,26 @@ async function formatRunCompletionJsonWithCost(
   });
 }
 
+export function withPublishedArtifacts<T extends { stage_id: string }>(
+  store: Pick<RunStore, "readRun"> | undefined,
+  runId: string,
+  stages: T[],
+): Array<T & { published_artifacts?: { key: string; version: number; kind: string; title: string }[] }> {
+  const db = store ? sqliteConnectionFromStore(store as RunStore) : undefined;
+  if (!db) return stages;
+  let grouped: ReturnType<typeof publishedArtifactsForRun>;
+  try {
+    grouped = publishedArtifactsForRun(db, runId);
+  } catch {
+    return stages;
+  }
+  return stages.map((stage) => {
+    const published = grouped.get(stage.stage_id);
+    if (published === undefined || published.length === 0) return stage;
+    return { ...stage, published_artifacts: published };
+  });
+}
+
 async function formatRunCompletionJsonWithStages(
   result: PipelineRunResult,
   store: Pick<RunStore, "readRun">,
@@ -190,7 +212,7 @@ async function formatRunCompletionJsonWithStages(
   return stringify({
     ...baseRunCompletionPayload(result),
     ...(detail.total_cost_usd !== undefined ? { total_cost_usd: detail.total_cost_usd } : {}),
-    stages: projection.stages,
+    stages: withPublishedArtifacts(store, result.runId, projection.stages),
   });
 }
 

@@ -126,17 +126,19 @@ Mandatory bar: `GET /livez` → 200. Optional stretch flags: `--readyz`, `--chec
 
 ## Pull and run (GHCR) {#pull-and-run-ghcr}
 
-Published image: **`ghcr.io/tejasghutukade/stageflow`**. This is the recommended way to run Stageflow. Tags per release: semver `x.y.z` and major.minor `x.y` (same digest). The current minor tag is `0.67` (`0.67.0` is that exact release).
+Published image: **`ghcr.io/tejasghutukade/stageflow`**. This is the recommended way to run Stageflow. Tags per release: semver `x.y.z` and major.minor `x.y` (same digest). The current minor tag is `0.69` (`0.69.0` is that exact release).
 This starts the console on this machine. The `stageflow-data` volume keeps providers and pipelines you save in the console. Pass `sf ui` because the image command is `sf mcp`. This command does not mount the Docker socket, so stage file tools run in the Stageflow container. [Compose from a checkout](#local-try-compose) is what turns the stage sandbox on.
 
 ```bash
 docker run --rm --name stageflow \
   -p 127.0.0.1:3847:3847 \
   -v stageflow-data:/data \
-  ghcr.io/tejasghutukade/stageflow:0.67 \  sf ui
+  ghcr.io/tejasghutukade/stageflow:0.69 \  sf ui
 ```
 
 Open [http://127.0.0.1:3847](http://127.0.0.1:3847). The published port stays on `127.0.0.1`. The process inside the container still binds `0.0.0.0`. The container logs print `Control token: <token>` on first start. Later starts reuse it and print the file path. Copy that into the console prompt. If the logs don't show it (for example after a restart, when the token is reused), run `docker exec <container> cat /data/control-token`.
+
+Live HTML preview and HTML cards need the sandbox origin. It is not available by default in a container: the process binds `0.0.0.0`, so auto-pick stays off and `sandbox_origin` on `GET /api/health` is null until you pin a port. The console keeps the scriptless preview. To turn the shell on, set `STAGEFLOW_SANDBOX_PORT` to a free port inside the container and publish that port on `127.0.0.1` the same way as `3847` (`-p 127.0.0.1:<host-port>:<STAGEFLOW_SANDBOX_PORT>`). The listener then binds `0.0.0.0` inside the container so the published mapping reaches it. The browser origin of the console has to be one of the origins the shell will frame, which for this published mapping is `http://127.0.0.1:3847` when the console port is published as `3847`. The sandbox port is a second published port. Do not add it to `STAGEFLOW_ALLOWED_HOSTS`. For public web chat on a separate host, also set `STAGEFLOW_SANDBOX_PUBLIC_ORIGIN` to the HTTPS origin where visitors reach this published sandbox port. See [Live HTML artifacts: the sandbox origin](artifacts.md#live-html-sandbox).
 
 Prefer a digest pin and a control token when the port is not limited to this machine:
 
@@ -403,6 +405,8 @@ services:
     networks: [internal]
     environment:
       STAGEFLOW_HOME: /data
+      OPENUI_TELEMETRY_DISABLED: "1"
+      DO_NOT_TRACK: "1"
       STAGEFLOW_BIND: 0.0.0.0
       STAGEFLOW_CONTROL_TOKEN_FILE: /run/secrets/control_token
       STAGEFLOW_BUILD_SHA: "<git sha>"
@@ -457,7 +461,7 @@ Example: a shop serves support chat at `https://chat.example.com/chat/support`. 
 
 ## CLI via `docker exec` {#cli-via-docker-exec}
 
-A CLI on the host machine that talks to a Docker Host on `127.0.0.1:3847` uses a different data directory. `sf run` and `sf runs` from the host report "Another Stageflow Host with a different data directory is on port 3847". Run CLI commands inside the container (`docker exec <container> sf …`), or use the HTTP API or MCP with the container's token (`docker exec <container> cat /data/control-token`).
+A CLI on the host machine that talks to a Docker Host on `127.0.0.1:3847` uses a different data directory. `sf run` and `sf runs` from the host report "Another Stageflow Host with a different data directory is on port 3847". Run CLI commands inside the container (`docker exec <container> sf …`), or use the HTTP API or MCP with the container's token (`docker exec <container> cat /data/control-token`). Agents creating and running work on a Host follow [Working against a running Host](working-against-a-host.md).
 
 A remote harness drives the Host over MCP/REST with a control token. Some CLI commands stay **exec-only** on purpose — see the decision table in [MCP — CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table). Below are literal commands assuming the container is named `stageflow` (replace with your compose service / container id). Prefer catalog-relative paths the Host already knows; mount or bake catalog into the image as your deployment does.
 

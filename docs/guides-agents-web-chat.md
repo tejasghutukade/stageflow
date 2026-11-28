@@ -28,6 +28,10 @@ Anyone with the link can talk to the agent, and spend its cost limits. To revoke
 | Message length | `max_message_chars` (1–20000, default 4000) |
 | Conversations per visitor | 50 |
 
+The agent's own `limits` apply to each conversation too: `max_turns` counts messages, `session_minutes` closes the conversation after that many minutes with no messages (waiting on an approval does not count as idle), and `cost_usd` counts what it spent. The default `session_minutes` is 10, which suits a live chat; raise it (up to 1,440) when people may come back later after a break. When a limit is hit, the page says which one ended it and offers **Start a new chat**.
+
+The open conversation is kept in the address as `?c=<id>`, so a refresh reopens it. The id only opens for the browser that started the conversation; anyone else, or an id that is gone, gets a new chat.
+
 Behind a reverse proxy every visitor shares the proxy's address, so the per-IP limit then applies to everyone together: raise `rate_limit_per_minute` or put the limit at the proxy.
 
 ## Behind a reverse proxy
@@ -41,7 +45,7 @@ Behind a reverse proxy every visitor shares the proxy's address, so the per-IP l
 
 ## Safety
 
-- Anonymous public agents must be tool-less, with project context, shared memory, browser, skills and sub-agents off. Unsafe publications return `identity.setup_required`; old unscoped histories are not adopted.
+- By default anonymous visitors can chat and see conversation cards only; turn on **Visitors can use this agent's tools** in the console (or set `web_chat.public_tools: true`) to let them use the agent's other tools. Identity-only tools never work on a public link, and a sub-agent that has one is withheld. Old unscoped histories are not adopted.
 - Protected tools require [consumer identity](consumer-identity.md) (turn it on from **Identity** in the console), an `authenticated` agent and an embedded client that signs people in. The built-in chat page has no sign-in button. The step-by-step is [Protect an agent's chat with customer sign-in](guides-agents-protected-chat.md). Supported customer resource tools are `orders.status`, `orders.list`, and `account.profile`. Ask-first tools still wait for an operator and reauthorize after the wait.
 
 ## Troubleshooting
@@ -52,6 +56,18 @@ Behind a reverse proxy every visitor shares the proxy's address, so the per-IP l
 | `web_chat.rate_limited` (429) | Over the visitor or address limit; wait `retryAfterSec` |
 | `web_chat.message_too_long` (413) | Over `max_message_chars` |
 | `web_chat.busy` (409) | A turn is already running on that conversation |
-| `web_chat.limit_reached` (409) | The agent hit `max_turns`, `session_minutes` or `cost_usd`; start a new conversation |
+| `web_chat.limit_reached` (409, or an `error` frame) | The conversation hit `max_turns`, `session_minutes` or `cost_usd`; `limit` says which (`turns`, `minutes`, `cost`). Start a new conversation |
 | Browser CORS error from another site | Origin not in `STAGEFLOW_PUBLIC_CHAT_ORIGINS` |
 | Reply appears all at once | The agent has `guardrails.block_patterns`, so streamed text is held until the check passes; or a proxy is buffering |
+
+## Cards in public chat
+
+An agent with `ui: { present: true }` draws cards (layouts, tables, numbers, markdown, and HTML when the sandbox is available) in its replies, and visitors see them on the public page. `GET /api/public/chat/<slug>` may include `sandboxOrigins` so the page can frame HTML cards. The cards are kept in the conversation: the program travels in the message, nothing is saved to the Artifacts page, and the card is deleted with the conversation. Ask the agent to change a card and it draws an updated one. See [Agent definition: ui](agent-definition.md#ui).
+
+## What visitors can use
+
+The public link opens while the agent is enabled and `web_chat.enabled` is true. With the default (`web_chat.public_tools: false`), visitors chat and see conversation cards (`present_ui` when `ui.persistence: conversation`) but the model is not offered the agent's other tools. Turn on **Visitors can use this agent's tools** to let anonymous visitors run granted Stageflow tools, MCP servers, functions, skills, memories, project context and safe sub-agents; approvals still wait in the console. Identity-only tools stay off the public link: builtin `read`, `grep`, `find`, `ls`, `write`, `edit`, `bash` and `browser` (they act on your machine and saved logins), and Stageflow tools that run code (writing pipelines, stages and tasks, `import_task`, functions, evals, `probe_project_mcp`), change the Host's setup (agents, connections, triggers, eval writes, deleting or cancelling runs) or reach other agents and conversations (`agent_chat`, `stop_agent_session`, `get_agent_session`). A sub-agent that has one is withheld as well. They keep working in the console and on authenticated links; the agent shows warning `agent.public_tools_identity_only` naming them. For visitors, `get_artifact` reads project artifacts and the visitor's own session artifacts only. To require sign-in for every tool, use `web_chat.access: authenticated` ([Protect an agent's chat with customer sign-in](guides-agents-protected-chat.md)).
+
+With public tools on, an agent that holds `artifacts.write` and draws cards kept in the conversation can also save a card for the visitor with `save_card`. The saved card is a session artifact of that conversation (30 days unless promoted): the visitor sees it inline, and other visitors and their conversations do not.
+
+With public tools on (or on an authenticated chat), visitors also see artifacts the agent published in that conversation, inline on the page. An artifact from another conversation, or a project artifact the agent only pointed at by key, is left out. The page loads each one from `GET /api/public/chat/<slug>/threads/<threadId>/artifacts/<id or key>`. Live charts show the snapshot that was saved with the artifact; the page does not run bindings or artifact buttons. Live HTML runs in the sandbox, the same way an HTML card does (`connect-src 'none'`). A deleted artifact, or a session artifact past its 30 days, is not shown.

@@ -1,0 +1,4 @@
+id: publish-note
+stages:
+  - id: publish-note
+    uses: ../stages/publish-note.yaml

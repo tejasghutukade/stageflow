@@ -12,8 +12,11 @@ import { TOOL_META, toolsInToolset } from "../src/toolkit/meta.js";
 import { FIXTURES_ROOT } from "./helpers/fixturePaths.js";
 import { MCP_TOOLSETS_ALL_QUERY, mcpUrl } from "./helpers/mcpCall.js";
 
-/** Measured 2026-11-14 after Plan 3 get_started toolset copy: 46,348 bytes for 57 tools (≤ 60,800 = 60% of 101,347 baseline). */
-const TOOLS_LIST_MAX_BYTES = 47_000;
+/**
+ * Measured 2026-11-27 after run_stats: 48,011 bytes for 63 tools. Cap 48,250 (about 240 bytes of headroom).
+ * Core payload still fits 18,200; that cap was not raised.
+ */
+const TOOLS_LIST_MAX_BYTES = 48_250;
 
 /** Measured 2026-11-14 after Plan 3 core toolsets: 17,918 bytes for 17 tools (≤ 20,269 = 20% of 101,347 baseline). */
 const CORE_TOOLS_LIST_MAX_BYTES = 18_200;
@@ -32,6 +35,7 @@ const APPENDIX_TOOL_NAMES = [
   "probe_project_mcp",
   "start_run",
   "get_run",
+  "run_stats",
   "get_stage",
   "run_files",
   "wait_run",
@@ -78,6 +82,11 @@ const APPENDIX_TOOL_NAMES = [
   "calibrate_eval_grader",
   "cancel_eval_run",
   "delete_eval_run",
+  "get_artifact",
+  "save_artifact",
+  "refresh_artifact",
+  "delete_artifact",
+  "promote_artifact",
 ] as const;
 
 const TOOLS_WITH_UNION_INPUT = new Set<string>([]);
@@ -156,15 +165,15 @@ describe("MCP tools/list", () => {
     expect(Buffer.byteLength(corePayload)).toBeLessThanOrEqual(CORE_TOOLS_LIST_MAX_BYTES);
   });
 
-  it("bare /mcp lists exactly the 17 core tools", () => {
+  it("bare /mcp lists exactly the 18 core tools", () => {
     expect(coreTools.map((tool) => tool.name).sort()).toEqual(CORE_TOOL_NAMES);
-    expect(coreTools).toHaveLength(17);
+    expect(coreTools).toHaveLength(18);
   });
 
-  it("lists exactly the 57 Appendix tools", () => {
+  it("lists exactly the 63 Appendix tools", () => {
     expect(tools.map((tool) => tool.name).sort()).toEqual([...APPENDIX_TOOL_NAMES].sort());
     expect(tools.map((tool) => tool.name).sort()).toEqual(Object.keys(TOOL_META).sort());
-    expect(tools).toHaveLength(57);
+    expect(tools).toHaveLength(63);
   });
 
   it("labels every tool with annotations that match its risk", () => {

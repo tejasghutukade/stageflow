@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { scrubSecrets } from "../compaction/scrub.js";
 
-export const FUNCTION_INVOCATION_KINDS = ["test", "verification", "route", "tool"] as const;
+export const FUNCTION_INVOCATION_KINDS = ["test", "verification", "route", "tool", "artifact"] as const;
 export type FunctionInvocationKind = (typeof FUNCTION_INVOCATION_KINDS)[number];
 
 export const FUNCTION_INVOCATION_STATUSES = ["succeeded", "failed", "uncertain"] as const;
@@ -51,6 +51,18 @@ export type FunctionInvocationDraft = {
   attempt?: number | null;
   sessionId?: string | null;
 };
+
+export const FUNCTION_INVOCATION_LIST_DEFAULT = 200;
+export const FUNCTION_INVOCATION_LIST_MAX = 1_000;
+export const FUNCTION_HISTORY_DAYS_ENV = "STAGEFLOW_FUNCTION_HISTORY_DAYS";
+export const FUNCTION_HISTORY_MAX_ROWS_ENV = "STAGEFLOW_FUNCTION_HISTORY_MAX_ROWS";
+export const DEFAULT_FUNCTION_HISTORY_DAYS = 30;
+export const DEFAULT_FUNCTION_HISTORY_MAX_ROWS = 50_000;
+export const FUNCTION_HISTORY_PRUNE_BATCH = 5_000;
+export const FUNCTION_HISTORY_DAYS_MAX = 3_650;
+export const FUNCTION_HISTORY_MAX_ROWS_CAP = 1_000_000;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type FunctionInvocationView = {
   id: string;
@@ -126,6 +138,7 @@ export function listFunctionInvocations(
   db: Database.Database,
   projectKey: string,
   functionId: string,
+  limit: number = FUNCTION_INVOCATION_LIST_DEFAULT,
 ): FunctionInvocationView[] {
   const rows = db
     .prepare(
@@ -133,10 +146,81 @@ export function listFunctionInvocations(
               attachment_id, run_id, stage_id, attempt, session_id, created_at
          FROM function_invocations
         WHERE project_key = ? AND function_id = ?
-        ORDER BY created_at DESC, id DESC`,
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?`,
     )
-    .all(projectKey, functionId) as Row[];
+    .all(projectKey, functionId, boundInvocationLimit(limit)) as Row[];
   return rows.map(toView);
+}
+
+export function functionHistoryLimits(env: NodeJS.ProcessEnv = process.env): { days: number; maxRows: number } {
+  return {
+    days: readPositiveInt(env, FUNCTION_HISTORY_DAYS_ENV, DEFAULT_FUNCTION_HISTORY_DAYS, FUNCTION_HISTORY_DAYS_MAX),
+    maxRows: readPositiveInt(env, FUNCTION_HISTORY_MAX_ROWS_ENV, DEFAULT_FUNCTION_HISTORY_MAX_ROWS, FUNCTION_HISTORY_MAX_ROWS_CAP),
+  };
+}
+
+function readPositiveInt(env: NodeJS.ProcessEnv, key: string, fallback: number, max: number): number {
+  const raw = env[key];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const text = raw.trim();
+  if (text.length > 10 || !/^\d+$/.test(text)) {
+    throw new Error(`${key} must be an integer from 1 to ${max}`);
+  }
+  const value = Number(text);
+  if (!Number.isInteger(value) || value < 1 || value > max) {
+    throw new Error(`${key} must be an integer from 1 to ${max}`);
+  }
+  return value;
+}
+
+function boundInvocationLimit(limit: number): number {
+  if (!Number.isInteger(limit) || limit < 1) return FUNCTION_INVOCATION_LIST_DEFAULT;
+  return Math.min(limit, FUNCTION_INVOCATION_LIST_MAX);
+}
+
+export function pruneFunctionInvocations(
+  db: Database.Database,
+  now: Date,
+  env: NodeJS.ProcessEnv = process.env,
+  batch: number = FUNCTION_HISTORY_PRUNE_BATCH,
+): number {
+  const table = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'function_invocations'`).get();
+  if (!table) return 0;
+  const { days, maxRows } = functionHistoryLimits(env);
+  const limit = Math.max(1, Math.min(batch, FUNCTION_HISTORY_PRUNE_BATCH));
+  const cutoff = new Date(now.getTime() - days * DAY_MS).toISOString();
+  const prune = db.transaction(() => {
+    const total = (db.prepare(`SELECT COUNT(*) AS n FROM function_invocations`).get() as { n: number }).n;
+    const older = (
+      db.prepare(`SELECT COUNT(*) AS n FROM function_invocations WHERE created_at < ?`).get(cutoff) as { n: number }
+    ).n;
+    const over = Math.max(0, total - maxRows);
+    if (older === 0 && over === 0) return 0;
+    const deleting = Math.min(limit, older >= over ? older : over);
+    if (older >= over) {
+      return db
+        .prepare(
+          `DELETE FROM function_invocations WHERE id IN (
+             SELECT id FROM function_invocations
+              WHERE created_at < ?
+              ORDER BY created_at ASC, id ASC
+              LIMIT ?
+           )`,
+        )
+        .run(cutoff, deleting).changes;
+    }
+    return db
+      .prepare(
+        `DELETE FROM function_invocations WHERE id IN (
+           SELECT id FROM function_invocations
+            ORDER BY created_at ASC, id ASC
+            LIMIT ?
+         )`,
+      )
+      .run(deleting).changes;
+  });
+  return prune();
 }
 
 function toView(row: Row): FunctionInvocationView {

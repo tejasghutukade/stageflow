@@ -18,7 +18,8 @@ import { createPiSettingsManager } from "../../agent/piSettings.js";
 import { createSessionContextWiring } from "../../compaction/sessionWiring.js";
 import { bindCursorApiKey, isCursorModelRef } from "../../agent/cursorProvider.js";
 import { findProviderSupport } from "../../agent/providerSupport.js";
-import { grantedBuiltinTools, type AgentDefinition } from "../../config/loadAgent.js";
+import { agentHoldsSaveCard, grantedBuiltinTools, type AgentDefinition } from "../../config/loadAgent.js";
+import { stripIdentityToolsFromDefinition } from "../consumerSafety.js";
 import { bindStageMemory, type StageMemory } from "../../memory/access.js";
 import { MemoryError, memoryHostFor } from "../../memory/host.js";
 import { memorySession } from "../../tools/memoryTools.js";
@@ -31,6 +32,17 @@ import { AgentError } from "../errors.js";
 import { MEMORY_STORE_BASH_DENIED, memoryStorePathInCommand } from "../../memory/bashDeny.js";
 import { compactionUsageCost, type CompactionEndSessionEvent } from "../../agent/compactionEvents.js";
 import { memoryHome } from "../../memory/host.js";
+import { appendAgentArtifactPrompt, bindAgentArtifactDelete, bindAgentArtifactRead, bindAgentArtifactRefresh, readAgentPublishPath, type AgentPublishTool } from "../artifactTools.js";
+import { previewPresentArgs } from "../../artifacts/inlinePreview.js";
+import { toPiTool, type GenUiPiTool } from "../../genui/adapters/pi.js";
+import { TurnBudget } from "../../genui/budget.js";
+import { PUBLISH_KINDS } from "../../genui/kindsList.js";
+import { genUiPresentPrompt } from "../../genui/prompt.js";
+import { messageReplayText } from "../../genui/replay.js";
+import { htmlSignal, surfaceKey, uiPolicy, type ArtifactStoreAccess, type Surface } from "../../genui/surface.js";
+import type { CardSource } from "../../genui/cards.js";
+import { PRESENT_UI_TOOL_NAME, presentUiSpec, publishArtifactSpec, saveCardSpec } from "../../genui/tools.js";
+import { agentSessionIsEval, SessionPublishError, type SessionPublishBody, type SessionPublishSuccess } from "../../artifacts/sessionPublish.js";
 import { forbiddenWriteTarget } from "../policy.js";
 import { prepareExecutionLaunch, type SandboxRunner } from "../sandbox.js";
 import { grantedStageflowTools, isOperatorOnlyTool, type ToolkitTool } from "../../toolkit/index.js";
@@ -41,8 +53,21 @@ export type PiRuntimeOptions = {
   cwd: string;
   agentDir: string;
   sandbox?: SandboxRunner;
+  /** Whether chat readers can reach the HTML card sandbox: live.html cards are taught and accepted only while true. */
+  htmlCardsAvailable?: boolean | (() => boolean);
   /** Stageflow's own tools, built lazily because they need Host services that start after the runtime. */
   toolkit?: () => ToolkitTool[];
+  /** Publishes as this agent. The owner and session source are applied here, not from the model. */
+  publishAgentArtifact?: (input: {
+    agentId: string;
+    sessionId: string;
+    projectRoot: string;
+    body: SessionPublishBody;
+  }) => Promise<SessionPublishSuccess>;
+  /** The artifact store present_ui uses to show saved artifacts and save one-off programs. Absent when the Host has none. */
+  artifactStore?: () => Promise<ArtifactStoreAccess | undefined>;
+  /** The cards a session has shown, read from its stored messages, for save_card. Absent: save_card is not offered. */
+  sessionCards?: (input: { sessionId: string; projectRoot: string }) => CardSource;
   /**
    * How long a session may sit unused before its Pi session and isolated MCP processes are released. A later message
    * reopens it from the stored transcript. Default 30 minutes; 0 keeps sessions until released or disposed.
@@ -62,8 +87,14 @@ export type OpenSessionInput = {
   /** Runs before each tool call; the session wires it to `pi.on("tool_call")`. */
   gate: (call: { toolCallId: string; toolName: string; input: Record<string, unknown> }) => Promise<{ block: true; reason: string; terminate?: boolean } | undefined>;
   delegateTool?: (agentId: string, message: string, callId: string) => Promise<string>;
-  /** Stageflow tools this agent is granted. */
+  /** Stageflow tools this agent is granted. save_artifact is never included. */
   stageflowTools?: ToolkitTool[];
+  /** In-session publish tool, present only when the agent holds artifacts.write. */
+  agentPublishTool?: AgentPublishTool;
+  /** In-session present_ui tool, present only when the agent holds ui.present. */
+  presentUiTool?: GenUiPiTool;
+  /** In-session save_card tool: ui.present with cards kept in the conversation, plus artifacts.write. */
+  saveCardTool?: GenUiPiTool;
   memory?: StageMemory;
   /** Defaults to true; one-shot judge sessions have no use for it. */
   workingState?: boolean;
@@ -111,11 +142,11 @@ function textOf(content: unknown): string {
     .join("");
 }
 
-function replayPrompt(prior: Array<{ role: string; text: string }>): string {
+function replayPrompt(prior: Array<{ role: string; text: string; parts?: Parameters<typeof messageReplayText>[0]["parts"] }>): string {
   return [
     "Earlier conversation in this session (restored after a restart). Continue from it; do not re-ask answered questions.",
     "",
-    ...prior.map((m) => `${m.role}: ${m.text.trim()}`),
+    ...prior.map((m) => `${m.role}: ${messageReplayText(m)}`),
   ].join("\n");
 }
 
@@ -281,6 +312,36 @@ async function openPiSession(options: PiRuntimeOptions, input: OpenSessionInput)
       if (!toolNames.includes(tool.name)) toolNames.push(tool.name);
     }
 
+    if (input.agentPublishTool) {
+      const tool = input.agentPublishTool;
+      customTools.push(
+        defineTool({
+          name: tool.name,
+          label: tool.label,
+          description: tool.description,
+          parameters: tool.parameters,
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+          execute: async (callId: string, args: unknown) => tool.execute(callId, args),
+        }),
+      );
+      if (!toolNames.includes(tool.name)) toolNames.push(tool.name);
+    }
+
+    for (const tool of [input.presentUiTool, input.saveCardTool]) {
+      if (!tool) continue;
+      customTools.push(
+        defineTool({
+          name: tool.name,
+          label: tool.label,
+          description: tool.description,
+          parameters: tool.parameters,
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+          execute: async (callId: string, args: unknown) => tool.execute(callId, args),
+        }),
+      );
+      if (!toolNames.includes(tool.name)) toolNames.push(tool.name);
+    }
+
     for (const tool of input.stageflowTools ?? []) {
       customTools.push(
         defineTool({
@@ -352,6 +413,8 @@ type Bound = {
   mcpServers: string[];
   subAgents: string[];
   functionTools: ResolvedFunctionTool[];
+  /** Cards drawn in the current turn. Reset at the start of each turn. */
+  budget: TurnBudget;
   /** Armed while no turn runs; releases the session when it fires. */
   idleTimer?: ReturnType<typeof setTimeout> | undefined;
   /** Set while a turn runs: the stall watchdog's pause handle. */
@@ -399,16 +462,25 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
     const existing = bound.get(input.sessionId);
     if (existing) return { state: existing, fresh: false };
     const { projectRoot } = input;
-    const allowedSubAgents = new Set(input.consumerSafeSubAgents ?? []);
-    const definition = input.consumerTools === undefined ? input.definition : {
-      ...input.definition,
-      project_context: false,
-      memories: [],
-      tools: { ...input.definition.tools, builtin: [], builtin_tools: [], mcp: {}, skills: [], browser: false,
-        functions: [],
-        stageflow: { groups: [], tools: [] } },
-      sub_agents: input.definition.sub_agents.filter((id) => allowedSubAgents.has(id)),
-    };
+    const allowedSubAgents = new Set(
+      input.anonymousPublicTools ? (input.anonymousPublicSafeSubAgents ?? []) : (input.consumerSafeSubAgents ?? []),
+    );
+    const definition = input.anonymousPublicTools
+      ? {
+          ...stripIdentityToolsFromDefinition(input.definition),
+          sub_agents: input.definition.sub_agents.filter((id) => allowedSubAgents.has(id)),
+        }
+      : input.consumerTools === undefined
+        ? input.definition
+        : {
+            ...input.definition,
+            project_context: false,
+            memories: [],
+            tools: { ...input.definition.tools, builtin: [], builtin_tools: [], mcp: {}, skills: [], browser: false,
+              functions: [],
+              stageflow: { groups: [], tools: [] } },
+            sub_agents: input.definition.sub_agents.filter((id) => allowedSubAgents.has(id)),
+          };
     if (definition.model.backend !== "pi") {
       throw new AgentError("agent.backend_unavailable", `The ${definition.model.backend} backend is not available for agents yet.`);
     }
@@ -433,8 +505,44 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
     const mcpServers = Object.keys(definition.tools.mcp);
     const subAgents = [...definition.sub_agents];
     const grantedSf = new Set(grantedStageflowTools(definition.tools.stageflow));
-    const stageflowTools = (options.toolkit?.() ?? []).filter((tool) => grantedSf.has(tool.name) && !isOperatorOnlyTool(tool.name));
-    const state: Bound = { opened: undefined as never, definitionKey: definition.id, hooks: undefined, mcpServers, subAgents, functionTools };
+    const stageflowTools = (options.toolkit?.() ?? [])
+      .filter((tool) => grantedSf.has(tool.name) && tool.name !== "save_artifact" && !isOperatorOnlyTool(tool.name))
+      .map((tool) => {
+        if (tool.name === "delete_artifact") return bindAgentArtifactDelete(tool, definition.id, projectRoot);
+        if (tool.name === "refresh_artifact") return bindAgentArtifactRefresh(tool, definition.id, projectRoot);
+        if (tool.name === "get_artifact") return bindAgentArtifactRead(tool, projectRoot, input.anonymousPublicTools ? input.sessionId : undefined);
+        return tool;
+      });
+    const budget = new TurnBudget();
+    const surface: Surface = {
+      key: surfaceKey("agent", input.sessionId),
+      id: input.sessionId,
+      owner: { kind: "agent", agent: definition.id },
+      hiddenArtifacts: (db) => agentSessionIsEval(db, input.sessionId),
+      projectRoot,
+      policy: {
+        ...uiPolicy(definition.ui, htmlSignal(options.htmlCardsAvailable)),
+        canSave: agentHoldsSaveCard(definition) && options.sessionCards !== undefined && options.artifactStore !== undefined,
+        canPublish: grantedSf.has("save_artifact") ? { kinds: PUBLISH_KINDS } : false,
+        ...(input.anonymousPublicTools ? { visitorSession: true } : {}),
+      },
+      budget,
+      ...(options.artifactStore ? { artifacts: options.artifactStore } : {}),
+      ...(options.sessionCards ? { cards: options.sessionCards({ sessionId: input.sessionId, projectRoot }) } : {}),
+      publish: {
+        readPath: (rawPath) => readAgentPublishPath(projectRoot, globalStageflowHome(), rawPath),
+        publish: (body) => {
+          if (!options.publishAgentArtifact) {
+            return Promise.reject(new SessionPublishError("artifact.invalid_shape", "artifact publish is not available"));
+          }
+          return options.publishAgentArtifact({ agentId: definition.id, sessionId: input.sessionId, projectRoot, body });
+        },
+      },
+    };
+    const agentPublishTool: AgentPublishTool | undefined = surface.policy.canPublish ? toPiTool(publishArtifactSpec("agent"), surface) : undefined;
+    const presentUiTool = surface.policy.canPresent ? toPiTool(presentUiSpec(surface.policy), surface) : undefined;
+    const saveCardTool = surface.policy.canSave ? toPiTool(saveCardSpec("agent"), surface) : undefined;
+    const state: Bound = { opened: undefined as never, definitionKey: definition.id, hooks: undefined, mcpServers, subAgents, functionTools, budget };
     const context = definition.project_context ? await projectContext(projectRoot) : "";
     let memory: StageMemory | undefined;
     if (definition.memories?.length) {
@@ -445,17 +553,32 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
         throw new AgentError("agent.invalid", `Memory could not be opened (${code})`);
       }
     }
-    const systemPrompt = `${definition.instructions}${context}${memory ? `\n\n${memorySession(memory).prompt}` : ""}${input.senderFact ? `\n\n${input.senderFact}` : ""}`;
+    const withArtifacts = appendAgentArtifactPrompt(
+      `${definition.instructions}${context}${memory ? `\n\n${memorySession(memory).prompt}` : ""}${input.senderFact ? `\n\n${input.senderFact}` : ""}`,
+      definition,
+      projectRoot,
+    );
+    const presentSection = genUiPresentPrompt(surface.policy);
+    const systemPrompt = presentSection === undefined ? withArtifacts : `${withArtifacts}\n\n${presentSection}`;
     state.opened = await open({
       projectRoot,
       definition,
       systemPrompt,
-      toolNames: [...piToolNames(definition), ...functionTools.map((tool) => tool.name)],
+      toolNames: [
+        ...piToolNames(definition),
+        ...functionTools.map((tool) => tool.name),
+        ...(agentPublishTool ? [agentPublishTool.name] : []),
+        ...(presentUiTool ? [presentUiTool.name] : []),
+        ...(saveCardTool ? [saveCardTool.name] : []),
+      ],
       ...(functionTools.length > 0 ? { functionTools } : {}),
       hooks: () => state.hooks,
       ...(input.consumerTools !== undefined ? { consumerTools: input.consumerTools } : {}),
       ...(memory ? { memory } : {}),
       ...(stageflowTools.length > 0 ? { stageflowTools } : {}),
+      ...(agentPublishTool ? { agentPublishTool } : {}),
+      ...(presentUiTool ? { presentUiTool } : {}),
+      ...(saveCardTool ? { saveCardTool } : {}),
       ...(subAgents.length > 0 ? { delegateTool: (agentId, message, callId) => state.hooks!.delegate(agentId, message, callId) } : {}),
       gate: async (call) => {
         const hooks = state.hooks;
@@ -489,12 +612,14 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
     async complete(input) {
       const { state, fresh } = await ensure(input);
       disarmIdle(state);
+      state.budget.reset();
       state.hooks = input.hooks;
       const user = input.messages.at(-1);
       if (!user || user.role !== "user") return { text: "", toolOutputs: [] };
       const { session } = state.opened;
       const toolOutputs: string[] = [];
       let text = "";
+      let presentRaw = "";
       const usage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
       let startedAt = new Date();
       let compactionStartedAt: Date | undefined;
@@ -555,6 +680,16 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
         else if (e.type === "message_update" && e.assistantMessageEvent?.type === "text_delta" && typeof e.assistantMessageEvent.delta === "string") {
           text += e.assistantMessageEvent.delta;
           input.onDelta(e.assistantMessageEvent.delta);
+        } else if (e.type === "message_update" && e.assistantMessageEvent?.type === "toolcall_delta") {
+          const update = e.assistantMessageEvent as { delta?: string; contentIndex?: number; partial?: { content?: Array<{ name?: string }> } };
+          const index = update.contentIndex ?? 0;
+          const name = update.partial?.content?.[index]?.name;
+          if (name === PRESENT_UI_TOOL_NAME || (name === undefined && presentRaw.length > 0)) {
+            if (typeof update.delta === "string") presentRaw += update.delta;
+            input.onUiPreview?.(previewPresentArgs(presentRaw));
+          } else if (name && name !== PRESENT_UI_TOOL_NAME) {
+            presentRaw = "";
+          }
         } else if (e.type === "message_end" && e.message?.role === "assistant") {
           const u = e.message.usage;
           const info = { inputTokens: u?.input ?? 0, outputTokens: u?.output ?? 0, costUsd: u?.cost?.total ?? 0 };
@@ -565,6 +700,10 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
           const final = textOf(e.message.content);
           if (final && !text) text = final;
         } else if (e.type === "tool_execution_start" && e.toolCallId && e.toolName) {
+          if (e.toolName === PRESENT_UI_TOOL_NAME) {
+            presentRaw = JSON.stringify(e.args ?? {});
+            input.onUiPreview?.(previewPresentArgs(presentRaw));
+          }
           const functionTool = state.functionTools.find((tool) => tool.name === e.toolName);
           const call = {
             id: e.toolCallId,
@@ -575,6 +714,7 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
           toolHolds.set(e.toolCallId, state.stall!.hold());
           input.hooks.toolStarted(call);
         } else if (e.type === "tool_execution_end" && e.toolCallId) {
+          presentRaw = "";
           toolHolds.get(e.toolCallId)?.();
           toolHolds.delete(e.toolCallId);
           const call = calls.get(e.toolCallId);
@@ -588,9 +728,28 @@ export function createPiAgentRuntime(options: PiRuntimeOptions): ConversationBac
       const onAbort = () => void session.abort?.();
       input.signal.addEventListener("abort", onAbort, { once: true });
       try {
-        const prior = input.messages.slice(0, -1).map((m) => ({ role: m.role, text: m.text }));
-        const prompt = fresh && prior.length > 0 ? `${replayPrompt(prior)}\n\nuser: ${user.text}` : user.text;
+        const prior = input.messages.slice(0, -1).map((m) => ({
+          role: m.role,
+          text: m.text,
+          ...(m.parts?.length ? { parts: m.parts } : {}),
+        }));
+        let toolInstruction = "";
         arm();
+        if (input.requestedTool) {
+          const release = state.stall!.hold();
+          try {
+            const decision = await input.hooks.gate(input.requestedTool);
+            if (!decision.allow) {
+              text = decision.reason;
+              input.onDelta(text);
+              return { text, toolOutputs, usage };
+            }
+            toolInstruction = `\n\nCall the tool ${input.requestedTool.tool} with these arguments and no others: ${JSON.stringify(input.requestedTool.input)}`;
+          } finally {
+            release();
+          }
+        }
+        const prompt = (fresh && prior.length > 0 ? `${replayPrompt(prior)}\n\nuser: ${user.text}` : user.text) + toolInstruction;
         await session.prompt(prompt);
       } finally {
         if (stallTimer) clearTimeout(stallTimer);

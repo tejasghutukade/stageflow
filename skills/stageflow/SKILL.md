@@ -18,7 +18,8 @@ Pick the row that matches the user's goal and read that skill next. If two rows 
 |---|---|
 | Write, change, validate or explain a pipeline, stage, task, trigger or the catalog; turn a chat into a pipeline | `stageflow-pipelines` |
 | Create or change a project agent: instructions, tools, `approvals.ask_first`, the agent's own channel, memories (`get_memory` with `list: true`, `save_memory` with `mode: create`), schedules, chat | `stageflow-agents` |
-| Start, watch, answer, retry, cancel or inspect runs; connect Slack, email or another provider for a pipeline stage send; Inbox approval decisions; read artifacts; run in CI | `stageflow-operate` |
+| Start, watch, answer, retry, cancel or inspect runs; connect Slack, email or another provider for a pipeline stage send; Inbox approval decisions; list or search published artifacts; run in CI | `stageflow-operate` |
+| Opt in a stage to `publish_artifact`, write `artifacts:` YAML, or grant an agent `artifacts.*` | `stageflow-pipelines` or `stageflow-agents` |
 | Measure quality: eval files, datasets, graders, compare runs, sort failures | `stageflow-evals` |
 | Install, log in to a provider, run `sf init`, start or connect to the Host, Docker, fix a setup problem, learn a term | this skill |
 | Anything else about Stageflow, or the request is unclear | this skill: ask one question that names the options above |

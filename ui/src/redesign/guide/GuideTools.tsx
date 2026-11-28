@@ -1,7 +1,15 @@
 import { useAui, useAuiState, type ToolCallMessagePartProps } from "@assistant-ui/react";
+import { lazy, Suspense } from "react";
 import type { GuideUi } from "./api";
 import { ChoicesCard, GuideUiCard, ToolActivity, type ToolActivityState } from "./GuideCards";
-import { readGuideUi } from "./guideUi";
+import { readGuideUi, readPresentUiCard, readSavedCard } from "./guideUi";
+
+const GuidePresentCard = lazy(() =>
+  import("./GuidePresentCard").then((mod) => ({ default: mod.GuidePresentCard })),
+);
+const GuideSavedCard = lazy(() =>
+  import("./GuideSavedCard").then((mod) => ({ default: mod.GuideSavedCard })),
+);
 
 const CONFIRM_TOOL = "confirm_action";
 
@@ -51,10 +59,20 @@ function GuideChoices({ ui, confirm }: { ui: Extract<GuideUi, { component: "choi
 export type GuideToolView =
   | { kind: "activity" }
   | { kind: "choices"; ui: Extract<GuideUi, { component: "choices" }>; confirm: boolean }
-  | { kind: "card"; ui: Exclude<GuideUi, { component: "choices" }> };
+  | { kind: "card"; ui: Exclude<GuideUi, { component: "choices" }> }
+  | { kind: "present"; part: import("../../../../src/artifacts/uiPartCard.ts").UiPartCard }
+  | { kind: "artifact"; part: import("../../../../src/artifacts/uiPartArtifactRef.ts").UiPartArtifactRef };
 
 /** Any tool whose result carries a drawable `ui` shows that card; every other call is an activity row. */
 export function guideToolView(part: Pick<ToolCallMessagePartProps, "toolName" | "result" | "isError" | "status">): GuideToolView {
+  if (part.toolName === "present_ui" && toolActivityState(part) === "complete") {
+    const card = readPresentUiCard(part.result);
+    if (card) return { kind: "present", part: card };
+  }
+  if (part.toolName === "save_card" && toolActivityState(part) === "complete") {
+    const saved = readSavedCard(part.result);
+    if (saved) return { kind: "artifact", part: saved };
+  }
   const ui = toolActivityState(part) === "complete" ? readGuideUi(part.result) : null;
   if (!ui) return { kind: "activity" };
   if (ui.component === "choices") return { kind: "choices", ui, confirm: part.toolName === CONFIRM_TOOL };
@@ -65,6 +83,20 @@ function GuideToolPart(props: ToolCallMessagePartProps) {
   const view = guideToolView(props);
   if (view.kind === "choices") return <GuideChoices ui={view.ui} confirm={view.confirm} />;
   if (view.kind === "card") return <GuideUiCard ui={view.ui} />;
+  if (view.kind === "present") {
+    return (
+      <Suspense fallback={<p className="m-0 text-[13px] text-[var(--sf-text-3)]">Loading card…</p>}>
+        <GuidePresentCard part={view.part} />
+      </Suspense>
+    );
+  }
+  if (view.kind === "artifact") {
+    return (
+      <Suspense fallback={<p className="m-0 text-[13px] text-[var(--sf-text-3)]">Loading artifact…</p>}>
+        <GuideSavedCard part={view.part} />
+      </Suspense>
+    );
+  }
   return <GuideToolActivity {...props} />;
 }
 

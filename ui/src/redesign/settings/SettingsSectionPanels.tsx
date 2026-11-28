@@ -68,6 +68,10 @@ export function SettingsGeneralPanel({
           <>
             <SettingsRow label="Runs on disk" mono={formatDiskBytes(disk.runs_bytes)} />
             <SettingsRow
+              label="Published artifacts"
+              mono={`${formatDiskBytes(disk.artifacts_bytes)} · ${disk.published_artifact_count} artifacts · ${disk.published_version_count} versions`}
+            />
+            <SettingsRow
               label="Free on volume"
               mono={formatDiskBytes(disk.free_bytes)}
               last

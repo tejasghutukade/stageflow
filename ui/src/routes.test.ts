@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  artifactsPath,
+  artifactDetailPath,
   agentPath,
   agentCreatePath,
   agentRunPath,
@@ -256,6 +258,39 @@ describe("parseHash", () => {
       pipelineId: "pipelines/demo.pipeline.yaml",
       taskPath: "pipelines/demo.task.yaml",
       projectRoot: "/repo/examples",
+    });
+  });
+});
+
+describe("artifact routes", () => {
+  it("opens the artifacts list", () => {
+    expect(artifactsPath()).toBe("/artifacts");
+    expect(parseHash("#/artifacts")).toEqual({ name: "artifacts" });
+    expect(parseHash(`#${artifactsPath()}`)).toEqual({ name: "artifacts" });
+  });
+
+  it("round-trips owner keys that contain colon, slash, and double colon", () => {
+    const owners = ["stage:sales:summarize", "stage:a/b:c", "stage:a::b:c"];
+    for (const ownerKey of owners) {
+      const path = artifactDetailPath(ownerKey, "weekly_note", "proj/root");
+      expect(parseHash(`#${path}`)).toEqual({
+        name: "artifact",
+        ownerKey,
+        id: "weekly_note",
+        projectRoot: "proj/root",
+      });
+    }
+    expect(parseHash(`#${artifactDetailPath("agent:helper", "weekly")}`)).toEqual({
+      name: "artifact",
+      ownerKey: "agent:helper",
+      id: "weekly",
+    });
+    expect(parseHash(`#${artifactDetailPath("stage:sales:summarize", "weekly", "proj/root", 2)}`)).toEqual({
+      name: "artifact",
+      ownerKey: "stage:sales:summarize",
+      id: "weekly",
+      projectRoot: "proj/root",
+      version: 2,
     });
   });
 });

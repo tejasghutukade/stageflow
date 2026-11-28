@@ -23,6 +23,7 @@ import { globalCredentialRoot, globalStageflowHome } from "../project/globalHome
 import { isUsableAuthFile } from "../runtime/credentialBinding.js";
 import { readFilesystemSize } from "./diskUsage.js";
 import type { RunStore } from "./port.js";
+import { collectPublishedArtifactBackupMembers } from "../artifacts/storeInventory.js";
 import { isInsideDir } from "./workspaceLayout.js";
 
 export type BackupErrorCode =
@@ -52,6 +53,7 @@ export type BackupContentsFlag =
   | "state.db"
   | "settings.json"
   | "agent/auth.json"
+  | "artifacts"
   | "a2a-artifacts"
   | "manifest.json";
 
@@ -63,6 +65,7 @@ export type BackupManifest = {
   db_only: boolean;
   credentials_included: boolean;
   a2a_artifacts_included: boolean;
+  artifacts_included: boolean;
   settings_fingerprint_before: string | null;
   settings_fingerprint_after: string | null;
   auth_fingerprint_before: string | null;
@@ -88,6 +91,7 @@ export type CreateBackupOptions = {
   dbOnly?: boolean;
   noCredentials?: boolean;
   includeA2aArtifacts?: boolean;
+  noArtifacts?: boolean;
   freeSpace?: (rootPath: string) => Promise<{ freeBytes: number }>;
   now?: () => Date;
 };
@@ -267,6 +271,7 @@ export async function createBackup(
   const dbOnly = options.dbOnly === true;
   const noCredentials = options.noCredentials === true;
   const includeA2a = options.includeA2aArtifacts === true;
+  const includeArtifacts = options.noArtifacts !== true;
   const now = options.now?.() ?? new Date();
   const createdAt = now.toISOString();
 
@@ -363,6 +368,16 @@ export async function createBackup(
       contents.push("agent/auth.json");
     }
 
+    if (includeArtifacts) {
+      const artifactMembers = await collectPublishedArtifactBackupMembers(homeDir);
+      if (artifactMembers.length > 0) {
+        contents.push("artifacts");
+        for (const member of artifactMembers) {
+          members.push({ ...member, mode: member.mode & 0o777 || 0o600 });
+        }
+      }
+    }
+
     if (includeA2a) {
       const a2aRoot = path.join(homeDir, "a2a-artifacts");
       if (existsSync(a2aRoot)) {
@@ -378,6 +393,7 @@ export async function createBackup(
       db_only: false,
       credentials_included: includeAuth,
       a2a_artifacts_included: includeA2a,
+      artifacts_included: includeArtifacts && contents.includes("artifacts"),
       settings_fingerprint_before: settingsBefore,
       settings_fingerprint_after: settingsAfter,
       auth_fingerprint_before: authBefore,

@@ -1,3 +1,4 @@
+import type { UiPart } from "../artifacts/uiPart.js";
 import type { ApprovalBroker, ApprovalOutcome } from "./approvalBroker.js";
 import type { AgentApproval, AgentStore, ApprovalActor, SessionStatus, TurnStatus } from "./store.js";
 
@@ -12,7 +13,7 @@ export type FinishInput = {
   status: TerminalTurnStatus;
   errorCode?: string | null;
   /** The assistant's reply, written with the turn so the transcript and the outcome never disagree. */
-  assistant?: { id: string; author: string; text: string };
+  assistant?: { id: string; author: string; text: string; parts?: UiPart[] };
   usage?: { inputTokens?: number; outputTokens?: number };
   costUsd?: number | null;
   evalScores?: Array<{ metric: string; score: number }>;
@@ -71,7 +72,7 @@ export class TurnLifecycle {
     if (!turn || isTerminalTurnStatus(turn.status)) return false;
     const now = this.nowIso();
     const closed = this.store.transaction(() => {
-      if (input.assistant && input.assistant.text.length > 0) {
+      if (input.assistant && (input.assistant.text.length > 0 || (input.assistant.parts?.length ?? 0) > 0)) {
         this.store.appendMessage({
           id: input.assistant.id,
           sessionId: turn.sessionId,
@@ -79,6 +80,7 @@ export class TurnLifecycle {
           role: "assistant",
           author: input.assistant.author,
           text: input.assistant.text,
+          ...(input.assistant.parts && input.assistant.parts.length > 0 ? { parts: input.assistant.parts } : {}),
           createdAt: now,
         });
       }

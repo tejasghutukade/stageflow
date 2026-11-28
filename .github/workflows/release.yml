@@ -1,5 +1,9 @@
 name: Release
 
+env:
+  OPENUI_TELEMETRY_DISABLED: "1"
+  DO_NOT_TRACK: "1"
+
 on:
   workflow_dispatch:
     inputs:

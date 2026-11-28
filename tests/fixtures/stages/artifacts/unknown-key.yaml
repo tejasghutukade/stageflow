@@ -1,0 +1,13 @@
+id: unknown-key
+system_prompt: Unknown artifacts key.
+model: anthropic/claude-sonnet-4-5
+artifacts:
+  publish: true
+  note: extra
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

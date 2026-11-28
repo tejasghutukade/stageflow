@@ -159,6 +159,31 @@ describe("buildStageEnvironment", () => {
     expect(env.STAGEFLOW_CREDENTIAL_HOME).toBeUndefined();
     expect(env.SF_WORKER_STAGEFLOW_HOME).toBeUndefined();
   });
+
+  it("never copies a control token into the stage environment", () => {
+    const token = "control-token-value-32chars-min!!";
+    const named = "named-drive-token-value-32chars!!";
+    const file = "/tmp/stageflow-control-token";
+    const { env } = buildStageEnvironment({
+      hostEnv: {
+        ...baseHost,
+        STAGEFLOW_CONTROL_TOKEN: token,
+        STAGEFLOW_CONTROL_TOKEN_FILE: file,
+        STAGEFLOW_CONTROL_TOKEN_DRIVE: named,
+        [STAGE_ENV_PASSTHROUGH]: "all",
+        [STAGE_ENV_ALLOW]: "STAGEFLOW_CONTROL_TOKEN,STAGEFLOW_CONTROL_TOKEN_FILE,STAGEFLOW_CONTROL_TOKEN_DRIVE",
+      },
+      grants: {
+        env: { STAGEFLOW_CONTROL_TOKEN: token },
+        registeredSecretNames: [],
+        declaredSecretNames: ["STAGEFLOW_CONTROL_TOKEN"],
+      },
+    });
+    expect(Object.keys(env).some((name) => name === "STAGEFLOW_CONTROL_TOKEN" || name.startsWith("STAGEFLOW_CONTROL_TOKEN_"))).toBe(false);
+    expect(JSON.stringify(env)).not.toContain(token);
+    expect(JSON.stringify(env)).not.toContain(named);
+    expect(JSON.stringify(env)).not.toContain(file);
+  });
 });
 
 describe("resolveBashPath", () => {

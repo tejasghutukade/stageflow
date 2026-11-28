@@ -2,6 +2,8 @@ import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentChatController } from "../src/agents/chatTurn.js";
 import { AgentInboundRouter, type InboundConnections } from "../src/agents/communications/inbound.js";
+import { PRESENT_UI_TOOL_NAME } from "../src/genui/index.js";
+import { UI_PART_KIND_ARTIFACT_REF, UI_PART_SCHEMA_VERSION } from "../src/artifacts/uiPart.js";
 import { AgentService } from "../src/agents/service.js";
 import { ConsumerAuthorization } from "../src/identity/authorization.js";
 import { createScopeAuthorizationEngine } from "../src/identity/scope.js";
@@ -104,6 +106,48 @@ function slackRequest(body: Record<string, unknown>, secret = "sign") {
 const slackEvent = { event: { type: "message", text: "where is my order?", channel: "C0123ABCD", ts: "1700000000.0001", event_ts: "1700000000.0001", user: "U1" } };
 
 describe("agent inbound webhooks", () => {
+  it("delivers present_ui as a readable link on the channel, not raw JSON", async () => {
+    const uiPart = {
+      v: UI_PART_SCHEMA_VERSION,
+      kind: UI_PART_KIND_ARTIFACT_REF,
+      key: "agent:helper/weekly",
+      title: "Weekly",
+      fallback: { text: "Weekly", url: "http://127.0.0.1:3847/#/artifacts/agent%3Ahelper/weekly" },
+    };
+    const fixture = await agentsFixture();
+    fixtures.push(fixture);
+    const { service, project } = fixture;
+    await service.create(
+      project,
+      agentInput("support", {
+        channel: { connection_id: "ops-slack", allow_from: ["*"] },
+        ui: { present: true, kinds: ["static.markdown"], functions: [] },
+      }),
+      { source: "console" },
+    );
+    await service.setEnabled(project, "support", true, { source: "console" });
+    const replies: Array<{ text: string }> = [];
+    const connections: InboundConnections = {
+      find: (id) => (id === "ops-slack" ? { provider: "slack", secret: "sign" } : undefined),
+      reply: async (_connectionId, _to, text) => void replies.push({ text }),
+    };
+    const chat = new AgentChatController({
+      service,
+      backend: scriptedBackend(async (_messages, ctx) => {
+        await ctx.tool(PRESENT_UI_TOOL_NAME, { key: uiPart.key }, () => JSON.stringify({ type: "ui", ui: uiPart }));
+        return "Shown";
+      }),
+    });
+    const router = new AgentInboundRouter({ service, chat, connections, projectRoot: project });
+    const req = slackRequest(slackEvent);
+    await router.handle("ops-slack", req.headers, req.raw);
+    await vi.waitFor(() => expect(replies).toHaveLength(1));
+    expect(replies[0]!.text).toContain("Shown");
+    expect(replies[0]!.text).toContain("Weekly");
+    expect(replies[0]!.text).not.toContain(uiPart.fallback.url);
+    expect(replies[0]!.text).not.toContain('"type":"ui"');
+  });
+
   it("runs a turn for a signed Slack message and replies on the same channel", async () => {
     const { router, replies, service, project } = await setup();
     const req = slackRequest(slackEvent);

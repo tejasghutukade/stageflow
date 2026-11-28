@@ -77,7 +77,11 @@ async function chat(ctx: Ctx, agentId: string): Promise<void> {
   const message = requireText(body.message, "message");
   const sessionId = optionalText(body.sessionId);
   const wantsStream = body.stream === true || String(ctx.req.headers.accept ?? "").includes("application/x-ndjson");
-  const send = (onDelta?: (text: string) => void, onSessionOpened?: (id: string) => void) =>
+  const send = (
+    onDelta?: (text: string) => void,
+    onUiPreview?: (preview: { phase: "skeleton" } | { phase: "error"; message: string }) => void,
+    onSessionOpened?: (id: string) => void,
+  ) =>
     ctx.host.chat.send({
       projectRoot: ctx.projectRoot,
       agentId,
@@ -85,6 +89,7 @@ async function chat(ctx: Ctx, agentId: string): Promise<void> {
       source: "console",
       ...(sessionId ? { sessionId } : {}),
       ...(onDelta ? { onDelta } : {}),
+      ...(onUiPreview ? { onUiPreview } : {}),
       ...(onSessionOpened ? { onSessionOpened } : {}),
     });
 
@@ -106,6 +111,15 @@ async function chat(ctx: Ctx, agentId: string): Promise<void> {
     const detail = await send(
       (text) => {
         writes = writes.then(() => writeFrame(ctx.res, { type: "delta", text }));
+      },
+      (preview) => {
+        writes = writes.then(() =>
+          writeFrame(ctx.res, {
+            type: "ui_preview",
+            phase: preview.phase,
+            ...(preview.phase === "error" ? { message: preview.message } : {}),
+          }),
+        );
       },
       (id) => {
         openedId = id;
@@ -305,6 +319,20 @@ const routes: Route[] = [
     method: "GET",
     pattern: /^\/api\/agents\/([^/]+)\/sessions\/([^/]+)$/,
     handle: async (ctx) => ctx.json(ctx.res, 200, await sessionFor(ctx, ctx.params[0]!, ctx.params[1]!)),
+  },
+  {
+    method: "POST",
+    pattern: /^\/api\/agents\/([^/]+)\/sessions\/([^/]+)\/ui-events$/,
+    handle: async (ctx) => {
+      const body = await readBody(ctx.req);
+      const result = await ctx.host.uiEvents({
+        projectRoot: ctx.projectRoot,
+        agentId: ctx.params[0]!,
+        sessionId: ctx.params[1]!,
+        body,
+      });
+      ctx.json(ctx.res, result.status, result.body);
+    },
   },
   {
     method: "GET",

@@ -20,6 +20,8 @@ One row per agent. Click a row, or move with **↑ / ↓** and press **Enter** o
 
 Filter chips: **All**, **Enabled**, **Disabled**, **Needs setup**.
 
+The console never hides another project's items silently. When the page shows one project, a line above the list says how many more are in other projects and offers one button per project to switch to it. A project you picked shows **Showing only <project>** with a **Back to the default project** button. The choice applies to this page only and clears when you leave the Agents, Functions or Catalog pages.
+
 ## Create (`#/agents/new`)
 
 A form beside an **author chat**. Describe the agent; the author fills the form and you review it. The page shows "Ready to save" when name and instructions are present. **Draft YAML** previews the file. A new agent is always created **disabled**.

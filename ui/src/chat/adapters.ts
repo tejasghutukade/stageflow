@@ -1,18 +1,25 @@
 import type { ChatModelAdapter, ChatModelRunResult, RemoteThreadListAdapter, ThreadMessageLike } from "@assistant-ui/react";
 import { createAssistantStream } from "assistant-stream";
 import { ChatApiError, type ChatApi } from "./api";
-import { friendlyMessage, type ChatErrorInfo } from "./errors";
+import { friendlyMessage, type ChatErrorInfo, type ChatLimitKind } from "./errors";
+import type { InlinePreview } from "../../../src/artifacts/inlinePreviewTypes.ts";
 import type { ChatMessageRecord } from "./ndjson";
 
 /** Carried on an incomplete assistant message so the UI can render a friendly notice. */
 export type ChatMessageError = ChatErrorInfo & { friendly: string };
 
-export function toChatError(code: string, message: string, retryAfterSec?: number): ChatMessageError {
-  return { code, message, ...(retryAfterSec !== undefined ? { retryAfterSec } : {}), friendly: friendlyMessage(code, retryAfterSec) };
+export function toChatError(code: string, message: string, retryAfterSec?: number, limit?: ChatLimitKind): ChatMessageError {
+  return {
+    code,
+    message,
+    ...(retryAfterSec !== undefined ? { retryAfterSec } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+    friendly: friendlyMessage(code, retryAfterSec, limit),
+  };
 }
 
 /** The visitor's conversations as the thread list wants them. Rename/archive/delete are not offered to visitors. */
-export function createThreadListAdapter(api: ChatApi): RemoteThreadListAdapter {
+export function createThreadListAdapter(api: Omit<ChatApi, "artifact">): RemoteThreadListAdapter {
   return {
     async list() {
       const threads = await api.listThreads();
@@ -60,6 +67,7 @@ export function toThreadMessages(records: readonly ChatMessageRecord[]): ThreadM
     content: [{ type: "text" as const, text: record.text }],
     createdAt: new Date(record.createdAt),
     ...(record.role === "assistant" ? { status: { type: "complete" as const, reason: "stop" as const } } : {}),
+    ...(record.ui?.length ? { metadata: { custom: { uiParts: record.ui } } } : {}),
   }));
 }
 
@@ -79,20 +87,29 @@ export function createChatModelAdapter(api: ChatApi, resolveThreadId: () => Prom
       const text = userText(options);
       if (!text) return;
       let reply = "";
+      let preview: InlinePreview | undefined;
       const content = () => [{ type: "text" as const, text: reply }];
+      const meta = (waiting: boolean) => ({ custom: { waiting, ...(preview ? { uiPreview: preview } : {}) } });
       try {
         const threadId = await resolveThreadId();
         for await (const frame of api.sendMessage(threadId, text, options.abortSignal)) {
           if (frame.type === "delta") {
             reply += frame.text;
-            yield { content: content(), metadata: { custom: { waiting: false } } };
+            yield { content: content(), metadata: meta(false) };
+          } else if (frame.type === "ui_preview") {
+            preview = frame.phase === "error" ? { phase: "error", message: frame.message ?? "That could not be shown." } : { phase: "skeleton" };
+            yield { content: content(), metadata: meta(false) };
           } else if (frame.type === "waiting") {
-            yield { content: content(), metadata: { custom: { waiting: true } } };
+            yield { content: content(), metadata: meta(true) };
           } else if (frame.type === "done") {
-            yield { content: [{ type: "text", text: frame.message.text }], status: { type: "complete", reason: "stop" }, metadata: { custom: { waiting: false } } };
+            yield {
+              content: [{ type: "text", text: frame.message.text }],
+              status: { type: "complete", reason: "stop" },
+              metadata: { custom: { waiting: false, ...(frame.message.ui?.length ? { uiParts: frame.message.ui } : {}) } },
+            };
             return;
           } else {
-            yield failure(reply, toChatError(frame.code, frame.message, frame.retryAfterSec));
+            yield failure(reply, toChatError(frame.code, frame.message, frame.retryAfterSec, frame.limit));
             return;
           }
         }
@@ -101,7 +118,7 @@ export function createChatModelAdapter(api: ChatApi, resolveThreadId: () => Prom
       } catch (error) {
         if (options.abortSignal.aborted) return;
         const info =
-          error instanceof ChatApiError ? toChatError(error.code, error.message, error.retryAfterSec) : toChatError("web_chat.failed", "");
+          error instanceof ChatApiError ? toChatError(error.code, error.message, error.retryAfterSec, error.limit) : toChatError("web_chat.failed", "");
         yield failure(reply, info);
       }
     },

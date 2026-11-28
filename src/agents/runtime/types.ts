@@ -1,8 +1,10 @@
+import type { InlinePreview } from "../../artifacts/inlinePreview.js";
+import type { UiPart } from "../../artifacts/uiPart.js";
 import type { AgentDefinition } from "../../config/loadAgent.js";
 import type { ConsumerRuntimeTool } from "../../identity/types.js";
 import { stageflowGrantId, TOOL_META } from "../../toolkit/meta.js";
 
-export type ConversationMessage = { role: "user" | "assistant"; text: string };
+export type ConversationMessage = { role: "user" | "assistant"; text: string; parts?: UiPart[] };
 
 /** One tool call by its grant id: a builtin name, `<server>.<tool>`, or `agent:<id>`. */
 export type ToolCall = { id: string; tool: string; input: Record<string, unknown> };
@@ -30,12 +32,22 @@ export type CompleteInput = {
   messages: ConversationMessage[];
   signal: AbortSignal;
   onDelta: (text: string) => void;
+  onUiPreview?: (preview: InlinePreview) => void;
   hooks: TurnHooks;
+  /**
+   * A chat action asked for this tool. The runtime gates it before anything runs,
+   * then calls it the same way a model tool call is called.
+   */
+  requestedTool?: ToolCall;
   consumerTools?: ConsumerRuntimeTool[];
   /** Who is writing on a channel, as the Host knows it. Goes in the system prompt, which compaction never rewrites. */
   senderFact?: string;
   /** Sub-agents already checked as consumer-safe. Ambient sub-agents stay off the consumer turn. */
   consumerSafeSubAgents?: readonly string[];
+  /** Anonymous public chat with public_tools: use the full agent surface minus identity-only tools. */
+  anonymousPublicTools?: boolean;
+  /** Sub-agents allowed on an anonymous public turn (no identity-only tools in the tree). */
+  anonymousPublicSafeSubAgents?: readonly string[];
 };
 
 export type CompleteResult = { text: string; usage?: RuntimeUsage; toolOutputs: string[] };

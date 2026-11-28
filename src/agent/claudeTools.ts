@@ -39,6 +39,7 @@ import {
   createWriteStageArtifactTool,
   type WriteStageArtifactOptions,
 } from "../tools/writeStageArtifact.js";
+import { createPublishArtifactTool, type PublishArtifactToolOptions } from "../tools/publishArtifact.js";
 import {
   ASK_OPERATOR_KINDS,
   AskOperatorError,
@@ -167,6 +168,28 @@ function asClaudeObjectSchema(schema: z.ZodType): z.ZodType {
 export const writeStageArtifactShape = {
   path: z.string().min(1),
   content: z.string(),
+};
+
+const publishArtifactShape = {
+  id: z.string().min(1),
+  kind: z.enum(["static.markdown", "static.image", "static.table", "static.text", "static.html", "live.declarative", "live.html"]),
+  title: z.string().min(1),
+  description: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+  summary: z.string().optional(),
+  path: z.string().optional(),
+  content: z.string().optional(),
+  content_base64: z.string().optional(),
+  format: z.string().optional(),
+  library: z.object({ name: z.string(), version: z.string() }).optional(),
+  bindings: z.array(z.object({ id: z.string(), function: z.string(), args: z.record(z.string(), z.unknown()) })).optional(),
+  refresh: z.object({ on_view: z.boolean().optional(), ttl_seconds: z.number().int().optional(), auto_seconds: z.number().int().optional() }).optional(),
+  csp: z.object({
+    connectDomains: z.array(z.string()).optional(),
+    resourceDomains: z.array(z.string()).optional(),
+    frameDomains: z.array(z.string()).optional(),
+    baseUriDomains: z.array(z.string()).optional(),
+  }).optional(),
 };
 
 const askOperatorShape = {
@@ -507,6 +530,7 @@ export function buildStageflowMcpServer(options: {
     capture: AskOperatorCapture;
     allowedKinds?: readonly AskOperatorKind[];
   };
+  publishArtifact?: PublishArtifactToolOptions;
   sandboxBash?: SandboxBashOptions;
   workspaceSearch?: WorkspaceSearchOptions;
 }): McpServerConfig {
@@ -543,6 +567,17 @@ export function buildStageflowMcpServer(options: {
   );
 
   const tools: Array<SdkMcpToolDefinition<any>> = [emitTool, artifactTool];
+  if (options.publishArtifact) {
+    const publishDef = createPublishArtifactTool(options.publishArtifact);
+    tools.push(
+      tool(
+        publishDef.name,
+        publishDef.description,
+        publishArtifactShape,
+        async (args) => toCallToolResult(await publishDef.execute("claude-tool-call", args)),
+      ) as unknown as SdkMcpToolDefinition<any>,
+    );
+  }
   if (options.askOperator) {
     tools.push(
       buildAskOperatorTool(options.askOperator.capture, options.askOperator.allowedKinds),

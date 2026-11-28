@@ -48,6 +48,7 @@ describe("toolkit registry", () => {
         ...toolsInToolset("triggers"),
         ...toolsInToolset("connections"),
         ...toolsInToolset("memories"),
+        ...toolsInToolset("artifacts"),
       ].sort(),
     ).toEqual(Object.keys(TOOL_META).sort());
   });
@@ -119,7 +120,7 @@ describe("operator-only tools", () => {
       );
     }
     const core = catalog.toolsets.find((row) => row.id === "core");
-    expect(core?.tools.length).toBe(17);
+    expect(core?.tools.length).toBe(18);
   });
 });
 
@@ -296,7 +297,7 @@ describe("pipeline authoring tools", () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "toolkit-pipe-"));
     await writeFile(path.join(dir, "stageflow.yaml"), "version: 1\ncatalog:\n  pipelines:\n    - flows\n  tasks:\n    - tasks\n");
     const toolkit = buildToolkit({ ...deps, cwd: dir, projectRoot: dir });
-    const call = (name: string, args: Record<string, unknown>) => toolkit.find((t) => t.name === name)!.run(args, { signal: new AbortController().signal });
+    const call = (name: string, args: Record<string, unknown>) => toolkit.find((t) => t.name === name)!.run({ ...args, project_root: dir }, { signal: new AbortController().signal });
     const created = await call("write_pipeline", {
       mode: "create",
       directory: "flows/hello",

@@ -100,8 +100,8 @@ function SummaryAside({ detail }: { detail: AgentDetail }) {
         <div className="flex flex-col gap-4">
           <KeyValue label="Version" value={`v${agent.revision}`} />
           <KeyValue label="Model" value={<span className={MONO}>{modelLabel(definition?.model ?? null)}</span>} />
-          <KeyValue label="Max turns" value={definition ? String(definition.limits.max_turns) : "—"} />
-          <KeyValue label="Time per session" value={definition ? `${definition.limits.session_minutes} minutes` : "—"} />
+          <KeyValue label="Messages per session" value={definition ? String(definition.limits.max_turns) : "—"} />
+          <KeyValue label="Close after idle" value={definition ? `${definition.limits.session_minutes} minutes idle` : "—"} />
         </div>
       </section>
       <section className="flex flex-col gap-4">
@@ -393,6 +393,15 @@ export function AgentDetailPage({ agentId }: { agentId: string }) {
           <span className="text-[var(--sf-text-1)]">
             The YAML file was edited and is now invalid, so v{agent.revision} stays in use.{" "}
             <span className="text-[var(--sf-text-2)]">{agent.issues.map((issue) => `${issue.path || "file"}: ${issue.message}`).join(" · ")}</span>
+          </span>
+        </div>
+      ) : null}
+      {agent.issues.length === 0 && agent.webChatNote ? (
+        <div className="flex shrink-0 items-start gap-3 border-b border-b-[var(--sf-hairline)] bg-[#f5b5440a] px-7 py-3 text-xs leading-[1.5]" role="status" data-testid="web-chat-blocked">
+          <LuTriangleAlert aria-hidden className="mt-0.5 size-3.5 shrink-0 text-[var(--sf-needs)]" />
+          <span className="text-[var(--sf-text-1)]">
+            Public chat page.{" "}
+            <span className="text-[var(--sf-text-2)]">{agent.webChatNote}</span>
           </span>
         </div>
       ) : null}

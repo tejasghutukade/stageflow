@@ -1,0 +1,4 @@
+id: publish-report
+stages:
+  - id: publish-report
+    uses: ./publish-report.yaml

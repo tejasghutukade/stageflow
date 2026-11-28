@@ -30,7 +30,11 @@ export type ToolGroupId =
   | "functions.read"
   | "functions.write"
   | "functions.test"
-  | "functions.cleanup";
+  | "functions.cleanup"
+  | "artifacts.read"
+  | "artifacts.write"
+  | "artifacts.refresh"
+  | "artifacts.cleanup";
 
 export type ToolGroup = {
   id: ToolGroupId;
@@ -49,7 +53,8 @@ export type ToolsetId =
   | "functions"
   | "triggers"
   | "connections"
-  | "memories";
+  | "memories"
+  | "artifacts";
 
 export type Toolset = {
   id: ToolsetId;
@@ -67,6 +72,7 @@ export const TOOLSETS: readonly Toolset[] = [
   { id: "triggers", title: "Triggers", summary: "List, configure and fire triggers." },
   { id: "connections", title: "Connections", summary: "Manage send channels and test recipients." },
   { id: "memories", title: "Memories", summary: "Manage host memories and their cards." },
+  { id: "artifacts", title: "Artifacts", summary: "Publish, read, refresh and delete artifacts." },
 ];
 
 export const TOOL_GROUPS: readonly ToolGroup[] = [
@@ -94,6 +100,10 @@ export const TOOL_GROUPS: readonly ToolGroup[] = [
   { id: "functions.write", title: "Author functions", summary: "Create, edit, and duplicate functions, and attach them through stage, pipeline, and agent writes." },
   { id: "functions.test", title: "Test functions", summary: "Ask to test a function." },
   { id: "functions.cleanup", title: "Delete functions", summary: "Delete a function that nothing references. Destructive." },
+  { id: "artifacts.read", title: "Look at artifacts", summary: "List artifacts and read a record, its versions, or its content." },
+  { id: "artifacts.write", title: "Publish artifacts", summary: "Publish a static artifact for a stage or agent owner." },
+  { id: "artifacts.refresh", title: "Refresh artifacts", summary: "Refresh a live artifact now. External." },
+  { id: "artifacts.cleanup", title: "Delete artifacts", summary: "Delete a published artifact and every version. Destructive." },
 ];
 
 export type ToolMeta = {
@@ -124,6 +134,7 @@ export const TOOL_META: Readonly<Record<string, ToolMeta>> = {
   import_task: t("pipelines.author", "external", "catalog"),
 
   get_run: t("runs.read", "read", "core"),
+  run_stats: t("runs.read", "read", "core"),
   get_stage: t("runs.read", "read", "core"),
   run_files: t("runs.read", "read", "core"),
   wait_run: t("runs.read", "read", "core"),
@@ -186,6 +197,12 @@ export const TOOL_META: Readonly<Record<string, ToolMeta>> = {
   save_function: t("functions.write", "write", "functions"),
   test_function: t("functions.test", "read", "functions"),
   delete_function: t("functions.cleanup", "destructive", "functions"),
+
+  get_artifact: t("artifacts.read", "read", "artifacts"),
+  save_artifact: t("artifacts.write", "write", "artifacts"),
+  refresh_artifact: t("artifacts.refresh", "external", "artifacts"),
+  delete_artifact: t("artifacts.cleanup", "destructive", "artifacts"),
+  promote_artifact: t("artifacts.write", "write", "artifacts", true),
 };
 
 export type StageflowGrants = { groups: readonly string[]; tools: readonly string[] };

@@ -84,7 +84,7 @@ Settle these before writing; each links to the reference that has the rules.
 - **Gates.** Advisory (`gate_kinds` only) or load-bearing (`gate_kinds` plus `verify: [{ type: gate, kind }]`). [catalog-mapping.md](references/catalog-mapping.md#human-gates)
 - **Proof and recovery.** What must be true after a stage (`verify`) and what happens when it is not (`on_verify_fail`: `repair` for idempotent work, `manual` for side effects). [catalog-mapping.md](references/catalog-mapping.md#verify-and-on_verify_fail)
 - **Handoff contracts.** `io.output.schema` of each parent must satisfy every child's `io.input.schema`. That check is skipped for a Clone Chain emitter parent. Share shapes with pipeline `schemas:` and `$ref`. [yaml-reference.md](references/yaml-reference.md#io-schemas)
-- **Capabilities** when the workflow needs them: a skill, stage MCP servers, a logged-in browser, a channel to send messages, memories, secrets and tools, a checkout, sandbox grants. [capabilities.md](references/capabilities.md)
+- **Capabilities** when the workflow needs them: a skill, stage MCP servers, a logged-in browser, a channel to send messages, memories, secrets and tools, a checkout, sandbox grants, durable published artifacts. [capabilities.md](references/capabilities.md), [artifacts.md](references/artifacts.md)
 
 ### 3. Write
 
@@ -171,6 +171,7 @@ All examples validate. Each pipeline sets `model: CHANGE_ME/<provider-model>`; r
 | [yaml-reference.md](references/yaml-reference.md) | Exact keys and placement for pipeline, stage, task and manifest files |
 | [stage-prompt-template.md](references/stage-prompt-template.md) | Writing a `system_prompt` |
 | [capabilities.md](references/capabilities.md) | Skills, stage MCP, browser, channels, memories, secrets, sandbox, checkout context, triggers, A2A publication |
+| [artifacts.md](references/artifacts.md) | Stage `artifacts:` opt-in, `publish_artifact`, kinds, ids, expect, envelope versus publish |
 | [finding-codes.md](references/finding-codes.md) | A validation or self-check finding needs a fix |
 | [authoring-tools.md](references/authoring-tools.md) | Choosing MCP tools or files and CLI; tool parameters and their traps |
 | [session-capture.md](references/session-capture.md) | Capturing a pipeline from a session |

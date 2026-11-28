@@ -38,6 +38,7 @@ export const BODY_KEYS = new Set([
   "checkout_context",
   "payload_schema",
   "gate_kinds",
+  "artifacts",
   "pre_emit_checks",
   "clone_input_schema",
   "timeout_ms",

@@ -12,8 +12,15 @@ import { AgentChatController } from "./chatTurn.js";
 import { otlpSinkFromEnv, type OtlpSink } from "./otlpSink.js";
 import type { ContactInfo } from "../channels/types.js";
 import type { McpToolDeps } from "../mcp/deps.js";
+import { consoleUrl } from "../mcp/writeTarget.js";
+import { catalogRootsForArtifacts } from "../artifacts/projectScope.js";
+import { publishSessionArtifact } from "../artifacts/sessionPublish.js";
+import { queryBinding } from "../artifacts/bindingQuery.js";
+import { createUiEventHandler, loadChatArtifact, validateChatBindingArgs, type UiEventHandler } from "./uiEvents.js";
+import { sqliteConnectionFromStore } from "../runstore/createStore.js";
 import { buildToolkit, type ToolkitTool } from "../toolkit/index.js";
 import { createPiAgentRuntime } from "./runtime/piRuntime.js";
+import { agentSessionCards } from "./sessionCards.js";
 import { AgentService, type AgentEnvironment } from "./service.js";
 import type { ConversationBackend } from "./sessions.js";
 import { getModelCatalog } from "../models/catalog.js";
@@ -28,6 +35,8 @@ export type AgentHostContext = {
   inbound: AgentInboundRouter;
   publicChat: PublicWebChat;
   chat: AgentChatController;
+  /** Chat artifact actions: read-only binding, user message, or a gated tool call. */
+  uiEvents: UiEventHandler;
   /** Eval tool gates by session id; the eval runner registers a gate for each eval session it opens. */
   evalGates: EvalGateRegistry;
   /** Fixture consumer bindings for eval leakage runs. */
@@ -98,6 +107,8 @@ export function createAgentHostContext(options: {
   /** Host services the Stageflow tools need; agent services are added here. Without it agents get no Stageflow tools. */
   /** Hold streams open to AgentMail and iMessage for agents linked to them. Only a running Host does this. */
   listenOnChannels?: boolean;
+  /** Filled once the sandbox listener starts; `cardsReachable` says whether visitors can reach it (see htmlCardsReachable). */
+  sandboxAdvertised?: { origins: string[]; cardsReachable: boolean };
   toolkitDeps?: Pick<
     McpToolDeps,
     | "manager"
@@ -137,6 +148,7 @@ export function createAgentHostContext(options: {
     createPiAgentRuntime({
       cwd: options.cwd,
       agentDir: options.agentDir,
+      htmlCardsAvailable: () => options.sandboxAdvertised?.cardsReachable === true,
       ...(options.toolkitDeps
         ? {
             toolkit: () =>
@@ -146,6 +158,24 @@ export function createAgentHostContext(options: {
                 agentService: service,
                 ...(chatRef ? { agentChat: chatRef } : {}),
               })),
+            publishAgentArtifact: async ({ agentId, sessionId, projectRoot, body }) => {
+              const db = sqliteConnectionFromStore(options.toolkitDeps!.store);
+              if (!db) throw new Error("artifact publish is not available");
+              const roots = await catalogRootsForArtifacts(options.toolkitDeps!.store);
+              return publishSessionArtifact(
+                { db, roots },
+                { owner: { kind: "agent", agent: agentId }, projectRoot, source: { sessionId } },
+                body,
+              );
+            },
+            sessionCards: ({ sessionId, projectRoot }) =>
+              agentSessionCards(async () => (await service.getSession(projectRoot, sessionId)).messages),
+            artifactStore: async () => {
+              const db = sqliteConnectionFromStore(options.toolkitDeps!.store);
+              if (!db) return undefined;
+              const roots = await catalogRootsForArtifacts(options.toolkitDeps!.store);
+              return { db, roots, consoleUrl: (hashPath: string) => consoleUrl({ ...options.toolkitDeps!, cwd: options.cwd }, hashPath) };
+            },
           }
         : {}),
     });
@@ -189,6 +219,8 @@ export function createAgentHostContext(options: {
     service,
     chat,
     projectRoot: defaultAgentProjectRoot(options.cwd),
+    sandboxOrigins: () => options.sandboxAdvertised?.origins ?? [],
+    artifacts: { db: options.connection },
     allowedOrigins: (process.env.STAGEFLOW_PUBLIC_CHAT_ORIGINS ?? "")
       .split(",")
       .map((origin) => origin.trim())
@@ -216,10 +248,26 @@ export function createAgentHostContext(options: {
     if (value?.contact.ok !== false) contactCache.set(connectionId, { at: Date.now(), value });
     return value;
   };
+  const uiEvents = createUiEventHandler({
+    service,
+    chat,
+    loadArtifact: async (projectRoot, key) => {
+      const roots = options.toolkitDeps?.store ? await catalogRootsForArtifacts(options.toolkitDeps.store) : [];
+      return loadChatArtifact(options.connection, roots, projectRoot, key);
+    },
+    query: (artifact, request) =>
+      queryBinding(
+        options.connection,
+        { projectRoot: artifact.projectRoot, projectId: artifact.projectId },
+        artifact.storageKey,
+        request,
+      ),
+    validateArgs: (projectRoot, functionId, args) => validateChatBindingArgs(options.connection, projectRoot, functionId, args),
+  });
   channelListeners?.start();
   if (options.listenOnChannels) delivery.start();
   if (options.listenOnChannels) void inbound.resumeInterrupted().catch((error) => console.error(`agent resume failed: ${String(error)}`));
-  return { service, chat, evalGates, evalConsumers, backend, inbound, publicChat, channelContact, ...(channelListeners ? { channelListeners } : {}), delivery, stop: async () => {
+  return { service, chat, uiEvents, evalGates, evalConsumers, backend, inbound, publicChat, channelContact, ...(channelListeners ? { channelListeners } : {}), delivery, stop: async () => {
       delivery.stop();
       await channelListeners?.stop();
       // The Host owns every runtime session's lifetime: nothing outlives it.

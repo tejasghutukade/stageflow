@@ -310,6 +310,8 @@ export type StageSnapshot = {
   events: StageLogEvent[];
   envelope: StageEnvelopeView | null;
   artifacts: string[];
+  /** Artifacts this stage published to the Artifacts page (not envelope files). */
+  published_artifacts?: { key: string; version: number; kind: string; title: string }[];
   last_at?: string;
   pending_prompt?: PendingPrompt;
   attempt_count: number;
@@ -983,8 +985,15 @@ export type CapacityHealth = {
     repos_bytes: number;
     state_db_bytes: number;
     a2a_artifacts_bytes: number;
+    artifacts_bytes: number;
+    published_artifact_count: number;
+    published_version_count: number;
+    cache_bytes?: number;
     free_bytes: number;
   };
+  sandbox_origin?: string | null;
+  /** Loopback shell origins (`localhost` and `127.0.0.1`). Empty when the listener is off. */
+  sandbox_origins?: string[];
 };
 
 export type CredentialSource = "sf_owned";
@@ -1261,6 +1270,7 @@ export type ChannelProviderMeta = {
   envNames: string[];
   yamlExample: string;
   stageExample: string;
+  ui: "interactive" | "image" | "link";
 };
 
 export type ChannelMeta = {

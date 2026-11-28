@@ -6,6 +6,7 @@ describe("railActiveId", () => {
   it("lights the rail item a route belongs to", () => {
     const cases: Array<[Route, string]> = [
       [{ name: "detail", runId: "r", view: "stream" } as unknown as Route, "runs"],
+      [{ name: "artifact", ownerKey: "stage:sales:summarize", id: "weekly" }, "artifacts"],
       [{ name: "new" }, "inbox"],
       [{ name: "pipeline", pipelineId: "p" }, "pipelines"],
       [{ name: "workshop" }, "pipelines"],

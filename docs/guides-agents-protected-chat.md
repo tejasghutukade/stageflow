@@ -49,7 +49,7 @@ Rules the Host enforces when you publish it:
 
 | Must be | Why |
 |---------|-----|
-| `web_chat.access: authenticated` | Public links are anonymous and tool-less |
+| `web_chat.access: authenticated` | Public links are anonymous; tools there are the owner's opt-in (`web_chat.public_tools`) and never include identity-only tools |
 | the Pi backend | The protected tool gate is part of the Pi runtime |
 | `tools.mcp` holds only declared customer resource tools (`orders: [status, list]`, `account: [profile]`), or nothing | Those are the supported protected tools |
 | no `project_context`, `memories`, `skills`, `browser`, built-in file or shell tools, or Stageflow tools | Those paths cannot yet check the person |

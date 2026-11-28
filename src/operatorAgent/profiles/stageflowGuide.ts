@@ -1,4 +1,10 @@
 import { createGuideKnowledgeTools } from "../../guide/knowledgeTools.js";
+import {
+  createGuidePresentUiTool,
+  guidePresentUiPlaybookSection,
+  type GuideHtmlCardsSignal,
+} from "../../guide/presentUi.js";
+import { createGuideSaveCardTool } from "../../guide/saveCard.js";
 import { createShowUiTool } from "../../guide/showUi.js";
 import type { McpToolDeps } from "../../mcp/deps.js";
 import { stageflowGuideToolNames } from "../../toolkit/profiles.js";
@@ -19,7 +25,7 @@ You have no tools in this session. You cannot read or change the project. Help t
 
 const ARMED = `## What you can do
 
-You can read and change this project with your tools: pipelines, stages, tasks, agents, triggers, evals, datasets, memories, and connections. You can start runs, run an eval, and read its report. You can show cards in the chat with show_ui. You can look up how Stageflow works with list_guide_topics and read_guide_topic.
+You can read and change this project with your tools: pipelines, stages, tasks, agents, triggers, evals, datasets, memories, and connections. You can start runs, run an eval, and read its report. You can show cards in the chat with show_ui and draw charts and tables with present_ui. You can save a drawn card with save_card. You can look up how Stageflow works with list_guide_topics and read_guide_topic.
 
 You cannot answer a question that is waiting on a person, and you cannot approve or deny another agent's action. Those stay with the person in the console. Point them to the Inbox.`;
 
@@ -129,14 +135,39 @@ const guideContextAdapter: OperatorAgentContextAdapter = {
   },
 };
 
-export function createStageflowGuideProfile(deps?: McpToolDeps): OperatorAgentProfile {
+export type StageflowGuideProfileOptions = {
+  htmlCardsAvailable?: GuideHtmlCardsSignal;
+};
+
+function buildArmedPlaybook(htmlCardsAvailable: GuideHtmlCardsSignal | undefined): string {
+  return `${STAGEFLOW_GUIDE_PLAYBOOK.replace(UNARMED, ARMED)}\n\n${guidePresentUiPlaybookSection(htmlCardsAvailable)}`;
+}
+
+export function createStageflowGuideProfile(
+  deps?: McpToolDeps,
+  options: StageflowGuideProfileOptions = {},
+): OperatorAgentProfile {
+  const htmlSignal = options.htmlCardsAvailable;
   const tools = deps
-    ? [...GuideToolkit(deps), createConfirmActionTool(), createShowUiTool(deps), ...createGuideKnowledgeTools()]
+    ? [
+        ...GuideToolkit(deps),
+        createConfirmActionTool(),
+        createShowUiTool(deps),
+        createGuidePresentUiTool(deps, { htmlCardsAvailable: htmlSignal }),
+        createGuideSaveCardTool(deps),
+        ...createGuideKnowledgeTools(),
+      ]
     : [];
+  const armedBase = deps ? buildArmedPlaybook(htmlSignal) : STAGEFLOW_GUIDE_PLAYBOOK;
   return {
     id: STAGEFLOW_GUIDE_PROFILE_ID,
     title: "Stageflow",
-    playbook: deps ? STAGEFLOW_GUIDE_PLAYBOOK.replace(UNARMED, ARMED) : STAGEFLOW_GUIDE_PLAYBOOK,
+    playbook: armedBase,
+    ...(deps
+      ? {
+          resolvePlaybook: () => buildArmedPlaybook(htmlSignal),
+        }
+      : {}),
     greeting: STAGEFLOW_GUIDE_GREETING,
     tools,
     contextAdapter: guideContextAdapter,

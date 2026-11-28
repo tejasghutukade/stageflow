@@ -1,3 +1,4 @@
+import "../artifacts/library/telemetryEnv.js";
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { createA2aHost, type A2aHost } from "../a2a/server.js";
@@ -35,6 +36,8 @@ import type { StageBrowserSupport } from "../browser/browserHost.js";
 import { consoleStageBrowserSupport } from "../browser/stageBrowserEnv.js";
 import { createHostProfileCatalog, type ProfileCatalog } from "../browser/profileCatalog.js";
 import { createRunLiveness } from "../browser/runLiveness.js";
+import { recoverRefreshingArtifacts } from "../artifacts/refresh.js";
+import { ensureArtifactSearchIndex, repairArtifactSearchOnHostStart, stopArtifactSearchRepair } from "../artifacts/search.js";
 import { RunManager } from "../runtime/runManager.js";
 import { EvalRunManager } from "../evals/manager.js";
 import { createStageCaseRunner } from "../evals/runner/stageCaseRunner.js";
@@ -181,6 +184,10 @@ export type StageflowHostBootstrap = {
   email?: ReturnType<typeof emailHostFor> & { triggers: EmailTriggers; stop: () => Promise<void> };
   /** Filesystem classification for `$STAGEFLOW_HOME` (Slot 8). */
   storeFilesystem?: StoreFilesystemClassification;
+  sandboxOrigin?: string | null;
+  sandboxOrigins?: string[];
+  /** Filled after the sandbox listener starts; read at request time for HTML cards and public chat. */
+  sandboxAdvertised?: { origins: string[]; cardsReachable: boolean };
   /**
    * When set, Host must not serve API/MCP (restore.failed or failed boot apply).
    * /livez still answers; /readyz fails.
@@ -445,6 +452,18 @@ export async function bootstrapStageflowHost(
   const runChangeBus =
     options.runChangeBus ?? boundBus ?? createRunChangeBus();
   const store = wrapRunStoreWithChangeBus(rawStore, runChangeBus);
+  if (sqliteConnection !== undefined) {
+    try {
+      ensureArtifactSearchIndex(sqliteConnection);
+      recoverRefreshingArtifacts(sqliteConnection);
+      await repairArtifactSearchOnHostStart(sqliteConnection, (runId) => store.getWorkspaceDir(runId));
+    } catch (error) {
+      bootLog.error(
+        "artifact.search.repair",
+        `artifact search repair failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
   await ensureProjectRootsFromEnv(env, store);
   const workspaceCatalog = ensureWorkspaceCatalog(ctx.globalHome);
   if (!workspaceCatalog.ok) {
@@ -475,6 +494,9 @@ export async function bootstrapStageflowHost(
     operatorCatalog: { cwd, agentDir },
     a2aStore,
     browser: options.browser ?? consoleStageBrowserSupport(),
+  });
+  manager.onShutdown(() => {
+    stopArtifactSearchRepair();
   });
   await manager.attachWaitingStages();
   await manager.reconcileOrphanedStages();
@@ -639,9 +661,11 @@ export async function bootstrapStageflowHost(
   const functionService = functionStore ? new FunctionService({ store: functionStore }) : undefined;
   const functionInvoker = sqliteConnection !== undefined ? createFunctionInvoker({ db: sqliteConnection }) : undefined;
   if (functionInvoker) registerHostFunctionInvoker(functionInvoker);
+  const sandboxAdvertised = { origins: [] as string[], cardsReachable: false };
   const agentHost =
     sqliteConnection !== undefined
       ? createAgentHostContext({
+          sandboxAdvertised,
           ...(options.consumerAuthorization ? { consumerAuthorization: options.consumerAuthorization } : {}),
           ...(consumerIdentity ? { consumerAuthorizationSource: () => consumerIdentity.current() } : {}),
           cwd,
@@ -756,10 +780,12 @@ export async function bootstrapStageflowHost(
     ...(functionService ? { functionService } : {}),
     ...(functionInvoker ? { functionInvoker } : {}),
     ...(consumerIdentity ? { consumerIdentity } : {}),
+    sandboxAdvertised,
     operatorHostSlot,
     ...(boundPort !== undefined ? { boundPort } : {}),
   };
   } catch (err) {
+    stopArtifactSearchRepair();
     stopGcInterval();
     stopScheduleSource();
     stopGithubPollSource();

@@ -18,7 +18,7 @@ export function fakeChannelProvider(options: { id?: string; credentialProvider?:
     meta: {
       label: "Fake", blurb: "Not connected", icon: "plug",
       fields: [], recipient: { label: "To", placeholder: "", multiple: false, cc: false, template: false },
-      envNames: [], yamlExample: "", stageExample: "    to: x",
+      envNames: [], yamlExample: "", stageExample: "    to: x", ui: "link",
     },
     operations: ["send"] as const,
     secrets: { required: ["token"], optional: ["extra"] },

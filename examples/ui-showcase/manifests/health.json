@@ -1,0 +1,1 @@
+{"format":"openui-lang","library":{"name":"stageflow","version":"1.0.0"},"bindings":[{"id":"health","function":"service_health","args":{}}],"refresh":{"ttl_seconds":30}}

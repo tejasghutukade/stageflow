@@ -22,6 +22,16 @@ import { MIGRATION_019 } from "./019-agent-session-rollover.js";
 import { MIGRATION_020 } from "./020-functions.js";
 import { MIGRATION_021 } from "./021-function-invocations.js";
 import { MIGRATION_022 } from "./022-function-route.js";
+import { MIGRATION_023 } from "./023-artifacts.js";
+import { MIGRATION_024 } from "./024-artifact-retention.js";
+import { MIGRATION_025 } from "./025-reserved-search.js";
+import { MIGRATION_026 } from "./026-artifact-publish.js";
+import { MIGRATION_027 } from "./027-artifact-search.js";
+import { MIGRATION_028 } from "./028-artifact-attempt-publishes.js";
+import { MIGRATION_029 } from "./029-artifact-snapshots.js";
+import { MIGRATION_030 } from "./030-artifact-origin-approvals.js";
+import { MIGRATION_031 } from "./031-agent-message-parts.js";
+import { MIGRATION_032 } from "./032-artifact-scope.js";
 
 export type SqliteMigration = {
   version: number;
@@ -53,7 +63,19 @@ const DEFAULT_MIGRATIONS: SqliteMigration[] = [
   MIGRATION_020,
   MIGRATION_021,
   MIGRATION_022,
+  MIGRATION_023,
+  MIGRATION_024,
+  MIGRATION_025,
+  MIGRATION_026,
+  MIGRATION_027,
+  MIGRATION_028,
+  MIGRATION_029,
+  MIGRATION_030,
+  MIGRATION_031,
+  MIGRATION_032,
 ];
+
+export const STORE_MIGRATIONS: readonly SqliteMigration[] = DEFAULT_MIGRATIONS;
 
 export const CURRENT_SCHEMA_VERSION =
   DEFAULT_MIGRATIONS[DEFAULT_MIGRATIONS.length - 1]!.version;
